@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.13.3</title>
+<title>The競馬 EV分析 v5.13.3 統合版 Calendar</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -91,6 +91,12 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
 .proxy-note { font-size: 11px; color: var(--muted); margin-top: 6px; }
 .nar-badge { display: inline-block; background: rgba(251,191,36,0.15); border: 1px solid rgba(251,191,36,0.35); color: #fbbf24; font-size: 10px; padding: 2px 7px; border-radius: 99px; font-weight: 700; }
 select option { background: #1e293b; }
+
+.pick-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+.pick-grid .field { margin-bottom: 0; }
+.race-select-box { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+.race-select-box select { flex: 1; }
+
 </style>
 </head>
 <body>
@@ -100,7 +106,7 @@ select option { background: #1e293b; }
     <h1>🏇 The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.13.3</span>
+    <span class="ver">v5.13.3 統合版</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -121,6 +127,38 @@ select option { background: #1e293b; }
     <div class="card">
       <div class="section-header">
         <h2>🌐 netkeibaから自動取得</h2>
+      </div>
+      <div class="pick-grid">
+        <div class="field">
+          <label>日付</label>
+          <input type="date" id="pickDate">
+        </div>
+        <div class="field">
+          <label>区分</label>
+          <select id="pickKind" onchange="renderVenueOptions()">
+            <option value="JRA">JRA</option>
+            <option value="NAR">NAR</option>
+          </select>
+        </div>
+      </div>
+      <div class="pick-grid">
+        <div class="field">
+          <label>開催場</label>
+          <select id="pickVenue"></select>
+        </div>
+        <div class="field">
+          <label>操作</label>
+          <button class="btn-sm" style="width:100%;height:36px" onclick="loadRaceList()">📅 レース一覧</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>レース選択</label>
+        <div class="race-select-box">
+          <select id="raceSelect" onchange="applySelectedRaceUrl()">
+            <option value="">先にレース一覧を取得</option>
+          </select>
+          <button class="btn-sm" onclick="applySelectedRaceUrl()">URL反映</button>
+        </div>
       </div>
       <div class="field">
         <label>レースURL（netkeiba.com の出馬表ページ）</label>
@@ -246,21 +284,66 @@ select option { background: #1e293b; }
         <div style="background:#0f172a;border:1px solid var(--border);border-radius:8px;padding:12px;font-family:monospace;font-size:11px;color:#7dd3fc;line-height:1.6;overflow-x:auto">
 export default {<br>
 &nbsp;&nbsp;async fetch(request) {<br>
+<br>
 &nbsp;&nbsp;&nbsp;&nbsp;const url = new URL(request.url);<br>
 &nbsp;&nbsp;&nbsp;&nbsp;const target = url.searchParams.get('url');<br>
-&nbsp;&nbsp;&nbsp;&nbsp;if (!target) return new Response('url param required', {status:400});<br>
+<br>
+&nbsp;&nbsp;&nbsp;&nbsp;if (!target) {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return new Response('url param required', {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;status: 400,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;headers: corsHeaders('text/plain; charset=UTF-8')<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;});<br>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br>
+<br>
+&nbsp;&nbsp;&nbsp;&nbsp;if (request.method === 'OPTIONS') {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return new Response(null, {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;status: 204,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;headers: corsHeaders('text/plain; charset=UTF-8')<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;});<br>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br>
+<br>
 &nbsp;&nbsp;&nbsp;&nbsp;const res = await fetch(target, {<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;headers: { 'User-Agent': 'Mozilla/5.0', 'Accept-Language': 'ja,en' }<br>
-&nbsp;&nbsp;&nbsp;&nbsp;});<br>
-&nbsp;&nbsp;&nbsp;&nbsp;const body = await res.arrayBuffer();<br>
-&nbsp;&nbsp;&nbsp;&nbsp;return new Response(body, {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;method: 'GET',<br>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;headers: {<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'Content-Type': res.headers.get('Content-Type') || 'text/html',<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'Access-Control-Allow-Origin': '*'<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'User-Agent':<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile Safari/605.1',<br>
+<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'Accept':<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',<br>
+<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'Accept-Language':<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'ja,en-US;q=0.9,en;q=0.8',<br>
+<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'Referer':<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'https://race.netkeiba.com/',<br>
+<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'Cache-Control':<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'no-cache',<br>
+<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'Pragma':<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'no-cache'<br>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}<br>
 &nbsp;&nbsp;&nbsp;&nbsp;});<br>
+<br>
+&nbsp;&nbsp;&nbsp;&nbsp;const html = await res.text();<br>
+<br>
+&nbsp;&nbsp;&nbsp;&nbsp;return new Response(html, {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;status: res.status,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;headers: corsHeaders('text/html; charset=UTF-8')<br>
+&nbsp;&nbsp;&nbsp;&nbsp;});<br>
 &nbsp;&nbsp;}<br>
-};
+};<br>
+<br>
+function corsHeaders(contentType) {<br>
+&nbsp;&nbsp;return {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;'Content-Type': contentType,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;'Access-Control-Allow-Origin': '*',<br>
+&nbsp;&nbsp;&nbsp;&nbsp;'Access-Control-Allow-Methods': 'GET, OPTIONS',<br>
+&nbsp;&nbsp;&nbsp;&nbsp;'Access-Control-Allow-Headers': '*',<br>
+&nbsp;&nbsp;&nbsp;&nbsp;'Cache-Control': 'no-store'<br>
+&nbsp;&nbsp;};<br>
+}<br>
+
         </div>
         <button class="btn-sm" style="margin-top:6px" onclick="copyWorkerCode()">📋 コードをコピー</button>
       </div>
@@ -271,7 +354,7 @@ export default {<br>
 
 <script>
 // ============================================================
-// The競馬 EV分析 HTML版 v5.13.3
+// The競馬 EV分析 HTML版 v5.13.1
 // EV計算・確率モデル・推奨ロジックを結合版.jsから移植
 // ============================================================
 
@@ -790,6 +873,137 @@ function renderResult(valid, rated){
   }).join('');
 }
 
+
+// ─── カレンダー・開催場・レース選択 ─────────────────
+const JRA_VENUES = [
+  ['01','札幌'],['02','函館'],['03','福島'],['04','新潟'],['05','東京'],
+  ['06','中山'],['07','中京'],['08','京都'],['09','阪神'],['10','小倉']
+];
+
+const NAR_VENUES = [
+  ['30','門別'],['35','盛岡'],['36','水沢'],['42','浦和'],['43','船橋'],['44','大井'],
+  ['45','川崎'],['46','金沢'],['47','笠松'],['48','名古屋'],['50','園田'],['51','姫路'],
+  ['54','高知'],['55','佐賀'],['65','帯広']
+];
+
+function todayYmd(){
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,'0');
+  const day = String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
+
+function renderVenueOptions(){
+  const kind = document.getElementById('pickKind')?.value || 'JRA';
+  const venueEl = document.getElementById('pickVenue');
+  if(!venueEl) return;
+
+  const list = kind === 'NAR' ? NAR_VENUES : JRA_VENUES;
+  venueEl.innerHTML = list.map(([code,name]) =>
+    `<option value="${code}">${name}</option>`
+  ).join('');
+
+  const setNar = document.getElementById('setNar');
+  if(setNar){
+    setNar.value = kind === 'NAR' ? '1' : '0';
+    saveSettings();
+  }
+}
+
+function raceListUrl(kind, date){
+  const d = String(date || '').replaceAll('-','');
+  if(kind === 'NAR'){
+    return `https://nar.netkeiba.com/top/race_list.html?kaisai_date=${d}`;
+  }
+  return `https://race.netkeiba.com/top/race_list.html?kaisai_date=${d}`;
+}
+
+function shutubaUrl(kind, raceId){
+  const host = kind === 'NAR'
+    ? 'https://nar.netkeiba.com'
+    : 'https://race.netkeiba.com';
+  return `${host}/race/shutuba.html?race_id=${raceId}&rf=race_submenu`;
+}
+
+function parseRaceIdsFromList(html, kind, venueCode){
+  const ids = new Set();
+  const re = /race_id=(\d{10,14})/g;
+  let m;
+  while((m = re.exec(html))){
+    const id = m[1];
+    if(kind === 'JRA' && venueCode && id.slice(4,6) !== venueCode) continue;
+    ids.add(id);
+  }
+  return Array.from(ids)
+    .sort((a,b) => Number(a.slice(-2)) - Number(b.slice(-2)))
+    .map(id => ({
+      raceId: id,
+      raceNo: Number(id.slice(-2)),
+      shutuba: shutubaUrl(kind, id)
+    }));
+}
+
+async function loadRaceList(){
+  const date = document.getElementById('pickDate')?.value || todayYmd();
+  const kind = document.getElementById('pickKind')?.value || 'JRA';
+  const venueCode = document.getElementById('pickVenue')?.value || '';
+  const status = document.getElementById('urlStatus');
+  const raceSelect = document.getElementById('raceSelect');
+
+  if(!settings.proxyUrl){
+    alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。');
+    return;
+  }
+
+  status.innerHTML = `<div class="url-status">📅 レース一覧取得中...</div>`;
+
+  try{
+    const url = raceListUrl(kind, date);
+    const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(url);
+    const res = await fetch(proxyReq);
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+
+    const html = await res.text();
+    const races = parseRaceIdsFromList(html, kind, venueCode);
+
+    if(!races.length){
+      raceSelect.innerHTML = '<option value="">レースが見つかりません</option>';
+      status.innerHTML = `<div class="url-status err">⚠️ ${date} の選択開催場レースが見つかりません</div>`;
+      return;
+    }
+
+    raceSelect.innerHTML = races.map(r =>
+      `<option value="${r.shutuba}" data-race-id="${r.raceId}">${r.raceNo}R / ${r.raceId}</option>`
+    ).join('');
+
+    applySelectedRaceUrl();
+    status.innerHTML = `<div class="url-status ok">✅ ${races.length}レース見つかりました。レースを選んで取得できます</div>`;
+
+  }catch(e){
+    console.error(e);
+    status.innerHTML = `<div class="url-status err">❌ レース一覧取得失敗: ${e.message}</div>`;
+  }
+}
+
+function applySelectedRaceUrl(){
+  const raceSelect = document.getElementById('raceSelect');
+  const raceUrl = document.getElementById('raceUrl');
+  if(!raceSelect || !raceUrl) return;
+  if(raceSelect.value) raceUrl.value = raceSelect.value;
+}
+
+function initCalendarPicker(){
+  const d = document.getElementById('pickDate');
+  if(d && !d.value) d.value = todayYmd();
+
+  const kindEl = document.getElementById('pickKind');
+  if(kindEl) kindEl.value = settings.nar ? 'NAR' : 'JRA';
+
+  renderVenueOptions();
+}
+
+
 // ─── netkeibaプロキシ取得 ────────────────────────
 async function fetchRace(){
   const rawUrl = document.getElementById('raceUrl').value.trim();
@@ -799,16 +1013,13 @@ async function fetchRace(){
     return;
   }
 
-  // result.html → shutuba.html へ自動変換
-  const targetUrl = rawUrl.replace(/\/race\/result\.html/, '/race/shutuba.html');
-
   const status = document.getElementById('urlStatus');
   const progress = document.getElementById('fetchProgress');
   progress.classList.add('show');
   status.innerHTML = '';
 
   try {
-    const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(targetUrl);
+    const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(rawUrl);
     const res = await fetch(proxyReq);
     if(!res.ok) throw new Error('HTTP ' + res.status);
     const html = await res.text();
@@ -836,80 +1047,135 @@ async function fetchRace(){
 }
 
 function parseHorsesFromDoc(doc, url){
+
   const list = [];
   const seen = new Set();
 
-  // ── shutuba.html 専用: HorseList行 + horse linkフィルタ ──
-  const horseRows = doc.querySelectorAll('tr.HorseList, tr[class*="Horse"], table.Shutuba tr, table tr');
-  horseRows.forEach(tr => {
-    // horse linkが無い行は払戻・人気・ラップ行なので除外
+  const rows = doc.querySelectorAll(
+    'tr.HorseList, tr[class*="HorseList"], tbody tr, table tr'
+  );
+
+  rows.forEach(tr => {
+
     const horseLink = tr.querySelector('a[href*="/horse/"]');
     if(!horseLink) return;
 
-    const cells = Array.from(tr.querySelectorAll('th,td')).map(e => e.textContent.trim().replace(/\s+/g,' '));
+    const horseName =
+      horseLink.textContent
+        .replace(/のデータベース/g,'')
+        .replace(/データベース/g,'')
+        .replace(/\s+/g,'')
+        .trim();
 
-    // 馬番: 1〜30の整数セル
-    const numCell = cells.find(c => /^\d{1,2}$/.test(c) && Number(c) >= 1 && Number(c) <= 30);
-    const num = Number(numCell || 0);
-    if(!num || seen.has(num)) return;
+    if(!horseName) return;
 
-    // 馬名: horse linkのテキストを優先
-    const nameRaw = horseLink.textContent.trim().replace(/\s+/g,'');
-    const name = nameRaw.slice(0, 20);
-    if(!name) return;
+    let num = 0;
 
-    // 単勝オッズ: クラス指定セルを優先、なければ小数点付き数値のみ（整数は体重誤爆するので除外）
-    const oddsTd = tr.querySelector('td.Odds, td[class*="odds"], td[class*="Odds"]');
-    let oddsVal = 0;
-    if(oddsTd){
-      const t = oddsTd.textContent.trim();
-      if(/^\d{1,4}\.\d+$/.test(t)) oddsVal = Number(t);
-    }
-    if(!oddsVal){
-      const oddsCell = cells.find(c => /^\d{1,3}\.\d+$/.test(c.trim()) && Number(c) < 999);
-      if(oddsCell) oddsVal = Number(oddsCell);
+    const numEl =
+      tr.querySelector('.Umaban') ||
+      tr.querySelector('[class*="Umaban"]') ||
+      tr.querySelector('td[class*="HorseNum"]') ||
+      tr.querySelector('td[class*="Num"]');
+
+    if(numEl){
+      num = Number(numEl.textContent.replace(/\D/g,''));
     }
 
-    // 人気: Popularクラスのtd優先、なければ1〜18の整数（馬番除く）
-    const popTd = tr.querySelector('td.Popular, td[class*="Popular"]');
-    let popVal = 0;
-    if(popTd){
-      const t = popTd.textContent.trim();
-      if(/^\d{1,2}$/.test(t)) popVal = Number(t);
-    }
-    if(!popVal){
-      const popCell = cells.find(c => /^\d{1,2}$/.test(c.trim()) && c !== numCell && Number(c) >= 1 && Number(c) <= 18);
-      if(popCell) popVal = Number(popCell);
+    if(!num){
+      const cells = Array.from(tr.querySelectorAll('td,th')).map(td =>
+        td.textContent.replace(/\s+/g,' ').trim()
+      );
+      for(const c of cells.slice(0,4)){
+        const m = c.match(/^\d{1,2}$/);
+        if(m){
+          const v = Number(m[0]);
+          if(v >= 1 && v <= 18){
+            num = v;
+            break;
+          }
+        }
+      }
     }
 
-    // 枠番: 1〜8の整数
-    const frameCell = cells.find(c => /^[1-8]$/.test(c.trim()) && c !== numCell);
+    if(!num || num < 1 || num > 18) return;
+    if(seen.has(num)) return;
+
+    let frame = 0;
+
+    const frameEl =
+      tr.querySelector('.Waku') ||
+      tr.querySelector('[class*="Waku"]') ||
+      tr.querySelector('[class*="Frame"]');
+
+    if(frameEl){
+      frame = Number(frameEl.textContent.replace(/\D/g,'')) || 0;
+    }
+
+    let odds = 0;
+
+    const oddsCandidates = [
+      tr.querySelector('.Popular_Ninki'),
+      tr.querySelector('.Odds'),
+      tr.querySelector('[class*="Odds"]'),
+      tr.querySelector('[class*="odds"]'),
+      ...tr.querySelectorAll('td'),
+      ...tr.querySelectorAll('span')
+    ];
+
+    for(const el of oddsCandidates){
+      if(!el) continue;
+      const txt = el.textContent.replace(/\s+/g,' ').trim();
+      const m = txt.match(/\d+\.\d+/);
+      if(m){
+        const v = Number(m[0]);
+        if(v >= 1 && v <= 9999){
+          odds = v;
+          break;
+        }
+      }
+    }
+
+    let pop = 0;
+
+    const popCandidates = [
+      tr.querySelector('.Popular'),
+      tr.querySelector('[class*="Popular"]'),
+      tr.querySelector('[class*="Ninki"]'),
+      ...tr.querySelectorAll('td'),
+      ...tr.querySelectorAll('span')
+    ];
+
+    for(const el of popCandidates){
+      if(!el) continue;
+      const txt = el.textContent.replace(/\s+/g,' ').trim();
+      let m = txt.match(/(\d{1,2})人気/);
+      if(!m){
+        const only = txt.match(/^(\d{1,2})$/);
+        if(only && Number(only[1]) !== num) m = only;
+      }
+      if(m){
+        const v = Number(m[1]);
+        if(v >= 1 && v <= 18){
+          pop = v;
+          break;
+        }
+      }
+    }
 
     seen.add(num);
+
     list.push({
       num,
-      name,
-      odds: oddsVal,
-      pop: popVal,
-      frame: Number(frameCell || 0)
+      name: horseName,
+      odds,
+      pop,
+      frame
     });
+
   });
 
-  // ── フォールバック: テキスト正規表現抽出 ──
-  if(list.length < 2){
-    const text = doc.body?.textContent || '';
-    const matches = [...text.matchAll(/(\d{1,2})\s+([ァ-ヴー一-龠]{2,16})\s+([\d.]+)/g)];
-    matches.forEach(m => {
-      const num = Number(m[1]);
-      if(!num||num<1||num>30||seen.has(num)) return;
-      seen.add(num);
-      list.push({ num, name: m[2], odds: Number(m[3]||0), pop:0, frame:0 });
-    });
-  }
-
-  return list.sort((a,b) => a.num-b.num);
+  return list.sort((a,b)=>a.num-b.num);
 }
-
 // ─── プロキシテスト ──────────────────────────────
 async function testProxy(){
   const url = document.getElementById('proxyUrl').value.trim();
@@ -932,21 +1198,66 @@ async function testProxy(){
 function copyWorkerCode(){
   const code = `export default {
   async fetch(request) {
+
     const url = new URL(request.url);
     const target = url.searchParams.get('url');
-    if (!target) return new Response('url param required', {status:400});
+
+    if (!target) {
+      return new Response('url param required', {
+        status: 400,
+        headers: corsHeaders('text/plain; charset=UTF-8')
+      });
+    }
+
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        status: 204,
+        headers: corsHeaders('text/plain; charset=UTF-8')
+      });
+    }
+
     const res = await fetch(target, {
-      headers: { 'User-Agent': 'Mozilla/5.0', 'Accept-Language': 'ja,en' }
-    });
-    const body = await res.arrayBuffer();
-    return new Response(body, {
+      method: 'GET',
       headers: {
-        'Content-Type': res.headers.get('Content-Type') || 'text/html',
-        'Access-Control-Allow-Origin': '*'
+        'User-Agent':
+          'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile Safari/605.1',
+
+        'Accept':
+          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+
+        'Accept-Language':
+          'ja,en-US;q=0.9,en;q=0.8',
+
+        'Referer':
+          'https://race.netkeiba.com/',
+
+        'Cache-Control':
+          'no-cache',
+
+        'Pragma':
+          'no-cache'
       }
     });
+
+    const html = await res.text();
+
+    return new Response(html, {
+      status: res.status,
+      headers: corsHeaders('text/html; charset=UTF-8')
+    });
   }
-};`;
+};
+
+function corsHeaders(contentType) {
+  return {
+    'Content-Type': contentType,
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'Access-Control-Allow-Headers': '*',
+    'Cache-Control': 'no-store'
+  };
+}
+`;
   navigator.clipboard.writeText(code).then(() => {
     const btn = event.target;
     const orig = btn.textContent;
@@ -957,6 +1268,7 @@ function copyWorkerCode(){
 
 // ─── 起動 ────────────────────────────────────────
 initUI();
+initCalendarPicker();
 
 // デモデータ
 if(horses.length === 0){

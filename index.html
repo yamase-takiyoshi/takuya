@@ -833,51 +833,101 @@ async function fetchRace(){
 }
 
 function parseHorsesFromDoc(doc, url){
+
   const list = [];
   const seen = new Set();
 
-  // shut uba table parsing
-  const rows = doc.querySelectorAll('tr');
+  // netkeiba 出馬表行
+  const rows = doc.querySelectorAll(
+    'tr.HorseList, tr[class*="HorseList"], tbody tr'
+  );
+
   rows.forEach(tr => {
-    const cells = Array.from(tr.querySelectorAll('th,td')).map(e => e.textContent.trim().replace(/\s+/g,' '));
-    // 馬番列と馬名列を探す
-    const numCell = cells.find(c => /^\d{1,2}$/.test(c.replace(/[^0-9]/g,'')));
-    const num = Number((numCell || '').replace(/[^0-9]/g,''));
-    if(!num || num < 1 || num > 30 || seen.has(num)) return;
 
-    // 馬名: カタカナ or 漢字が含まれるセル
-    const nameCell = cells.find(c => /[ァ-ヴー一-龠]{2,}/.test(c) && !/人気|着順|馬番|枠番/.test(c));
-    if(!nameCell) return;
+    // horse link 必須
+    const horseLink = tr.querySelector('a[href*="/horse/"]');
+    if(!horseLink) return;
 
-    const oddsCell = cells.find(c => /^\d+\.\d$/.test(c.trim()));
-    const popCell = cells.find(c => /^\d{1,2}$/.test(c.trim()) && c !== numCell);
-    const frameCell = cells.find(c => /^[1-8]$/.test(c.trim()) && c !== numCell);
+    const horseName =
+      horseLink.textContent
+      .replace(/\s+/g,'')
+      .trim();
+
+    if(!horseName) return;
+
+    // 馬番
+    let num = 0;
+
+    const numEl =
+      tr.querySelector('.Umaban') ||
+      tr.querySelector('[class*="Umaban"]');
+
+    if(numEl){
+      num = Number(
+        numEl.textContent.replace(/\D/g,'')
+      );
+    }
+
+    if(!num){
+      const m =
+        tr.textContent.match(/^\s*(\d{1,2})\s/);
+
+      if(m) num = Number(m[1]);
+    }
+
+    if(!num || num < 1 || num > 18) return;
+    if(seen.has(num)) return;
+
+    // オッズ
+    let odds = 0;
+
+    const oddsEl =
+      tr.querySelector('[class*="Odds"]');
+
+    if(oddsEl){
+      odds =
+        Number(
+          oddsEl.textContent.match(/\d+\.\d+/)?.[0]
+        ) || 0;
+    }
+
+    // 人気
+    let pop = 0;
+
+    const popEl =
+      tr.querySelector('[class*="Popular"]');
+
+    if(popEl){
+      pop =
+        Number(popEl.textContent.replace(/\D/g,'')) || 0;
+    }
+
+    // 枠番
+    let frame = 0;
+
+    const frameEl =
+      tr.querySelector('.Waku') ||
+      tr.querySelector('[class*="Waku"]');
+
+    if(frameEl){
+      frame =
+        Number(frameEl.textContent.replace(/\D/g,'')) || 0;
+    }
 
     seen.add(num);
+
     list.push({
       num,
-      name: nameCell.replace(/\s+/g,'').slice(0,20),
-      odds: Number(oddsCell || 0),
-      pop: Number(popCell || 0),
-      frame: Number(frameCell || 0)
+      name: horseName,
+      odds,
+      pop,
+      frame
     });
+
   });
 
-  // フォールバック: テキストから抽出
-  if(list.length < 2){
-    const text = doc.body?.textContent || '';
-    const matches = [...text.matchAll(/(\d{1,2})\s+([ァ-ヴー一-龠]{2,16})\s+([\d.]+)/g)];
-    matches.forEach(m => {
-      const num = Number(m[1]);
-      if(!num||num<1||num>30||seen.has(num)) return;
-      seen.add(num);
-      list.push({ num, name: m[2], odds: Number(m[3]||0), pop:0, frame:0 });
-    });
-  }
-
-  return list.sort((a,b) => a.num-b.num);
+  return list.sort((a,b)=>a.num-b.num);
 }
-
 // ─── プロキシテスト ──────────────────────────────
 async function testProxy(){
   const url = document.getElementById('proxyUrl').value.trim();

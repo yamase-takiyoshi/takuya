@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.13.3 統合版 Calendar</title>
+<title>The競馬 EV分析 v5.13.4 統合版 Calendar</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -106,7 +106,7 @@ select option { background: #1e293b; }
     <h1>🏇 The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.13.3 統合版</span>
+    <span class="ver">v5.13.4 統合版</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -288,16 +288,16 @@ export default {<br>
 &nbsp;&nbsp;&nbsp;&nbsp;const url = new URL(request.url);<br>
 &nbsp;&nbsp;&nbsp;&nbsp;const target = url.searchParams.get('url');<br>
 <br>
-&nbsp;&nbsp;&nbsp;&nbsp;if (!target) {<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return new Response('url param required', {<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;status: 400,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;if (request.method === 'OPTIONS') {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return new Response(null, {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;status: 204,<br>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;headers: corsHeaders('text/plain; charset=UTF-8')<br>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;});<br>
 &nbsp;&nbsp;&nbsp;&nbsp;}<br>
 <br>
-&nbsp;&nbsp;&nbsp;&nbsp;if (request.method === 'OPTIONS') {<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return new Response(null, {<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;status: 204,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;if (!target) {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return new Response('url param required', {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;status: 400,<br>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;headers: corsHeaders('text/plain; charset=UTF-8')<br>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;});<br>
 &nbsp;&nbsp;&nbsp;&nbsp;}<br>
@@ -315,19 +315,42 @@ export default {<br>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'ja,en-US;q=0.9,en;q=0.8',<br>
 <br>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'Referer':<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'https://race.netkeiba.com/',<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;target.includes('nar.netkeiba.com')<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;? 'https://nar.netkeiba.com/'<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;: 'https://race.netkeiba.com/',<br>
 <br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'Cache-Control':<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'no-cache',<br>
-<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'Pragma':<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'no-cache'<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'Cache-Control': 'no-cache',<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'Pragma': 'no-cache'<br>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}<br>
 &nbsp;&nbsp;&nbsp;&nbsp;});<br>
 <br>
-&nbsp;&nbsp;&nbsp;&nbsp;const html = await res.text();<br>
+&nbsp;&nbsp;&nbsp;&nbsp;const buffer = await res.arrayBuffer();<br>
 <br>
-&nbsp;&nbsp;&nbsp;&nbsp;return new Response(html, {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;let charset = 'utf-8';<br>
+<br>
+&nbsp;&nbsp;&nbsp;&nbsp;const contentType = res.headers.get('content-type') || '';<br>
+&nbsp;&nbsp;&nbsp;&nbsp;const ctCharset = contentType.match(/charset=([^;]+)/i);<br>
+&nbsp;&nbsp;&nbsp;&nbsp;if (ctCharset) {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;charset = ctCharset[1].trim().toLowerCase();<br>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br>
+<br>
+&nbsp;&nbsp;&nbsp;&nbsp;if (target.includes('nar.netkeiba.com')) {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;charset = 'euc-jp';<br>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br>
+<br>
+&nbsp;&nbsp;&nbsp;&nbsp;let bodyText = '';<br>
+<br>
+&nbsp;&nbsp;&nbsp;&nbsp;try {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;bodyText = new TextDecoder(charset).decode(buffer);<br>
+&nbsp;&nbsp;&nbsp;&nbsp;} catch (e) {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;try {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;bodyText = new TextDecoder('shift_jis').decode(buffer);<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;} catch (e2) {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;bodyText = new TextDecoder('utf-8').decode(buffer);<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}<br>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br>
+<br>
+&nbsp;&nbsp;&nbsp;&nbsp;return new Response(bodyText, {<br>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;status: res.status,<br>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;headers: corsHeaders('text/html; charset=UTF-8')<br>
 &nbsp;&nbsp;&nbsp;&nbsp;});<br>
@@ -1202,16 +1225,16 @@ function copyWorkerCode(){
     const url = new URL(request.url);
     const target = url.searchParams.get('url');
 
-    if (!target) {
-      return new Response('url param required', {
-        status: 400,
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        status: 204,
         headers: corsHeaders('text/plain; charset=UTF-8')
       });
     }
 
-    if (request.method === 'OPTIONS') {
-      return new Response(null, {
-        status: 204,
+    if (!target) {
+      return new Response('url param required', {
+        status: 400,
         headers: corsHeaders('text/plain; charset=UTF-8')
       });
     }
@@ -1229,19 +1252,42 @@ function copyWorkerCode(){
           'ja,en-US;q=0.9,en;q=0.8',
 
         'Referer':
-          'https://race.netkeiba.com/',
+          target.includes('nar.netkeiba.com')
+            ? 'https://nar.netkeiba.com/'
+            : 'https://race.netkeiba.com/',
 
-        'Cache-Control':
-          'no-cache',
-
-        'Pragma':
-          'no-cache'
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache'
       }
     });
 
-    const html = await res.text();
+    const buffer = await res.arrayBuffer();
 
-    return new Response(html, {
+    let charset = 'utf-8';
+
+    const contentType = res.headers.get('content-type') || '';
+    const ctCharset = contentType.match(/charset=([^;]+)/i);
+    if (ctCharset) {
+      charset = ctCharset[1].trim().toLowerCase();
+    }
+
+    if (target.includes('nar.netkeiba.com')) {
+      charset = 'euc-jp';
+    }
+
+    let bodyText = '';
+
+    try {
+      bodyText = new TextDecoder(charset).decode(buffer);
+    } catch (e) {
+      try {
+        bodyText = new TextDecoder('shift_jis').decode(buffer);
+      } catch (e2) {
+        bodyText = new TextDecoder('utf-8').decode(buffer);
+      }
+    }
+
+    return new Response(bodyText, {
       status: res.status,
       headers: corsHeaders('text/html; charset=UTF-8')
     });

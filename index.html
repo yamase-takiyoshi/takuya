@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.16.1 Product Simulation</title>
+<title>The競馬 EV分析 v5.16.2 Product Simulation</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -112,7 +112,7 @@ select option { background: #1e293b; }
 
 
 /* ============================================================
-   v5.16.1 Product Simulation Theme / 緑の旧アイコン復活
+   v5.16.2 Product Simulation Theme / 緑の旧アイコン復活
    ============================================================ */
 :root{
   --accent:#00e676;
@@ -193,7 +193,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.16.1 Product</span>
+    <span class="ver">v5.16.2 Product</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2024,6 +2024,78 @@ async function getReliableJraRacesFromList(html, date, venueCode){
   return buildJraRacesFromFixedKaisai(html, date, venueCode, kdFixed);
 }
 
+// ============================================================
+// v5.16.2: 土曜・日曜 race_id 混在の最終防壁
+// JRA race_id は YYYY+場+開催回+開催日+R で、MMDDを直接持たない。
+// そのため race_id先頭8桁で日付判定してはいけない。
+// グループ（YYYY+場+開催回+開催日）ごとに出馬表本文の日付を検証し、
+// 選択日と一致したグループだけをプルダウンへ渡す。
+// ============================================================
+function raceListDateLabel(date){
+  const d = ymdParts(date).yyyymmdd;
+  return `${d.slice(0,4)}/${d.slice(4,6)}/${d.slice(6,8)}`;
+}
+
+function dedupeRacesByRaceIdAndNo(races){
+  const seenId = new Set();
+  const seenNo = new Set();
+  const out = [];
+  (races || [])
+    .filter(r => r && r.raceId && Number(r.raceNo) >= 1 && Number(r.raceNo) <= 12)
+    .sort((a,b) => Number(a.raceNo) - Number(b.raceNo))
+    .forEach(r => {
+      const id = String(r.raceId);
+      const no = Number(r.raceNo);
+      if(seenId.has(id)) return;
+      // 同じ1Rが2本ある状態は、土日混在の典型。最初の有効グループだけ残す。
+      if(seenNo.has(no)) return;
+      seenId.add(id);
+      seenNo.add(no);
+      out.push(r);
+    });
+  return out;
+}
+
+async function finalFilterRacesForSelection(races, kind, date, venueCode){
+  let list = Array.isArray(races) ? races.slice() : [];
+
+  // 場コード不一致を除外
+  list = list.filter(r => raceIdVenueMatches(kind, r.raceId, venueCode));
+
+  if(kind === 'NAR'){
+    list = list.filter(r => raceIdMatchesSelectedDate(kind, r.raceId, date));
+    return dedupeRacesByRaceIdAndNo(list);
+  }
+
+  // JRA: race_idだけではMMDDが分からないため、開催日グループ単位で実ページ照合。
+  const groups = new Map();
+  list.forEach(r => {
+    const key = jraRaceDayKey(r.raceId);
+    if(!key) return;
+    if(!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  });
+
+  if(groups.size <= 1){
+    return dedupeRacesByRaceIdAndNo(list);
+  }
+
+  for(const group of groups.values()){
+    const sorted = group.slice().sort((a,b) => Number(a.raceNo) - Number(b.raceNo));
+    const probe = sorted.find(r => Number(r.raceNo) === 1) || sorted[0];
+    try{
+      if(await verifyJraRaceDateByShutuba(date, probe.raceId)){
+        return dedupeRacesByRaceIdAndNo(sorted);
+      }
+    }catch(e){}
+  }
+
+  // 照合に失敗した場合でも混在表示は絶対に避ける。
+  // 最大件数のグループだけ残し、同一R重複を消す。
+  const biggest = Array.from(groups.values()).sort((a,b) => b.length - a.length)[0] || [];
+  return dedupeRacesByRaceIdAndNo(biggest);
+}
+
 
 async function loadRaceList(){
   const selectedDateYmd = document.getElementById('pickDate')?.value || formatLocalDate(new Date());
@@ -2070,15 +2142,23 @@ async function loadRaceList(){
       races = await getReliableJraRacesFromList(html, date, venueCode);
     }
 
+    // v5.16.2 最終filter：選択日・開催場と一致するレースだけを残す。
+    // ここを通すことで、5/16の 202605020701 と 5/17の 202605020801 が
+    // 同じプルダウンへ同時に入る事故を防止する。
+    races = await finalFilterRacesForSelection(races, kind, date, venueCode);
+
     if(!races.length){
       raceSelect.innerHTML = '<option value="">レースが見つかりません</option>';
       status.innerHTML = `<div class="url-status err">⚠️ ${date} の ${venueName(kind, venueCode)} はレースが見つかりません。別日・別場のrace_idは除外しました。</div>`;
       return;
     }
 
+    const dateLabel = raceListDateLabel(date);
     raceSelect.innerHTML = races.map(r => {
       const url = shutubaUrl(kind, r.raceId); // 前回URLを絶対に再利用しない
-      return `<option value="${url}" data-race-id="${r.raceId}" data-race-name="${escapeHtml(r.raceName)}">${r.raceNo}R ${escapeHtml(r.raceName)} / ${r.raceId}</option>`;
+      const raceName = escapeHtml(r.raceName || `${r.raceNo}R`);
+      const label = `${dateLabel} ${venueName(kind, venueCode)} ${r.raceNo}R ${raceName} / ${r.raceId}`;
+      return `<option value="${url}" data-race-id="${r.raceId}" data-race-name="${raceName}">${label}</option>`;
     }).join('');
 
     applySelectedRaceUrl();

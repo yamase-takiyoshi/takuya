@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.14.8 統合版 NARcountfix</title>
+<title>The競馬 EV分析 v5.14.9 統合版 JRAdatefix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -111,7 +111,7 @@ select option { background: #1e293b; }
     <h1>🏇 The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.14.8 統合版</span>
+    <span class="ver">v5.14.9 統合版</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1384,6 +1384,80 @@ async function loadActiveVenuesForDate(){
   }
 }
 
+
+
+function normalizeJapaneseSpaces(s){
+  return String(s || '').replace(/\u00a0/g, ' ').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function parseJraKaisaiFromListText(html, venueCode){
+  // JRAのrace_idは日付を直接持たないため、一覧ページ本文の「2回東京8日目」から
+  // 開催回・開催日を取り出して race_id を再構成する。
+  const venue = venueName('JRA', venueCode);
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  const text = normalizeJapaneseSpaces(doc.body ? doc.body.textContent : html);
+  const escVenue = venue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const patterns = [
+    new RegExp(`(\\d{1,2})回\\s*${escVenue}\\s*(\\d{1,2})日(?:目)?`),
+    new RegExp(`${escVenue}[^0-9０-９]{0,12}(\\d{1,2})回[^0-9０-９]{0,12}(\\d{1,2})日(?:目)?`)
+  ];
+  for(const re of patterns){
+    const m = text.match(re);
+    if(m){
+      // 2番目のパターンも「回」「日」の順で捕まえる。
+      const kai = Number(m[1]);
+      const day = Number(m[2]);
+      if(kai >= 1 && kai <= 12 && day >= 1 && day <= 12) return {kai, day};
+    }
+  }
+  return null;
+}
+
+function extractJraRaceNamesFromList(html, venueCode){
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  const names = new Map();
+  const venue = venueName('JRA', venueCode);
+  Array.from(doc.querySelectorAll('a[href*="race_id="]')).forEach(a => {
+    const href = a.getAttribute('href') || a.href || '';
+    const m = href.match(/race_id=(\d{10,14})/);
+    if(!m) return;
+    const id = m[1];
+    if(extractVenueCodeFromRaceId(id, 'JRA') !== venueCode) return;
+    const raceNo = Number(id.slice(-2));
+    if(!(raceNo >= 1 && raceNo <= 12)) return;
+    const block = a.closest('li, tr, dd, dl, .RaceList_DataItem, .RaceList_Item, .RaceList_Box, .RaceList_Table, [class*="RaceList"]') || a.parentElement || a;
+    const t = normalizeJapaneseSpaces(block.textContent || a.textContent || '');
+    // 「俺プロ」「払戻一覧」等をレース名として拾わない。
+    if(/俺プロ|払戻一覧|オッズ|予想|結果|映像|掲示板/.test(t) && !/発走|芝|ダ|障|m/.test(t)) return;
+    let name = cleanRaceName(t, raceNo);
+    if(!name || /^\d{1,2}R$/.test(name) || /俺プロ|払戻|オッズ|予想/.test(name)) return;
+    if(!names.has(raceNo)) names.set(raceNo, name);
+  });
+  return names;
+}
+
+function buildJraRacesFromKaisai(html, date, venueCode){
+  const kd = parseJraKaisaiFromListText(html, venueCode);
+  if(!kd) return [];
+  const p = ymdParts(date);
+  const names = extractJraRaceNamesFromList(html, venueCode);
+  const races = [];
+  for(let r=1; r<=12; r++){
+    const raceId = `${p.yyyy}${venueCode}${String(kd.kai).padStart(2,'0')}${String(kd.day).padStart(2,'0')}${String(r).padStart(2,'0')}`;
+    races.push({
+      raceId,
+      raceNo:r,
+      venueCode,
+      raceName:names.get(r) || `${r}R`,
+      shutuba:shutubaUrl('JRA', raceId),
+      builtFromKaisai:true
+    });
+  }
+  return races;
+}
+
 async function loadRaceList(){
   const date = document.getElementById('pickDate')?.value || todayYmd();
   const kind = document.getElementById('pickKind')?.value || 'JRA';
@@ -1417,13 +1491,16 @@ async function loadRaceList(){
       status.innerHTML = `<div class="url-status">📅 ${date} ${venueName(kind, venueCode)} のrace_idを直接確認中...</div>`;
       races = await loadNarRaceListByRaceId(date, venueCode);
     }else{
-      // JRAは開催一覧から取得。ただしURL/host/race_idの残留は後段で必ず検査する。
+      // JRAのrace_idは日付を直接持たないため、HTML内の古い出馬表リンクが混入すると
+      // 5/17選択なのに5/10のrace_idを拾う事故が起きる。まず「○回東京○日目」から
+      // 当日のrace_idを再構成し、リンクの残留を使わない。
       const url = raceListUrl(kind, date, venueCode);
       const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(url);
-      const res = await fetch(proxyReq);
+      const res = await fetch(proxyReq, { cache:'no-store' });
       if(!res.ok) throw new Error('HTTP ' + res.status);
       const html = await res.text();
-      races = parseRaceIdsFromList(html, kind, venueCode, date)
+      const built = buildJraRacesFromKaisai(html, date, venueCode);
+      races = built.length ? built : parseRaceIdsFromList(html, kind, venueCode, date)
         .filter(r => r.shutuba.includes('https://race.netkeiba.com/') && raceIdVenueMatches(kind, r.raceId, venueCode));
     }
 
@@ -1509,7 +1586,7 @@ async function fetchRace(){
 
   try {
     const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(rawUrl);
-    const res = await fetch(proxyReq);
+    const res = await fetch(proxyReq, { cache:'no-store' });
     if(!res.ok) throw new Error('HTTP ' + res.status);
     const html = await res.text();
     if(validation.raceId && !html.includes(validation.raceId)){

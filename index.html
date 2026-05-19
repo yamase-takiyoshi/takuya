@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.13.4 統合版 Calendar+</title>
+<title>The競馬 EV分析 v5.13.5 統合版 Calendar+</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -111,7 +111,7 @@ select option { background: #1e293b; }
     <h1>🏇 The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.13.4 統合版</span>
+    <span class="ver">v5.13.5 統合版</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1044,12 +1044,25 @@ function renderVenueOptions(listOverride){
   }
 }
 
-function raceListUrl(kind, date){
+function ymdParts(date){
   const d = String(date || '').replaceAll('-','');
+  return { ymd:d, y:d.slice(0,4), md:d.slice(4,8) };
+}
+
+function narKaisaiId(date, venueCode){
+  const p = ymdParts(date);
+  const vc = String(venueCode || '').padStart(2,'0');
+  return p.y + vc + p.md;
+}
+
+function raceListUrl(kind, date, venueCode){
+  const p = ymdParts(date);
   if(kind === 'NAR'){
-    return `https://nar.netkeiba.com/top/race_list.html?kaisai_date=${d}`;
+    // NARは日付ページの初期表示が先頭開催場だけになるため、開催場ごとの kaisai_id を付ける
+    const base = `https://nar.netkeiba.com/top/race_list.html?kaisai_date=${p.ymd}`;
+    return venueCode ? `${base}&kaisai_id=${narKaisaiId(date, venueCode)}` : base;
   }
-  return `https://race.netkeiba.com/top/race_list.html?kaisai_date=${d}`;
+  return `https://race.netkeiba.com/top/race_list.html?kaisai_date=${p.ymd}`;
 }
 
 function shutubaUrl(kind, raceId){
@@ -1111,12 +1124,36 @@ function parseRaceIdsFromList(html, kind, venueCode){
 }
 
 function parseActiveVenuesFromList(html, kind){
-  const races = parseRaceIdsFromList(html, kind, '');
   const byVenue = new Map();
+
+  // まず race_id から判定（JRAはこれで全開催場が取れる）
+  const races = parseRaceIdsFromList(html, kind, '');
   races.forEach(r => {
     if(!r.venueCode) return;
     byVenue.set(r.venueCode, (byVenue.get(r.venueCode) || 0) + 1);
   });
+
+  // NARは初期表示で先頭開催場の race_id しか出ないことがあるため、開催場タブ/リンクの文字からも拾う
+  if(kind === 'NAR'){
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const bodyText = doc.body ? doc.body.textContent : html;
+
+    // kaisai_id がリンクに入っていればそこから開催場コードを取る
+    Array.from(doc.querySelectorAll('a[href*="kaisai_id="]')).forEach(a => {
+      const m = a.href.match(/kaisai_id=(\d{10})/);
+      if(!m) return;
+      const code = m[1].slice(4,6);
+      const name = venueName(kind, code);
+      if(name && name !== code && !byVenue.has(code)) byVenue.set(code, 0);
+    });
+
+    // 画面上のタブ名（例：盛岡・大井・金沢・名古屋）から拾う
+    NAR_VENUES.forEach(([code,name]) => {
+      if(bodyText.includes(name) && !byVenue.has(code)) byVenue.set(code, 0);
+    });
+  }
+
   return Array.from(byVenue.entries())
     .sort((a,b) => a[0].localeCompare(b[0]))
     .map(([code,count]) => [code, venueName(kind, code), count]);
@@ -1137,7 +1174,7 @@ async function loadActiveVenuesForDate(){
 
   try{
     if(status) status.innerHTML = `<div class="url-status">📅 ${date} の開催場を確認中...</div>`;
-    const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(raceListUrl(kind, date));
+    const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(raceListUrl(kind, date, ''));
     const res = await fetch(proxyReq);
     if(!res.ok) throw new Error('HTTP ' + res.status);
     const html = await res.text();
@@ -1168,7 +1205,7 @@ async function loadRaceList(){
   status.innerHTML = `<div class="url-status">📅 レース一覧取得中...</div>`;
 
   try{
-    const url = raceListUrl(kind, date);
+    const url = raceListUrl(kind, date, venueCode);
     const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(url);
     const res = await fetch(proxyReq);
     if(!res.ok) throw new Error('HTTP ' + res.status);

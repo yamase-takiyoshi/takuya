@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.14.6 統合版 Calendar+ NARfix</title>
+<title>The競馬 EV分析 v5.14.7 統合版 RaceIDfix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -111,7 +111,7 @@ select option { background: #1e293b; }
     <h1>🏇 The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.14.6 統合版</span>
+    <span class="ver">v5.14.7 統合版</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1072,9 +1072,15 @@ function shutubaUrl(kind, raceId){
   return `${host}/race/shutuba.html?race_id=${raceId}&rf=race_submenu`;
 }
 
-function extractVenueCodeFromRaceId(raceId){
+function extractVenueCodeFromRaceId(raceId, kind){
   const id = String(raceId || '');
-  return id.length >= 6 ? id.slice(4,6) : '';
+  if(id.length < 10) return '';
+
+  // netkeiba race_id は JRA/NAR とも先頭4桁が年、次の2桁が開催場コード。
+  // JRA例: YYYY + 場コード + 開催回 + 日次 + RR
+  // NAR例: YYYY + 場コード + MMDD + RR
+  // ここを race_id 基準で統一し、開催場プルダウンへの混入を防ぐ。
+  return id.slice(4,6);
 }
 
 function raceIdMatchesSelectedDate(kind, raceId, date){
@@ -1106,11 +1112,20 @@ function parseRaceIdsFromList(html, kind, venueCode, date){
 
   links.forEach(a => {
     const href = a.getAttribute('href') || a.href || '';
+    // レース一覧以外のリンク（過去成績・検索結果・広告等）が大量に混入すると、
+    // 552R のような異常カウントになるため、出馬表リンクを最優先で採用する。
+    const isShutubaLike = /shutuba\.html|race\/shutuba|nar\.netkeiba\.com\/race\/shutuba|race\.netkeiba\.com\/race\/shutuba/.test(href);
+    if(kind === 'JRA' && !isShutubaLike) return;
+    if(kind === 'NAR' && !isShutubaLike && !/race_id=/.test(href)) return;
+
+    const kdm = href.match(/kaisai_date=(\d{8})/);
+    if(kind === 'JRA' && kdm && kdm[1] !== ymdParts(date).yyyymmdd) return;
+
     const m = href.match(/race_id=(\d{10,14})/);
     if(!m) return;
     const id = m[1];
     if(!raceIdMatchesSelectedDate(kind, id, date)) return;
-    const vc = extractVenueCodeFromRaceId(id);
+    const vc = extractVenueCodeFromRaceId(id, kind);
     if(venueCode && vc !== venueCode) return;
     const raceNo = Number(id.slice(-2));
     const parentText = (a.closest('li, tr, dd, dl, .RaceList_DataItem, .RaceList_Item, .RaceList_Box, .RaceList_Table') || a.parentElement || a).textContent;
@@ -1125,7 +1140,7 @@ function parseRaceIdsFromList(html, kind, venueCode, date){
     while((m = re.exec(html))){
       const id = m[1];
       if(!raceIdMatchesSelectedDate(kind, id, date)) continue;
-      const vc = extractVenueCodeFromRaceId(id);
+      const vc = extractVenueCodeFromRaceId(id, kind);
       if(venueCode && vc !== venueCode) continue;
       if(!map.has(id)) map.set(id, { raceId:id, raceNo:Number(id.slice(-2)), venueCode:vc, raceName:`${Number(id.slice(-2))}R`, shutuba:shutubaUrl(kind, id) });
     }
@@ -1139,37 +1154,19 @@ function parseActiveVenuesFromList(html, kind, date){
   const p = ymdParts(date);
 
   if(kind !== 'NAR'){
-    // JRA: race_idには日付情報がないため、getAttribute(href)のkaisai_dateで日付フィルタ。
-    // netkeiba一覧HTMLには土日両日分が含まれることがあるため必須。
-    // race_id単位で重複排除し、場コードの出現数を正確に計上する。
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(html, 'text/html');
-    const seenIds = new Set();
-    doc.querySelectorAll('a[href*="race_id="]').forEach(a => {
-      const href = a.getAttribute('href') || '';
-      const kdm = href.match(/kaisai_date=(\d{8})/);
-      if(!kdm) return;                      // kaisai_date なしは無視
-      if(kdm[1] !== p.yyyymmdd) return;    // 別日は除外
-      const m = href.match(/race_id=(\d{10,14})/);
-      if(!m) return;
-      const id = m[1];
-      if(seenIds.has(id)) return;
-      seenIds.add(id);
-      const vc = extractVenueCodeFromRaceId(id);
-      if(!vc) return;
-      byVenue.set(vc, (byVenue.get(vc) || 0) + 1);
+    // JRA: レース一覧の出馬表リンクだけを race_id 単位で採用する。
+    // 過去成績・オッズ・広告などの race_id 混入を避け、開催場別に「レース番号」の集合で数える。
+    const races = parseRaceIdsFromList(html, kind, '', date);
+    races.forEach(r => {
+      if(!r.venueCode) return;
+      if(!JRA_VENUES.some(v => v[0] === r.venueCode)) return;
+      if(!byVenue.has(r.venueCode)) byVenue.set(r.venueCode, new Set());
+      if(r.raceNo >= 1 && r.raceNo <= 12) byVenue.get(r.venueCode).add(r.raceNo);
     });
-    // kaisai_date 付きリンクが1件もない → race_id ベースにフォールバック
-    if(!byVenue.size){
-      const races = parseRaceIdsFromList(html, kind, '', date);
-      races.forEach(r => {
-        if(!r.venueCode) return;
-        byVenue.set(r.venueCode, (byVenue.get(r.venueCode) || 0) + 1);
-      });
-    }
+
     return Array.from(byVenue.entries())
       .sort((a,b) => a[0].localeCompare(b[0]))
-      .map(([code,count]) => [code, venueName(kind, code), count]);
+      .map(([code,set]) => [code, venueName(kind, code), set.size]);
   }
 
   // まず、その日付に一致する race_id だけから開催場を作る。
@@ -1256,7 +1253,7 @@ function expectedHostForKind(kind){
 
 function raceIdVenueMatches(kind, raceId, venueCode){
   if(!venueCode) return true;
-  return extractVenueCodeFromRaceId(raceId) === venueCode;
+  return extractVenueCodeFromRaceId(raceId, kind) === venueCode;
 }
 
 function validateRaceUrlForCurrentSelection(rawUrl){

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.15.0 統合版 Sim復活</title>
+<title>The競馬 EV分析 v5.15.1 統合版 JRA修正</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -118,7 +118,7 @@ select option { background: #1e293b; }
     <h1>🏇 The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.15.0 統合版</span>
+    <span class="ver">v5.15.1 統合版</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -432,7 +432,7 @@ function corsHeaders(contentType) {<br>
 
 <script>
 // ============================================================
-// The競馬 EV分析 HTML版 v5.13.1
+// The競馬 EV分析 HTML版 v5.15.1
 // EV計算・確率モデル・推奨ロジックを結合版.jsから移植
 // ============================================================
 
@@ -1898,18 +1898,121 @@ async function fetchRace(){
 }
 
 function parseRaceTitleFromDoc(doc){
+  // netkeibaのタブ名（データ分析・オッズ等）をレース名として拾わないように厳格化。
+  const bad = /データ分析|オッズ|購入|予想|結果|払戻|レース映像|掲示板|お気に入り|netkeiba|競馬データベース/i;
   const candidates = [
-    doc.querySelector('.RaceName'),
-    doc.querySelector('[class*="RaceName"]'),
-    doc.querySelector('h1'),
-    doc.querySelector('title')
+    ...doc.querySelectorAll('.RaceName, [class*="RaceName"], h1')
   ];
   for(const el of candidates){
     if(!el) continue;
-    let t = el.textContent.replace(/出馬表|オッズ|競馬データベース|netkeiba.com|｜.*$/g,'').replace(/\s+/g,' ').trim();
-    if(t && t.length >= 2) return t;
+    let t = (el.textContent || '')
+      .replace(/出馬表|オッズ|競馬データベース|netkeiba\.com|｜.*$/g,'')
+      .replace(/\s+/g,' ')
+      .trim();
+    if(t && t.length >= 2 && !bad.test(t)) return t;
   }
-  return '';
+  const title = (doc.querySelector('title')?.textContent || '')
+    .replace(/出馬表|オッズ|競馬データベース|netkeiba\.com|｜.*$/g,'')
+    .replace(/\s+/g,' ')
+    .trim();
+  return title && !bad.test(title) ? title : '';
+}
+
+function normCellText(el){
+  return String(el?.textContent || '')
+    .replace(/\u00a0/g,' ')
+    .replace(/[\r\n\t]+/g,' ')
+    .replace(/\s+/g,' ')
+    .trim();
+}
+
+function toHalfNumberText(v){
+  return String(v || '').replace(/[０-９．]/g, ch => {
+    if(ch === '．') return '.';
+    return String.fromCharCode(ch.charCodeAt(0) - 0xFEE0);
+  });
+}
+
+function findHeaderIndex(tr, headerRegex){
+  const table = tr.closest('table');
+  if(!table) return -1;
+  const headerRows = Array.from(table.querySelectorAll('thead tr, tr')).filter(r => r.querySelector('th'));
+  for(const hr of headerRows){
+    const cells = Array.from(hr.children);
+    for(let i=0;i<cells.length;i++){
+      const tx = normCellText(cells[i]);
+      if(headerRegex.test(tx)) return i;
+    }
+  }
+  return -1;
+}
+
+function cellByHeader(tr, headerRegex){
+  const idx = findHeaderIndex(tr, headerRegex);
+  if(idx < 0) return null;
+  return Array.from(tr.children)[idx] || null;
+}
+
+function firstNumberInCell(el, allowDecimal=false){
+  const t = toHalfNumberText(normCellText(el));
+  const re = allowDecimal ? /(\d{1,4}(?:\.\d+)?)/ : /(\d{1,2})/;
+  const m = t.match(re);
+  return m ? Number(m[1]) : 0;
+}
+
+function extractOddsFromRow(tr){
+  // 最優先: 表ヘッダー「オッズ」「予想オッズ」に対応するセル。
+  // これによりJRAの斤量55.0を単勝オッズとして誤読しない。
+  const byHead = cellByHeader(tr, /^(予想)?オッズ$|単勝オッズ|人気オッズ/);
+  let v = firstNumberInCell(byHead, true);
+  if(v >= 1 && v <= 9999) return v;
+
+  const selectors = [
+    'td.Odds', 'td[class~="Odds"]', '[class*="Tansho"]', '[class*="Odds"]',
+    '[class*="odds"]', '.RaceOdds', '.Popular_Odds'
+  ];
+  for(const sel of selectors){
+    for(const el of tr.querySelectorAll(sel)){
+      const cls = String(el.className || '').toLowerCase();
+      if(/kinryo|weight|futan|sex|age|jockey|trainer|stable|time|margin/.test(cls)) continue;
+      v = firstNumberInCell(el, true);
+      if(v >= 1 && v <= 9999) return v;
+    }
+  }
+
+  // 最後の保険: 人気セルの直前にある小数を使う。斤量列は人気セルから離れているため避けやすい。
+  const cells = Array.from(tr.children);
+  const popIdx = findHeaderIndex(tr, /^人気$|人気順/);
+  if(popIdx > 0){
+    for(let i=popIdx-1; i>=0 && i>=popIdx-3; i--){
+      const txt = toHalfNumberText(normCellText(cells[i]));
+      const m = txt.match(/^(\d{1,4}\.\d+)$/) || txt.match(/(\d{1,4}\.\d+)/);
+      if(m){
+        v = Number(m[1]);
+        if(v >= 1 && v <= 9999) return v;
+      }
+    }
+  }
+  return 0;
+}
+
+function extractPopularityFromRow(tr, horseNo){
+  const byHead = cellByHeader(tr, /^人気$|人気順/);
+  let v = firstNumberInCell(byHead, false);
+  if(v >= 1 && v <= 18) return v;
+
+  const selectors = ['td.Popular', '[class*="Popular"]', '[class*="Ninki"]', '.Rank'];
+  for(const sel of selectors){
+    for(const el of tr.querySelectorAll(sel)){
+      const tx = toHalfNumberText(normCellText(el));
+      let m = tx.match(/(\d{1,2})\s*人気/) || tx.match(/^(\d{1,2})$/);
+      if(m){
+        v = Number(m[1]);
+        if(v >= 1 && v <= 18 && v !== horseNo) return v;
+      }
+    }
+  }
+  return 0;
 }
 
 function parseHorsesFromDoc(doc, url){
@@ -1917,48 +2020,43 @@ function parseHorsesFromDoc(doc, url){
   const list = [];
   const seen = new Set();
 
-  const rows = doc.querySelectorAll(
-    'tr.HorseList, tr[class*="HorseList"], tbody tr, table tr'
-  );
+  // JRA/NARとも「馬リンクが存在する行」だけを採用。広告・払戻・分析タブの混入を遮断する。
+  const rows = Array.from(doc.querySelectorAll('tr.HorseList, tr[class*="HorseList"], tbody tr, table tr'));
 
   rows.forEach(tr => {
 
     const horseLink = tr.querySelector('a[href*="/horse/"]');
     if(!horseLink) return;
 
-    const horseName =
-      horseLink.textContent
-        .replace(/のデータベース/g,'')
-        .replace(/データベース/g,'')
-        .replace(/\s+/g,'')
-        .trim();
+    const horseName = normCellText(horseLink)
+      .replace(/のデータベース/g,'')
+      .replace(/データベース/g,'')
+      .replace(/\s+/g,'')
+      .trim();
 
     if(!horseName) return;
 
     let num = 0;
 
-    const numEl =
-      tr.querySelector('.Umaban') ||
-      tr.querySelector('[class*="Umaban"]') ||
-      tr.querySelector('td[class*="HorseNum"]') ||
-      tr.querySelector('td[class*="Num"]');
+    // 最優先: ヘッダー「馬番」に対応するセル。
+    num = firstNumberInCell(cellByHeader(tr, /^馬番$/), false);
 
-    if(numEl){
-      num = Number(numEl.textContent.replace(/\D/g,''));
+    if(!num){
+      const numEl =
+        tr.querySelector('.Umaban') ||
+        tr.querySelector('[class*="Umaban"]') ||
+        tr.querySelector('td[class*="HorseNum"]') ||
+        tr.querySelector('td[class*="Num"]');
+      num = firstNumberInCell(numEl, false);
     }
 
     if(!num){
-      const cells = Array.from(tr.querySelectorAll('td,th')).map(td =>
-        td.textContent.replace(/\s+/g,' ').trim()
-      );
-      for(const c of cells.slice(0,4)){
-        const m = c.match(/^\d{1,2}$/);
+      const cells = Array.from(tr.querySelectorAll('td,th')).map(td => normCellText(td));
+      for(const c of cells.slice(0,5)){
+        const m = toHalfNumberText(c).match(/^\d{1,2}$/);
         if(m){
-          const v = Number(m[0]);
-          if(v >= 1 && v <= 18){
-            num = v;
-            break;
-          }
+          const vv = Number(m[0]);
+          if(vv >= 1 && vv <= 18){ num = vv; break; }
         }
       }
     }
@@ -1966,67 +2064,18 @@ function parseHorsesFromDoc(doc, url){
     if(!num || num < 1 || num > 18) return;
     if(seen.has(num)) return;
 
-    let frame = 0;
-
-    const frameEl =
-      tr.querySelector('.Waku') ||
-      tr.querySelector('[class*="Waku"]') ||
-      tr.querySelector('[class*="Frame"]');
-
-    if(frameEl){
-      frame = Number(frameEl.textContent.replace(/\D/g,'')) || 0;
+    let frame = firstNumberInCell(cellByHeader(tr, /^枠$|枠番/), false);
+    if(!frame){
+      const frameEl =
+        tr.querySelector('.Waku') ||
+        tr.querySelector('[class*="Waku"]') ||
+        tr.querySelector('[class*="Frame"]');
+      frame = firstNumberInCell(frameEl, false) || 0;
     }
+    if(frame < 1 || frame > 8) frame = Math.ceil(num / 2);
 
-    let odds = 0;
-
-    const oddsCandidates = [
-      tr.querySelector('.Popular_Ninki'),
-      tr.querySelector('.Odds'),
-      tr.querySelector('[class*="Odds"]'),
-      tr.querySelector('[class*="odds"]'),
-      ...tr.querySelectorAll('td'),
-      ...tr.querySelectorAll('span')
-    ];
-
-    for(const el of oddsCandidates){
-      if(!el) continue;
-      const txt = el.textContent.replace(/\s+/g,' ').trim();
-      const m = txt.match(/\d+\.\d+/);
-      if(m){
-        const v = Number(m[0]);
-        if(v >= 1 && v <= 9999){
-          odds = v;
-          break;
-        }
-      }
-    }
-
-    let pop = 0;
-
-    const popCandidates = [
-      tr.querySelector('.Popular'),
-      tr.querySelector('[class*="Popular"]'),
-      tr.querySelector('[class*="Ninki"]'),
-      ...tr.querySelectorAll('td'),
-      ...tr.querySelectorAll('span')
-    ];
-
-    for(const el of popCandidates){
-      if(!el) continue;
-      const txt = el.textContent.replace(/\s+/g,' ').trim();
-      let m = txt.match(/(\d{1,2})人気/);
-      if(!m){
-        const only = txt.match(/^(\d{1,2})$/);
-        if(only && Number(only[1]) !== num) m = only;
-      }
-      if(m){
-        const v = Number(m[1]);
-        if(v >= 1 && v <= 18){
-          pop = v;
-          break;
-        }
-      }
-    }
+    const odds = extractOddsFromRow(tr);
+    const pop = extractPopularityFromRow(tr, num);
 
     seen.add(num);
 

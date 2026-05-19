@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.13.4 統合版 Calendar</title>
+<title>The競馬 EV分析 v5.13.5 統合版 Calendar</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -96,6 +96,13 @@ select option { background: #1e293b; }
 .pick-grid .field { margin-bottom: 0; }
 .race-select-box { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
 .race-select-box select { flex: 1; }
+.sim-kpi { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-bottom:10px; }
+.sim-kpi .box { background:var(--surface); border-radius:8px; padding:10px 6px; text-align:center; }
+.sim-kpi .box .val { font-size:17px; font-weight:800; }
+.sim-kpi .box .lbl { font-size:10px; color:var(--muted); margin-top:2px; }
+.hit { color:var(--green); font-weight:800; }
+.miss { color:var(--red); font-weight:800; }
+.sim-log { font-size:12px; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:8px; max-height:180px; overflow:auto; white-space:pre-wrap; }
 
 </style>
 </head>
@@ -106,7 +113,7 @@ select option { background: #1e293b; }
     <h1>🏇 The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.13.4 統合版</span>
+    <span class="ver">v5.13.5 統合版</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -117,6 +124,7 @@ select option { background: #1e293b; }
   <div class="tabs">
     <button class="tab-btn active" data-tab="horses">🐎 馬データ</button>
     <button class="tab-btn" data-tab="result">📊 推奨買い目</button>
+    <button class="tab-btn" data-tab="simulation">🧪 シミュレーション</button>
     <button class="tab-btn" data-tab="settings">⚙️ 設定</button>
     <button class="tab-btn" data-tab="proxy">🌐 プロキシ</button>
   </div>
@@ -220,6 +228,38 @@ select option { background: #1e293b; }
 
   </div>
 
+
+  <div id="tab-simulation" style="display:none">
+    <div class="card">
+      <h2>🧪 買ったつもりシミュレーション</h2>
+      <div class="sim-kpi">
+        <div class="box"><div class="val" id="simInvest">0円</div><div class="lbl">投資</div></div>
+        <div class="box"><div class="val" id="simReturn">0円</div><div class="lbl">払戻</div></div>
+        <div class="box"><div class="val" id="simRoi">0%</div><div class="lbl">回収率</div></div>
+      </div>
+      <div class="field">
+        <label>結果URL（通常は自動生成）</label>
+        <input type="url" id="resultUrl" placeholder="https://race.netkeiba.com/race/result.html?race_id=...">
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="runSimulation()">🧪 このレースを精算</button>
+        <button class="btn-sm" onclick="clearSimHistory()">履歴クリア</button>
+      </div>
+      <div id="simStatus"></div>
+    </div>
+    <div class="card"><h2>🎯 的中判定</h2><div id="simTicketResult" class="empty">まだシミュレーションしていません。</div></div>
+    <div class="card"><h2>💰 払戻データ</h2><div id="simPayoutView" class="empty">結果ページ取得後に表示されます。</div></div>
+    <div class="card">
+      <h2>📚 累計履歴</h2>
+      <div class="sim-kpi">
+        <div class="box"><div class="val" id="histRaces">0</div><div class="lbl">件数</div></div>
+        <div class="box"><div class="val" id="histProfit">0円</div><div class="lbl">収支</div></div>
+        <div class="box"><div class="val" id="histRoi">0%</div><div class="lbl">累計ROI</div></div>
+      </div>
+      <div id="simHistory" class="sim-log"></div>
+    </div>
+  </div>
+
   <!-- 設定タブ -->
   <div id="tab-settings" style="display:none">
 
@@ -288,16 +328,16 @@ export default {<br>
 &nbsp;&nbsp;&nbsp;&nbsp;const url = new URL(request.url);<br>
 &nbsp;&nbsp;&nbsp;&nbsp;const target = url.searchParams.get('url');<br>
 <br>
-&nbsp;&nbsp;&nbsp;&nbsp;if (request.method === 'OPTIONS') {<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return new Response(null, {<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;status: 204,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;if (!target) {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return new Response('url param required', {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;status: 400,<br>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;headers: corsHeaders('text/plain; charset=UTF-8')<br>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;});<br>
 &nbsp;&nbsp;&nbsp;&nbsp;}<br>
 <br>
-&nbsp;&nbsp;&nbsp;&nbsp;if (!target) {<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return new Response('url param required', {<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;status: 400,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;if (request.method === 'OPTIONS') {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return new Response(null, {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;status: 204,<br>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;headers: corsHeaders('text/plain; charset=UTF-8')<br>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;});<br>
 &nbsp;&nbsp;&nbsp;&nbsp;}<br>
@@ -315,42 +355,19 @@ export default {<br>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'ja,en-US;q=0.9,en;q=0.8',<br>
 <br>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'Referer':<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;target.includes('nar.netkeiba.com')<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;? 'https://nar.netkeiba.com/'<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;: 'https://race.netkeiba.com/',<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'https://race.netkeiba.com/',<br>
 <br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'Cache-Control': 'no-cache',<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'Pragma': 'no-cache'<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'Cache-Control':<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'no-cache',<br>
+<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'Pragma':<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'no-cache'<br>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}<br>
 &nbsp;&nbsp;&nbsp;&nbsp;});<br>
 <br>
-&nbsp;&nbsp;&nbsp;&nbsp;const buffer = await res.arrayBuffer();<br>
+&nbsp;&nbsp;&nbsp;&nbsp;const html = await res.text();<br>
 <br>
-&nbsp;&nbsp;&nbsp;&nbsp;let charset = 'utf-8';<br>
-<br>
-&nbsp;&nbsp;&nbsp;&nbsp;const contentType = res.headers.get('content-type') || '';<br>
-&nbsp;&nbsp;&nbsp;&nbsp;const ctCharset = contentType.match(/charset=([^;]+)/i);<br>
-&nbsp;&nbsp;&nbsp;&nbsp;if (ctCharset) {<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;charset = ctCharset[1].trim().toLowerCase();<br>
-&nbsp;&nbsp;&nbsp;&nbsp;}<br>
-<br>
-&nbsp;&nbsp;&nbsp;&nbsp;if (target.includes('nar.netkeiba.com')) {<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;charset = 'euc-jp';<br>
-&nbsp;&nbsp;&nbsp;&nbsp;}<br>
-<br>
-&nbsp;&nbsp;&nbsp;&nbsp;let bodyText = '';<br>
-<br>
-&nbsp;&nbsp;&nbsp;&nbsp;try {<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;bodyText = new TextDecoder(charset).decode(buffer);<br>
-&nbsp;&nbsp;&nbsp;&nbsp;} catch (e) {<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;try {<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;bodyText = new TextDecoder('shift_jis').decode(buffer);<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;} catch (e2) {<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;bodyText = new TextDecoder('utf-8').decode(buffer);<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}<br>
-&nbsp;&nbsp;&nbsp;&nbsp;}<br>
-<br>
-&nbsp;&nbsp;&nbsp;&nbsp;return new Response(bodyText, {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;return new Response(html, {<br>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;status: res.status,<br>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;headers: corsHeaders('text/html; charset=UTF-8')<br>
 &nbsp;&nbsp;&nbsp;&nbsp;});<br>
@@ -434,6 +451,8 @@ let settings = {
 let horses = [];
 let lastRecs = [];
 let lastTickets = [];
+let simHistory = [];
+let lastRaceUrl = '';
 
 // ─── 設定ロード ────────────────────────────────
 function loadSettings(){
@@ -1013,7 +1032,11 @@ function applySelectedRaceUrl(){
   const raceSelect = document.getElementById('raceSelect');
   const raceUrl = document.getElementById('raceUrl');
   if(!raceSelect || !raceUrl) return;
-  if(raceSelect.value) raceUrl.value = raceSelect.value;
+  if(raceSelect.value){
+    raceUrl.value = raceSelect.value;
+    const resultInput = document.getElementById('resultUrl');
+    if(resultInput) resultInput.value = makeResultUrl(raceSelect.value);
+  }
 }
 
 function initCalendarPicker(){
@@ -1030,6 +1053,9 @@ function initCalendarPicker(){
 // ─── netkeibaプロキシ取得 ────────────────────────
 async function fetchRace(){
   const rawUrl = document.getElementById('raceUrl').value.trim();
+  lastRaceUrl = rawUrl;
+  const resultInput = document.getElementById('resultUrl');
+  if(resultInput) resultInput.value = makeResultUrl(rawUrl);
   if(!rawUrl){ alert('URLを入力してください。'); return; }
   if(!settings.proxyUrl){
     alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。');
@@ -1199,6 +1225,172 @@ function parseHorsesFromDoc(doc, url){
 
   return list.sort((a,b)=>a.num-b.num);
 }
+
+// ─── シミュレーション・結果精算 ─────────────────────
+function yenFmt(n){ return Number(n || 0).toLocaleString('ja-JP') + '円'; }
+
+function makeResultUrl(u){
+  try{
+    const url = new URL(u);
+    const raceId = url.searchParams.get('race_id');
+    if(!raceId) return u;
+    const host = url.host.includes('nar.') ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com';
+    return `${host}/race/result.html?race_id=${raceId}&rf=race_submenu`;
+  }catch(e){ return String(u||'').replace('/shutuba.html','/result.html'); }
+}
+
+function normCombo(nums, ordered){
+  const arr = Array.isArray(nums) ? nums.map(Number) : String(nums).split('-').map(Number);
+  return ordered ? arr.join('-') : arr.slice().sort((a,b)=>a-b).join('-');
+}
+function ticketKey(type, nums){ return type + '|' + normCombo(nums, ['馬単','3連単'].includes(type)); }
+function payoutKey(type, combo){ return type + '|' + normCombo(combo, ['馬単','3連単'].includes(type)); }
+
+function parseResultFromDoc(doc){ return { finish: parseFinishFromResult(doc), payouts: parsePayoutsFromResult(doc) }; }
+
+function parseFinishFromResult(doc){
+  const out = [], seen = new Set();
+  doc.querySelectorAll('tr').forEach(tr => {
+    const horseLink = tr.querySelector('a[href*="/horse/"]');
+    if(!horseLink) return;
+    const cells = Array.from(tr.querySelectorAll('td,th')).map(td => td.textContent.replace(/\s+/g,' ').trim());
+    let rank=0, frame=0, horseNo=0;
+    for(const c of cells.slice(0,5)){
+      const m = c.match(/^\d{1,2}$/); if(!m) continue;
+      const v = Number(m[0]);
+      if(!rank && v>=1 && v<=30){ rank=v; continue; }
+      if(!frame && v>=1 && v<=8){ frame=v; continue; }
+      if(!horseNo && v>=1 && v<=18){ horseNo=v; continue; }
+    }
+    const horse = horseLink.textContent.replace(/のデータベース/g,'').replace(/データベース/g,'').replace(/\s+/g,'').trim();
+    if(rank && horseNo && horse){
+      const k = rank+'-'+horseNo;
+      if(!seen.has(k)){ seen.add(k); out.push({rank, frame, horseNo, horse}); }
+    }
+  });
+  return out.sort((a,b)=>a.rank-b.rank);
+}
+
+function parsePayoutsFromResult(doc){
+  const payouts = [], types = ['単勝','複勝','枠連','馬連','ワイド','馬単','3連複','3連単'];
+  doc.querySelectorAll('tr').forEach(tr => {
+    const row = tr.textContent.replace(/\s+/g,' ').trim();
+    const type = types.find(t => row.includes(t));
+    if(type) collectPayoutsFromText(type, row, payouts);
+  });
+  const bodyText = (doc.body ? doc.body.textContent : '').replace(/\s+/g,' ');
+  types.forEach(type => {
+    if(payouts.some(p => p.type === type)) return;
+    const idx = bodyText.indexOf(type);
+    if(idx < 0) return;
+    const nexts = types.map(t => bodyText.indexOf(t, idx + type.length)).filter(v => v > idx);
+    const end = nexts.length ? Math.min(...nexts) : Math.min(bodyText.length, idx + 300);
+    collectPayoutsFromText(type, bodyText.slice(idx, end), payouts);
+  });
+  const seen = new Set();
+  return payouts.filter(p => { const k=p.type+'|'+p.combo+'|'+p.pay; if(seen.has(k))return false; seen.add(k); return true; });
+}
+
+function collectPayoutsFromText(type, text, out){
+  const need = (type === '単勝' || type === '複勝') ? 1 : ((type === '3連複' || type === '3連単') ? 3 : 2);
+  const comboPattern = need === 1 ? /(?:^|\s)(\d{1,2})(?=\s|$)/g :
+    need === 2 ? /(\d{1,2})\s*[-－ー―−→]\s*(\d{1,2})/g :
+    /(\d{1,2})\s*[-－ー―−→]\s*(\d{1,2})\s*[-－ー―−→]\s*(\d{1,2})/g;
+  const combos = [];
+  let m;
+  while((m = comboPattern.exec(text))){
+    const arr = m.slice(1).filter(Boolean).map(Number);
+    if(arr.length === need && arr.every(n => n>=1 && n<=18)) combos.push(arr.join('-'));
+  }
+  const pays = Array.from(text.matchAll(/(\d[\d,]*)\s*円/g)).map(x => Number(x[1].replace(/,/g,'')));
+  const pops = Array.from(text.matchAll(/(\d{1,3})\s*人気/g)).map(x => Number(x[1]));
+  for(let i=0;i<Math.min(combos.length,pays.length);i++){
+    if(pays[i] >= 100) out.push({type, combo:combos[i], pay:pays[i], popularity:pops[i] || ''});
+  }
+}
+
+async function runSimulation(){
+  if(!lastTickets || !lastTickets.length){ alert('先にEV計算・買い目推奨を実行してください。'); return; }
+  const resultUrlEl = document.getElementById('resultUrl');
+  let url = resultUrlEl?.value || makeResultUrl(lastRaceUrl || document.getElementById('raceUrl')?.value || '');
+  if(resultUrlEl && !resultUrlEl.value) resultUrlEl.value = url;
+  if(!url){ alert('結果URLがありません。'); return; }
+  if(!settings.proxyUrl){ alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。'); return; }
+
+  const status = document.getElementById('simStatus');
+  status.innerHTML = '<div class="url-status">🧪 結果ページ取得中...</div>';
+  try{
+    const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(url);
+    const res = await fetch(proxyReq);
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    const result = parseResultFromDoc(doc);
+    const payoutMap = new Map();
+    result.payouts.forEach(p => payoutMap.set(payoutKey(p.type, p.combo), p));
+    let invest=0, ret=0;
+    const rows = lastTickets.map(t => {
+      invest += Number(t.amount || 0);
+      const hit = payoutMap.get(ticketKey(t.type, t.nums));
+      const pay = hit ? Math.floor((Number(hit.pay)||0) * (Number(t.amount||0)/100)) : 0;
+      ret += pay;
+      return {...t, hit:!!hit, pay, payout:hit};
+    });
+    const roi = invest ? Math.round(ret / invest * 100) : 0;
+    const profit = ret - invest;
+    document.getElementById('simInvest').textContent = yenFmt(invest);
+    document.getElementById('simReturn').textContent = yenFmt(ret);
+    document.getElementById('simRoi').textContent = roi + '%';
+    renderSimTickets(rows);
+    renderSimPayouts(result.payouts);
+    const entry = { at:new Date().toLocaleString('ja-JP'), url, invest, ret, profit, roi, hits:rows.filter(r=>r.hit).length, tickets:rows.length };
+    simHistory.unshift(entry); simHistory = simHistory.slice(0,100);
+    localStorage.setItem('tk-sim-history', JSON.stringify(simHistory));
+    renderSimHistory();
+    status.innerHTML = `<div class="url-status ok">✅ 精算完了：${entry.hits}/${rows.length} 的中 / 収支 ${yenFmt(profit)}</div>`;
+  }catch(e){
+    console.error(e);
+    status.innerHTML = `<div class="url-status err">❌ 精算失敗: ${e.message}</div>`;
+  }
+}
+
+function renderSimTickets(rows){
+  const el = document.getElementById('simTicketResult');
+  el.innerHTML = rows.length ? rows.map(r => `
+    <div class="ticket-row">
+      <span class="chip ${CHIP_CLASS[r.type]||''}">${r.type}</span>
+      <div class="info"><b>${r.nums.join('-')}</b><span style="margin-left:8px" class="${r.hit?'hit':'miss'}">${r.hit?'的中':'不的中'}</span>${r.payout ? `<span style="color:var(--muted);font-size:11px;margin-left:6px">払戻 ${r.payout.pay}円</span>` : ''}</div>
+      <div class="stake">${yenFmt(r.pay)}</div>
+    </div>`).join('') : '<div class="empty">買い目なし</div>';
+}
+
+function renderSimPayouts(payouts){
+  const el = document.getElementById('simPayoutView');
+  if(!payouts.length){ el.innerHTML = '<div class="empty">払戻を取得できませんでした。</div>'; return; }
+  el.innerHTML = `<table class="result-table"><thead><tr><th>券種</th><th>組合せ</th><th>払戻</th><th>人気</th></tr></thead><tbody>` +
+    payouts.map(p => `<tr><td>${p.type}</td><td>${p.combo}</td><td>${yenFmt(p.pay)}</td><td>${p.popularity || ''}</td></tr>`).join('') + '</tbody></table>';
+}
+
+function loadSimHistory(){
+  try{ simHistory = JSON.parse(localStorage.getItem('tk-sim-history') || '[]'); }catch(e){ simHistory = []; }
+  renderSimHistory();
+}
+function renderSimHistory(){
+  const invest = simHistory.reduce((s,x)=>s+Number(x.invest||0),0);
+  const ret = simHistory.reduce((s,x)=>s+Number(x.ret||0),0);
+  const profit = ret - invest;
+  const roi = invest ? Math.round(ret/invest*100) : 0;
+  if(!document.getElementById('histRaces')) return;
+  document.getElementById('histRaces').textContent = simHistory.length;
+  document.getElementById('histProfit').textContent = yenFmt(profit);
+  document.getElementById('histRoi').textContent = roi + '%';
+  document.getElementById('simHistory').textContent = simHistory.map(x => `${x.at} / ${x.hits}/${x.tickets}的中 / 投資${x.invest}円 / 払戻${x.ret}円 / 収支${x.profit}円 / ROI${x.roi}%`).join('\n') || '履歴なし';
+}
+function clearSimHistory(){
+  if(!confirm('シミュレーション履歴を削除しますか？')) return;
+  simHistory = []; localStorage.removeItem('tk-sim-history'); renderSimHistory();
+}
+
+
 // ─── プロキシテスト ──────────────────────────────
 async function testProxy(){
   const url = document.getElementById('proxyUrl').value.trim();
@@ -1225,16 +1417,16 @@ function copyWorkerCode(){
     const url = new URL(request.url);
     const target = url.searchParams.get('url');
 
-    if (request.method === 'OPTIONS') {
-      return new Response(null, {
-        status: 204,
+    if (!target) {
+      return new Response('url param required', {
+        status: 400,
         headers: corsHeaders('text/plain; charset=UTF-8')
       });
     }
 
-    if (!target) {
-      return new Response('url param required', {
-        status: 400,
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        status: 204,
         headers: corsHeaders('text/plain; charset=UTF-8')
       });
     }
@@ -1252,42 +1444,19 @@ function copyWorkerCode(){
           'ja,en-US;q=0.9,en;q=0.8',
 
         'Referer':
-          target.includes('nar.netkeiba.com')
-            ? 'https://nar.netkeiba.com/'
-            : 'https://race.netkeiba.com/',
+          'https://race.netkeiba.com/',
 
-        'Cache-Control': 'no-cache',
-        'Pragma': 'no-cache'
+        'Cache-Control':
+          'no-cache',
+
+        'Pragma':
+          'no-cache'
       }
     });
 
-    const buffer = await res.arrayBuffer();
+    const html = await res.text();
 
-    let charset = 'utf-8';
-
-    const contentType = res.headers.get('content-type') || '';
-    const ctCharset = contentType.match(/charset=([^;]+)/i);
-    if (ctCharset) {
-      charset = ctCharset[1].trim().toLowerCase();
-    }
-
-    if (target.includes('nar.netkeiba.com')) {
-      charset = 'euc-jp';
-    }
-
-    let bodyText = '';
-
-    try {
-      bodyText = new TextDecoder(charset).decode(buffer);
-    } catch (e) {
-      try {
-        bodyText = new TextDecoder('shift_jis').decode(buffer);
-      } catch (e2) {
-        bodyText = new TextDecoder('utf-8').decode(buffer);
-      }
-    }
-
-    return new Response(bodyText, {
+    return new Response(html, {
       status: res.status,
       headers: corsHeaders('text/html; charset=UTF-8')
     });
@@ -1315,6 +1484,7 @@ function corsHeaders(contentType) {
 // ─── 起動 ────────────────────────────────────────
 initUI();
 initCalendarPicker();
+loadSimHistory();
 
 // デモデータ
 if(horses.length === 0){

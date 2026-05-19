@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.16.0 Product Simulation</title>
+<title>The競馬 EV分析 v5.16.1 Product Simulation</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -112,7 +112,7 @@ select option { background: #1e293b; }
 
 
 /* ============================================================
-   v5.16.0 Product Simulation Theme / 緑の旧アイコン復活
+   v5.16.1 Product Simulation Theme / 緑の旧アイコン復活
    ============================================================ */
 :root{
   --accent:#00e676;
@@ -193,7 +193,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.16.0 Product</span>
+    <span class="ver">v5.16.1 Product</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1942,19 +1942,48 @@ function buildJraRacesFromFixedKaisai(html, date, venueCode, kd){
   return races;
 }
 
+function jraRaceDayKey(raceId){
+  const id = String(raceId || '');
+  // JRA race_id = YYYY + 場コード2桁 + 開催回2桁 + 開催日2桁 + R2桁
+  // 例: 202605020701 = 2026 / 東京(05) / 2回 / 7日目 / 1R
+  if(id.length < 10) return '';
+  return id.slice(0, 8); // 年+場+回+日で同一開催日のグループ化
+}
+
+async function filterJraDirectRacesBySelectedDate(direct, date){
+  // netkeibaのJRAレース一覧HTMLには、隣接日のレースリンクが同じ場タブ内に混じることがある。
+  // 以前は「最初の1Rだけ」を照合してdirect全部を返していたため、
+  // 202605020701 と 202605020801 のような別開催日race_idが同時に選択窓へ混入していた。
+  const groups = new Map();
+  direct.forEach(r => {
+    const key = jraRaceDayKey(r.raceId);
+    if(!key) return;
+    if(!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  });
+
+  for(const group of groups.values()){
+    const probe = group.find(r => r.raceNo === 1) || group[0];
+    try{
+      if(await verifyJraRaceDateByShutuba(date, probe.raceId)){
+        return group
+          .filter(r => r.raceNo >= 1 && r.raceNo <= 12)
+          .sort((a,b) => a.raceNo - b.raceNo);
+      }
+    }catch(e){}
+  }
+  return [];
+}
+
 async function getReliableJraRacesFromList(html, date, venueCode){
   const direct = parseRaceIdsFromList(html, 'JRA', venueCode, date)
     .filter(r => r.shutuba.includes('https://race.netkeiba.com/') && raceIdVenueMatches('JRA', r.raceId, venueCode));
 
-  // まずHTML内の出馬表リンクを使う。ただしJRAの一覧HTMLには前日リンクが混じることがあるため、
-  // 1Rを実際に開いて選択日と一致するか確認する。
+  // JRAの一覧HTMLには同一場の「前日/翌日」リンクが混入することがある。
+  // race_idの開催日グループ単位で出馬表本文の日付を照合し、選択日と一致したグループだけを採用する。
   if(direct.length){
-    const first = direct.find(r => r.raceNo === 1) || direct[0];
-    try{
-      if(await verifyJraRaceDateByShutuba(date, first.raceId)){
-        return direct;
-      }
-    }catch(e){}
+    const verified = await filterJraDirectRacesBySelectedDate(direct, date);
+    if(verified.length) return verified;
   }
 
   // 直接リンクが前日・別日だった場合は、「○回東京○日目」から仮生成した上で

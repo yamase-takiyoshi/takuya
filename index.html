@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.14.7 統合版 RaceIDfix</title>
+<title>The競馬 EV分析 v5.14.8 統合版 NARcountfix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -111,7 +111,7 @@ select option { background: #1e293b; }
     <h1>🏇 The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.14.7 統合版</span>
+    <span class="ver">v5.14.8 統合版</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1203,16 +1203,21 @@ function parseActiveVenuesFromList(html, kind, date){
     .map(([code,count]) => [code, venueName(kind, code), count]);
 }
 
-async function detectActiveNarVenue(date, venueCode){
-  // NAR一覧HTMLは選択中の1場しか race_id を持たない場合がある。
-  // そのため、開催場ごとに race_id を直接作って1R〜12Rを実在確認する。
+async function countActiveNarRaces(date, venueCode){
+  // NARは開催場ごとに race_id を直接作り、実在したレース番号だけを数える。
+  // これによりJRAと同じ「盛岡（12R）」形式で表示できる。
+  let count = 0;
   for(let r=1; r<=12; r++){
     try{
       const item = await probeNarRaceById(date, venueCode, r);
-      if(item) return true;
+      if(item) count++;
     }catch(e){}
   }
-  return false;
+  return count;
+}
+
+async function detectActiveNarVenue(date, venueCode){
+  return (await countActiveNarRaces(date, venueCode)) > 0;
 }
 
 async function loadActiveNarVenuesByRaceId(date){
@@ -1220,8 +1225,8 @@ async function loadActiveNarVenuesByRaceId(date){
   const status = document.getElementById('urlStatus');
   for(const [code,name] of NAR_VENUES){
     if(status) status.innerHTML = `<div class="url-status">📅 NAR開催確認中... ${name}</div>`;
-    const ok = await detectActiveNarVenue(date, code);
-    if(ok) found.push([code, name, 0]);
+    const count = await countActiveNarRaces(date, code);
+    if(count > 0) found.push([code, name, count]);
   }
   return found;
 }
@@ -1344,15 +1349,14 @@ async function loadActiveVenuesForDate(){
       const fromHtml = parseActiveVenuesFromList(html, kind, date);
 
       if(fromHtml.length){
-        // ② HTML解析で取れた場コードだけ race_id 実在確認（1Rだけ叩く）
+        // ② HTML解析で取れた場コードだけ race_id 実在確認し、実レース数を数える。
         if(status) status.innerHTML = `<div class="url-status">📅 NAR開催確認中 (${fromHtml.length}場)...</div>`;
         const confirmed = [];
         for(const [code, name] of fromHtml){
           try{
-            const ok = await probeNarRaceById(date, code, 1)
-                    || await probeNarRaceById(date, code, 2)
-                    || await probeNarRaceById(date, code, 3);
-            if(ok) confirmed.push([code, name, 0]);
+            if(status) status.innerHTML = `<div class="url-status">📅 NAR開催確認中... ${name}</div>`;
+            const count = await countActiveNarRaces(date, code);
+            if(count > 0) confirmed.push([code, name, count]);
           }catch(e){}
         }
         venues = confirmed.length ? confirmed : fromHtml; // 実在確認が全滅した場合はHTML解析結果をそのまま使う

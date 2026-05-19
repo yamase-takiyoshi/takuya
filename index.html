@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.15.2 統合版 JRA修正</title>
+<title>The競馬 EV分析 v5.15.3 統合版 JRA日付補正</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -118,7 +118,7 @@ select option { background: #1e293b; }
     <h1>🏇 The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.15.2 統合版</span>
+    <span class="ver">v5.15.3 統合版</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -432,7 +432,7 @@ function corsHeaders(contentType) {<br>
 
 <script>
 // ============================================================
-// The競馬 EV分析 HTML版 v5.15.2
+// The競馬 EV分析 HTML版 v5.15.3
 // EV計算・確率モデル・推奨ロジックを結合版.jsから移植
 // ============================================================
 
@@ -1076,7 +1076,7 @@ function renderProfitChart(){
 }
 
 
-// ─── シミュレーション復活 v5.15.2 ─────────────────────────────
+// ─── シミュレーション復活 v5.15.3 ─────────────────────────────
 function resultUrl(kind, raceId){
   const host = kind === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com';
   return `${host}/race/result.html?race_id=${raceId}&rf=race_submenu`;
@@ -1749,6 +1749,113 @@ function buildJraRacesFromKaisai(html, date, venueCode){
   return races;
 }
 
+
+function jraRaceIdToKaisai(raceId){
+  const id = String(raceId || '');
+  if(id.length < 12) return null;
+  return {
+    year: id.slice(0,4),
+    venueCode: id.slice(4,6),
+    kai: Number(id.slice(6,8)),
+    day: Number(id.slice(8,10)),
+    raceNo: Number(id.slice(10,12))
+  };
+}
+
+function jraHtmlMatchesSelectedDate(html, date){
+  const p = ymdParts(date);
+  const mm = Number(p.mmdd.slice(0,2));
+  const dd = Number(p.mmdd.slice(2,4));
+  const text = normalizeJapaneseSpaces(
+    String(html || '')
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+  );
+  const patterns = [
+    `${mm}月${dd}日`,
+    `${String(mm).padStart(2,'0')}月${String(dd).padStart(2,'0')}日`,
+    `${mm}/${dd}`,
+    `${String(mm).padStart(2,'0')}/${String(dd).padStart(2,'0')}`
+  ];
+  return patterns.some(x => text.includes(x));
+}
+
+async function fetchHtmlViaProxy(url){
+  const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(url);
+  const res = await fetch(proxyReq, { cache:'no-store' });
+  if(!res.ok) throw new Error('HTTP ' + res.status);
+  return await res.text();
+}
+
+async function verifyJraRaceDateByShutuba(date, raceId){
+  const url = shutubaUrl('JRA', raceId);
+  const html = await fetchHtmlViaProxy(url);
+  if(!html.includes(String(raceId))) return false;
+  return jraHtmlMatchesSelectedDate(html, date);
+}
+
+async function fixJraKaisaiByProbe(date, venueCode, kd){
+  if(!kd) return null;
+  const p = ymdParts(date);
+  const candidateDays = [];
+  for(const d of [kd.day, kd.day + 1, kd.day - 1, kd.day + 2, kd.day - 2]){
+    if(d >= 1 && d <= 12 && !candidateDays.includes(d)) candidateDays.push(d);
+  }
+
+  for(const day of candidateDays){
+    const raceId = `${p.yyyy}${venueCode}${String(kd.kai).padStart(2,'0')}${String(day).padStart(2,'0')}01`;
+    try{
+      if(await verifyJraRaceDateByShutuba(date, raceId)){
+        return { kai: kd.kai, day };
+      }
+    }catch(e){}
+  }
+  return kd;
+}
+
+function buildJraRacesFromFixedKaisai(html, date, venueCode, kd){
+  if(!kd) return [];
+  const p = ymdParts(date);
+  const names = extractJraRaceNamesFromList(html, venueCode);
+  const races = [];
+  for(let r=1; r<=12; r++){
+    const raceId = `${p.yyyy}${venueCode}${String(kd.kai).padStart(2,'0')}${String(kd.day).padStart(2,'0')}${String(r).padStart(2,'0')}`;
+    races.push({
+      raceId,
+      raceNo:r,
+      venueCode,
+      raceName:names.get(r) || `${r}R`,
+      shutuba:shutubaUrl('JRA', raceId),
+      builtFromKaisai:true
+    });
+  }
+  return races;
+}
+
+async function getReliableJraRacesFromList(html, date, venueCode){
+  const direct = parseRaceIdsFromList(html, 'JRA', venueCode, date)
+    .filter(r => r.shutuba.includes('https://race.netkeiba.com/') && raceIdVenueMatches('JRA', r.raceId, venueCode));
+
+  // まずHTML内の出馬表リンクを使う。ただしJRAの一覧HTMLには前日リンクが混じることがあるため、
+  // 1Rを実際に開いて選択日と一致するか確認する。
+  if(direct.length){
+    const first = direct.find(r => r.raceNo === 1) || direct[0];
+    try{
+      if(await verifyJraRaceDateByShutuba(date, first.raceId)){
+        return direct;
+      }
+    }catch(e){}
+  }
+
+  // 直接リンクが前日・別日だった場合は、「○回東京○日目」から仮生成した上で
+  // day±2を実ページ照合して正しい開催日へ補正する。
+  const kdRaw = parseJraKaisaiFromListText(html, venueCode);
+  const kdFixed = await fixJraKaisaiByProbe(date, venueCode, kdRaw);
+  return buildJraRacesFromFixedKaisai(html, date, venueCode, kdFixed);
+}
+
+
 async function loadRaceList(){
   const selectedDateYmd = document.getElementById('pickDate')?.value || formatLocalDate(new Date());
   const selectedDateCompact = ymdCompactLocal(selectedDateYmd);
@@ -1786,17 +1893,12 @@ async function loadRaceList(){
       status.innerHTML = `<div class="url-status">📅 ${date} ${venueName(kind, venueCode)} のrace_idを直接確認中...</div>`;
       races = await loadNarRaceListByRaceId(date, venueCode);
     }else{
-      // JRAのrace_idは日付を直接持たないため、HTML内の古い出馬表リンクが混入すると
-      // 5/17選択なのに5/10のrace_idを拾う事故が起きる。まず「○回東京○日目」から
-      // 当日のrace_idを再構成し、リンクの残留を使わない。
+      // JRAは race_id に月日が入らないため、一覧HTMLの「前日リンク」や
+      // 「○回東京7日目」の先頭誤検出で1日ズレることがある。
+      // そのため、出馬表ページを1Rだけ実取得して、本文の日付が選択日と一致するrace_idを採用する。
       const url = raceListUrl(kind, date, venueCode);
-      const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(url);
-      const res = await fetch(proxyReq, { cache:'no-store' });
-      if(!res.ok) throw new Error('HTTP ' + res.status);
-      const html = await res.text();
-      const built = buildJraRacesFromKaisai(html, date, venueCode);
-      races = built.length ? built : parseRaceIdsFromList(html, kind, venueCode, date)
-        .filter(r => r.shutuba.includes('https://race.netkeiba.com/') && raceIdVenueMatches(kind, r.raceId, venueCode));
+      const html = await fetchHtmlViaProxy(url);
+      races = await getReliableJraRacesFromList(html, date, venueCode);
     }
 
     if(!races.length){

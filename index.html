@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.14.5 統合版 Calendar+ NARfix</title>
+<title>The競馬 EV分析 v5.14.6 統合版 Calendar+ NARfix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -111,7 +111,7 @@ select option { background: #1e293b; }
     <h1>🏇 The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.14.5 統合版</span>
+    <span class="ver">v5.14.6 統合版</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1139,23 +1139,27 @@ function parseActiveVenuesFromList(html, kind, date){
   const p = ymdParts(date);
 
   if(kind !== 'NAR'){
-    // JRA: race_idには日付情報がないため、リンクのhref内 kaisai_date で日付フィルタする。
+    // JRA: race_idには日付情報がないため、getAttribute(href)のkaisai_dateで日付フィルタ。
     // netkeiba一覧HTMLには土日両日分が含まれることがあるため必須。
+    // race_id単位で重複排除し、場コードの出現数を正確に計上する。
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
-    const links = Array.from(doc.querySelectorAll('a[href*="race_id="]'));
-    links.forEach(a => {
-      const href = a.getAttribute('href') || a.href || '';
-      // kaisai_date が明示されている場合は選択日と照合
+    const seenIds = new Set();
+    doc.querySelectorAll('a[href*="race_id="]').forEach(a => {
+      const href = a.getAttribute('href') || '';
       const kdm = href.match(/kaisai_date=(\d{8})/);
-      if(kdm && kdm[1] !== p.yyyymmdd) return;
+      if(!kdm) return;                      // kaisai_date なしは無視
+      if(kdm[1] !== p.yyyymmdd) return;    // 別日は除外
       const m = href.match(/race_id=(\d{10,14})/);
       if(!m) return;
-      const vc = extractVenueCodeFromRaceId(m[1]);
+      const id = m[1];
+      if(seenIds.has(id)) return;
+      seenIds.add(id);
+      const vc = extractVenueCodeFromRaceId(id);
       if(!vc) return;
       byVenue.set(vc, (byVenue.get(vc) || 0) + 1);
     });
-    // リンクに kaisai_date がない場合のフォールバック: race_id ベース（従来動作）
+    // kaisai_date 付きリンクが1件もない → race_id ベースにフォールバック
     if(!byVenue.size){
       const races = parseRaceIdsFromList(html, kind, '', date);
       races.forEach(r => {

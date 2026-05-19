@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.14.0 統合版 Calendar+ NARfix</title>
+<title>The競馬 EV分析 v5.14.4 統合版 Calendar+ NARfix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -111,7 +111,7 @@ select option { background: #1e293b; }
     <h1>🏇 The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.14.0 統合版</span>
+    <span class="ver">v5.14.4 統合版</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1304,16 +1304,30 @@ async function loadActiveVenuesForDate(){
     let venues = [];
 
     if(kind === 'NAR'){
-      // NARは一覧HTMLのタブ取得が不安定なため、race_id直接確認を主ルートにする。
-      venues = await loadActiveNarVenuesByRaceId(date);
+      // ① まず一覧HTMLから開催場コードを取得（高速）
+      const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(raceListUrl(kind, date));
+      const res = await fetch(proxyReq);
+      if(!res.ok) throw new Error('HTTP ' + res.status);
+      const html = await res.text();
+      const fromHtml = parseActiveVenuesFromList(html, kind, date);
 
-      // 直接確認で0件だった場合だけ、一覧HTML解析を保険として使う。
-      if(!venues.length){
-        const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(raceListUrl(kind, date));
-        const res = await fetch(proxyReq);
-        if(!res.ok) throw new Error('HTTP ' + res.status);
-        const html = await res.text();
-        venues = parseActiveVenuesFromList(html, kind, date);
+      if(fromHtml.length){
+        // ② HTML解析で取れた場コードだけ race_id 実在確認（1Rだけ叩く）
+        if(status) status.innerHTML = `<div class="url-status">📅 NAR開催確認中 (${fromHtml.length}場)...</div>`;
+        const confirmed = [];
+        for(const [code, name] of fromHtml){
+          try{
+            const ok = await probeNarRaceById(date, code, 1)
+                    || await probeNarRaceById(date, code, 2)
+                    || await probeNarRaceById(date, code, 3);
+            if(ok) confirmed.push([code, name, 0]);
+          }catch(e){}
+        }
+        venues = confirmed.length ? confirmed : fromHtml; // 実在確認が全滅した場合はHTML解析結果をそのまま使う
+      }else{
+        // ③ HTML解析で0件 → 全場フォールバック（最大1R確認のみ）
+        if(status) status.innerHTML = `<div class="url-status">📅 NAR全場確認中（一覧取得失敗）...</div>`;
+        venues = await loadActiveNarVenuesByRaceId(date);
       }
     }else{
       const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(raceListUrl(kind, date));
@@ -1432,7 +1446,7 @@ function initCalendarPicker(){
   if(kindEl) kindEl.value = settings.nar ? 'NAR' : 'JRA';
 
   renderVenueOptions([]);
-  loadActiveVenuesForDate();
+  if(settings.proxyUrl) loadActiveVenuesForDate();
 }
 
 
@@ -1654,7 +1668,7 @@ async function testProxy(){
   status.innerHTML = '<div class="url-status">🔄 テスト中...</div>';
   try {
     const testUrl = url.replace(/\/$/, '') + '?url=' + encodeURIComponent('https://race.netkeiba.com/');
-    const res = await fetch(testUrl, { signal: AbortSignal.timeout(8000) });
+    const res = await fetch(testUrl);
     if(res.ok){
       status.innerHTML = '<div class="url-status ok">✅ 接続成功！</div>';
     } else {

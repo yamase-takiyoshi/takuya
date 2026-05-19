@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.16.0 Product Simulation</title>
+<title>The競馬 EV分析 v5.16.1 Product Simulation</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -112,7 +112,7 @@ select option { background: #1e293b; }
 
 
 /* ============================================================
-   v5.16.0 Product Simulation Theme / 緑の旧アイコン復活
+   v5.16.1 Product Simulation Theme / 緑の旧アイコン復活
    ============================================================ */
 :root{
   --accent:#00e676;
@@ -193,7 +193,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.16.0 Product</span>
+    <span class="ver">v5.16.1 Product</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1721,63 +1721,94 @@ async function loadNarRaceListByRaceId(date, venueCode){
   return out;
 }
 
+let activeVenueLoadSeq = 0;
+
 async function onRaceDateKindChanged(){
   resetRaceState('条件変更のためレース選択を初期化しました');
   renderVenueOptions([]);
   await loadActiveVenuesForDate();
 }
 
+async function confirmActiveJraVenuesFromHtml(html, date, candidates){
+  // JRAの一覧HTMLには、同一開催場の前日/翌日race_idが混入することがある。
+  // ここでは候補場ごとに getReliableJraRacesFromList() を通し、
+  // 出馬表本文の日付照合まで済んだレースだけを数える。
+  const confirmed = [];
+  const status = document.getElementById('urlStatus');
+
+  for(const [code, name] of candidates){
+    try{
+      if(status) status.innerHTML = `<div class="url-status">📅 JRA開催確認中... ${name}</div>`;
+      const races = await getReliableJraRacesFromList(html, date, code);
+      const nums = new Set((races || [])
+        .map(r => Number(r.raceNo))
+        .filter(n => n >= 1 && n <= 12));
+      if(nums.size > 0) confirmed.push([code, name, nums.size]);
+    }catch(e){
+      // 1場の確認失敗で全体を止めない
+    }
+  }
+
+  return confirmed;
+}
+
 async function loadActiveVenuesForDate(){
+  const seq = ++activeVenueLoadSeq;
   const date = document.getElementById('pickDate')?.value || todayYmd();
   const kind = document.getElementById('pickKind')?.value || 'JRA';
   const status = document.getElementById('urlStatus');
   const raceSelect = document.getElementById('raceSelect');
   if(raceSelect) raceSelect.innerHTML = '<option value="">開催場を選んでレース一覧を取得</option>';
-  if(!settings.proxyUrl){ renderVenueOptions(); return; }
+
+  // 正確な開催場絞り込みにはnetkeiba一覧取得が必須。プロキシ未設定時に全場を出すと誤操作になるため、空にする。
+  if(!settings.proxyUrl){
+    renderVenueOptions([]);
+    if(status) status.innerHTML = '<div class="url-status err">⚠️ プロキシURL未設定のため、開催場を自動取得できません</div>';
+    return;
+  }
 
   try{
-    if(status) status.innerHTML = `<div class="url-status">📅 ${date} の開催場を確認中...</div>`;
+    if(status) status.innerHTML = `<div class="url-status">📅 ${date} の開催場を自動確認中...</div>`;
 
     let venues = [];
 
     if(kind === 'NAR'){
-      // ① まず一覧HTMLから開催場コードを取得（高速）
       const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(raceListUrl(kind, date));
-      const res = await fetch(proxyReq);
+      const res = await fetch(proxyReq, { cache:'no-store' });
       if(!res.ok) throw new Error('HTTP ' + res.status);
       const html = await res.text();
       const fromHtml = parseActiveVenuesFromList(html, kind, date);
 
       if(fromHtml.length){
-        // ② HTML解析で取れた場コードだけ race_id 実在確認し、実レース数を数える。
-        if(status) status.innerHTML = `<div class="url-status">📅 NAR開催確認中 (${fromHtml.length}場)...</div>`;
         const confirmed = [];
         for(const [code, name] of fromHtml){
+          if(seq !== activeVenueLoadSeq) return;
           try{
             if(status) status.innerHTML = `<div class="url-status">📅 NAR開催確認中... ${name}</div>`;
             const count = await countActiveNarRaces(date, code);
             if(count > 0) confirmed.push([code, name, count]);
           }catch(e){}
         }
-        venues = confirmed.length ? confirmed : fromHtml; // 実在確認が全滅した場合はHTML解析結果をそのまま使う
+        venues = confirmed;
       }else{
-        // ③ HTML解析で0件 → 全場フォールバック（最大1R確認のみ）
-        if(status) status.innerHTML = `<div class="url-status">📅 NAR全場確認中（一覧取得失敗）...</div>`;
+        if(status) status.innerHTML = `<div class="url-status">📅 NAR全場確認中...</div>`;
         venues = await loadActiveNarVenuesByRaceId(date);
       }
     }else{
-      const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(raceListUrl(kind, date));
-      const res = await fetch(proxyReq);
-      if(!res.ok) throw new Error('HTTP ' + res.status);
-      const html = await res.text();
-      venues = parseActiveVenuesFromList(html, kind, date);
+      const url = raceListUrl(kind, date);
+      const html = await fetchHtmlViaProxy(url);
+      const fromHtml = parseActiveVenuesFromList(html, kind, date);
+      venues = await confirmActiveJraVenuesFromHtml(html, date, fromHtml);
     }
+
+    if(seq !== activeVenueLoadSeq) return;
 
     renderVenueOptions(venues);
     if(status) status.innerHTML = venues.length
-      ? `<div class="url-status ok">✅ ${date} の${kind}開催場 ${venues.length}場を表示しました</div>`
+      ? `<div class="url-status ok">✅ ${date} の${kind}開催場だけを表示しました：${venues.map(v => v[1] + '（' + v[2] + 'R）').join('、')}</div>`
       : `<div class="url-status err">⚠️ ${date} は${kind}の開催場が見つかりません</div>`;
   }catch(e){
+    if(seq !== activeVenueLoadSeq) return;
     console.error(e);
     renderVenueOptions([]);
     if(status) status.innerHTML = `<div class="url-status err">⚠️ 開催場の自動取得に失敗: ${e.message}</div>`;
@@ -1942,19 +1973,48 @@ function buildJraRacesFromFixedKaisai(html, date, venueCode, kd){
   return races;
 }
 
+function jraRaceDayKey(raceId){
+  const id = String(raceId || '');
+  // JRA race_id = YYYY + 場コード2桁 + 開催回2桁 + 開催日2桁 + R2桁
+  // 例: 202605020701 = 2026 / 東京(05) / 2回 / 7日目 / 1R
+  if(id.length < 10) return '';
+  return id.slice(0, 8); // 年+場+回+日で同一開催日のグループ化
+}
+
+async function filterJraDirectRacesBySelectedDate(direct, date){
+  // netkeibaのJRAレース一覧HTMLには、隣接日のレースリンクが同じ場タブ内に混じることがある。
+  // 以前は「最初の1Rだけ」を照合してdirect全部を返していたため、
+  // 202605020701 と 202605020801 のような別開催日race_idが同時に選択窓へ混入していた。
+  const groups = new Map();
+  direct.forEach(r => {
+    const key = jraRaceDayKey(r.raceId);
+    if(!key) return;
+    if(!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  });
+
+  for(const group of groups.values()){
+    const probe = group.find(r => r.raceNo === 1) || group[0];
+    try{
+      if(await verifyJraRaceDateByShutuba(date, probe.raceId)){
+        return group
+          .filter(r => r.raceNo >= 1 && r.raceNo <= 12)
+          .sort((a,b) => a.raceNo - b.raceNo);
+      }
+    }catch(e){}
+  }
+  return [];
+}
+
 async function getReliableJraRacesFromList(html, date, venueCode){
   const direct = parseRaceIdsFromList(html, 'JRA', venueCode, date)
     .filter(r => r.shutuba.includes('https://race.netkeiba.com/') && raceIdVenueMatches('JRA', r.raceId, venueCode));
 
-  // まずHTML内の出馬表リンクを使う。ただしJRAの一覧HTMLには前日リンクが混じることがあるため、
-  // 1Rを実際に開いて選択日と一致するか確認する。
+  // JRAの一覧HTMLには同一場の「前日/翌日」リンクが混入することがある。
+  // race_idの開催日グループ単位で出馬表本文の日付を照合し、選択日と一致したグループだけを採用する。
   if(direct.length){
-    const first = direct.find(r => r.raceNo === 1) || direct[0];
-    try{
-      if(await verifyJraRaceDateByShutuba(date, first.raceId)){
-        return direct;
-      }
-    }catch(e){}
+    const verified = await filterJraDirectRacesBySelectedDate(direct, date);
+    if(verified.length) return verified;
   }
 
   // 直接リンクが前日・別日だった場合は、「○回東京○日目」から仮生成した上で
@@ -2064,8 +2124,22 @@ function initCalendarPicker(){
   const kindEl = document.getElementById('pickKind');
   if(kindEl) kindEl.value = settings.nar ? 'NAR' : 'JRA';
 
+  // iPad/Safariでは date picker の確定タイミングに差があるため、change/input の両方で拾う。
+  if(d && !d.dataset.activeVenueBound){
+    d.dataset.activeVenueBound = '1';
+    d.addEventListener('change', onRaceDateKindChanged);
+    d.addEventListener('input', () => {
+      clearTimeout(window.__activeVenueInputTimer);
+      window.__activeVenueInputTimer = setTimeout(onRaceDateKindChanged, 250);
+    });
+  }
+  if(kindEl && !kindEl.dataset.activeVenueBound){
+    kindEl.dataset.activeVenueBound = '1';
+    kindEl.addEventListener('change', onRaceDateKindChanged);
+  }
+
   renderVenueOptions([]);
-  if(settings.proxyUrl) loadActiveVenuesForDate();
+  loadActiveVenuesForDate();
 }
 
 

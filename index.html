@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.13.6 統合版 Calendar+</title>
+<title>The競馬 EV分析 v5.13.8 統合版 Calendar+</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -111,7 +111,7 @@ select option { background: #1e293b; }
     <h1>🏇 The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.13.6 統合版</span>
+    <span class="ver">v5.13.8 統合版</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1163,7 +1163,98 @@ function parseActiveVenuesFromList(html, kind, date){
     .map(([code,count]) => [code, venueName(kind, code), count]);
 }
 
+
+function resetRaceState(message){
+  currentRaceId = '';
+  currentRaceName = '';
+
+  const raceSelect = document.getElementById('raceSelect');
+  if(raceSelect) raceSelect.innerHTML = '<option value="">開催場を選んでレース一覧を取得</option>';
+
+  const raceUrl = document.getElementById('raceUrl');
+  if(raceUrl) raceUrl.value = '';
+
+  const box = document.getElementById('raceTitleBox');
+  if(box){
+    box.style.display = 'none';
+    box.textContent = '';
+  }
+
+  const status = document.getElementById('urlStatus');
+  if(status) status.innerHTML = message ? `<div class="url-status">${message}</div>` : '';
+}
+
+function expectedHostForKind(kind){
+  return kind === 'NAR' ? 'nar.netkeiba.com' : 'race.netkeiba.com';
+}
+
+function raceIdVenueMatches(kind, raceId, venueCode){
+  if(!venueCode) return true;
+  return extractVenueCodeFromRaceId(raceId) === venueCode;
+}
+
+function validateRaceUrlForCurrentSelection(rawUrl){
+  const kind = document.getElementById('pickKind')?.value || 'JRA';
+  const date = document.getElementById('pickDate')?.value || todayYmd();
+  const venueCode = document.getElementById('pickVenue')?.value || '';
+  let u;
+  try{ u = new URL(rawUrl); }catch(e){ return {ok:false, message:'URL形式が不正です'}; }
+
+  const expectedHost = expectedHostForKind(kind);
+  if(u.hostname !== expectedHost){
+    return {ok:false, message:`区分は${kind}ですがURLが${u.hostname}です。${expectedHost} のURLを選び直してください。`};
+  }
+
+  const raceId = u.searchParams.get('race_id') || '';
+  if(!/^\d{10,14}$/.test(raceId)) return {ok:false, message:'race_id が取得できません'};
+
+  if(!raceIdVenueMatches(kind, raceId, venueCode)){
+    return {ok:false, message:`開催場が一致しません。選択=${venueName(kind, venueCode)} / race_id=${raceId}`};
+  }
+
+  if(!raceIdMatchesSelectedDate(kind, raceId, date)){
+    return {ok:false, message:`日付が一致しません。選択日=${date} / race_id=${raceId}`};
+  }
+
+  return {ok:true, raceId, kind, date, venueCode};
+}
+
+async function probeNarRaceById(date, venueCode, raceNo){
+  const p = ymdParts(date);
+  const raceId = `${p.yyyy}${venueCode}${p.mmdd}${String(raceNo).padStart(2,'0')}`;
+  const url = shutubaUrl('NAR', raceId);
+  const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(url);
+  const res = await fetch(proxyReq);
+  if(!res.ok) return null;
+  const html = await res.text();
+
+  // netkeibaが別日・別場に飛ばした場合は、HTML内に当該race_idが残らないため除外する。
+  if(!html.includes(raceId)) return null;
+
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  const horsesFound = parseHorsesFromDoc(doc, url).length;
+  if(horsesFound < 2) return null;
+
+  const name = parseRaceTitleFromDoc(doc) || `${raceNo}R`;
+  return { raceId, raceNo, venueCode, raceName:name, shutuba:url, horsesFound };
+}
+
+async function loadNarRaceListByRaceId(date, venueCode){
+  const out = [];
+  for(let r=1; r<=12; r++){
+    try{
+      const item = await probeNarRaceById(date, venueCode, r);
+      if(item) out.push(item);
+    }catch(e){
+      // 存在しないrace_idや通信失敗はスキップ
+    }
+  }
+  return out;
+}
+
 async function onRaceDateKindChanged(){
+  resetRaceState('条件変更のためレース選択を初期化しました');
   renderVenueOptions([]);
   await loadActiveVenuesForDate();
 }
@@ -1201,6 +1292,13 @@ async function loadRaceList(){
   const status = document.getElementById('urlStatus');
   const raceSelect = document.getElementById('raceSelect');
 
+  currentRaceId = '';
+  currentRaceName = '';
+  const raceUrl = document.getElementById('raceUrl');
+  if(raceUrl) raceUrl.value = '';
+  const box = document.getElementById('raceTitleBox');
+  if(box){ box.style.display = 'none'; box.textContent = ''; }
+
   if(!settings.proxyUrl){
     alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。');
     return;
@@ -1213,23 +1311,33 @@ async function loadRaceList(){
   status.innerHTML = `<div class="url-status">📅 レース一覧取得中...</div>`;
 
   try{
-    const url = raceListUrl(kind, date, venueCode);
-    const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(url);
-    const res = await fetch(proxyReq);
-    if(!res.ok) throw new Error('HTTP ' + res.status);
+    let races = [];
 
-    const html = await res.text();
-    const races = parseRaceIdsFromList(html, kind, venueCode, date);
+    if(kind === 'NAR'){
+      // NARは一覧HTMLのタブ状態に引きずられるため、race_idを直接生成して実在確認する。
+      status.innerHTML = `<div class="url-status">📅 ${date} ${venueName(kind, venueCode)} のrace_idを直接確認中...</div>`;
+      races = await loadNarRaceListByRaceId(date, venueCode);
+    }else{
+      // JRAは開催一覧から取得。ただしURL/host/race_idの残留は後段で必ず検査する。
+      const url = raceListUrl(kind, date, venueCode);
+      const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(url);
+      const res = await fetch(proxyReq);
+      if(!res.ok) throw new Error('HTTP ' + res.status);
+      const html = await res.text();
+      races = parseRaceIdsFromList(html, kind, venueCode, date)
+        .filter(r => r.shutuba.includes('https://race.netkeiba.com/') && raceIdVenueMatches(kind, r.raceId, venueCode));
+    }
 
     if(!races.length){
       raceSelect.innerHTML = '<option value="">レースが見つかりません</option>';
-      status.innerHTML = `<div class="url-status err">⚠️ ${date} の ${venueName(kind, venueCode)} はレースが見つかりません。日付違いのrace_idは除外しました。</div>`;
+      status.innerHTML = `<div class="url-status err">⚠️ ${date} の ${venueName(kind, venueCode)} はレースが見つかりません。別日・別場のrace_idは除外しました。</div>`;
       return;
     }
 
-    raceSelect.innerHTML = races.map(r =>
-      `<option value="${r.shutuba}" data-race-id="${r.raceId}" data-race-name="${escapeHtml(r.raceName)}">${r.raceNo}R ${escapeHtml(r.raceName)} / ${r.raceId}</option>`
-    ).join('');
+    raceSelect.innerHTML = races.map(r => {
+      const url = shutubaUrl(kind, r.raceId); // 前回URLを絶対に再利用しない
+      return `<option value="${url}" data-race-id="${r.raceId}" data-race-name="${escapeHtml(r.raceName)}">${r.raceNo}R ${escapeHtml(r.raceName)} / ${r.raceId}</option>`;
+    }).join('');
 
     applySelectedRaceUrl();
     status.innerHTML = `<div class="url-status ok">✅ ${date} ${venueName(kind, venueCode)} ${races.length}レースを取得しました</div>`;
@@ -1244,16 +1352,26 @@ function applySelectedRaceUrl(){
   const raceSelect = document.getElementById('raceSelect');
   const raceUrl = document.getElementById('raceUrl');
   const box = document.getElementById('raceTitleBox');
+  const kind = document.getElementById('pickKind')?.value || 'JRA';
   if(!raceSelect || !raceUrl) return;
-  if(raceSelect.value){
-    raceUrl.value = raceSelect.value;
-    const opt = raceSelect.options[raceSelect.selectedIndex];
+
+  const opt = raceSelect.options[raceSelect.selectedIndex];
+  const raceId = opt?.dataset?.raceId || '';
+
+  if(raceId){
+    // ここで必ずJRA/NAR別にURLを再生成し、前回のURL残留を完全に防ぐ。
+    raceUrl.value = shutubaUrl(kind, raceId);
     currentRaceName = opt?.dataset?.raceName || opt?.textContent || '';
-    currentRaceId = opt?.dataset?.raceId || '';
+    currentRaceId = raceId;
     if(box){
       box.style.display = currentRaceName ? 'block' : 'none';
       box.textContent = currentRaceName ? `選択中: ${currentRaceName}` : '';
     }
+  }else{
+    raceUrl.value = '';
+    currentRaceName = '';
+    currentRaceId = '';
+    if(box){ box.style.display = 'none'; box.textContent = ''; }
   }
 }
 
@@ -1279,6 +1397,13 @@ async function fetchRace(){
   }
 
   const status = document.getElementById('urlStatus');
+  const validation = validateRaceUrlForCurrentSelection(rawUrl);
+  if(!validation.ok){
+    status.innerHTML = `<div class="url-status err">❌ ${escapeHtml(validation.message)}</div>`;
+    alert(validation.message);
+    return;
+  }
+
   const progress = document.getElementById('fetchProgress');
   progress.classList.add('show');
   status.innerHTML = '';
@@ -1288,6 +1413,9 @@ async function fetchRace(){
     const res = await fetch(proxyReq);
     if(!res.ok) throw new Error('HTTP ' + res.status);
     const html = await res.text();
+    if(validation.raceId && !html.includes(validation.raceId)){
+      throw new Error(`取得HTML内に選択race_id ${validation.raceId} がありません。別日・別場への遷移を検出したため中止しました。`);
+    }
 
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
@@ -1303,6 +1431,9 @@ async function fetchRace(){
     }
 
     horses = parseHorsesFromDoc(doc, rawUrl);
+    if(horses.length < 2){
+      throw new Error('出走馬を十分に取得できませんでした。race_idまたは開催情報を確認してください。');
+    }
     renderHorseRows();
 
     status.innerHTML = `<div class="url-status ok">✅ ${escapeHtml(currentRaceName || '')} ${horses.length}頭 取得しました</div>`;

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.15.1 統合版 JRA修正</title>
+<title>The競馬 EV分析 v5.15.2 統合版 JRA修正</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -118,7 +118,7 @@ select option { background: #1e293b; }
     <h1>🏇 The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.15.1 統合版</span>
+    <span class="ver">v5.15.2 統合版</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -432,7 +432,7 @@ function corsHeaders(contentType) {<br>
 
 <script>
 // ============================================================
-// The競馬 EV分析 HTML版 v5.15.1
+// The競馬 EV分析 HTML版 v5.15.2
 // EV計算・確率モデル・推奨ロジックを結合版.jsから移植
 // ============================================================
 
@@ -493,6 +493,26 @@ let currentRaceName = '';
 let currentRaceId = '';
 let profitHistory = [];
 
+// ─── iPad/Safari UTC日付ズレ対策 ─────────────────────────
+// input[type=date] や netkeiba 日付指定は必ず端末ローカル日付で扱う。
+// toISOString().slice(0,10) はUTC変換で日本時間だと1日ズレることがあるため禁止。
+function formatLocalDate(date = new Date()){
+  const d = (date instanceof Date) ? date : new Date(date);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+function parseLocalDateYMD(ymd){
+  const m = String(ymd || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(!m) return new Date();
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0, 0);
+}
+function ymdCompactLocal(ymd){
+  return String(ymd || '').replace(/[^\d]/g, '').slice(0, 8);
+}
+
+
 // ─── 設定ロード ────────────────────────────────
 function loadSettings(){
   try {
@@ -528,6 +548,8 @@ function saveProxy(){
 // ─── UI初期化 ───────────────────────────────────
 function initUI(){
   loadSettings();
+  const pickDateEl = document.getElementById('pickDate');
+  if(pickDateEl && !pickDateEl.value) pickDateEl.value = formatLocalDate(new Date());
 
   // タブ
   document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -1054,7 +1076,7 @@ function renderProfitChart(){
 }
 
 
-// ─── シミュレーション復活 v5.15.0 ─────────────────────────────
+// ─── シミュレーション復活 v5.15.2 ─────────────────────────────
 function resultUrl(kind, raceId){
   const host = kind === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com';
   return `${host}/race/result.html?race_id=${raceId}&rf=race_submenu`;
@@ -1728,6 +1750,10 @@ function buildJraRacesFromKaisai(html, date, venueCode){
 }
 
 async function loadRaceList(){
+  const selectedDateYmd = document.getElementById('pickDate')?.value || formatLocalDate(new Date());
+  const selectedDateCompact = ymdCompactLocal(selectedDateYmd);
+  const selectedYear = selectedDateCompact.slice(0, 4);
+
   const date = document.getElementById('pickDate')?.value || todayYmd();
   const kind = document.getElementById('pickKind')?.value || 'JRA';
   const venueCode = document.getElementById('pickVenue')?.value || '';

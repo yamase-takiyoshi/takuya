@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.13.8 統合版 Calendar+</title>
+<title>The競馬 EV分析 v5.14.0 統合版 Calendar+ NARfix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -111,7 +111,7 @@ select option { background: #1e293b; }
     <h1>🏇 The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.13.8 統合版</span>
+    <span class="ver">v5.14.0 統合版</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1015,10 +1015,12 @@ const NAR_VENUES = [
 ];
 
 function todayYmd(){
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth()+1).padStart(2,'0');
-  const day = String(d.getDate()).padStart(2,'0');
+  // iPad/Safariの端末タイムゾーンや深夜帯のズレを避けるため、JSTで日付を固定する。
+  const now = new Date();
+  const jst = new Date(now.getTime() + (9 * 60 + now.getTimezoneOffset()) * 60 * 1000);
+  const y = jst.getFullYear();
+  const m = String(jst.getMonth()+1).padStart(2,'0');
+  const day = String(jst.getDate()).padStart(2,'0');
   return `${y}-${m}-${day}`;
 }
 
@@ -1076,12 +1078,13 @@ function extractVenueCodeFromRaceId(raceId){
 }
 
 function raceIdMatchesSelectedDate(kind, raceId, date){
-  if(kind !== 'NAR') return true;
   const id = String(raceId || '');
   const p = ymdParts(date);
-  // NAR race_id は概ね YYYY + 場コード2桁 + MMDD + RR。
-  // 例: 202635051901 = 2026年・盛岡(35)・5/19・1R。
-  return id.length >= 10 && id.slice(6,10) === p.mmdd;
+  if(kind !== 'NAR') return true;
+  // NAR race_id は原則 YYYY + 場コード2桁 + MMDD + RR。
+  // 例: 202635051901 = 2026年・盛岡(35)・05/19・1R。
+  // 一覧HTML側の揺れに備え、年月とMMDDの両方で厳密確認する。
+  return id.length >= 12 && id.slice(0,4) === p.yyyy && id.slice(6,10) === p.mmdd;
 }
 
 function cleanRaceName(txt, raceNo){
@@ -1141,26 +1144,54 @@ function parseActiveVenuesFromList(html, kind, date){
     byVenue.set(r.venueCode, (byVenue.get(r.venueCode) || 0) + 1);
   });
 
-  // NARは初期表示の1場分しかrace_idがHTMLに出ない場合があるため、タブの kaisai_id も読む。
   if(kind === 'NAR'){
     const p = ymdParts(date);
-    const re = /kaisai_id=(\d{10})/g;
+
+    // kaisai_id=YYYY + 場コード + MMDD を採用。
+    const re1 = /kaisai_id=(\d{10})/g;
     let m;
-    while((m = re.exec(html))){
+    while((m = re1.exec(html))){
       const kid = m[1];
+      if(kid.slice(0,4) !== p.yyyy) continue;
+      if(kid.slice(6,10) !== p.mmdd) continue;
       const code = kid.slice(4,6);
-      const mmdd = kid.slice(6,10);
-      if(mmdd !== p.mmdd) continue; // 5/19選択時に5/20門別などを混入させない
-      if(!byVenue.has(code)) byVenue.set(code, 0);
+      if(NAR_VENUES.some(v => v[0] === code) && !byVenue.has(code)) byVenue.set(code, 0);
     }
 
-    // hrefではなく本文中にタブ名だけがあるケースの保険。
-    // ただし日付違いの場は入れないため、race_id/kaisai_idが取れたものだけを正式採用する。
+    // URLエンコード・JSON断片・HTML属性など、表記揺れした kaisai_id も拾う。
+    const re2 = new RegExp(`${p.yyyy}(\\d{2})${p.mmdd}`, 'g');
+    while((m = re2.exec(html))){
+      const code = m[1];
+      if(NAR_VENUES.some(v => v[0] === code) && !byVenue.has(code)) byVenue.set(code, 0);
+    }
   }
 
   return Array.from(byVenue.entries())
     .sort((a,b) => a[0].localeCompare(b[0]))
     .map(([code,count]) => [code, venueName(kind, code), count]);
+}
+
+async function detectActiveNarVenue(date, venueCode){
+  // NAR一覧HTMLは選択中の1場しか race_id を持たない場合がある。
+  // そのため、開催場ごとに race_id を直接作って1R〜12Rを実在確認する。
+  for(let r=1; r<=12; r++){
+    try{
+      const item = await probeNarRaceById(date, venueCode, r);
+      if(item) return true;
+    }catch(e){}
+  }
+  return false;
+}
+
+async function loadActiveNarVenuesByRaceId(date){
+  const found = [];
+  const status = document.getElementById('urlStatus');
+  for(const [code,name] of NAR_VENUES){
+    if(status) status.innerHTML = `<div class="url-status">📅 NAR開催確認中... ${name}</div>`;
+    const ok = await detectActiveNarVenue(date, code);
+    if(ok) found.push([code, name, 0]);
+  }
+  return found;
 }
 
 
@@ -1269,14 +1300,32 @@ async function loadActiveVenuesForDate(){
 
   try{
     if(status) status.innerHTML = `<div class="url-status">📅 ${date} の開催場を確認中...</div>`;
-    const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(raceListUrl(kind, date));
-    const res = await fetch(proxyReq);
-    if(!res.ok) throw new Error('HTTP ' + res.status);
-    const html = await res.text();
-    const venues = parseActiveVenuesFromList(html, kind, date);
+
+    let venues = [];
+
+    if(kind === 'NAR'){
+      // NARは一覧HTMLのタブ取得が不安定なため、race_id直接確認を主ルートにする。
+      venues = await loadActiveNarVenuesByRaceId(date);
+
+      // 直接確認で0件だった場合だけ、一覧HTML解析を保険として使う。
+      if(!venues.length){
+        const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(raceListUrl(kind, date));
+        const res = await fetch(proxyReq);
+        if(!res.ok) throw new Error('HTTP ' + res.status);
+        const html = await res.text();
+        venues = parseActiveVenuesFromList(html, kind, date);
+      }
+    }else{
+      const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(raceListUrl(kind, date));
+      const res = await fetch(proxyReq);
+      if(!res.ok) throw new Error('HTTP ' + res.status);
+      const html = await res.text();
+      venues = parseActiveVenuesFromList(html, kind, date);
+    }
+
     renderVenueOptions(venues);
     if(status) status.innerHTML = venues.length
-      ? `<div class="url-status ok">✅ ${date} の開催場 ${venues.length}場を表示しました</div>`
+      ? `<div class="url-status ok">✅ ${date} の${kind}開催場 ${venues.length}場を表示しました</div>`
       : `<div class="url-status err">⚠️ ${date} は${kind}の開催場が見つかりません</div>`;
   }catch(e){
     console.error(e);
@@ -1648,6 +1697,9 @@ function copyWorkerCode(){
 
         'Accept-Language':
           'ja,en-US;q=0.9,en;q=0.8',
+
+        'Accept-Encoding':
+          'gzip, deflate, br',
 
         'Referer':
           'https://race.netkeiba.com/',

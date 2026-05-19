@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.13.5 統合版 Calendar</title>
+<title>The競馬 EV分析 v5.13.4 統合版 Calendar+</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -96,13 +96,11 @@ select option { background: #1e293b; }
 .pick-grid .field { margin-bottom: 0; }
 .race-select-box { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
 .race-select-box select { flex: 1; }
-.sim-kpi { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-bottom:10px; }
-.sim-kpi .box { background:var(--surface); border-radius:8px; padding:10px 6px; text-align:center; }
-.sim-kpi .box .val { font-size:17px; font-weight:800; }
-.sim-kpi .box .lbl { font-size:10px; color:var(--muted); margin-top:2px; }
-.hit { color:var(--green); font-weight:800; }
-.miss { color:var(--red); font-weight:800; }
-.sim-log { font-size:12px; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:8px; max-height:180px; overflow:auto; white-space:pre-wrap; }
+.race-title-box { font-size: 12px; color: var(--green); margin-top: 6px; padding: 7px 9px; background: rgba(52,211,153,0.08); border: 1px solid rgba(52,211,153,0.18); border-radius: 8px; display: none; }
+.chart-box { width: 100%; height: 220px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 8px; }
+.chart-box canvas { width: 100%; height: 100%; display: block; }
+.profit-controls { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; align-items: end; margin-bottom: 10px; }
+.profit-controls .field { margin-bottom: 0; }
 
 </style>
 </head>
@@ -113,7 +111,7 @@ select option { background: #1e293b; }
     <h1>🏇 The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.13.5 統合版</span>
+    <span class="ver">v5.13.4 統合版</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -124,7 +122,6 @@ select option { background: #1e293b; }
   <div class="tabs">
     <button class="tab-btn active" data-tab="horses">🐎 馬データ</button>
     <button class="tab-btn" data-tab="result">📊 推奨買い目</button>
-    <button class="tab-btn" data-tab="simulation">🧪 シミュレーション</button>
     <button class="tab-btn" data-tab="settings">⚙️ 設定</button>
     <button class="tab-btn" data-tab="proxy">🌐 プロキシ</button>
   </div>
@@ -139,11 +136,11 @@ select option { background: #1e293b; }
       <div class="pick-grid">
         <div class="field">
           <label>日付</label>
-          <input type="date" id="pickDate">
+          <input type="date" id="pickDate" onchange="onRaceDateKindChanged()">
         </div>
         <div class="field">
           <label>区分</label>
-          <select id="pickKind" onchange="renderVenueOptions()">
+          <select id="pickKind" onchange="onRaceDateKindChanged()">
             <option value="JRA">JRA</option>
             <option value="NAR">NAR</option>
           </select>
@@ -167,6 +164,7 @@ select option { background: #1e293b; }
           </select>
           <button class="btn-sm" onclick="applySelectedRaceUrl()">URL反映</button>
         </div>
+        <div id="raceTitleBox" class="race-title-box"></div>
       </div>
       <div class="field">
         <label>レースURL（netkeiba.com の出馬表ページ）</label>
@@ -215,6 +213,26 @@ select option { background: #1e293b; }
     </div>
 
     <div class="card">
+      <h2>📊 収支グラフ</h2>
+      <div class="profit-controls">
+        <div class="field">
+          <label>投資額</label>
+          <input type="number" id="profitBet" value="0" min="0" step="100">
+        </div>
+        <div class="field">
+          <label>払戻金</label>
+          <input type="number" id="profitReturn" value="0" min="0" step="10">
+        </div>
+        <button class="btn-sm" style="height:36px" onclick="recordProfit()">記録</button>
+      </div>
+      <div class="btn-row" style="margin-bottom:10px">
+        <button class="btn-sm" onclick="clearProfitHistory()">収支履歴クリア</button>
+      </div>
+      <div class="summary-grid" id="profitSummary" style="margin-bottom:10px"></div>
+      <div class="chart-box"><canvas id="profitChart" width="560" height="220"></canvas></div>
+    </div>
+
+    <div class="card">
       <h2>📋 全候補（EV順）</h2>
       <div style="overflow-x:auto">
         <table class="result-table">
@@ -226,38 +244,6 @@ select option { background: #1e293b; }
       </div>
     </div>
 
-  </div>
-
-
-  <div id="tab-simulation" style="display:none">
-    <div class="card">
-      <h2>🧪 買ったつもりシミュレーション</h2>
-      <div class="sim-kpi">
-        <div class="box"><div class="val" id="simInvest">0円</div><div class="lbl">投資</div></div>
-        <div class="box"><div class="val" id="simReturn">0円</div><div class="lbl">払戻</div></div>
-        <div class="box"><div class="val" id="simRoi">0%</div><div class="lbl">回収率</div></div>
-      </div>
-      <div class="field">
-        <label>結果URL（通常は自動生成）</label>
-        <input type="url" id="resultUrl" placeholder="https://race.netkeiba.com/race/result.html?race_id=...">
-      </div>
-      <div class="btn-row">
-        <button class="btn btn-primary" onclick="runSimulation()">🧪 このレースを精算</button>
-        <button class="btn-sm" onclick="clearSimHistory()">履歴クリア</button>
-      </div>
-      <div id="simStatus"></div>
-    </div>
-    <div class="card"><h2>🎯 的中判定</h2><div id="simTicketResult" class="empty">まだシミュレーションしていません。</div></div>
-    <div class="card"><h2>💰 払戻データ</h2><div id="simPayoutView" class="empty">結果ページ取得後に表示されます。</div></div>
-    <div class="card">
-      <h2>📚 累計履歴</h2>
-      <div class="sim-kpi">
-        <div class="box"><div class="val" id="histRaces">0</div><div class="lbl">件数</div></div>
-        <div class="box"><div class="val" id="histProfit">0円</div><div class="lbl">収支</div></div>
-        <div class="box"><div class="val" id="histRoi">0%</div><div class="lbl">累計ROI</div></div>
-      </div>
-      <div id="simHistory" class="sim-log"></div>
-    </div>
   </div>
 
   <!-- 設定タブ -->
@@ -451,26 +437,23 @@ let settings = {
 let horses = [];
 let lastRecs = [];
 let lastTickets = [];
-let simHistory = [];
-let lastRaceUrl = '';
+let currentRaceName = '';
+let currentRaceId = '';
+let profitHistory = [];
 
 // ─── 設定ロード ────────────────────────────────
 function loadSettings(){
   try {
     const s = JSON.parse(localStorage.getItem('tk-html-settings') || '{}');
     Object.assign(settings, s);
-
-    // デフォルトProxy強制
-    if(!settings.proxyUrl){
-      settings.proxyUrl = 'https://takuya.nitta-katsuhiko.workers.dev/';
-    }
-
+    if(!settings.proxyUrl) settings.proxyUrl = 'https://takuya.nitta-katsuhiko.workers.dev/';
     if(!settings.minEVByType) settings.minEVByType = {...DEFAULT_MIN_EV};
-    TICKET_TYPES.forEach(t => {
-      if(!settings.minEVByType[t]) settings.minEVByType[t] = DEFAULT_MIN_EV[t];
-    });
-
+    TICKET_TYPES.forEach(t => { if(!settings.minEVByType[t]) settings.minEVByType[t] = DEFAULT_MIN_EV[t]; });
   } catch(e) {}
+  try {
+    profitHistory = JSON.parse(localStorage.getItem('tk-profit-history') || '[]');
+    if(!Array.isArray(profitHistory)) profitHistory = [];
+  } catch(e) { profitHistory = []; }
 }
 function saveSettings(){
   settings.nar = document.getElementById('setNar')?.value === '1';
@@ -540,6 +523,7 @@ function initUI(){
 
   // 馬データ初期表示
   renderHorseRows();
+  renderProfitChart();
 }
 
 // ─── 馬データUI ─────────────────────────────────
@@ -871,6 +855,7 @@ function renderResult(valid, rated){
   const evSum = lastTickets.reduce((a,b)=>a+b.ev*b.amount,0);
   const expectedROI = totalBet ? evSum/totalBet : 0;
   sg.innerHTML = `
+    <div class="summary-item"><div class="val" style="font-size:13px;line-height:1.3">${escapeHtml(currentRaceName || '未取得')}</div><div class="lbl">レース名</div></div>
     <div class="summary-item"><div class="val">${valid.length}頭</div><div class="lbl">出走</div></div>
     <div class="summary-item"><div class="val">${lastTickets.length}点</div><div class="lbl">買い目</div></div>
     <div class="summary-item"><div class="val" style="color:${expectedROI>=1?'var(--green)':'var(--yellow)'}">${(expectedROI*100).toFixed(0)}%</div><div class="lbl">期待ROI</div></div>
@@ -922,6 +907,98 @@ function renderResult(valid, rated){
       <td>${(r.kelly*100).toFixed(1)}%</td>
     </tr>`;
   }).join('');
+
+  const betEl = document.getElementById('profitBet');
+  if(betEl) betEl.value = totalBet || 0;
+  renderProfitChart();
+}
+
+function escapeHtml(v){
+  return String(v ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+
+function recordProfit(){
+  const bet = Number(document.getElementById('profitBet')?.value || 0);
+  const ret = Number(document.getElementById('profitReturn')?.value || 0);
+  const profit = ret - bet;
+  const label = currentRaceName || currentRaceId || new Date().toLocaleString('ja-JP');
+  profitHistory.push({ date: new Date().toISOString(), raceId: currentRaceId, raceName: label, bet, ret, profit });
+  localStorage.setItem('tk-profit-history', JSON.stringify(profitHistory.slice(-200)));
+  profitHistory = profitHistory.slice(-200);
+  renderProfitChart();
+}
+
+function clearProfitHistory(){
+  if(!confirm('収支履歴をクリアしますか？')) return;
+  profitHistory = [];
+  localStorage.removeItem('tk-profit-history');
+  renderProfitChart();
+}
+
+function renderProfitChart(){
+  const sumEl = document.getElementById('profitSummary');
+  const canvas = document.getElementById('profitChart');
+  if(!sumEl || !canvas) return;
+
+  const totalBet = profitHistory.reduce((s,x)=>s+Number(x.bet||0),0);
+  const totalRet = profitHistory.reduce((s,x)=>s+Number(x.ret||0),0);
+  const totalProfit = totalRet - totalBet;
+  const roi = totalBet ? (totalRet / totalBet * 100) : 0;
+
+  sumEl.innerHTML = `
+    <div class="summary-item"><div class="val">${profitHistory.length}</div><div class="lbl">記録数</div></div>
+    <div class="summary-item"><div class="val" style="color:${totalProfit>=0?'var(--green)':'var(--red)'}">${totalProfit.toLocaleString()}円</div><div class="lbl">累計収支</div></div>
+    <div class="summary-item"><div class="val" style="color:${roi>=100?'var(--green)':'var(--yellow)'}">${roi.toFixed(1)}%</div><div class="lbl">回収率</div></div>
+  `;
+
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0,0,w,h);
+  ctx.fillStyle = '#1e293b';
+  ctx.fillRect(0,0,w,h);
+  ctx.strokeStyle = '#334155';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for(let i=0;i<=4;i++){
+    const y = 18 + i*(h-42)/4;
+    ctx.moveTo(34,y); ctx.lineTo(w-10,y);
+  }
+  ctx.stroke();
+
+  if(!profitHistory.length){
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '13px -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx.fillText('払戻金を入力して「記録」を押すと収支グラフが表示されます', 48, h/2);
+    return;
+  }
+
+  let cum = 0;
+  const points = profitHistory.map((x,i)=>{ cum += Number(x.profit||0); return {i, y: cum}; });
+  const ys = points.map(p=>p.y).concat([0]);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const pad = Math.max(100, (maxY-minY)*0.12);
+  const lo = minY - pad, hi = maxY + pad;
+  const xOf = i => 34 + (points.length === 1 ? 0 : i*(w-54)/(points.length-1));
+  const yOf = v => 18 + (hi-v)*(h-42)/(hi-lo || 1);
+
+  const zeroY = yOf(0);
+  ctx.strokeStyle = '#64748b';
+  ctx.beginPath(); ctx.moveTo(34,zeroY); ctx.lineTo(w-10,zeroY); ctx.stroke();
+
+  ctx.strokeStyle = totalProfit >= 0 ? '#34d399' : '#f87171';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  points.forEach((p,i)=>{ const x=xOf(i), y=yOf(p.y); i ? ctx.lineTo(x,y) : ctx.moveTo(x,y); });
+  ctx.stroke();
+
+  ctx.fillStyle = ctx.strokeStyle;
+  points.forEach(p=>{ const x=xOf(p.i), y=yOf(p.y); ctx.beginPath(); ctx.arc(x,y,3,0,Math.PI*2); ctx.fill(); });
+
+  ctx.fillStyle = '#cbd5e1';
+  ctx.font = '11px -apple-system, BlinkMacSystemFont, sans-serif';
+  ctx.fillText(maxY.toLocaleString(), 4, 20);
+  ctx.fillText(minY.toLocaleString(), 4, h-18);
+  ctx.fillText('累計収支', w-58, 16);
 }
 
 
@@ -945,15 +1022,20 @@ function todayYmd(){
   return `${y}-${m}-${day}`;
 }
 
-function renderVenueOptions(){
+function venueName(kind, code){
+  const list = kind === 'NAR' ? NAR_VENUES : JRA_VENUES;
+  return (list.find(v => v[0] === code) || [code, code])[1];
+}
+
+function renderVenueOptions(listOverride){
   const kind = document.getElementById('pickKind')?.value || 'JRA';
   const venueEl = document.getElementById('pickVenue');
   if(!venueEl) return;
 
-  const list = kind === 'NAR' ? NAR_VENUES : JRA_VENUES;
-  venueEl.innerHTML = list.map(([code,name]) =>
-    `<option value="${code}">${name}</option>`
-  ).join('');
+  const list = listOverride || (kind === 'NAR' ? NAR_VENUES : JRA_VENUES);
+  venueEl.innerHTML = list.length
+    ? list.map(([code,name,count]) => `<option value="${code}">${name}${count ? '（' + count + 'R）' : ''}</option>`).join('')
+    : '<option value="">開催なし</option>';
 
   const setNar = document.getElementById('setNar');
   if(setNar){
@@ -977,22 +1059,98 @@ function shutubaUrl(kind, raceId){
   return `${host}/race/shutuba.html?race_id=${raceId}&rf=race_submenu`;
 }
 
+function extractVenueCodeFromRaceId(raceId){
+  const id = String(raceId || '');
+  return id.length >= 6 ? id.slice(4,6) : '';
+}
+
+function cleanRaceName(txt, raceNo){
+  let t = String(txt || '')
+    .replace(/\s+/g, ' ')
+    .replace(/出馬表|オッズ|結果|払戻|予想|\|.*$/g, '')
+    .trim();
+  const m = t.match(new RegExp(`${raceNo}R\\s*([^0-9]{1,40})`));
+  if(m) t = m[1].trim();
+  t = t.replace(/^\d{1,2}R\s*/, '').replace(/^(レース|Race)\s*/i, '').trim();
+  return t || `${raceNo}R`;
+}
+
 function parseRaceIdsFromList(html, kind, venueCode){
-  const ids = new Set();
-  const re = /race_id=(\d{10,14})/g;
-  let m;
-  while((m = re.exec(html))){
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  const map = new Map();
+  const links = Array.from(doc.querySelectorAll('a[href*="race_id="]'));
+
+  links.forEach(a => {
+    const m = a.href.match(/race_id=(\d{10,14})/);
+    if(!m) return;
     const id = m[1];
-    if(kind === 'JRA' && venueCode && id.slice(4,6) !== venueCode) continue;
-    ids.add(id);
+    const vc = extractVenueCodeFromRaceId(id);
+    if(venueCode && vc !== venueCode) return;
+    const raceNo = Number(id.slice(-2));
+    const parentText = (a.closest('li, tr, dd, dl, .RaceList_DataItem, .RaceList_Item, .RaceList_Box, .RaceList_Table') || a.parentElement || a).textContent;
+    const name = cleanRaceName(parentText || a.textContent, raceNo);
+    if(!map.has(id)) map.set(id, { raceId:id, raceNo, venueCode:vc, raceName:name, shutuba:shutubaUrl(kind, id) });
+    else if(name && name !== `${raceNo}R`) map.get(id).raceName = name;
+  });
+
+  if(!map.size){
+    const ids = new Set();
+    const re = /race_id=(\d{10,14})/g;
+    let m;
+    while((m = re.exec(html))){
+      const id = m[1];
+      const vc = extractVenueCodeFromRaceId(id);
+      if(venueCode && vc !== venueCode) continue;
+      ids.add(id);
+    }
+    ids.forEach(id => map.set(id, { raceId:id, raceNo:Number(id.slice(-2)), venueCode:extractVenueCodeFromRaceId(id), raceName:`${Number(id.slice(-2))}R`, shutuba:shutubaUrl(kind, id) }));
   }
-  return Array.from(ids)
-    .sort((a,b) => Number(a.slice(-2)) - Number(b.slice(-2)))
-    .map(id => ({
-      raceId: id,
-      raceNo: Number(id.slice(-2)),
-      shutuba: shutubaUrl(kind, id)
-    }));
+
+  return Array.from(map.values()).sort((a,b) => a.venueCode.localeCompare(b.venueCode) || a.raceNo - b.raceNo);
+}
+
+function parseActiveVenuesFromList(html, kind){
+  const races = parseRaceIdsFromList(html, kind, '');
+  const byVenue = new Map();
+  races.forEach(r => {
+    if(!r.venueCode) return;
+    byVenue.set(r.venueCode, (byVenue.get(r.venueCode) || 0) + 1);
+  });
+  return Array.from(byVenue.entries())
+    .sort((a,b) => a[0].localeCompare(b[0]))
+    .map(([code,count]) => [code, venueName(kind, code), count]);
+}
+
+async function onRaceDateKindChanged(){
+  renderVenueOptions();
+  await loadActiveVenuesForDate();
+}
+
+async function loadActiveVenuesForDate(){
+  const date = document.getElementById('pickDate')?.value || todayYmd();
+  const kind = document.getElementById('pickKind')?.value || 'JRA';
+  const status = document.getElementById('urlStatus');
+  const raceSelect = document.getElementById('raceSelect');
+  if(raceSelect) raceSelect.innerHTML = '<option value="">開催場を選んでレース一覧を取得</option>';
+  if(!settings.proxyUrl){ renderVenueOptions(); return; }
+
+  try{
+    if(status) status.innerHTML = `<div class="url-status">📅 ${date} の開催場を確認中...</div>`;
+    const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(raceListUrl(kind, date));
+    const res = await fetch(proxyReq);
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+    const html = await res.text();
+    const venues = parseActiveVenuesFromList(html, kind);
+    renderVenueOptions(venues);
+    if(status) status.innerHTML = venues.length
+      ? `<div class="url-status ok">✅ 開催場 ${venues.length}場を表示しました</div>`
+      : `<div class="url-status err">⚠️ ${date} は${kind}の開催場が見つかりません</div>`;
+  }catch(e){
+    console.error(e);
+    renderVenueOptions();
+    if(status) status.innerHTML = `<div class="url-status err">⚠️ 開催場の自動取得に失敗: ${e.message}</div>`;
+  }
 }
 
 async function loadRaceList(){
@@ -1025,11 +1183,11 @@ async function loadRaceList(){
     }
 
     raceSelect.innerHTML = races.map(r =>
-      `<option value="${r.shutuba}" data-race-id="${r.raceId}">${r.raceNo}R / ${r.raceId}</option>`
+      `<option value="${r.shutuba}" data-race-id="${r.raceId}" data-race-name="${escapeHtml(r.raceName)}">${r.raceNo}R ${escapeHtml(r.raceName)} / ${r.raceId}</option>`
     ).join('');
 
     applySelectedRaceUrl();
-    status.innerHTML = `<div class="url-status ok">✅ ${races.length}レース見つかりました。レースを選んで取得できます</div>`;
+    status.innerHTML = `<div class="url-status ok">✅ ${venueName(kind, venueCode)} ${races.length}レース見つかりました。レース名つきで選択できます</div>`;
 
   }catch(e){
     console.error(e);
@@ -1040,11 +1198,17 @@ async function loadRaceList(){
 function applySelectedRaceUrl(){
   const raceSelect = document.getElementById('raceSelect');
   const raceUrl = document.getElementById('raceUrl');
+  const box = document.getElementById('raceTitleBox');
   if(!raceSelect || !raceUrl) return;
   if(raceSelect.value){
     raceUrl.value = raceSelect.value;
-    const resultInput = document.getElementById('resultUrl');
-    if(resultInput) resultInput.value = makeResultUrl(raceSelect.value);
+    const opt = raceSelect.options[raceSelect.selectedIndex];
+    currentRaceName = opt?.dataset?.raceName || opt?.textContent || '';
+    currentRaceId = opt?.dataset?.raceId || '';
+    if(box){
+      box.style.display = currentRaceName ? 'block' : 'none';
+      box.textContent = currentRaceName ? `選択中: ${currentRaceName}` : '';
+    }
   }
 }
 
@@ -1056,15 +1220,13 @@ function initCalendarPicker(){
   if(kindEl) kindEl.value = settings.nar ? 'NAR' : 'JRA';
 
   renderVenueOptions();
+  loadActiveVenuesForDate();
 }
 
 
 // ─── netkeibaプロキシ取得 ────────────────────────
 async function fetchRace(){
   const rawUrl = document.getElementById('raceUrl').value.trim();
-  lastRaceUrl = rawUrl;
-  const resultInput = document.getElementById('resultUrl');
-  if(resultInput) resultInput.value = makeResultUrl(rawUrl);
   if(!rawUrl){ alert('URLを入力してください。'); return; }
   if(!settings.proxyUrl){
     alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。');
@@ -1085,10 +1247,20 @@ async function fetchRace(){
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
 
+    const titleFromDoc = parseRaceTitleFromDoc(doc);
+    if(titleFromDoc) currentRaceName = titleFromDoc;
+    const rid = (rawUrl.match(/race_id=(\d{10,14})/) || [])[1];
+    if(rid) currentRaceId = rid;
+    const box = document.getElementById('raceTitleBox');
+    if(box && currentRaceName){
+      box.style.display = 'block';
+      box.textContent = `選択中: ${currentRaceName}`;
+    }
+
     horses = parseHorsesFromDoc(doc, rawUrl);
     renderHorseRows();
 
-    status.innerHTML = `<div class="url-status ok">✅ ${horses.length}頭 取得しました</div>`;
+    status.innerHTML = `<div class="url-status ok">✅ ${escapeHtml(currentRaceName || '')} ${horses.length}頭 取得しました</div>`;
 
     // 取得後すぐにタブを馬データへ
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -1102,6 +1274,21 @@ async function fetchRace(){
   } finally {
     progress.classList.remove('show');
   }
+}
+
+function parseRaceTitleFromDoc(doc){
+  const candidates = [
+    doc.querySelector('.RaceName'),
+    doc.querySelector('[class*="RaceName"]'),
+    doc.querySelector('h1'),
+    doc.querySelector('title')
+  ];
+  for(const el of candidates){
+    if(!el) continue;
+    let t = el.textContent.replace(/出馬表|オッズ|競馬データベース|netkeiba.com|｜.*$/g,'').replace(/\s+/g,' ').trim();
+    if(t && t.length >= 2) return t;
+  }
+  return '';
 }
 
 function parseHorsesFromDoc(doc, url){
@@ -1234,172 +1421,6 @@ function parseHorsesFromDoc(doc, url){
 
   return list.sort((a,b)=>a.num-b.num);
 }
-
-// ─── シミュレーション・結果精算 ─────────────────────
-function yenFmt(n){ return Number(n || 0).toLocaleString('ja-JP') + '円'; }
-
-function makeResultUrl(u){
-  try{
-    const url = new URL(u);
-    const raceId = url.searchParams.get('race_id');
-    if(!raceId) return u;
-    const host = url.host.includes('nar.') ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com';
-    return `${host}/race/result.html?race_id=${raceId}&rf=race_submenu`;
-  }catch(e){ return String(u||'').replace('/shutuba.html','/result.html'); }
-}
-
-function normCombo(nums, ordered){
-  const arr = Array.isArray(nums) ? nums.map(Number) : String(nums).split('-').map(Number);
-  return ordered ? arr.join('-') : arr.slice().sort((a,b)=>a-b).join('-');
-}
-function ticketKey(type, nums){ return type + '|' + normCombo(nums, ['馬単','3連単'].includes(type)); }
-function payoutKey(type, combo){ return type + '|' + normCombo(combo, ['馬単','3連単'].includes(type)); }
-
-function parseResultFromDoc(doc){ return { finish: parseFinishFromResult(doc), payouts: parsePayoutsFromResult(doc) }; }
-
-function parseFinishFromResult(doc){
-  const out = [], seen = new Set();
-  doc.querySelectorAll('tr').forEach(tr => {
-    const horseLink = tr.querySelector('a[href*="/horse/"]');
-    if(!horseLink) return;
-    const cells = Array.from(tr.querySelectorAll('td,th')).map(td => td.textContent.replace(/\s+/g,' ').trim());
-    let rank=0, frame=0, horseNo=0;
-    for(const c of cells.slice(0,5)){
-      const m = c.match(/^\d{1,2}$/); if(!m) continue;
-      const v = Number(m[0]);
-      if(!rank && v>=1 && v<=30){ rank=v; continue; }
-      if(!frame && v>=1 && v<=8){ frame=v; continue; }
-      if(!horseNo && v>=1 && v<=18){ horseNo=v; continue; }
-    }
-    const horse = horseLink.textContent.replace(/のデータベース/g,'').replace(/データベース/g,'').replace(/\s+/g,'').trim();
-    if(rank && horseNo && horse){
-      const k = rank+'-'+horseNo;
-      if(!seen.has(k)){ seen.add(k); out.push({rank, frame, horseNo, horse}); }
-    }
-  });
-  return out.sort((a,b)=>a.rank-b.rank);
-}
-
-function parsePayoutsFromResult(doc){
-  const payouts = [], types = ['単勝','複勝','枠連','馬連','ワイド','馬単','3連複','3連単'];
-  doc.querySelectorAll('tr').forEach(tr => {
-    const row = tr.textContent.replace(/\s+/g,' ').trim();
-    const type = types.find(t => row.includes(t));
-    if(type) collectPayoutsFromText(type, row, payouts);
-  });
-  const bodyText = (doc.body ? doc.body.textContent : '').replace(/\s+/g,' ');
-  types.forEach(type => {
-    if(payouts.some(p => p.type === type)) return;
-    const idx = bodyText.indexOf(type);
-    if(idx < 0) return;
-    const nexts = types.map(t => bodyText.indexOf(t, idx + type.length)).filter(v => v > idx);
-    const end = nexts.length ? Math.min(...nexts) : Math.min(bodyText.length, idx + 300);
-    collectPayoutsFromText(type, bodyText.slice(idx, end), payouts);
-  });
-  const seen = new Set();
-  return payouts.filter(p => { const k=p.type+'|'+p.combo+'|'+p.pay; if(seen.has(k))return false; seen.add(k); return true; });
-}
-
-function collectPayoutsFromText(type, text, out){
-  const need = (type === '単勝' || type === '複勝') ? 1 : ((type === '3連複' || type === '3連単') ? 3 : 2);
-  const comboPattern = need === 1 ? /(?:^|\s)(\d{1,2})(?=\s|$)/g :
-    need === 2 ? /(\d{1,2})\s*[-－ー―−→]\s*(\d{1,2})/g :
-    /(\d{1,2})\s*[-－ー―−→]\s*(\d{1,2})\s*[-－ー―−→]\s*(\d{1,2})/g;
-  const combos = [];
-  let m;
-  while((m = comboPattern.exec(text))){
-    const arr = m.slice(1).filter(Boolean).map(Number);
-    if(arr.length === need && arr.every(n => n>=1 && n<=18)) combos.push(arr.join('-'));
-  }
-  const pays = Array.from(text.matchAll(/(\d[\d,]*)\s*円/g)).map(x => Number(x[1].replace(/,/g,'')));
-  const pops = Array.from(text.matchAll(/(\d{1,3})\s*人気/g)).map(x => Number(x[1]));
-  for(let i=0;i<Math.min(combos.length,pays.length);i++){
-    if(pays[i] >= 100) out.push({type, combo:combos[i], pay:pays[i], popularity:pops[i] || ''});
-  }
-}
-
-async function runSimulation(){
-  if(!lastTickets || !lastTickets.length){ alert('先にEV計算・買い目推奨を実行してください。'); return; }
-  const resultUrlEl = document.getElementById('resultUrl');
-  let url = resultUrlEl?.value || makeResultUrl(lastRaceUrl || document.getElementById('raceUrl')?.value || '');
-  if(resultUrlEl && !resultUrlEl.value) resultUrlEl.value = url;
-  if(!url){ alert('結果URLがありません。'); return; }
-  if(!settings.proxyUrl){ alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。'); return; }
-
-  const status = document.getElementById('simStatus');
-  status.innerHTML = '<div class="url-status">🧪 結果ページ取得中...</div>';
-  try{
-    const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(url);
-    const res = await fetch(proxyReq);
-    if(!res.ok) throw new Error('HTTP ' + res.status);
-    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-    const result = parseResultFromDoc(doc);
-    const payoutMap = new Map();
-    result.payouts.forEach(p => payoutMap.set(payoutKey(p.type, p.combo), p));
-    let invest=0, ret=0;
-    const rows = lastTickets.map(t => {
-      invest += Number(t.amount || 0);
-      const hit = payoutMap.get(ticketKey(t.type, t.nums));
-      const pay = hit ? Math.floor((Number(hit.pay)||0) * (Number(t.amount||0)/100)) : 0;
-      ret += pay;
-      return {...t, hit:!!hit, pay, payout:hit};
-    });
-    const roi = invest ? Math.round(ret / invest * 100) : 0;
-    const profit = ret - invest;
-    document.getElementById('simInvest').textContent = yenFmt(invest);
-    document.getElementById('simReturn').textContent = yenFmt(ret);
-    document.getElementById('simRoi').textContent = roi + '%';
-    renderSimTickets(rows);
-    renderSimPayouts(result.payouts);
-    const entry = { at:new Date().toLocaleString('ja-JP'), url, invest, ret, profit, roi, hits:rows.filter(r=>r.hit).length, tickets:rows.length };
-    simHistory.unshift(entry); simHistory = simHistory.slice(0,100);
-    localStorage.setItem('tk-sim-history', JSON.stringify(simHistory));
-    renderSimHistory();
-    status.innerHTML = `<div class="url-status ok">✅ 精算完了：${entry.hits}/${rows.length} 的中 / 収支 ${yenFmt(profit)}</div>`;
-  }catch(e){
-    console.error(e);
-    status.innerHTML = `<div class="url-status err">❌ 精算失敗: ${e.message}</div>`;
-  }
-}
-
-function renderSimTickets(rows){
-  const el = document.getElementById('simTicketResult');
-  el.innerHTML = rows.length ? rows.map(r => `
-    <div class="ticket-row">
-      <span class="chip ${CHIP_CLASS[r.type]||''}">${r.type}</span>
-      <div class="info"><b>${r.nums.join('-')}</b><span style="margin-left:8px" class="${r.hit?'hit':'miss'}">${r.hit?'的中':'不的中'}</span>${r.payout ? `<span style="color:var(--muted);font-size:11px;margin-left:6px">払戻 ${r.payout.pay}円</span>` : ''}</div>
-      <div class="stake">${yenFmt(r.pay)}</div>
-    </div>`).join('') : '<div class="empty">買い目なし</div>';
-}
-
-function renderSimPayouts(payouts){
-  const el = document.getElementById('simPayoutView');
-  if(!payouts.length){ el.innerHTML = '<div class="empty">払戻を取得できませんでした。</div>'; return; }
-  el.innerHTML = `<table class="result-table"><thead><tr><th>券種</th><th>組合せ</th><th>払戻</th><th>人気</th></tr></thead><tbody>` +
-    payouts.map(p => `<tr><td>${p.type}</td><td>${p.combo}</td><td>${yenFmt(p.pay)}</td><td>${p.popularity || ''}</td></tr>`).join('') + '</tbody></table>';
-}
-
-function loadSimHistory(){
-  try{ simHistory = JSON.parse(localStorage.getItem('tk-sim-history') || '[]'); }catch(e){ simHistory = []; }
-  renderSimHistory();
-}
-function renderSimHistory(){
-  const invest = simHistory.reduce((s,x)=>s+Number(x.invest||0),0);
-  const ret = simHistory.reduce((s,x)=>s+Number(x.ret||0),0);
-  const profit = ret - invest;
-  const roi = invest ? Math.round(ret/invest*100) : 0;
-  if(!document.getElementById('histRaces')) return;
-  document.getElementById('histRaces').textContent = simHistory.length;
-  document.getElementById('histProfit').textContent = yenFmt(profit);
-  document.getElementById('histRoi').textContent = roi + '%';
-  document.getElementById('simHistory').textContent = simHistory.map(x => `${x.at} / ${x.hits}/${x.tickets}的中 / 投資${x.invest}円 / 払戻${x.ret}円 / 収支${x.profit}円 / ROI${x.roi}%`).join('\n') || '履歴なし';
-}
-function clearSimHistory(){
-  if(!confirm('シミュレーション履歴を削除しますか？')) return;
-  simHistory = []; localStorage.removeItem('tk-sim-history'); renderSimHistory();
-}
-
-
 // ─── プロキシテスト ──────────────────────────────
 async function testProxy(){
   const url = document.getElementById('proxyUrl').value.trim();
@@ -1493,7 +1514,6 @@ function corsHeaders(contentType) {
 // ─── 起動 ────────────────────────────────────────
 initUI();
 initCalendarPicker();
-loadSimHistory();
 
 // デモデータ
 if(horses.length === 0){

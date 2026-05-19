@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.16.3 Product Simulation</title>
+<title>The競馬 EV分析 v5.16.2 Product Simulation</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -112,7 +112,7 @@ select option { background: #1e293b; }
 
 
 /* ============================================================
-   v5.16.3 Product Simulation Theme / 緑の旧アイコン復活
+   v5.16.2 Product Simulation Theme / 緑の旧アイコン復活
    ============================================================ */
 :root{
   --accent:#00e676;
@@ -193,7 +193,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.16.3 Product</span>
+    <span class="ver">v5.16.2 Product</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1904,67 +1904,19 @@ function jraRaceIdToKaisai(raceId){
 
 function jraHtmlMatchesSelectedDate(html, date){
   const p = ymdParts(date);
-  const yyyymmdd = p.yyyymmdd; // 例: "20260516"
-
-  // ① 最優先: kaisai_date=YYYYMMDD がHTML内にあればそれで判定（最確実）
-  const kdMatch = html.match(/kaisai_date=(\d{8})/g);
-  if(kdMatch && kdMatch.length){
-    // 選択日が含まれているかチェック
-    const hasSelected = kdMatch.some(m => m.includes(yyyymmdd));
-    // 選択日以外の日付だけが含まれている場合は不一致
-    const onlyOther = kdMatch.every(m => !m.includes(yyyymmdd));
-    if(onlyOther) return false;
-    if(hasSelected) return true;
-  }
-
-  // ② 出馬表のrace_idが選択日のKKDD（開催回・日）と一致するか
-  // JRA race_id = YYYY + 場2 + 回2 + 日2 + R2
-  // 直接日付はないが、後続の verifyJraRaceDateByShutuba でrace_idを渡しているので
-  // ここではHTML内のrace_idから開催日グループキーを全部拾い、
-  // 「選択日のグループキー（8桁）」が含まれているかを照合する。
-  // ただし開催日グループキーは日付でなく「年+場+回+日」なので直接は比較できない。
-  // → フォールバックとして本文テキストの月日表記で照合する（ただし「翌日リンク」混入対策を強化）
-
-  // 本文テキストを抽出（スクリプト・スタイルを除去）
-  const rawText = String(html || '');
-
-  // ③ meta[name="description"] や title タグに月日が含まれるか（より確実）
-  const metaMatch = rawText.match(/<meta[^>]+name=["']description["'][^>]*content=["']([^"']+)["']/i)
-    || rawText.match(/<title[^>]*>([^<]+)<\/title>/i);
-  if(metaMatch){
-    const metaText = normalizeJapaneseSpaces(metaMatch[1] || '');
-    const mm = Number(p.mmdd.slice(0,2));
-    const dd = Number(p.mmdd.slice(2,4));
-    // metaやtitleに日付が明示されていれば、それで確定判定
-    const metaPatterns = [
-      `${mm}月${dd}日`,
-      `${String(mm).padStart(2,'0')}/${String(dd).padStart(2,'0')}`
-    ];
-    if(metaPatterns.some(x => metaText.includes(x))) return true;
-    // metaに別の日付（前後日）が含まれていたら不一致
-    for(let offset = -2; offset <= 2; offset++){
-      if(offset === 0) continue;
-      const other = new Date(Number(p.yyyymmdd.slice(0,4)), Number(p.yyyymmdd.slice(4,6))-1, Number(p.yyyymmdd.slice(6,8)) + offset);
-      const om = other.getMonth()+1;
-      const od = other.getDate();
-      const otherPats = [`${om}月${od}日`, `${String(om).padStart(2,'0')}/${String(od).padStart(2,'0')}`];
-      if(otherPats.some(x => metaText.includes(x))) return false;
-    }
-  }
-
-  // ④ 最終フォールバック: 本文テキストで月日照合（従来ロジック）
-  const mm4 = Number(p.mmdd.slice(0,2));
-  const dd4 = Number(p.mmdd.slice(2,4));
+  const mm = Number(p.mmdd.slice(0,2));
+  const dd = Number(p.mmdd.slice(2,4));
   const text = normalizeJapaneseSpaces(
-    rawText
+    String(html || '')
       .replace(/<script[\s\S]*?<\/script>/gi, ' ')
       .replace(/<style[\s\S]*?<\/style>/gi, ' ')
       .replace(/<[^>]+>/g, ' ')
   );
   const patterns = [
-    `${mm4}月${dd4}日`,
-    `${String(mm4).padStart(2,'0')}月${String(dd4).padStart(2,'0')}日`,
-    `${String(mm4).padStart(2,'0')}/${String(dd4).padStart(2,'0')}`
+    `${mm}月${dd}日`,
+    `${String(mm).padStart(2,'0')}月${String(dd).padStart(2,'0')}日`,
+    `${mm}/${dd}`,
+    `${String(mm).padStart(2,'0')}/${String(dd).padStart(2,'0')}`
   ];
   return patterns.some(x => text.includes(x));
 }
@@ -1980,15 +1932,6 @@ async function verifyJraRaceDateByShutuba(date, raceId){
   const url = shutubaUrl('JRA', raceId);
   const html = await fetchHtmlViaProxy(url);
   if(!html.includes(String(raceId))) return false;
-
-  // kaisai_date=YYYYMMDD がHTML内にあれば最優先で照合（最確実）
-  const p = ymdParts(date);
-  const kdMatches = [...html.matchAll(/kaisai_date=(\d{8})/g)].map(m => m[1]);
-  if(kdMatches.length > 0){
-    if(kdMatches.some(k => k === p.yyyymmdd)) return true;
-    if(kdMatches.every(k => k !== p.yyyymmdd)) return false;
-  }
-
   return jraHtmlMatchesSelectedDate(html, date);
 }
 
@@ -2082,7 +2025,7 @@ async function getReliableJraRacesFromList(html, date, venueCode){
 }
 
 // ============================================================
-// v5.16.3: 土曜・日曜 race_id 混在 kaisai_date優先照合
+// v5.16.2: 土曜・日曜 race_id 混在の最終防壁
 // JRA race_id は YYYY+場+開催回+開催日+R で、MMDDを直接持たない。
 // そのため race_id先頭8桁で日付判定してはいけない。
 // グループ（YYYY+場+開催回+開催日）ごとに出馬表本文の日付を検証し、

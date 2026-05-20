@@ -2890,12 +2890,30 @@ function firstNumberInCell(el, allowDecimal=false){
   return m ? Number(m[1]) : 0;
 }
 
+// セル内の全小数候補を抽出し、オッズ範囲(1.0〜999.9)かつ小数点付きを優先して返す。
+// 斤量(50〜60 の整数または x.x 固定の小数)との混同を防ぐ。
+function extractOddsValueFromText(txt){
+  const candidates = [];
+  const re = /(\d{1,4}\.\d+)/g;
+  let m;
+  while((m = re.exec(txt)) !== null){
+    const v = Number(m[1]);
+    if(v >= 1.1 && v <= 999.9) candidates.push(v);
+  }
+  if(candidates.length === 0) return 0;
+  // 斤量は通常 50〜60 台。その範囲外の値を優先する。
+  const nonKinryo = candidates.filter(v => v < 50 || v > 60);
+  return nonKinryo.length > 0 ? nonKinryo[0] : candidates[0];
+}
+
 function extractOddsFromRow(tr){
   // 最優先: 表ヘッダー「オッズ」「予想オッズ」に対応するセル。
   // これによりJRAの斤量55.0を単勝オッズとして誤読しない。
   const byHead = cellByHeader(tr, /^(予想)?オッズ$|単勝オッズ|人気オッズ/);
-  let v = firstNumberInCell(byHead, true);
-  if(v >= 1 && v <= 9999) return v;
+  if(byHead){
+    const v = extractOddsValueFromText(toHalfNumberText(normCellText(byHead)));
+    if(v >= 1.1 && v <= 999.9) return v;
+  }
 
   const selectors = [
     'td.Odds', 'td[class~="Odds"]', '[class*="Tansho"]', '[class*="Odds"]',
@@ -2905,8 +2923,8 @@ function extractOddsFromRow(tr){
     for(const el of tr.querySelectorAll(sel)){
       const cls = String(el.className || '').toLowerCase();
       if(/kinryo|weight|futan|sex|age|jockey|trainer|stable|time|margin/.test(cls)) continue;
-      v = firstNumberInCell(el, true);
-      if(v >= 1 && v <= 9999) return v;
+      const v = extractOddsValueFromText(toHalfNumberText(normCellText(el)));
+      if(v >= 1.1 && v <= 999.9) return v;
     }
   }
 
@@ -2916,11 +2934,8 @@ function extractOddsFromRow(tr){
   if(popIdx > 0){
     for(let i=popIdx-1; i>=0 && i>=popIdx-3; i--){
       const txt = toHalfNumberText(normCellText(cells[i]));
-      const m = txt.match(/^(\d{1,4}\.\d+)$/) || txt.match(/(\d{1,4}\.\d+)/);
-      if(m){
-        v = Number(m[1]);
-        if(v >= 1 && v <= 9999) return v;
-      }
+      const v = extractOddsValueFromText(txt);
+      if(v >= 1.1 && v <= 999.9) return v;
     }
   }
   return 0;
@@ -2929,7 +2944,7 @@ function extractOddsFromRow(tr){
 function extractPopularityFromRow(tr, horseNo){
   const byHead = cellByHeader(tr, /^人気$|人気順/);
   let v = firstNumberInCell(byHead, false);
-  if(v >= 1 && v <= 18) return v;
+  if(v >= 1 && v <= 28) return v;
 
   const selectors = ['td.Popular', '[class*="Popular"]', '[class*="Ninki"]', '.Rank'];
   for(const sel of selectors){
@@ -2938,7 +2953,7 @@ function extractPopularityFromRow(tr, horseNo){
       let m = tx.match(/(\d{1,2})\s*人気/) || tx.match(/^(\d{1,2})$/);
       if(m){
         v = Number(m[1]);
-        if(v >= 1 && v <= 18 && v !== horseNo) return v;
+        if(v >= 1 && v <= 28) return v;
       }
     }
   }

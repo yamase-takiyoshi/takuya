@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.16.2 Product Simulation</title>
+<title>The競馬 EV分析 v5.17 Simulation Auto Settle</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -198,6 +198,16 @@ body{
 .sim-cand-row .ev-badge{font-size:11px;font-weight:700;margin-left:auto}
 .nums-sel-wrap{display:flex;gap:3px;flex-wrap:wrap}
 
+
+/* v5.17 シミュレーション強化 */
+.sim-toolbar{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:10px}
+.sim-toolbar .btn-sm{height:38px;background:rgba(0,255,136,.12);border-color:rgba(0,255,136,.28);color:#d9ffe8;font-weight:850}
+.sim-auto-box{margin-top:10px;padding:10px;border:1px solid rgba(0,255,136,.22);background:rgba(0,255,136,.07);border-radius:12px;font-size:12px;color:#c8ffe0;line-height:1.65}
+.sim-finish-picker{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:8px 0 10px}
+.sim-finish-picker .field{margin-bottom:0}
+.sim-payout-ok{color:var(--green);font-weight:800}.sim-payout-est{color:var(--yellow);font-weight:800}
+@media(max-width:560px){.sim-toolbar,.sim-finish-picker{grid-template-columns:1fr}}
+
 </style>
 </head>
 <body>
@@ -207,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.16.2 Product</span>
+    <span class="ver">v5.17 AutoSettle</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -358,6 +368,13 @@ body{
         <button class="btn-sm" onclick="runSimulationFromResult()">⚡ 結果取得・本精算</button>
         <button class="btn-sm" onclick="runManualSimulation()">✍️ 手入力で仮精算</button>
       </div>
+      <div class="sim-toolbar">
+        <button class="btn-sm" onclick="simAutoAddCandidates()">🤖 候補を自動追加</button>
+        <button class="btn-sm" onclick="runAutoSimulation()">🚀 自動追加＋結果取得＋精算</button>
+      </div>
+      <div class="sim-auto-box">
+        自動モードは、現在の推奨買い目が空ならEV候補から買い目を作成し、結果URLを自動生成して、払戻表から100円払戻を読み取り、投資額に応じて精算・履歴グラフへ記録します。
+      </div>
       <div id="simStatus" style="margin-top:10px"></div>
     </div>
 
@@ -412,6 +429,8 @@ body{
           <input type="text" id="manualFinishFrames" placeholder="1着枠-2着枠-3着枠">
         </div>
       </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:4px">または着順をドロップダウンで選択</div>
+      <div class="sim-finish-picker" id="manualFinishPicker"></div>
       <button class="btn btn-primary" onclick="runManualSimulation()">♞ シミュレーション実行</button>
     </div>
 
@@ -745,6 +764,7 @@ function initUI(){
   renderSimCandList();
   loadSimHistory();
   renderSimProfitChart();
+  renderManualFinishPicker();
 }
 
 // ─── 馬データUI ─────────────────────────────────
@@ -771,6 +791,7 @@ function renderHorseRows(){
 function addHorseRow(){
   horses.push({ num: horses.length + 1, name: '', odds: 0, pop: 0, frame: 0 });
   renderHorseRows();
+  renderManualFinishPicker();
 }
 function removeHorse(i){ horses.splice(i, 1); renderHorseRows(); }
 function clearHorses(){ horses = []; renderHorseRows(); }
@@ -1390,6 +1411,54 @@ function simAddFromCand(i){
   renderSimEditRows();
 }
 
+function simAutoAddCandidates(){
+  if(!lastRecs.length){
+    const valid = horses.filter(h => Number(h.num) > 0 && h.name);
+    if(valid.length >= 2){
+      const made = generateCandidates(valid);
+      lastRecs = made.recs.sort((a,b)=>b.ev-a.ev);
+      lastTickets = buildTickets(made.recs);
+      renderResult(valid, made.rated);
+    }
+  }
+  if(lastTickets.length){
+    simTickets = lastTickets.map(t => ({...t, nums:[...t.nums], amount:Number(t.amount||settings.unit||100)}));
+  }else if(lastRecs.length){
+    simTickets = lastRecs
+      .filter(r => Number(r.ev||0) >= 1.0)
+      .slice(0, settings.maxTickets || 5)
+      .map(r => ({type:r.type, nums:[...r.nums], amount:settings.unit||100, odds:r.odds, ev:r.ev, p:r.p}));
+  }
+  renderSimEditRows();
+  renderSimCandList();
+  const st = document.getElementById('simStatus');
+  const total = simTickets.reduce((s,t)=>s+Number(t.amount||0),0);
+  if(st) st.innerHTML = simTickets.length
+    ? `<div class="url-status ok">✅ 候補を${simTickets.length}点追加しました。合計 ${total.toLocaleString()}円</div>`
+    : '<div class="url-status err">⚠️ 追加できる候補がありません。先に馬データ取得またはEV計算を実行してください。</div>';
+}
+
+async function runAutoSimulation(){
+  if(!simTickets.length) simAutoAddCandidates();
+  fillSimResultUrl();
+  await runSimulationFromResult();
+}
+
+function renderManualFinishPicker(){
+  const box = document.getElementById('manualFinishPicker');
+  if(!box) return;
+  const opts = (horses.length ? horses : Array.from({length:18},(_,i)=>({num:i+1,name:''})))
+    .map(h => `<option value="${Number(h.num)}">${Number(h.num)}${h.name ? '.' + escapeHtml(String(h.name).slice(0,6)) : ''}</option>`).join('');
+  box.innerHTML = [1,2,3].map(i => `<div class="field"><label>${i}着</label><select id="manualFinish${i}" onchange="syncManualFinishInputs()"><option value="">未選択</option>${opts}</select></div>`).join('');
+}
+
+function syncManualFinishInputs(){
+  const vals = [1,2,3].map(i => Number(document.getElementById('manualFinish'+i)?.value || 0)).filter(n=>n>0);
+  if(vals.length) document.getElementById('manualFinishNums').value = vals.join('-');
+  const frames = vals.map(n => Number((horses.find(h=>Number(h.num)===n)||{}).frame||0)).filter(n=>n>0);
+  if(frames.length === vals.length) document.getElementById('manualFinishFrames').value = frames.join('-');
+}
+
 // simTicketsからlastTicketsを同期してシミュレーションを実行
 function simGetTicketsFromEdit(){
   // simTicketsが空なら従来のlastTicketsを使用
@@ -1443,6 +1512,7 @@ function simClearHistory(){
   simHistory = [];
   saveSimHistory();
   renderSimProfitChart();
+  renderManualFinishPicker();
 }
 
 function renderSimProfitChart(){
@@ -1676,6 +1746,30 @@ function parsePayoutsFromResultDoc(doc){
       if(amount) payouts[`${type}:${comboKey(type, nums)}`] = amount;
     });
   });
+  // テーブル構造が崩れている場合の本文フォールバック（払戻エリア全体のテキストから券種別に抽出）
+  const allText = normSimDigits(doc.body?.innerText || doc.body?.textContent || '');
+  const blocks = allText.split(/(?=単勝|複勝|枠連|馬連|ワイド|馬単|3連複|3連単)/);
+  blocks.forEach(block => {
+    const type = types.find(t => block.startsWith(t));
+    if(!type) return;
+    const amounts = [...block.matchAll(/([0-9,]+)\s*円/g)].map(m=>Number(m[1].replace(/,/g,''))).filter(n=>n>0 && n%10===0);
+    if(!amounts.length) return;
+    let combos = [];
+    if(type === '単勝' || type === '複勝'){
+      const nums = [...block.matchAll(/(?:^|[^0-9])([1-9]|1[0-8])(?:[^0-9]|$)/g)].map(m=>Number(m[1]));
+      combos = [...new Set(nums)].slice(0, amounts.length).map(n=>[n]);
+    }else{
+      [...block.matchAll(/([1-9]|1[0-8])\s*-\s*([1-9]|1[0-8])(?:\s*-\s*([1-9]|1[0-8]))?/g)].forEach(m=>{
+        const a=[Number(m[1]),Number(m[2])];
+        if(m[3]) a.push(Number(m[3]));
+        combos.push(a);
+      });
+    }
+    combos.forEach((nums,i)=>{
+      const k = `${type}:${comboKey(type, nums)}`;
+      if(!payouts[k] && amounts[i]) payouts[k] = amounts[i];
+    });
+  });
   return payouts;
 }
 
@@ -1700,8 +1794,8 @@ function judgeTicketHit(ticket, finish){
 
 function payoutForTicket(ticket, payouts){
   const key = `${ticket.type}:${comboKey(ticket.type, ticket.nums)}`;
-  if(payouts && payouts[key]) return payouts[key];
-  return Math.max(0, Math.round((Number(ticket.odds || 0) * 100) / 10) * 10);
+  if(payouts && payouts[key]) return {amount:payouts[key], source:'real'};
+  return {amount:Math.max(0, Math.round((Number(ticket.odds || 0) * 100) / 10) * 10), source:'estimate'};
 }
 
 function renderSimulation(finish, payouts, sourceLabel){
@@ -1726,7 +1820,8 @@ function renderSimulation(finish, payouts, sourceLabel){
 
   activeTickets.forEach(t => {
     const hit = judgeTicketHit(t, finish);
-    const per100 = hit ? payoutForTicket(t, payouts) : 0;
+    const payInfo = hit ? payoutForTicket(t, payouts) : {amount:0, source:'none'};
+    const per100 = Number(payInfo.amount||0);
     const ret = hit ? Math.floor(Number(t.amount||0) / 100) * per100 : 0;
     if(hit) hitCount++;
     totalReturn += ret;
@@ -1741,7 +1836,7 @@ function renderSimulation(finish, payouts, sourceLabel){
       <span class="chip ${CHIP_CLASS[t.type]||''}">${t.type}</span>
       <div class="sim-ticket-main">
         <b>${t.nums.join('-')}</b>
-        <div class="sim-ticket-meta">購入 ${Number(t.amount||0).toLocaleString()}円 / 100円払戻 ${per100 ? per100.toLocaleString() + '円' : '-'} / EV ${Number(t.ev||0).toFixed(2)}</div>
+        <div class="sim-ticket-meta">購入 ${Number(t.amount||0).toLocaleString()}円 / 100円払戻 ${per100 ? per100.toLocaleString() + '円' : '-'} <span class="${payInfo.source==='real'?'sim-payout-ok':'sim-payout-est'}">${hit ? (payInfo.source==='real'?'実払戻':'推定') : ''}</span> / EV ${Number(t.ev||0).toFixed(2)}</div>
       </div>
       <div class="sim-return ${hit?'hit':''}">${hit ? '＋' : ''}${ret.toLocaleString()}円<div class="sim-ticket-meta">${hit ? '的中' : '不的中'} / ROI ${roiOne.toFixed(0)}%</div></div>
     </div>`;

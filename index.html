@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.19.8 Race ID Fixed</title>
+<title>The競馬 EV分析 v5.20.1 Odds Popularity Fixed</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.19.8</span>
+    <span class="ver">v5.20.1</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2904,7 +2904,7 @@ function extractOddsValueFromText(txt){
 function extractOddsFromRow(tr){
   // 最優先: 表ヘッダー「オッズ」「予想オッズ」に対応するセル。
   // これによりJRAの斤量55.0を単勝オッズとして誤読しない。
-  const byHead = cellByHeader(tr, /^(予想)?オッズ$|単勝オッズ|人気オッズ/);
+  const byHead = cellByHeader(tr, /^(予想)?オッズ$|単勝オッズ|人気オッズ|^単勝$|^単オッズ$|^単勝\s*オッズ$/);
   if(byHead){
     const v = extractOddsValueFromText(toHalfNumberText(normCellText(byHead)));
     if(v >= 1.1 && v <= 999.9) return v;
@@ -2925,7 +2925,7 @@ function extractOddsFromRow(tr){
 
   // 最後の保険: 人気セルの直前にある小数を使う。斤量列は人気セルから離れているため避けやすい。
   const cells = Array.from(tr.children);
-  const popIdx = findHeaderIndex(tr, /^人気$|人気順/);
+  const popIdx = findHeaderIndex(tr, /^人気$|人気順|^単勝人気$|^人気\s*順/);
   if(popIdx > 0){
     for(let i=popIdx-1; i>=0 && i>=popIdx-3; i--){
       const txt = toHalfNumberText(normCellText(cells[i]));
@@ -2937,7 +2937,7 @@ function extractOddsFromRow(tr){
 }
 
 function extractPopularityFromRow(tr, horseNo){
-  const byHead = cellByHeader(tr, /^人気$|人気順/);
+  const byHead = cellByHeader(tr, /^人気$|人気順|^単勝人気$|^人気\s*順/);
   let v = firstNumberInCell(byHead, false);
   if(v >= 1 && v <= 28) return v;
 
@@ -2953,6 +2953,38 @@ function extractPopularityFromRow(tr, horseNo){
     }
   }
   return 0;
+}
+
+
+
+function extractOddsPopFromCellsNearHorseRow(tr){
+  // netkeibaの出馬表は端末幅・開催区分により「単勝」「人気」のclass/headerが消えることがある。
+  // その場合は、馬リンク行のセル列から「小数=単勝オッズ」「その直後または近接する整数=人気」を読む。
+  const cells = Array.from(tr.querySelectorAll('td,th')).map(td => toHalfNumberText(normCellText(td)));
+  const horseIdx = Array.from(tr.querySelectorAll('td,th')).findIndex(td => td.querySelector && td.querySelector('a[href*="/horse/"]'));
+  const start = horseIdx >= 0 ? Math.max(0, horseIdx + 1) : 0;
+  const tail = cells.slice(start);
+  const pairs = [];
+  for(let i=0;i<tail.length;i++){
+    const tx = tail[i];
+    if(!tx) continue;
+    const om = tx.match(/(\d{1,4}\.\d+)/);
+    if(!om) continue;
+    const odds = Number(om[1]);
+    if(!(odds >= 1.1 && odds <= 999.9)) continue;
+    if(odds >= 50 && odds <= 60) continue; // 斤量55.0などを除外
+    let pop = 0;
+    for(let j=i; j<=Math.min(i+3, tail.length-1); j++){
+      const pm = tail[j].match(/(?:^|\s)(\d{1,2})(?:\s*人気)?(?:$|\s)/);
+      if(pm){
+        const cand = Number(pm[1]);
+        if(cand >= 1 && cand <= 18 && cand !== odds){ pop = cand; break; }
+      }
+    }
+    pairs.push({odds, pop});
+  }
+  // 後方の小数は単勝オッズである確率が高い。斤量・馬体重増減は除外済み。
+  return pairs.length ? pairs[pairs.length - 1] : {odds:0, pop:0};
 }
 
 function parseHorsesFromDoc(doc, url){
@@ -3014,8 +3046,11 @@ function parseHorsesFromDoc(doc, url){
     }
     if(frame < 1 || frame > 8) frame = Math.ceil(num / 2);
 
-    const odds = extractOddsFromRow(tr);
-    const pop = extractPopularityFromRow(tr, num);
+    let odds = extractOddsFromRow(tr);
+    let pop = extractPopularityFromRow(tr, num);
+    const fallbackOP = extractOddsPopFromCellsNearHorseRow(tr);
+    if(!(odds >= 1.1)) odds = fallbackOP.odds || 0;
+    if(!(pop >= 1)) pop = fallbackOP.pop || 0;
 
     seen.add(num);
 
@@ -3127,7 +3162,7 @@ function corsHeaders(contentType) {
 
 
 /* ============================================================
-   v5.19.8 Race ID Fixed / 以前UI保持版
+   v5.20.1 Odds Popularity Fixed / 以前UI保持版
    目的：カレンダー日付・区分・開催場が変わった時、前回のrace_id/URL/レース選択を絶対に残さない。
    ============================================================ */
 let __raceListSeqV5188 = 0;
@@ -3409,7 +3444,7 @@ function initCalendarPicker(){
 
 
 /* ============================================================
-   v5.19.8 Race ID Fixed
+   v5.20.1 Odds Popularity Fixed
    ネット上のテキストデータ優先：race_list本文テキスト＋リンクhrefを同時参照。
    目的：カレンダーの日付を変えた時、前回race_idを絶対に流用せず、
          選択日・開催場・R番号・レース名をテキストから再構築する。

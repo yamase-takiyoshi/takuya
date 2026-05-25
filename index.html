@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.19.0 Net Text Race Lock</title>
+<title>The競馬 EV分析 v5.19.1 Date Fix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.19.0</span>
+    <span class="ver">v5.19.1</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2443,21 +2443,57 @@ function jraRaceIdToKaisai(raceId){
 
 function jraHtmlMatchesSelectedDate(html, date){
   const p = ymdParts(date);
+  const yyyymmdd = p.yyyymmdd;
+
+  // ① 最優先：HTMLに埋め込まれた kaisai_date=YYYYMMDD を直接照合
+  //    出馬表ページの <a href="...kaisai_date=20260524..."> など
+  const kdMatches = (html || '').match(/kaisai_date=(\d{8})/g) || [];
+  if(kdMatches.length > 0){
+    // 選択日と一致するものが1件でもあれば OK
+    const hasMatch = kdMatches.some(m => m.includes(yyyymmdd));
+    if(!hasMatch) return false; // kaisai_dateがあるが全て別日 → 確実に不一致
+    // 一致ありの場合も、不一致のものだけの方が多い場合はNG（隣接日ナビリンクの誤マッチ防止）
+    const matchCount = kdMatches.filter(m => m.includes(yyyymmdd)).length;
+    const totalCount = kdMatches.length;
+    if(matchCount >= totalCount - matchCount) return true; // 同数以上なら採用
+    // 不一致が多数派でも「選択日のものが存在」すれば採用（出馬表本文は1日分のはず）
+    return true;
+  }
+
+  // ② kaisai_dateがHTML中に無い場合：本文テキストの月日パターンで照合
+  //    ただし隣接日（前日・翌日）の月日が誤ってマッチしないよう、
+  //    前日・翌日の日付文字列は除外してから判定する
   const mm = Number(p.mmdd.slice(0,2));
   const dd = Number(p.mmdd.slice(2,4));
-  const text = normalizeJapaneseSpaces(
+  const makeDate = (offset) => {
+    const d = new Date(Number(p.yyyy), mm - 1, dd + offset);
+    return { mm: d.getMonth() + 1, dd: d.getDate() };
+  };
+  const prev = makeDate(-1);
+  const next = makeDate(1);
+
+  const stripped = normalizeJapaneseSpaces(
     String(html || '')
       .replace(/<script[\s\S]*?<\/script>/gi, ' ')
       .replace(/<style[\s\S]*?<\/style>/gi, ' ')
       .replace(/<[^>]+>/g, ' ')
   );
-  const patterns = [
+
+  // 前日・翌日の月日文字列を除去してから選択日の月日を検索
+  const adjacentPatterns = [
+    new RegExp(`${prev.mm}月${prev.dd}日`, 'g'),
+    new RegExp(`${String(prev.mm).padStart(2,'0')}月${String(prev.dd).padStart(2,'0')}日`, 'g'),
+    new RegExp(`${next.mm}月${next.dd}日`, 'g'),
+    new RegExp(`${String(next.mm).padStart(2,'0')}月${String(next.dd).padStart(2,'0')}日`, 'g'),
+  ];
+  let cleaned = stripped;
+  adjacentPatterns.forEach(re => { cleaned = cleaned.replace(re, ' '); });
+
+  const targetPatterns = [
     `${mm}月${dd}日`,
     `${String(mm).padStart(2,'0')}月${String(dd).padStart(2,'0')}日`,
-    `${mm}/${dd}`,
-    `${String(mm).padStart(2,'0')}/${String(dd).padStart(2,'0')}`
   ];
-  return patterns.some(x => text.includes(x));
+  return targetPatterns.some(x => cleaned.includes(x));
 }
 
 async function fetchHtmlViaProxy(url){

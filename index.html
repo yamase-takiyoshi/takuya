@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.9 Net Text Race Lock</title>
+<title>The競馬 EV分析 v5.19.0 Net Text Race Lock</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.9</span>
+    <span class="ver">v5.19.0</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -3127,7 +3127,7 @@ function corsHeaders(contentType) {
 
 
 /* ============================================================
-   v5.18.9 Net Text Race Lock / 以前UI保持版
+   v5.19.0 Net Text Race Lock / 以前UI保持版
    目的：カレンダー日付・区分・開催場が変わった時、前回のrace_id/URL/レース選択を絶対に残さない。
    ============================================================ */
 let __raceListSeqV5188 = 0;
@@ -3409,7 +3409,7 @@ function initCalendarPicker(){
 
 
 /* ============================================================
-   v5.18.9 Net Text Race Lock
+   v5.19.0 Net Text Race Lock
    ネット上のテキストデータ優先：race_list本文テキスト＋リンクhrefを同時参照。
    目的：カレンダーの日付を変えた時、前回race_idを絶対に流用せず、
          選択日・開催場・R番号・レース名をテキストから再構築する。
@@ -3428,12 +3428,16 @@ function __v5189_text(el){ return String(el?.textContent || '').replace(/\s+/g,'
 function __v5189_extractRaceNameFromText(text, raceNo){
   let t = String(text || '').replace(/\s+/g,' ').trim();
   const r = Number(raceNo)||0;
+  // 「11R ○○○ 発走時刻or距離」の形で、対象Rのみに限定して抽出する。
+  // ポイント: raceNoRの直後から次の数字（他のR番号や時刻）の手前まで。
   const pats = [
-    new RegExp('(?:^|\\s)'+r+'R\\s+([^0-9]{1,45?})(?=\\s*(?:発走|芝|ダ|障|右|左|外|内|$))'.replace('{1,45?}','{1,45}')),
-    new RegExp('(?:^|\\s)'+r+'R\\s+(.{1,45}?)(?=\\s*(?:出馬表|オッズ|結果|予想|$))')
+    // 「11R レース名 HH:MM 芝/ダ」形式 → 時刻・距離の手前まで
+    new RegExp('(?:^|\\s)'+r+'R\\s+([^\\/\\d][^\\d]{0,40}?)(?=\\s*\\d{1,2}[:\\-]\\d{2}|\\s*(?:芝|ダ|障)|\\s*$)'),
+    // 「11R レース名」で行末まで（改行・スペース区切り）
+    new RegExp('(?:^|\\s)'+r+'R\\s+([^0-9]{1,40}?)(?=\\s*(?:発走|出馬表|オッズ|結果|予想|\\d|$))')
   ];
-  for(const p of pats){ const m=t.match(p); if(m && m[1]) return cleanRaceName(m[1], r); }
-  return cleanRaceName(t, r);
+  for(const p of pats){ const m=t.match(p); if(m && m[1] && m[1].trim().length>0) return cleanRaceName(m[1], r); }
+  return '';
 }
 function parseRaceIdsFromList(html, kind, venueCode, date){
   const doc = new DOMParser().parseFromString(html, 'text/html');
@@ -3463,12 +3467,37 @@ function parseRaceIdsFromList(html, kind, venueCode, date){
     const isRaceLink = /shutuba\.html|race\/shutuba|出馬表|RaceList|race_id=/.test(href + ' ' + blockText);
     if(!isRaceLink) return;
 
-    let raceName = __v5189_extractRaceNameFromText(blockText || a.textContent, raceNo);
-    if(!raceName || /^\d{1,2}R$/.test(raceName)) raceName = `${raceNo}R`;
-    const item = { raceId:id, raceNo, venueCode:vc, raceName, shutuba:shutubaUrl(kind, id), source:'net-text' };
+    // レース名取得: title属性 → aテキスト → blockText の順で優先。
+    // blockTextは複数R分の情報を含む可能性があるため最後の手段。
+    let raceName = '';
+    const aTitle = (a.getAttribute('title') || '').trim();
+    const aText  = (a.textContent || '').replace(/\s+/g,' ').trim();
 
+    // title属性にレース名らしい文字列があればそれを使う
+    if(aTitle && !/^\d{1,2}R$/.test(aTitle) && aTitle.length > 1){
+      raceName = cleanRaceName(aTitle, raceNo);
+    }
+    // aテキストがレース名らしければ使う（「11R」だけのリンクは除外）
+    if(!raceName && aText && !/^\d{1,2}R$/.test(aText) && !/^(出馬表|オッズ|結果|予想)$/.test(aText)){
+      raceName = cleanRaceName(aText, raceNo);
+    }
+    // blockTextからは「NR」で始まるこのR専用のセグメントだけを使う
+    if(!raceName){
+      raceName = __v5189_extractRaceNameFromText(blockText, raceNo);
+    }
+    if(!raceName || /^\d{1,2}R$/.test(raceName)) raceName = `${raceNo}R`;
+
+    // 同じrace_idが既登録の場合、より情報量の多い名前へ更新するが、
+    // 「11R」などの番号のみは上書きしない（誤って短い名前で上書きするのを防ぐ）。
     const old = map.get(id);
-    if(!old || String(raceName).length > String(old.raceName||'').length) map.set(id, item);
+    if(!old){
+      map.set(id, { raceId:id, raceNo, venueCode:vc, raceName, shutuba:shutubaUrl(kind, id), source:'net-text' });
+    } else {
+      const oldIsPlain = /^\d{1,2}R$/.test(old.raceName||'');
+      const newIsPlain = /^\d{1,2}R$/.test(raceName);
+      if(oldIsPlain && !newIsPlain) old.raceName = raceName; // 番号のみ → 名前あり に更新
+      // 名前あり同士は最初に取得した方を優先（誤マッチで上書きしない）
+    }
   });
 
   return Array.from(map.values()).sort((a,b)=>a.venueCode.localeCompare(b.venueCode)||a.raceNo-b.raceNo);

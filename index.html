@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.19.6 Venue Select Safe</title>
+<title>The競馬 EV分析 v5.19.8 Race ID Fixed</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.19.6</span>
+    <span class="ver">v5.19.8</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2337,19 +2337,7 @@ async function loadActiveVenuesForDate(){
       const url = raceListUrl(kind, date);
       const html = await fetchHtmlViaProxy(url);
       const fromHtml = parseActiveVenuesFromList(html, kind, date);
-
-      // v5.19.6: 開催場プルダウン段階では strict 検証しない。
-      // strict 検証をここで行うと、一覧HTMLの表記揺れや前後レース導線で全場除外され、
-      // 「開催場を選べない」状態になる。開催場は本文/listから素直に出し、
-      // race_id・レース名の厳密判定はレース選択後に限定する。
-      venues = fromHtml;
-
-      // fromHtml が空の場合は「○回東京○日目」等の本文テキストから開催場だけ復元する。
-      if(!venues.length){
-        venues = JRA_VENUES
-          .filter(([code]) => parseJraKaisaiFromListText(html, code))
-          .map(([code,name]) => [code, name, 12]);
-      }
+      venues = await confirmActiveJraVenuesFromHtml(html, date, fromHtml);
     }
 
     if(seq !== activeVenueLoadSeq) return;
@@ -2357,7 +2345,7 @@ async function loadActiveVenuesForDate(){
     renderVenueOptions(venues);
     if(status) status.innerHTML = venues.length
       ? `<div class="url-status ok">✅ ${date} の${kind}開催場だけを表示しました：${venues.map(v => v[1] + '（' + v[2] + 'R）').join('、')}</div>`
-      : `<div class="url-status err">⚠️ ${date} は${kind}の開催場が見つかりません。日付を変えるか、再取得してください。</div>`;
+      : `<div class="url-status err">⚠️ ${date} は${kind}の開催場が見つかりません</div>`;
   }catch(e){
     if(seq !== activeVenueLoadSeq) return;
     console.error(e);
@@ -2638,10 +2626,8 @@ async function finalFilterRacesForSelection(races, kind, date, venueCode){
     }catch(e){}
   }
 
-  // v5.19.6: 全グループ照合が失敗しても、開催場選択ができなくなるより、
-  // 選択中の開催場・R番号が整った候補を表示する。
-  // 最終的な不一致警告は fetchRace / identity 表示で出す。
-  return dedupeRacesByRaceIdAndNo(list);
+  // 全グループが照合失敗 → 空を返して「見つからない」表示にする（別日race_idは絶対に返さない）
+  return [];
 }
 
 
@@ -2764,14 +2750,6 @@ function initCalendarPicker(){
   if(kindEl && !kindEl.dataset.activeVenueBound){
     kindEl.dataset.activeVenueBound = '1';
     kindEl.addEventListener('change', onRaceDateKindChanged);
-  }
-
-  const venueEl = document.getElementById('pickVenue');
-  if(venueEl && !venueEl.dataset.raceListBound){
-    venueEl.dataset.raceListBound = '1';
-    venueEl.addEventListener('change', () => {
-      resetRaceState('開催場変更のためレース選択を初期化しました');
-    });
   }
 
   renderVenueOptions([]);
@@ -3149,7 +3127,7 @@ function corsHeaders(contentType) {
 
 
 /* ============================================================
-   v5.18.9 Net Text Race Lock / 以前UI保持版
+   v5.19.8 Race ID Fixed / 以前UI保持版
    目的：カレンダー日付・区分・開催場が変わった時、前回のrace_id/URL/レース選択を絶対に残さない。
    ============================================================ */
 let __raceListSeqV5188 = 0;
@@ -3431,7 +3409,7 @@ function initCalendarPicker(){
 
 
 /* ============================================================
-   v5.18.9 Net Text Race Lock
+   v5.19.8 Race ID Fixed
    ネット上のテキストデータ優先：race_list本文テキスト＋リンクhrefを同時参照。
    目的：カレンダーの日付を変えた時、前回race_idを絶対に流用せず、
          選択日・開催場・R番号・レース名をテキストから再構築する。
@@ -3603,6 +3581,107 @@ async function onRaceDateKindChanged(){
   renderHorseRows();
   renderVenueOptions([]);
   await loadActiveVenuesForDate();
+}
+
+
+
+// ============================================================
+// v5.19.8 Race ID 正規化修正
+// netkeiba JRA race_id は YYYY + 場コード + 開催回 + 開催日 + R。
+// 例: 2026/05/24 東京11R オークス = 202605021011。
+// 旧版は一覧本文の「前日グループ」をfallback採用して 2026050209xx を出していたため、
+// 必ず出馬表ページの title/og:title/RaceData01 で選択日を検証し、fallback採用を禁止する。
+// ============================================================
+function __v5198_pageDateToken(date){
+  const p = ymdParts(date);
+  const y = p.yyyy;
+  const m = String(Number(p.mmdd.slice(0,2)));
+  const d = String(Number(p.mmdd.slice(2,4)));
+  const mm = p.mmdd.slice(0,2);
+  const dd = p.mmdd.slice(2,4);
+  return {y,m,d,mm,dd, jp1:`${y}年${m}月${d}日`, jp2:`${y}年${mm}月${dd}日`, slash1:`${y}/${m}/${d}`, slash2:`${y}/${mm}/${dd}`};
+}
+function __v5198_mainRaceTextFromHtml(html){
+  try{
+    const doc = new DOMParser().parseFromString(String(html||''), 'text/html');
+    const parts = [];
+    const title = doc.querySelector('title')?.textContent || '';
+    const og = doc.querySelector('meta[property="og:title"],meta[name="twitter:title"]')?.getAttribute('content') || '';
+    const h1 = doc.querySelector('h1,.RaceName,.race_name')?.textContent || '';
+    const data = doc.querySelector('.RaceData01,.RaceData02,.RaceData')?.textContent || '';
+    [title, og, h1, data].forEach(x=>{ if(x) parts.push(x); });
+    return normalizeJapaneseSpaces(parts.join(' / '));
+  }catch(e){
+    return normalizeJapaneseSpaces(String(html||'').slice(0,4000).replace(/<[^>]+>/g,' '));
+  }
+}
+function __v5198_htmlMainDateMatches(html, date){
+  const t = __v5198_mainRaceTextFromHtml(html);
+  const k = __v5198_pageDateToken(date);
+  return t.includes(k.jp1) || t.includes(k.jp2) || t.includes(k.slash1) || t.includes(k.slash2);
+}
+function __v5198_extractRaceNameFromHtml(html, raceNo){
+  const main = __v5198_mainRaceTextFromHtml(html);
+  let name = '';
+  let m = main.match(/^([^|｜\/]+?)\s*[|｜\/]/);
+  if(m) name = m[1];
+  if(!name){
+    m = main.match(new RegExp(`${raceNo}R\\s*([^|｜/]+?)\\s*(?:出馬表|オッズ|結果|レース情報|$)`));
+    if(m) name = m[1];
+  }
+  name = String(name||'')
+    .replace(/出馬表|オッズ|結果|レース情報\(JRA\)|レース情報|競馬データベース|netkeiba\.com|\(G\d\)/g,'')
+    .replace(/^[\s　\-｜|/]+|[\s　\-｜|/]+$/g,'')
+    .trim();
+  if(!name || /メインメニュー|IPAT|連携|特別登録|前|次/.test(name)) return `${raceNo}R`;
+  return name;
+}
+async function verifyJraRaceDateByShutuba(date, raceId){
+  const url = shutubaUrl('JRA', raceId);
+  const html = await fetchHtmlViaProxy(url);
+  if(!String(html||'').includes(String(raceId))) return false;
+  return __v5198_htmlMainDateMatches(html, date);
+}
+async function __v5198_enrichJraRacesByShutuba(races, date){
+  const out = [];
+  for(const r of (races||[]).slice().sort((a,b)=>Number(a.raceNo)-Number(b.raceNo))){
+    try{
+      const html = await fetchHtmlViaProxy(shutubaUrl('JRA', r.raceId));
+      if(!String(html||'').includes(String(r.raceId))) continue;
+      if(!__v5198_htmlMainDateMatches(html, date)) continue;
+      const rn = __v5198_extractRaceNameFromHtml(html, Number(r.raceNo));
+      out.push({...r, raceName: rn, source:'v5198-shutuba-verified'});
+    }catch(e){
+      // 1ページ失敗しても他レースは残す。ただし日付未検証の別日race_idは残さない。
+    }
+  }
+  return out.length ? out : races;
+}
+async function getReliableJraRacesFromList(html, date, venueCode){
+  const direct = parseRaceIdsFromList(html, 'JRA', venueCode, date)
+    .filter(r => raceIdVenueMatches('JRA', r.raceId, venueCode));
+
+  if(direct.length){
+    const verified = await filterJraDirectRacesBySelectedDate(direct, date);
+    if(verified.length) return await __v5198_enrichJraRacesByShutuba(verified, date);
+  }
+
+  // fallbackで「一番多いグループ」を採用するのは禁止。必ず開催回・開催日を出馬表で補正して生成する。
+  const kdRaw = parseJraKaisaiFromListText(html, venueCode);
+  const kdFixed = await fixJraKaisaiByProbe(date, venueCode, kdRaw);
+  let generated = buildJraRacesFromFixedKaisai(html, date, venueCode, kdFixed).map(r=>({...r, source:'v5198-generated-fixed'}));
+  generated = await __v5198_enrichJraRacesByShutuba(generated, date);
+  return generated;
+}
+async function finalFilterRacesForSelection(races, kind, date, venueCode){
+  let list = Array.isArray(races) ? races.slice() : [];
+  list = list.filter(r => raceIdVenueMatches(kind, r.raceId, venueCode));
+  if(kind === 'NAR'){
+    list = list.filter(r => raceIdMatchesSelectedDate(kind, r.raceId, date));
+    return dedupeRacesByRaceIdAndNo(list);
+  }
+  // JRAはrace_idにMMDDが無いので、ここでも出馬表ページ日付で最終防壁を掛ける。
+  return await __v5198_enrichJraRacesByShutuba(dedupeRacesByRaceIdAndNo(list), date);
 }
 
 // ─── 起動 ────────────────────────────────────────

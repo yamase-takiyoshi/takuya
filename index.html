@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.5 RaceIdStrict</title>
+<title>The競馬 EV分析 v5.18.6 WeekdayGroup</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -210,7 +210,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.5</span>
+    <span class="ver">v5.18.6</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2966,11 +2966,34 @@ async function loadRaceList(){
     const dateLabel = raceListDateLabel(date);
     raceMap = {};
     const metas = races.map(r => registerRaceMeta(buildRaceMeta(kind, date, r)));
-    raceSelect.innerHTML = metas.map(meta => {
-      const safeName = escapeHtml(meta.raceName || `${meta.raceNo}R`);
-      const label = `${meta.weekday} ${meta.venue}${Number(meta.raceNo)}R ${safeName} / race_id=${meta.raceId}`;
-      return `<option value="${meta.raceId}" data-race-id="${meta.raceId}">${label}</option>`;
-    }).join('');
+    // 土曜・日曜をoptgroupで区別して表示
+    const groups = {};
+    metas.forEach(meta => {
+      const wd = parseLocalDateYMD(meta.date).getDay(); // 0=日,6=土
+      const key = meta.date + '_' + wd;
+      if(!groups[key]) groups[key] = { date: meta.date, wd, label: `${meta.weekday}曜日 (${meta.date})`, metas: [] };
+      groups[key].metas.push(meta);
+    });
+    const sortedKeys = Object.keys(groups).sort();
+    if(sortedKeys.length <= 1){
+      // 1日のみ → optgroup不要
+      raceSelect.innerHTML = metas.map(meta => {
+        const safeName = escapeHtml(meta.raceName || `${meta.raceNo}R`);
+        const label = `${meta.weekday} ${meta.venue}${Number(meta.raceNo)}R ${safeName} / race_id=${meta.raceId}`;
+        return `<option value="${meta.raceId}" data-race-id="${meta.raceId}">${label}</option>`;
+      }).join('');
+    } else {
+      // 複数日 → optgroupで区切る
+      raceSelect.innerHTML = sortedKeys.map(key => {
+        const g = groups[key];
+        const opts = g.metas.map(meta => {
+          const safeName = escapeHtml(meta.raceName || `${meta.raceNo}R`);
+          const label = `${meta.weekday} ${meta.venue}${Number(meta.raceNo)}R ${safeName} / race_id=${meta.raceId}`;
+          return `<option value="${meta.raceId}" data-race-id="${meta.raceId}">${label}</option>`;
+        }).join('');
+        return `<optgroup label="── ${escapeHtml(g.label)} ──">${opts}</optgroup>`;
+      }).join('');
+    }
 
     applySelectedRaceUrl();
     status.innerHTML = `<div class="url-status ok">✅ ${date} ${venueName(kind, venueCode)} ${races.length}レースを取得しました</div>`;

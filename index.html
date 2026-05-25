@@ -2806,32 +2806,31 @@ async function finalFilterRacesForSelection(races, kind, date, venueCode){
 
 
 /* ============================================================
-   v5.20.8 Safari固定：開催場プルダウンは「開催場名だけ」を全件表示
-   - JRA/NAR切替時にネット取得で絞り込まない
-   - 「開催なし」を表示しない
-   - Safariで壊れやすい innerHTML/appendChild 混在を避け、options.add で再生成
+   v5.20.9 開催場プルダウン修正
+   - 日付＋区分を選んだら「その日に開催している開催場だけ」を全て表示
+   - 表示名は開催場だけ（門別・浦和・盛岡・金沢など）
+   - R数表記や「開催なし固定」は出さない
+   - Safari安定化のため select は options.add/remove だけで再生成
    ============================================================ */
 function renderVenueOptions(listOverride){
   const kind = document.getElementById('pickKind')?.value || 'JRA';
   const venueEl = document.getElementById('pickVenue');
   if(!venueEl) return;
 
-  const master = Array.isArray(listOverride) && listOverride.length
-    ? listOverride
-    : (kind === 'NAR' ? NAR_VENUES : JRA_VENUES);
-
+  const list = Array.isArray(listOverride) ? listOverride : [];
   while(venueEl.options.length) venueEl.remove(0);
 
-  const first = new Option('開催場を選択', '');
-  venueEl.options.add(first);
-
-  master.forEach(v => {
-    const code = String(v[0] || '');
-    const name = String(v[1] || code);
-    if(!code || !name) return;
-    // 表示は「門別」「東京」など開催場だけ。R数・開催なし表記は出さない。
-    venueEl.options.add(new Option(name, code));
-  });
+  if(!list.length){
+    venueEl.options.add(new Option('開催場を取得してください', ''));
+  }else{
+    venueEl.options.add(new Option('開催場を選択', ''));
+    list.forEach(v => {
+      const code = String(v[0] || '');
+      const name = String(v[1] || code);
+      if(!code || !name) return;
+      venueEl.options.add(new Option(name, code)); // 開催場名だけ表示
+    });
+  }
 
   const setNar = document.getElementById('setNar');
   if(setNar){
@@ -2841,13 +2840,73 @@ function renderVenueOptions(listOverride){
   }
 }
 
+function uniqVenueList(list, kind){
+  const master = kind === 'NAR' ? NAR_VENUES : JRA_VENUES;
+  const okCodes = new Set(master.map(v => String(v[0])));
+  const byCode = new Map();
+  (list || []).forEach(v => {
+    const code = String(v[0] || '');
+    if(!okCodes.has(code) || byCode.has(code)) return;
+    byCode.set(code, [code, venueName(kind, code)]);
+  });
+  return Array.from(byCode.values()).sort((a,b)=>a[0].localeCompare(b[0]));
+}
+
+function parseActiveNarVenuesByText(html){
+  const text = normalizeJapaneseSpaces(String(html || '').replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' '));
+  const found = [];
+  for(const [code, name] of NAR_VENUES){
+    // 「本日の開催競馬場」「開催レース一覧」のようなページ本文に出ている開催場を拾う。
+    // サイドメニュー等の汎用リンク混入を避けるため、本文中に実名がある場合のみ補助採用。
+    if(text.includes(name)) found.push([code, name]);
+  }
+  return found;
+}
+
 async function loadActiveVenuesForDate(){
-  // ユーザー指定：開催場だけを全て選択可能にする。
-  // ここではネット取得で開催場を絞り込まない。レース一覧ボタン押下後に選択場のレースだけ取得する。
+  const seq = ++__activeVenueSeqV5188;
   const kind = document.getElementById('pickKind')?.value || 'JRA';
   const date = document.getElementById('pickDate')?.value || todayYmd();
-  renderVenueOptions(kind === 'NAR' ? NAR_VENUES : JRA_VENUES);
-  resetRaceState(`${date} の${kind === 'NAR' ? '地方' : 'JRA'}開催場を全て表示しました。開催場を選んで「レース一覧」を押してください。`);
+  const status = document.getElementById('urlStatus');
+
+  renderVenueOptions([]);
+  resetRaceState(`📅 ${date} ${kind} の開催場を取得中...`);
+  if(status) status.innerHTML = `<div class="url-status">📅 ${escapeHtml(date)} ${escapeHtml(kind)} の開催場を取得中...</div>`;
+
+  if(!settings.proxyUrl){
+    if(status) status.innerHTML = '<div class="url-status err">⚠️ 先にプロキシURLを設定してください。</div>';
+    return;
+  }
+
+  try{
+    const html = await fetchHtmlViaProxy(raceListUrl(kind, date, ''));
+    if(seq !== __activeVenueSeqV5188) return;
+
+    let venues = parseActiveVenuesFromList(html, kind, date);
+    if(kind === 'NAR'){
+      // NARは race_id/kaisai_id がHTML内で揺れるため、ページ本文の開催場名も補助採用する。
+      venues = uniqVenueList([...venues, ...parseActiveNarVenuesByText(html)], kind);
+    }else{
+      venues = uniqVenueList(venues, kind);
+    }
+
+    if(!venues.length){
+      renderVenueOptions([]);
+      resetRaceState(`⚠️ ${date} ${kind} の開催場を確認できませんでした。日付またはプロキシを確認してください。`);
+      if(status) status.innerHTML = `<div class="url-status err">⚠️ ${escapeHtml(date)} ${escapeHtml(kind)} の開催場を確認できませんでした。</div>`;
+      return;
+    }
+
+    renderVenueOptions(venues);
+    resetRaceState(`✅ ${date} ${kind} の開催場を表示しました。開催場を選んで「レース一覧」を押してください。`);
+    if(status) status.innerHTML = `<div class="url-status ok">✅ ${escapeHtml(date)} ${escapeHtml(kind)} の開催場を表示しました。</div>`;
+  }catch(e){
+    console.error(e);
+    if(seq !== __activeVenueSeqV5188) return;
+    renderVenueOptions([]);
+    resetRaceState(`❌ 開催場取得失敗: ${e.message}`);
+    if(status) status.innerHTML = `<div class="url-status err">❌ 開催場取得失敗: ${escapeHtml(e.message)}</div>`;
+  }
 }
 
 async function onRaceDateKindChanged(){

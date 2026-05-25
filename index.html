@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.17.8 OaksFix</title>
+<title>The競馬 EV分析 v5.17.9 OddsFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -207,7 +207,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.17.8 OaksFix</span>
+    <span class="ver">v5.17.9 OddsFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2487,8 +2487,9 @@ async function verifyJraRaceAndTitleByShutuba(date, raceId){
 
 
 async function verifyJraRaceActualDateAndTitleByShutuba(date, raceId){
-  // v5.17.8: JRAの race_id は「年月日」ではなく「開催回＋開催日」。
-  // レース一覧が前日リンクを返すケースがあるため、候補race_idの出馬表本文の日付を必ず確認する。
+  // v5.17.9: race_id一致 + 馬2頭以上 を必須条件とし、日付チェックはソフト判定にする。
+  // JRAの出馬表ページは日付をページ内に持つが、取得HTML次第で拾えないことがある。
+  // dateOkが取れない場合は horseCount >= 2 のみで合格扱いにする。
   const url = shutubaUrl('JRA', raceId);
   const html = await fetchHtmlViaProxy(url);
   if(!html.includes(String(raceId))) return { ok:false, title:'', dateOk:false, horseCount:0 };
@@ -2496,7 +2497,7 @@ async function verifyJraRaceActualDateAndTitleByShutuba(date, raceId){
   const horseCount = parseHorsesFromDoc(doc, url).length;
   const title = parseRaceTitleFromDoc(doc) || `${Number(String(raceId).slice(-2))}R`;
   const dateOk = jraHtmlMatchesSelectedDate(html, date);
-  return { ok: horseCount >= 2 && dateOk, title, dateOk, horseCount };
+  return { ok: horseCount >= 2 && dateOk, dateOkOrUnknown: horseCount >= 2, title, dateOk, horseCount };
 }
 
 function shiftJraRaceIdDay(raceId, delta){
@@ -2527,25 +2528,35 @@ function buildJraRacesFromOneRaceId(seedRaceId, names){
 
 async function chooseJraRaceDayByDateProbe(html, date, venueCode, direct){
   // 代表レース(11R優先、なければ1R)を基点に、開催日を±2だけずらして実ページの日付で照合する。
-  // 2026/05/24 東京11Rが欅S(前日)になる事故は、ここで 09日目→10日目 に補正される。
   const list = (direct || []).filter(r => r && raceIdVenueMatches('JRA', r.raceId, venueCode));
   if(!list.length) return [];
   const seed = list.find(r => Number(r.raceNo) === 11) || list.find(r => Number(r.raceNo) === 1) || list[0];
   const names = extractJraRaceNamesFromList(html, venueCode);
 
   const deltas = [0, 1, -1, 2, -2, 3, -3];
+  let fallbackCandidate = null; // 日付OK不明だが馬がいた候補
   for(const d of deltas){
     const candidate = shiftJraRaceIdDay(seed.raceId, d);
     if(!candidate) continue;
     try{
       const v = await verifyJraRaceActualDateAndTitleByShutuba(date, candidate);
       if(v.ok){
+        // 日付一致 → 即採用
         return buildJraRacesFromOneRaceId(candidate, names);
+      }
+      // 馬はいるが日付取得不能 → フォールバック候補として保持
+      if(v.dateOkOrUnknown && !fallbackCandidate && d === 0){
+        fallbackCandidate = candidate;
       }
     }catch(e){}
   }
 
-  // 日付照合に失敗した場合は、一覧のrace_idをそのまま返す。空にすると操作不能になるため。
+  // 日付照合できなかったがd=0で馬がいた場合はそのまま使う
+  if(fallbackCandidate){
+    return buildJraRacesFromOneRaceId(fallbackCandidate, names);
+  }
+
+  // 最終フォールバック：一覧のrace_idをそのまま返す
   return await filterJraDirectRacesBySelectedDate(list, date);
 }
 
@@ -3003,14 +3014,14 @@ function firstNumberInCell(el, allowDecimal=false){
 
 function extractOddsFromRow(tr){
   // 最優先: 表ヘッダー「オッズ」「予想オッズ」に対応するセル。
-  // これによりJRAの斤量55.0を単勝オッズとして誤読しない。
   const byHead = cellByHeader(tr, /^(予想)?オッズ$|単勝オッズ|人気オッズ/);
   let v = firstNumberInCell(byHead, true);
   if(v >= 1 && v <= 9999) return v;
 
   const selectors = [
     'td.Odds', 'td[class~="Odds"]', '[class*="Tansho"]', '[class*="Odds"]',
-    '[class*="odds"]', '.RaceOdds', '.Popular_Odds'
+    '[class*="odds"]', '.RaceOdds', '.Popular_Odds',
+    'td.Fav', '[class*="Fav"]', 'span.Odds', 'span[class*="odds"]'
   ];
   for(const sel of selectors){
     for(const el of tr.querySelectorAll(sel)){
@@ -3021,7 +3032,7 @@ function extractOddsFromRow(tr){
     }
   }
 
-  // 最後の保険: 人気セルの直前にある小数を使う。斤量列は人気セルから離れているため避けやすい。
+  // 保険1: 人気セルの直前にある小数を使う。
   const cells = Array.from(tr.children);
   const popIdx = findHeaderIndex(tr, /^人気$|人気順/);
   if(popIdx > 0){
@@ -3034,6 +3045,20 @@ function extractOddsFromRow(tr){
       }
     }
   }
+
+  // 保険2: 全セルから小数値(例: 3.5, 12.0)を探す。斤量(40-60)と馬番(1-18)を除外。
+  for(const td of cells){
+    const cls = String(td.className || '').toLowerCase();
+    if(/kinryo|weight|futan|jockey|trainer|stable/.test(cls)) continue;
+    const txt = toHalfNumberText(normCellText(td));
+    const m = txt.match(/^(\d{1,4}\.\d)$/) || txt.match(/^\s*(\d{1,4}\.\d)\s*$/);
+    if(m){
+      v = Number(m[1]);
+      // 斤量帯(40-60)を除外
+      if(v >= 1 && v <= 9999 && !(v >= 40 && v <= 60)) return v;
+    }
+  }
+
   return 0;
 }
 
@@ -3042,7 +3067,8 @@ function extractPopularityFromRow(tr, horseNo){
   let v = firstNumberInCell(byHead, false);
   if(v >= 1 && v <= 18) return v;
 
-  const selectors = ['td.Popular', '[class*="Popular"]', '[class*="Ninki"]', '.Rank'];
+  const selectors = ['td.Popular', '[class*="Popular"]', '[class*="Ninki"]', '.Rank',
+                     'td.Popularity', '[class*="Popularity"]', 'span.Popular'];
   for(const sel of selectors){
     for(const el of tr.querySelectorAll(sel)){
       const tx = toHalfNumberText(normCellText(el));
@@ -3051,6 +3077,18 @@ function extractPopularityFromRow(tr, horseNo){
         v = Number(m[1]);
         if(v >= 1 && v <= 18 && v !== horseNo) return v;
       }
+    }
+  }
+
+  // 保険: 全セルから1〜18の整数を探す（馬番と同値は除外）
+  for(const td of Array.from(tr.children)){
+    const cls = String(td.className || '').toLowerCase();
+    if(/name|horse|jockey|trainer|stable|odds|kinryo|weight/.test(cls)) continue;
+    const tx = toHalfNumberText(normCellText(td));
+    const m = tx.match(/^(\d{1,2})$/);
+    if(m){
+      v = Number(m[1]);
+      if(v >= 1 && v <= 18 && v !== horseNo) return v;
     }
   }
   return 0;

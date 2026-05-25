@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.6 RaceIdStrict</title>
+<title>The競馬 EV分析 v5.18.7 RaceIdStrict</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -210,7 +210,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.6</span>
+    <span class="ver">v5.18.7</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -235,7 +235,7 @@ body{
       </div>
       <div class="pick-grid">
         <div class="field">
-          <label>日付</label>
+          <label>日付 <span id="pickDateEcho" style="margin-left:8px;font-size:11px;opacity:.7"></span></label>
           <input type="date" id="pickDate" onchange="onRaceDateKindChanged()">
         </div>
         <div class="field">
@@ -3044,11 +3044,35 @@ function initCalendarPicker(){
         const el = document.getElementById('pickDate');
         if(!el) return;
         const v = el.value || '';
+        // 認識中の日付を常時画面に出す。値が空でも反映する。
+        const echo = document.getElementById('pickDateEcho');
+        if(echo) echo.textContent = v ? `認識中: ${v}` : '認識中: (未設定)';
         if(v && v !== el.dataset.lastSeenValue){
           el.dataset.lastSeenValue = v;
           onRaceDateKindChanged();
         }
       }, 1000);
+    }
+
+    // v5.18.7: iOS Safari でカレンダー選択後にchangeが飛ばないケースに備え、
+    // ページ上の任意のタップ/クリックを契機に pickDate の値を即時再評価する。
+    // これで「カレンダーで5/24を選んだ後、別の場所をタップした瞬間」に確定する。
+    if(!window.__activeVenueGlobalTapBound){
+      window.__activeVenueGlobalTapBound = true;
+      const reread = () => {
+        const el = document.getElementById('pickDate');
+        if(!el) return;
+        const v = el.value || '';
+        if(v && v !== el.dataset.lastSeenValue){
+          el.dataset.lastSeenValue = v;
+          onRaceDateKindChanged();
+        }
+      };
+      document.addEventListener('touchend', reread, true);
+      document.addEventListener('click', reread, true);
+      // 画面復帰時(タブ切替・カレンダー閉じ後)にも必ず確認する。
+      document.addEventListener('visibilitychange', () => { if(!document.hidden) reread(); });
+      window.addEventListener('focus', reread);
     }
   }
   if(kindEl && !kindEl.dataset.activeVenueBound){

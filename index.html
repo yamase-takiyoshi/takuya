@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.17.1 Simulation Auto Settle</title>
+<title>The競馬 EV分析 v5.18.8 Calendar Race Lock</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.17 AutoSettle</span>
+    <span class="ver">v5.18.8</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -3122,6 +3122,288 @@ function corsHeaders(contentType) {
     btn.textContent = '✅ コピーしました';
     setTimeout(() => btn.textContent = orig, 2000);
   }).catch(() => alert(code));
+}
+
+
+
+/* ============================================================
+   v5.18.8 Calendar Race Lock / 以前UI保持版
+   目的：カレンダー日付・区分・開催場が変わった時、前回のrace_id/URL/レース選択を絶対に残さない。
+   ============================================================ */
+let __raceListSeqV5188 = 0;
+let __activeVenueSeqV5188 = 0;
+let __selectedRaceMetaV5188 = null;
+
+function __v5188_dateLabel(date){
+  const d = String(date || todayYmd());
+  const p = ymdParts(d);
+  return `${p.yyyy}/${p.yyyymmdd.slice(4,6)}/${p.yyyymmdd.slice(6,8)}`;
+}
+function __v5188_weekday(date){
+  try{
+    const d = parseLocalDateYMD(date);
+    return ['日','月','火','水','木','金','土'][d.getDay()];
+  }catch(e){ return ''; }
+}
+function __v5188_clearRaceOnly(message){
+  __selectedRaceMetaV5188 = null;
+  currentRaceId = '';
+  currentRaceName = '';
+  const raceSelect = document.getElementById('raceSelect');
+  if(raceSelect) raceSelect.innerHTML = '<option value="">開催場を選んでレース一覧を取得</option>';
+  const raceUrl = document.getElementById('raceUrl');
+  if(raceUrl) raceUrl.value = '';
+  const box = document.getElementById('raceTitleBox');
+  if(box){ box.style.display='none'; box.textContent=''; }
+  const status = document.getElementById('urlStatus');
+  if(status && message) status.innerHTML = `<div class="url-status">${escapeHtml(message)}</div>`;
+}
+
+// 既存関数を上書き：開催場ドロップダウンには「その日開催あり」のみを入れ、変更時に前回レースを破棄。
+function renderVenueOptions(listOverride){
+  const kind = document.getElementById('pickKind')?.value || 'JRA';
+  const venueEl = document.getElementById('pickVenue');
+  if(!venueEl) return;
+  const list = Array.isArray(listOverride) ? listOverride : [];
+  venueEl.innerHTML = list.length
+    ? '<option value="">開催場を選択</option>' + list.map(([code,name,count]) => `<option value="${code}">${escapeHtml(name)}${count ? '（' + count + 'R）' : ''}</option>`).join('')
+    : '<option value="">開催なし</option>';
+
+  if(!venueEl.dataset.v5188Bound){
+    venueEl.dataset.v5188Bound = '1';
+    venueEl.addEventListener('change', () => {
+      currentRaceId = '';
+      currentRaceName = '';
+      __selectedRaceMetaV5188 = null;
+      const raceUrl = document.getElementById('raceUrl');
+      if(raceUrl) raceUrl.value = '';
+      const raceSelect = document.getElementById('raceSelect');
+      if(raceSelect) raceSelect.innerHTML = '<option value="">レース一覧を取得してください</option>';
+      const box = document.getElementById('raceTitleBox');
+      if(box){ box.style.display='none'; box.textContent=''; }
+    });
+  }
+
+  const setNar = document.getElementById('setNar');
+  if(setNar){
+    setNar.value = kind === 'NAR' ? '1' : '0';
+    saveSettings();
+  }
+}
+
+async function onRaceDateKindChanged(){
+  __raceListSeqV5188++;
+  __activeVenueSeqV5188++;
+  __v5188_clearRaceOnly('日付・区分変更のため、前回のrace_idとURLをクリアしました');
+  renderVenueOptions([]);
+  await loadActiveVenuesForDate();
+}
+
+async function loadActiveVenuesForDate(){
+  const seq = ++__activeVenueSeqV5188;
+  const date = document.getElementById('pickDate')?.value || todayYmd();
+  const kind = document.getElementById('pickKind')?.value || 'JRA';
+  const status = document.getElementById('urlStatus');
+  const raceSelect = document.getElementById('raceSelect');
+  if(raceSelect) raceSelect.innerHTML = '<option value="">開催場を選んでレース一覧を取得</option>';
+
+  if(!settings.proxyUrl){
+    renderVenueOptions([]);
+    if(status) status.innerHTML = '<div class="url-status err">⚠️ プロキシURL未設定のため、開催場を自動取得できません</div>';
+    return;
+  }
+
+  try{
+    if(status) status.innerHTML = `<div class="url-status">📅 ${escapeHtml(date)} の開催場を自動確認中...</div>`;
+    let venues = [];
+    if(kind === 'NAR'){
+      const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(raceListUrl(kind, date));
+      const res = await fetch(proxyReq, { cache:'no-store' });
+      if(!res.ok) throw new Error('HTTP ' + res.status);
+      const html = await res.text();
+      const fromHtml = parseActiveVenuesFromList(html, kind, date);
+      if(fromHtml.length){
+        const confirmed = [];
+        for(const [code, name] of fromHtml){
+          if(seq !== __activeVenueSeqV5188) return;
+          try{
+            if(status) status.innerHTML = `<div class="url-status">📅 NAR開催確認中... ${escapeHtml(name)}</div>`;
+            const count = await countActiveNarRaces(date, code);
+            if(count > 0) confirmed.push([code, name, count]);
+          }catch(e){}
+        }
+        venues = confirmed;
+      }else{
+        if(status) status.innerHTML = '<div class="url-status">📅 NAR全場確認中...</div>';
+        venues = await loadActiveNarVenuesByRaceId(date);
+      }
+    }else{
+      const html = await fetchHtmlViaProxy(raceListUrl(kind, date));
+      const fromHtml = parseActiveVenuesFromList(html, kind, date);
+      venues = await confirmActiveJraVenuesFromHtml(html, date, fromHtml);
+    }
+
+    if(seq !== __activeVenueSeqV5188) return;
+    renderVenueOptions(venues);
+    if(status) status.innerHTML = venues.length
+      ? `<div class="url-status ok">✅ ${escapeHtml(date)}（${__v5188_weekday(date)}）の${kind}開催場だけを表示しました：${venues.map(v => escapeHtml(v[1]) + '（' + v[2] + 'R）').join('、')}</div>`
+      : `<div class="url-status err">⚠️ ${escapeHtml(date)} は${kind}の開催場が見つかりません</div>`;
+  }catch(e){
+    if(seq !== __activeVenueSeqV5188) return;
+    renderVenueOptions([]);
+    if(status) status.innerHTML = `<div class="url-status err">⚠️ 開催場の自動取得に失敗: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function loadRaceList(){
+  const seq = ++__raceListSeqV5188;
+  const date = document.getElementById('pickDate')?.value || todayYmd();
+  const kind = document.getElementById('pickKind')?.value || 'JRA';
+  const venueCode = document.getElementById('pickVenue')?.value || '';
+  const status = document.getElementById('urlStatus');
+  const raceSelect = document.getElementById('raceSelect');
+
+  currentRaceId = '';
+  currentRaceName = '';
+  __selectedRaceMetaV5188 = null;
+  const raceUrl = document.getElementById('raceUrl');
+  if(raceUrl) raceUrl.value = '';
+  const box = document.getElementById('raceTitleBox');
+  if(box){ box.style.display = 'none'; box.textContent = ''; }
+
+  if(!settings.proxyUrl){ alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。'); return; }
+  if(!venueCode){ alert('開催場を選択してください。'); return; }
+
+  if(status) status.innerHTML = `<div class="url-status">📅 ${escapeHtml(date)} ${escapeHtml(venueName(kind, venueCode))} のレース一覧取得中...</div>`;
+  if(raceSelect) raceSelect.innerHTML = '<option value="">取得中...</option>';
+
+  try{
+    let races = [];
+    if(kind === 'NAR'){
+      if(status) status.innerHTML = `<div class="url-status">📅 ${escapeHtml(date)} ${escapeHtml(venueName(kind, venueCode))} のrace_idを直接確認中...</div>`;
+      races = await loadNarRaceListByRaceId(date, venueCode);
+    }else{
+      const html = await fetchHtmlViaProxy(raceListUrl(kind, date, venueCode));
+      races = await getReliableJraRacesFromList(html, date, venueCode);
+    }
+
+    races = await finalFilterRacesForSelection(races, kind, date, venueCode);
+    if(seq !== __raceListSeqV5188) return;
+
+    if(!races.length){
+      if(raceSelect) raceSelect.innerHTML = '<option value="">レースが見つかりません</option>';
+      if(status) status.innerHTML = `<div class="url-status err">⚠️ ${escapeHtml(date)} の ${escapeHtml(venueName(kind, venueCode))} はレースが見つかりません。別日・別場のrace_idは除外しました。</div>`;
+      return;
+    }
+
+    const dateLabel = __v5188_dateLabel(date);
+    if(raceSelect){
+      raceSelect.innerHTML = races.map(r => {
+        const raceId = String(r.raceId || '');
+        const rn = escapeHtml(r.raceName || `${r.raceNo}R`);
+        const label = `${dateLabel} ${venueName(kind, venueCode)} ${r.raceNo}R ${rn} / ${raceId}`;
+        return `<option value="${shutubaUrl(kind, raceId)}" data-race-id="${raceId}" data-race-name="${rn}" data-date="${date}" data-kind="${kind}" data-venue="${venueCode}" data-race-no="${r.raceNo}">${escapeHtml(label)}</option>`;
+      }).join('');
+    }
+
+    applySelectedRaceUrl();
+    if(status) status.innerHTML = `<div class="url-status ok">✅ ${escapeHtml(date)} ${escapeHtml(venueName(kind, venueCode))} ${races.length}レースを取得しました</div>`;
+  }catch(e){
+    if(seq !== __raceListSeqV5188) return;
+    console.error(e);
+    if(raceSelect) raceSelect.innerHTML = '<option value="">取得失敗</option>';
+    if(status) status.innerHTML = `<div class="url-status err">❌ レース一覧取得失敗: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function applySelectedRaceUrl(){
+  const raceSelect = document.getElementById('raceSelect');
+  const raceUrl = document.getElementById('raceUrl');
+  const box = document.getElementById('raceTitleBox');
+  const kind = document.getElementById('pickKind')?.value || 'JRA';
+  const date = document.getElementById('pickDate')?.value || todayYmd();
+  const venueCode = document.getElementById('pickVenue')?.value || '';
+  if(!raceSelect || !raceUrl) return;
+
+  const opt = raceSelect.options[raceSelect.selectedIndex];
+  const raceId = opt?.dataset?.raceId || '';
+  if(!raceId || opt?.dataset?.date !== date || opt?.dataset?.kind !== kind || opt?.dataset?.venue !== venueCode){
+    raceUrl.value = '';
+    currentRaceName = '';
+    currentRaceId = '';
+    __selectedRaceMetaV5188 = null;
+    if(box){ box.style.display = 'none'; box.textContent = ''; }
+    return;
+  }
+
+  raceUrl.value = shutubaUrl(kind, raceId);
+  currentRaceName = opt.dataset.raceName || opt.textContent || '';
+  currentRaceId = raceId;
+  __selectedRaceMetaV5188 = {
+    raceId,
+    raceName: currentRaceName,
+    kind,
+    date,
+    venueCode,
+    raceNo: Number(opt.dataset.raceNo || raceId.slice(-2)) || 0,
+    url: raceUrl.value
+  };
+  if(box){
+    box.style.display = 'block';
+    box.textContent = `選択中: ${currentRaceName}`;
+  }
+}
+
+function validateRaceUrlForCurrentSelection(rawUrl){
+  const kind = document.getElementById('pickKind')?.value || 'JRA';
+  const date = document.getElementById('pickDate')?.value || todayYmd();
+  const venueCode = document.getElementById('pickVenue')?.value || '';
+  let u;
+  try{ u = new URL(rawUrl); }catch(e){ return {ok:false, message:'URL形式が不正です'}; }
+
+  const expectedHost = expectedHostForKind(kind);
+  if(u.hostname !== expectedHost){
+    return {ok:false, message:`区分は${kind}ですがURLが${u.hostname}です。${expectedHost} のURLを選び直してください。`};
+  }
+  const raceId = u.searchParams.get('race_id') || '';
+  if(!/^\d{10,14}$/.test(raceId)) return {ok:false, message:'race_id が取得できません'};
+  if(!raceIdVenueMatches(kind, raceId, venueCode)){
+    return {ok:false, message:`開催場が一致しません。選択=${venueName(kind, venueCode)} / race_id=${raceId}`};
+  }
+  if(kind === 'NAR' && !raceIdMatchesSelectedDate(kind, raceId, date)){
+    return {ok:false, message:`日付が一致しません。選択日=${date} / race_id=${raceId}`};
+  }
+
+  // JRAはrace_id自体に月日が入らないため、現在のレース選択メタデータと一致しないURLは拒否する。
+  const meta = __selectedRaceMetaV5188;
+  if(!meta || meta.raceId !== raceId || meta.date !== date || meta.kind !== kind || meta.venueCode !== venueCode){
+    return {ok:false, message:'現在選択中の日付・開催場・レースとURLのrace_idが一致しません。レース一覧を再取得して選び直してください。'};
+  }
+
+  return {ok:true, raceId, kind, date, venueCode};
+}
+
+function initCalendarPicker(){
+  const d = document.getElementById('pickDate');
+  if(d && !d.value) d.value = todayYmd();
+  const kindEl = document.getElementById('pickKind');
+  if(kindEl) kindEl.value = settings.nar ? 'NAR' : 'JRA';
+
+  if(d && !d.dataset.v5188Bound){
+    d.dataset.v5188Bound = '1';
+    d.addEventListener('change', onRaceDateKindChanged);
+    d.addEventListener('input', () => {
+      clearTimeout(window.__v5188DateTimer);
+      window.__v5188DateTimer = setTimeout(onRaceDateKindChanged, 250);
+    });
+  }
+  if(kindEl && !kindEl.dataset.v5188Bound){
+    kindEl.dataset.v5188Bound = '1';
+    kindEl.addEventListener('change', onRaceDateKindChanged);
+  }
+
+  renderVenueOptions([]);
+  loadActiveVenuesForDate();
 }
 
 // ─── 起動 ────────────────────────────────────────

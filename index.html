@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.20.1 Odds Popularity Fixed</title>
+<title>The競馬 EV分析 v5.20.2</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.20.1</span>
+    <span class="ver">v5.20.2</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2804,6 +2804,13 @@ async function fetchRace(){
     if(horses.length < 2){
       throw new Error('出走馬を十分に取得できませんでした。race_idまたは開催情報を確認してください。');
     }
+
+    // デバッグ: オッズ・人気が取れなかった馬をコンソールに出力
+    const noOdds = horses.filter(h => !(h.odds >= 1.1));
+    const noPop  = horses.filter(h => !(h.pop  >= 1));
+    if(noOdds.length > 0) console.warn('[EV] オッズ未取得:', noOdds.map(h=>`${h.num}${h.name}`).join(', '));
+    if(noPop.length  > 0) console.warn('[EV] 人気未取得:', noPop.map(h=>`${h.num}${h.name}`).join(', '));
+
     renderHorseRows();
 
     status.innerHTML = `<div class="url-status ok">✅ ${escapeHtml(currentRaceName || '')} ${horses.length}頭 取得しました</div>`;
@@ -2858,15 +2865,29 @@ function toHalfNumberText(v){
   });
 }
 
+// colspanを展開して「実際の列位置」を返す。
+// netkeibaのthは colspan を使う場合があり、素のchildrenインデックスだと td とずれる。
+function buildColumnMap(tr){
+  // セルを「論理列インデックス→セル」のMapに変換。colspanは分解して各列に同じセルを入れる。
+  const map = new Map();
+  let col = 0;
+  for(const cell of Array.from(tr.children)){
+    const span = parseInt(cell.getAttribute('colspan')||'1', 10) || 1;
+    for(let s=0;s<span;s++) map.set(col+s, cell);
+    col += span;
+  }
+  return map;
+}
+
 function findHeaderIndex(tr, headerRegex){
   const table = tr.closest('table');
   if(!table) return -1;
   const headerRows = Array.from(table.querySelectorAll('thead tr, tr')).filter(r => r.querySelector('th'));
   for(const hr of headerRows){
-    const cells = Array.from(hr.children);
-    for(let i=0;i<cells.length;i++){
-      const tx = normCellText(cells[i]);
-      if(headerRegex.test(tx)) return i;
+    const colMap = buildColumnMap(hr);
+    for(const [colIdx, cell] of colMap){
+      const tx = normCellText(cell);
+      if(headerRegex.test(tx)) return colIdx;
     }
   }
   return -1;
@@ -2875,7 +2896,9 @@ function findHeaderIndex(tr, headerRegex){
 function cellByHeader(tr, headerRegex){
   const idx = findHeaderIndex(tr, headerRegex);
   if(idx < 0) return null;
-  return Array.from(tr.children)[idx] || null;
+  // trのセルも論理列マップで取得する
+  const colMap = buildColumnMap(tr);
+  return colMap.get(idx) || Array.from(tr.children)[idx] || null;
 }
 
 function firstNumberInCell(el, allowDecimal=false){
@@ -2910,9 +2933,13 @@ function extractOddsFromRow(tr){
     if(v >= 1.1 && v <= 999.9) return v;
   }
 
+  // netkeibaクラス名（2024年以降含む）
   const selectors = [
-    'td.Odds', 'td[class~="Odds"]', '[class*="Tansho"]', '[class*="Odds"]',
-    '[class*="odds"]', '.RaceOdds', '.Popular_Odds'
+    'td.Odds', 'td[class~="Odds"]',
+    '[class*="Tansho"]', '[class*="Odds"]',
+    '[class*="odds"]', '.RaceOdds', '.Popular_Odds',
+    'td.Txt_R', // 2026年netkeibaでの単勝オッズ列に使われることがある
+    'span.Odds', 'span[class*="Odds"]'
   ];
   for(const sel of selectors){
     for(const el of tr.querySelectorAll(sel)){
@@ -2927,8 +2954,11 @@ function extractOddsFromRow(tr){
   const cells = Array.from(tr.children);
   const popIdx = findHeaderIndex(tr, /^人気$|人気順|^単勝人気$|^人気\s*順/);
   if(popIdx > 0){
+    const colMap = buildColumnMap(tr);
     for(let i=popIdx-1; i>=0 && i>=popIdx-3; i--){
-      const txt = toHalfNumberText(normCellText(cells[i]));
+      const cell = colMap.get(i);
+      if(!cell) continue;
+      const txt = toHalfNumberText(normCellText(cell));
       const v = extractOddsValueFromText(txt);
       if(v >= 1.1 && v <= 999.9) return v;
     }
@@ -2941,7 +2971,10 @@ function extractPopularityFromRow(tr, horseNo){
   let v = firstNumberInCell(byHead, false);
   if(v >= 1 && v <= 28) return v;
 
-  const selectors = ['td.Popular', '[class*="Popular"]', '[class*="Ninki"]', '.Rank'];
+  const selectors = [
+    'td.Popular', '[class*="Popular"]', '[class*="Ninki"]', '.Rank',
+    'td.Txt_C' // 2026年netkeibaで人気列に使われることがある
+  ];
   for(const sel of selectors){
     for(const el of tr.querySelectorAll(sel)){
       const tx = toHalfNumberText(normCellText(el));
@@ -3050,7 +3083,11 @@ function parseHorsesFromDoc(doc, url){
     let pop = extractPopularityFromRow(tr, num);
     const fallbackOP = extractOddsPopFromCellsNearHorseRow(tr);
     if(!(odds >= 1.1)) odds = fallbackOP.odds || 0;
-    if(!(pop >= 1)) pop = fallbackOP.pop || 0;
+    if(!(pop >= 1)){
+      // フォールバックのpopが馬番と一致してしまう場合は捨てる
+      const fp = fallbackOP.pop || 0;
+      if(fp >= 1 && fp !== num) pop = fp;
+    }
 
     seen.add(num);
 
@@ -3162,7 +3199,7 @@ function corsHeaders(contentType) {
 
 
 /* ============================================================
-   v5.20.1 Odds Popularity Fixed / 以前UI保持版
+   v5.20.2 Odds Popularity Fixed / 以前UI保持版
    目的：カレンダー日付・区分・開催場が変わった時、前回のrace_id/URL/レース選択を絶対に残さない。
    ============================================================ */
 let __raceListSeqV5188 = 0;
@@ -3444,7 +3481,7 @@ function initCalendarPicker(){
 
 
 /* ============================================================
-   v5.20.1 Odds Popularity Fixed
+   v5.20.2 Odds Popularity Fixed
    ネット上のテキストデータ優先：race_list本文テキスト＋リンクhrefを同時参照。
    目的：カレンダーの日付を変えた時、前回race_idを絶対に流用せず、
          選択日・開催場・R番号・レース名をテキストから再構築する。

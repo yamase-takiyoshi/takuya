@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.5 RaceIdStrict</title>
+<title>The競馬 EV分析 v5.18.6 RaceIdStrict</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -210,7 +210,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.5</span>
+    <span class="ver">v5.18.6</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -811,7 +811,7 @@ function saveProxy(){
 function initUI(){
   loadSettings();
   const pickDateEl = document.getElementById('pickDate');
-  if(pickDateEl && !pickDateEl.value) pickDateEl.value = formatLocalDate(new Date());
+  if(pickDateEl && !pickDateEl.value) pickDateEl.value = todayYmd();
 
   // タブ
   document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -2462,6 +2462,16 @@ async function loadActiveVenuesForDate(){
 
     if(seq !== activeVenueLoadSeq) return;
 
+    // v5.18.6: 取得完了直前で、入力欄の日付が変わっていないか必ず照合する。
+    // iPad Safari は <input type="date"> の change/input を取りこぼすことがあり、
+    // その状態で警告が古い日付のまま残るのを防ぐため、最新値と違ったら再実行。
+    const currentDate = document.getElementById('pickDate')?.value || todayYmd();
+    if(currentDate !== date){
+      // 入力欄が動いている。最新値で取り直す。
+      loadActiveVenuesForDate();
+      return;
+    }
+
     renderVenueOptions(venues);
     if(status) status.innerHTML = venues.length
       ? `<div class="url-status ok">✅ ${date} の${kind}開催場だけを表示しました：${venues.map(v => v[1] + '（' + v[2] + 'R）').join('、')}</div>`
@@ -3007,14 +3017,39 @@ function initCalendarPicker(){
   const kindEl = document.getElementById('pickKind');
   if(kindEl) kindEl.value = settings.nar ? 'NAR' : 'JRA';
 
-  // iPad/Safariでは date picker の確定タイミングに差があるため、change/input の両方で拾う。
+  // iPad/Safariでは date picker の確定タイミングに差があるため、change/input/blur の全てで拾う。
   if(d && !d.dataset.activeVenueBound){
     d.dataset.activeVenueBound = '1';
-    d.addEventListener('change', onRaceDateKindChanged);
+    d.dataset.lastSeenValue = d.value || '';
+
+    const fire = () => {
+      const v = d.value || '';
+      if(v === d.dataset.lastSeenValue) return;
+      d.dataset.lastSeenValue = v;
+      onRaceDateKindChanged();
+    };
+
+    d.addEventListener('change', fire);
+    d.addEventListener('blur', fire);
+    d.addEventListener('focusout', fire);
     d.addEventListener('input', () => {
       clearTimeout(window.__activeVenueInputTimer);
-      window.__activeVenueInputTimer = setTimeout(onRaceDateKindChanged, 250);
+      window.__activeVenueInputTimer = setTimeout(fire, 250);
     });
+
+    // v5.18.6: iOS Safari がイベントを完全に取りこぼした場合の保険として、
+    // 1秒ごとに値の変化を監視する。差分があった時だけ発火する軽量ポーリング。
+    if(!window.__activeVenueDatePoll){
+      window.__activeVenueDatePoll = setInterval(() => {
+        const el = document.getElementById('pickDate');
+        if(!el) return;
+        const v = el.value || '';
+        if(v && v !== el.dataset.lastSeenValue){
+          el.dataset.lastSeenValue = v;
+          onRaceDateKindChanged();
+        }
+      }, 1000);
+    }
   }
   if(kindEl && !kindEl.dataset.activeVenueBound){
     kindEl.dataset.activeVenueBound = '1';

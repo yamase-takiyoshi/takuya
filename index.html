@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.17.4 RaceIDLock</title>
+<title>The競馬 EV分析 v5.17.5 RaceIDLock</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -207,7 +207,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.17.4 RaceIDLock</span>
+    <span class="ver">v5.17.5 RaceIDLock</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1387,6 +1387,7 @@ function toggleManualInput(){
 }
 
 
+function simAddBlankRow(){
   const defaultNum = horses.length ? horses[0].num : 1;
   simTickets.push({type:'単勝', nums:[defaultNum], amount:settings.unit||100, odds:0, ev:0, p:0});
   renderSimEditRows();
@@ -1969,7 +1970,7 @@ function shutubaUrl(kind, raceId){
 }
 
 
-// v5.17.4 RaceIDLock: netkeibaのSP/PC/結果URL混在をrace_id基準で正規化する。
+// v5.17.5 RaceIDLock: netkeibaのSP/PC/結果URL混在をrace_id基準で正規化する。
 // ここを入口にすることで「表示中のnetkeibaページ」と「アプリ側の取得レース」が別物になる事故を防ぐ。
 function normalizeNetkeibaRaceUrl(rawUrl, fallbackKind){
   const raw = String(rawUrl || '').trim();
@@ -2246,7 +2247,9 @@ let activeVenueLoadSeq = 0;
 
 async function onRaceDateKindChanged(){
   resetRaceState('条件変更のためレース選択を初期化しました');
-  renderVenueOptions([]);
+  // v5.17.5: 取得中に開催場が空のまま固まる事故を防ぐ。
+  // まず全場を選べる状態にしてから、取得に成功した場合だけ開催場ありの一覧へ絞り込む。
+  renderVenueOptions();
   await loadActiveVenuesForDate();
 }
 
@@ -2281,10 +2284,11 @@ async function loadActiveVenuesForDate(){
   const raceSelect = document.getElementById('raceSelect');
   if(raceSelect) raceSelect.innerHTML = '<option value="">開催場を選んでレース一覧を取得</option>';
 
-  // 正確な開催場絞り込みにはnetkeiba一覧取得が必須。プロキシ未設定時に全場を出すと誤操作になるため、空にする。
+  // v5.17.5: プロキシ未設定・通信失敗時でも開催場選択を殺さない。
+  // URL手入力や後からのプロキシ設定ができるよう、全場を残す。
   if(!settings.proxyUrl){
-    renderVenueOptions([]);
-    if(status) status.innerHTML = '<div class="url-status err">⚠️ プロキシURL未設定のため、開催場を自動取得できません</div>';
+    renderVenueOptions();
+    if(status) status.innerHTML = '<div class="url-status err">⚠️ プロキシURL未設定です。開催場は全場表示にしています。</div>';
     return;
   }
 
@@ -2331,8 +2335,8 @@ async function loadActiveVenuesForDate(){
   }catch(e){
     if(seq !== activeVenueLoadSeq) return;
     console.error(e);
-    renderVenueOptions([]);
-    if(status) status.innerHTML = `<div class="url-status err">⚠️ 開催場の自動取得に失敗: ${e.message}</div>`;
+    renderVenueOptions();
+    if(status) status.innerHTML = `<div class="url-status err">⚠️ 開催場の自動取得に失敗しました。全場表示に戻しました。必要なら開催場を選んで「レース一覧」を押してください。詳細: ${e.message}</div>`;
   }
 }
 
@@ -2769,7 +2773,8 @@ function initCalendarPicker(){
     kindEl.addEventListener('change', onRaceDateKindChanged);
   }
 
-  renderVenueOptions([]);
+  // v5.17.5: 初期表示で空プルダウンにしない。
+  renderVenueOptions();
   loadActiveVenuesForDate();
 }
 

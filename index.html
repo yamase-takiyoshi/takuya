@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.1</title>
+<title>The競馬 EV分析 v5.18.2</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -207,7 +207,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.1</span>
+    <span class="ver">v5.18.2</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -259,11 +259,11 @@ body{
           <select id="raceSelect" onchange="applySelectedRaceUrl()">
             <option value="">先にレース一覧を取得</option>
           </select>
-          <button class="btn-sm" onclick="applySelectedRaceUrl()">URL反映</button>
+          <!-- URL反映ボタン非表示 -->
         </div>
-        <div id="raceTitleBox" class="race-title-box"></div>
+        <div id="raceTitleBox" class="race-title-box" style="display:none"></div>
       </div>
-      <div class="field">
+      <div class="field" style="display:none">
         <label>レースURL（netkeiba.com の出馬表ページ）</label>
         <input type="url" id="raceUrl" placeholder="https://race.netkeiba.com/race/shutuba.html?race_id=..." />
       </div>
@@ -2496,7 +2496,7 @@ async function verifyJraRaceAndTitleByShutuba(date, raceId){
 
 
 async function verifyJraRaceActualDateAndTitleByShutuba(date, raceId){
-  // v5.18.1: kaisai_date優先の日付判定を使用。
+  // v5.18.2: kaisai_date優先の日付判定を使用。
   // kaisai_date が取得できた場合は日付一致が必須条件。
   // kaisai_date が取得できない場合のみ horseCount >= 2 をフォールバックとする。
   const url = shutubaUrl('JRA', raceId);
@@ -2819,9 +2819,11 @@ async function loadRaceList(){
 
     raceSelect.innerHTML = races.map(r => {
       const raceName = escapeHtml(r.raceName || `${r.raceNo}R`);
-      // 表示は「11R 欅S」形式。race_idはvalue/data属性のみ保持。
-      const label = `${r.raceNo}R ${raceName}`;
-      return `<option value="${r.raceId}" data-race-id="${r.raceId}" data-race-name="${raceName}">${label}</option>`;
+      // 表示はレース名のみ（NR形式のみの場合はそのまま）
+      // レース名が「NR」だけの場合はレース番号付きで表示、それ以外はレース名のみ
+      const isNoName = /^\d{1,2}R$/.test(r.raceName || '');
+      const label = isNoName ? `${r.raceNo}R` : String(r.raceName || `${r.raceNo}R`);
+      return `<option value="${r.raceId}" data-race-id="${r.raceId}" data-race-name="${raceName}">${escapeHtml(label)}</option>`;
     }).join('');
 
     applySelectedRaceUrl();
@@ -2848,7 +2850,8 @@ function applySelectedRaceUrl(){
     raceUrl.value = shutubaUrl(kind, raceId);
     currentRaceName = opt?.dataset?.raceName || opt?.textContent || '';
     currentRaceId = raceId;
-    if(box){
+    // raceTitleBoxは非表示のため更新不要
+    if(false && box){
       box.style.display = currentRaceName ? 'block' : 'none';
       box.textContent = currentRaceName ? `選択中: ${currentRaceName}` : '';
     }

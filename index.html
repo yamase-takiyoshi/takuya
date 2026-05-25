@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.20.2</title>
+<title>The競馬 EV分析 v5.20.2 Odds Popularity Fixed</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -2805,15 +2805,25 @@ async function fetchRace(){
       throw new Error('出走馬を十分に取得できませんでした。race_idまたは開催情報を確認してください。');
     }
 
-    // デバッグ: オッズ・人気が取れなかった馬をコンソールに出力
-    const noOdds = horses.filter(h => !(h.odds >= 1.1));
-    const noPop  = horses.filter(h => !(h.pop  >= 1));
-    if(noOdds.length > 0) console.warn('[EV] オッズ未取得:', noOdds.map(h=>`${h.num}${h.name}`).join(', '));
-    if(noPop.length  > 0) console.warn('[EV] 人気未取得:', noPop.map(h=>`${h.num}${h.name}`).join(', '));
+    // v5.20.2: 出馬表HTMLだけで単勝オッズ・人気が空になる場合、同じrace_idのオッズページも取得して補完する。
+    const beforeOP = horses.filter(h => Number(h.odds||0) >= 1.1 && Number(h.pop||0) >= 1).length;
+    let oddsMergeInfo = { merged:0, source:'' };
+    if(beforeOP < horses.length){
+      try{
+        oddsMergeInfo = await fetchAndMergeOddsPopularity(rawUrl, horses);
+      }catch(oe){
+        console.warn('odds/popularity merge skipped:', oe);
+      }
+    }
 
     renderHorseRows();
 
-    status.innerHTML = `<div class="url-status ok">✅ ${escapeHtml(currentRaceName || '')} ${horses.length}頭 取得しました</div>`;
+    const afterOdds = horses.filter(h => Number(h.odds||0) >= 1.1).length;
+    const afterPop = horses.filter(h => Number(h.pop||0) >= 1).length;
+    const opMsg = oddsMergeInfo.merged
+      ? ` / オッズページ補完 ${oddsMergeInfo.merged}件`
+      : ` / 単勝オッズ${afterOdds}頭・人気${afterPop}頭`;
+    status.innerHTML = `<div class="url-status ok">✅ ${escapeHtml(currentRaceName || '')} ${horses.length}頭 取得しました${opMsg}</div>`;
 
     // 取得後すぐにタブを馬データへ
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -2865,29 +2875,15 @@ function toHalfNumberText(v){
   });
 }
 
-// colspanを展開して「実際の列位置」を返す。
-// netkeibaのthは colspan を使う場合があり、素のchildrenインデックスだと td とずれる。
-function buildColumnMap(tr){
-  // セルを「論理列インデックス→セル」のMapに変換。colspanは分解して各列に同じセルを入れる。
-  const map = new Map();
-  let col = 0;
-  for(const cell of Array.from(tr.children)){
-    const span = parseInt(cell.getAttribute('colspan')||'1', 10) || 1;
-    for(let s=0;s<span;s++) map.set(col+s, cell);
-    col += span;
-  }
-  return map;
-}
-
 function findHeaderIndex(tr, headerRegex){
   const table = tr.closest('table');
   if(!table) return -1;
   const headerRows = Array.from(table.querySelectorAll('thead tr, tr')).filter(r => r.querySelector('th'));
   for(const hr of headerRows){
-    const colMap = buildColumnMap(hr);
-    for(const [colIdx, cell] of colMap){
-      const tx = normCellText(cell);
-      if(headerRegex.test(tx)) return colIdx;
+    const cells = Array.from(hr.children);
+    for(let i=0;i<cells.length;i++){
+      const tx = normCellText(cells[i]);
+      if(headerRegex.test(tx)) return i;
     }
   }
   return -1;
@@ -2896,9 +2892,7 @@ function findHeaderIndex(tr, headerRegex){
 function cellByHeader(tr, headerRegex){
   const idx = findHeaderIndex(tr, headerRegex);
   if(idx < 0) return null;
-  // trのセルも論理列マップで取得する
-  const colMap = buildColumnMap(tr);
-  return colMap.get(idx) || Array.from(tr.children)[idx] || null;
+  return Array.from(tr.children)[idx] || null;
 }
 
 function firstNumberInCell(el, allowDecimal=false){
@@ -2933,13 +2927,9 @@ function extractOddsFromRow(tr){
     if(v >= 1.1 && v <= 999.9) return v;
   }
 
-  // netkeibaクラス名（2024年以降含む）
   const selectors = [
-    'td.Odds', 'td[class~="Odds"]',
-    '[class*="Tansho"]', '[class*="Odds"]',
-    '[class*="odds"]', '.RaceOdds', '.Popular_Odds',
-    'td.Txt_R', // 2026年netkeibaでの単勝オッズ列に使われることがある
-    'span.Odds', 'span[class*="Odds"]'
+    'td.Odds', 'td[class~="Odds"]', '[class*="Tansho"]', '[class*="Odds"]',
+    '[class*="odds"]', '.RaceOdds', '.Popular_Odds'
   ];
   for(const sel of selectors){
     for(const el of tr.querySelectorAll(sel)){
@@ -2954,11 +2944,8 @@ function extractOddsFromRow(tr){
   const cells = Array.from(tr.children);
   const popIdx = findHeaderIndex(tr, /^人気$|人気順|^単勝人気$|^人気\s*順/);
   if(popIdx > 0){
-    const colMap = buildColumnMap(tr);
     for(let i=popIdx-1; i>=0 && i>=popIdx-3; i--){
-      const cell = colMap.get(i);
-      if(!cell) continue;
-      const txt = toHalfNumberText(normCellText(cell));
+      const txt = toHalfNumberText(normCellText(cells[i]));
       const v = extractOddsValueFromText(txt);
       if(v >= 1.1 && v <= 999.9) return v;
     }
@@ -2971,10 +2958,7 @@ function extractPopularityFromRow(tr, horseNo){
   let v = firstNumberInCell(byHead, false);
   if(v >= 1 && v <= 28) return v;
 
-  const selectors = [
-    'td.Popular', '[class*="Popular"]', '[class*="Ninki"]', '.Rank',
-    'td.Txt_C' // 2026年netkeibaで人気列に使われることがある
-  ];
+  const selectors = ['td.Popular', '[class*="Popular"]', '[class*="Ninki"]', '.Rank'];
   for(const sel of selectors){
     for(const el of tr.querySelectorAll(sel)){
       const tx = toHalfNumberText(normCellText(el));
@@ -3018,6 +3002,112 @@ function extractOddsPopFromCellsNearHorseRow(tr){
   }
   // 後方の小数は単勝オッズである確率が高い。斤量・馬体重増減は除外済み。
   return pairs.length ? pairs[pairs.length - 1] : {odds:0, pop:0};
+}
+
+
+// v5.20.2: netkeibaの出馬表でオッズ列だけ遅延・別ページ化される場合の補完。
+function buildOddsUrlFromRaceUrl(rawUrl){
+  const rid = (String(rawUrl || '').match(/race_id=(\d{10,14})/) || [])[1] || currentRaceId || '';
+  if(!rid) return '';
+  const kind = document.getElementById('pickKind')?.value || (String(rawUrl).includes('nar.netkeiba.com') ? 'NAR' : 'JRA');
+  const host = kind === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com';
+  return `${host}/odds/index.html?race_id=${rid}&rf=race_submenu`;
+}
+
+function normalizeHorseNameKey(v){
+  return String(v || '').replace(/[\s　・･\-ー−―～~]/g,'').trim();
+}
+
+function extractHorseNoFromLink(href){
+  const m = String(href || '').match(/(?:horse|db\/horse)\/(\d+)/);
+  return m ? m[1] : '';
+}
+
+function parseOddsPopularityFromOddsDoc(doc){
+  const mapByNum = new Map();
+  const mapByName = new Map();
+  const rows = Array.from(doc.querySelectorAll('tr, li, div'));
+
+  rows.forEach(row => {
+    const horseLink = row.querySelector && row.querySelector('a[href*="/horse/"]');
+    if(!horseLink) return;
+
+    const name = normCellText(horseLink).replace(/のデータベース|データベース/g,'').replace(/\s+/g,'').trim();
+    const cells = Array.from(row.querySelectorAll ? row.querySelectorAll('td,th,span,div') : [])
+      .map(el => toHalfNumberText(normCellText(el)))
+      .filter(Boolean);
+    const joined = toHalfNumberText(normCellText(row));
+
+    let num = firstNumberInCell(cellByHeader(row, /^馬番$/), false);
+    if(!num){
+      const numEl = row.querySelector('.Umaban,[class*="Umaban"],[class*="HorseNum"],[class*="Num"]');
+      num = firstNumberInCell(numEl, false);
+    }
+    if(!num){
+      for(const c of cells.slice(0,8)){
+        const m = c.match(/^\d{1,2}$/);
+        if(m){ const vv = Number(m[0]); if(vv >= 1 && vv <= 18){ num = vv; break; } }
+      }
+    }
+
+    let odds = extractOddsFromRow(row);
+    let pop = extractPopularityFromRow(row, num);
+    const op = extractOddsPopFromCellsNearHorseRow(row);
+    if(!(odds >= 1.1)) odds = op.odds || 0;
+    if(!(pop >= 1)) pop = op.pop || 0;
+
+    // さらに保険：行テキスト内の「12.3 5人気」系を読む。
+    if(!(odds >= 1.1)) odds = extractOddsValueFromText(joined);
+    if(!(pop >= 1)){
+      const pm = joined.match(/(\d{1,2})\s*人気/);
+      if(pm){ const pv = Number(pm[1]); if(pv >= 1 && pv <= 18) pop = pv; }
+    }
+
+    if((num >= 1 && num <= 18) && (odds >= 1.1 || pop >= 1)){
+      mapByNum.set(Number(num), {odds:Number(odds)||0, pop:Number(pop)||0, name});
+    }
+    const nk = normalizeHorseNameKey(name);
+    if(nk && (odds >= 1.1 || pop >= 1)){
+      mapByName.set(nk, {odds:Number(odds)||0, pop:Number(pop)||0, num:Number(num)||0, name});
+    }
+  });
+
+  // script内JSON/テキスト補完。class構造が全滅した場合の最後の保険。
+  const scriptText = Array.from(doc.querySelectorAll('script'))
+    .map(s => toHalfNumberText(s.textContent || '')).join('
+');
+  if(scriptText){
+    const chunkRe = /(?:horse[_-]?number|umaban|馬番|no)["']?\s*[:=]\s*["']?(\d{1,2})["']?[\s\S]{0,420}?(?:odds|tansho|単勝)["']?\s*[:=]\s*["']?(\d{1,4}\.\d+)["']?[\s\S]{0,220}?(?:popular|ninki|人気)["']?\s*[:=]\s*["']?(\d{1,2})/ig;
+    let m;
+    while((m = chunkRe.exec(scriptText)) !== null){
+      const num = Number(m[1]), odds = Number(m[2]), pop = Number(m[3]);
+      if(num>=1 && num<=18 && odds>=1.1 && odds<=999.9 && pop>=1 && pop<=18){
+        mapByNum.set(num, {odds, pop, name:''});
+      }
+    }
+  }
+
+  return {mapByNum, mapByName};
+}
+
+async function fetchAndMergeOddsPopularity(rawUrl, horseList){
+  const oddsUrl = buildOddsUrlFromRaceUrl(rawUrl);
+  if(!oddsUrl || !settings.proxyUrl) return {merged:0, source:''};
+  const html = await fetchHtmlViaProxy(oddsUrl);
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const parsed = parseOddsPopularityFromOddsDoc(doc);
+  let merged = 0;
+  horseList.forEach(h => {
+    const byNum = parsed.mapByNum.get(Number(h.num));
+    const byName = parsed.mapByName.get(normalizeHorseNameKey(h.name));
+    const src = byNum || byName;
+    if(!src) return;
+    let changed = false;
+    if(!(Number(h.odds||0) >= 1.1) && Number(src.odds||0) >= 1.1){ h.odds = Number(src.odds); changed = true; }
+    if(!(Number(h.pop||0) >= 1) && Number(src.pop||0) >= 1){ h.pop = Number(src.pop); changed = true; }
+    if(changed) merged++;
+  });
+  return {merged, source:oddsUrl};
 }
 
 function parseHorsesFromDoc(doc, url){
@@ -3083,11 +3173,7 @@ function parseHorsesFromDoc(doc, url){
     let pop = extractPopularityFromRow(tr, num);
     const fallbackOP = extractOddsPopFromCellsNearHorseRow(tr);
     if(!(odds >= 1.1)) odds = fallbackOP.odds || 0;
-    if(!(pop >= 1)){
-      // フォールバックのpopが馬番と一致してしまう場合は捨てる
-      const fp = fallbackOP.pop || 0;
-      if(fp >= 1 && fp !== num) pop = fp;
-    }
+    if(!(pop >= 1)) pop = fallbackOP.pop || 0;
 
     seen.add(num);
 

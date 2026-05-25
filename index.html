@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.3 RaceNameDayOdds</title>
+<title>The競馬 EV分析 v5.18.5 RaceIdStrict</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -99,6 +99,7 @@ select option { background: #1e293b; }
 .race-title-box { font-size: 12px; color: var(--green); margin-top: 6px; padding: 7px 9px; background: rgba(52,211,153,0.08); border: 1px solid rgba(52,211,153,0.18); border-radius: 8px; display: none; line-height:1.6; }
 .race-name-main { font-size: 13px; font-weight: 900; color:#a7f3d0; }
 .race-name-sub { font-size: 11px; color: var(--muted); }
+.day-badge { display:inline-block; padding:2px 7px; border-radius:999px; margin-right:6px; font-size:11px; font-weight:900; background:rgba(0,230,118,.12); border:1px solid rgba(0,230,118,.25); color:#a7f3d0; }
 .chart-box { width: 100%; height: 220px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 8px; }
 .chart-box canvas { width: 100%; height: 100%; display: block; }
 .profit-controls { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; align-items: end; margin-bottom: 10px; }
@@ -209,7 +210,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.3</span>
+    <span class="ver">v5.18.5</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -639,6 +640,8 @@ let lastRecs = [];
 let lastTickets = [];
 let currentRaceName = '';
 let currentRaceId = '';
+let currentRaceMeta = null;
+let raceMap = {};
 let profitHistory = [];
 
 // ─── iPad/Safari UTC日付ズレ対策 ─────────────────────────
@@ -658,6 +661,117 @@ function parseLocalDateYMD(ymd){
 }
 function ymdCompactLocal(ymd){
   return String(ymd || '').replace(/[^\d]/g, '').slice(0, 8);
+}
+
+function weekdayLabel(date){
+  const w = ['日','月','火','水','木','金','土'][parseLocalDateYMD(date).getDay()];
+  return `${w}曜`;
+}
+
+function raceStoreKey(raceId){
+  return `tk-race-cache:${String(raceId || '')}`;
+}
+
+function buildRaceMeta(kind, date, race){
+  const raceId = String(race?.raceId || '');
+  const venueCode = race?.venueCode || extractVenueCodeFromRaceId(raceId, kind);
+  const raceNo = Number(race?.raceNo || String(raceId).slice(-2) || 0);
+  const raceName = race?.raceName || `${raceNo}R`;
+  const ymd = String(date || todayYmd());
+  return {
+    raceId,
+    date: ymd,
+    weekday: weekdayLabel(ymd),
+    kind,
+    venueCode,
+    venue: venueName(kind, venueCode),
+    raceNo,
+    raceName,
+    shutubaUrl: shutubaUrl(kind, raceId),
+    resultUrl: resultUrl(kind, raceId)
+  };
+}
+
+function saveRaceCache(){
+  if(!currentRaceId) return;
+  try{
+    localStorage.setItem(raceStoreKey(currentRaceId), JSON.stringify({
+      meta: currentRaceMeta,
+      horses,
+      currentRaceName,
+      savedAt: new Date().toISOString()
+    }));
+  }catch(e){}
+}
+
+function loadRaceCache(raceId){
+  try{
+    const raw = localStorage.getItem(raceStoreKey(raceId));
+    if(!raw) return null;
+    const data = JSON.parse(raw);
+    if(String(data?.meta?.raceId || '') !== String(raceId)) return null;
+    return data;
+  }catch(e){ return null; }
+}
+
+function clearRaceScopedWorkingData(){
+  horses = [];
+  lastRecs = [];
+  lastTickets = [];
+  if(typeof simTickets !== 'undefined') simTickets = [];
+  renderHorseRows?.();
+  renderTicketList?.();
+  renderCandTable?.();
+  renderSimEditRows?.();
+  renderSimCandList?.();
+}
+
+function showRaceMeta(meta){
+  const box = document.getElementById('raceTitleBox');
+  if(!box) return;
+  if(!meta || !meta.raceId){
+    box.style.display = 'none';
+    box.textContent = '';
+    return;
+  }
+  box.style.display = 'block';
+  box.innerHTML = `<div class="race-name-main"><span class="day-badge">${escapeHtml(meta.weekday)}</span>選択中：${escapeHtml(meta.venue)}${Number(meta.raceNo)}R ${escapeHtml(meta.raceName)}</div><div class="race-name-sub">${escapeHtml(meta.date)} / ${escapeHtml(meta.kind)} / race_id=${escapeHtml(meta.raceId)}</div>`;
+}
+
+function setCurrentRaceFromMeta(meta, loadCached=true){
+  currentRaceMeta = meta || null;
+  currentRaceId = meta?.raceId || '';
+  currentRaceName = meta?.raceName || '';
+  const raceUrl = document.getElementById('raceUrl');
+  if(raceUrl) raceUrl.value = meta?.shutubaUrl || '';
+  const simUrl = document.getElementById('simResultUrl');
+  if(simUrl) simUrl.value = meta?.resultUrl || '';
+  showRaceMeta(meta);
+
+  if(!meta){ clearRaceScopedWorkingData(); return; }
+
+  const cached = loadCached ? loadRaceCache(meta.raceId) : null;
+  if(cached && cached.meta && cached.meta.date === meta.date && cached.meta.kind === meta.kind){
+    horses = Array.isArray(cached.horses) ? cached.horses : [];
+    currentRaceName = cached.currentRaceName || meta.raceName || currentRaceName;
+    currentRaceMeta.raceName = currentRaceName;
+    renderHorseRows();
+  }else{
+    // race_idが変わったら前日の馬データ・買い目・シミュレーションを残さない。
+    clearRaceScopedWorkingData();
+  }
+}
+
+function registerRaceMeta(meta){
+  if(meta && meta.raceId) raceMap[meta.raceId] = meta;
+  return meta;
+}
+
+function assertCurrentRaceId(raceId){
+  if(currentRaceId && String(raceId) !== String(currentRaceId)){
+    return {ok:false, message:`選択中race_idとURLのrace_idが一致しません。選択=${currentRaceId} / URL=${raceId}`};
+  }
+  return {ok:true};
 }
 
 
@@ -1632,7 +1746,7 @@ function resultUrl(kind, raceId){
 }
 
 function fillSimResultUrl(){
-  const kind = document.getElementById('pickKind')?.value || (settings.nar ? 'NAR' : 'JRA');
+  const kind = currentRaceMeta?.kind || document.getElementById('pickKind')?.value || (settings.nar ? 'NAR' : 'JRA');
   let raceId = currentRaceId || '';
   if(!raceId){
     try{
@@ -1862,16 +1976,22 @@ async function runSimulationFromResult(){
   const raw = document.getElementById('simResultUrl')?.value || '';
   if(!raw){ if(st) st.innerHTML = '<div class="url-status err">⚠️ 結果URLがありません。</div>'; return; }
   if(!settings.proxyUrl){ if(st) st.innerHTML = '<div class="url-status err">⚠️ プロキシURLを設定してください。</div>'; return; }
+  const resultRaceId = extractRaceIdFromAnyUrl(raw);
+  const currentCheck = assertCurrentRaceId(resultRaceId);
+  if(!currentCheck.ok){ if(st) st.innerHTML = `<div class="url-status err">❌ ${escapeHtml(currentCheck.message)}</div>`; return; }
+  const canonicalResultUrl = resultUrl(currentRaceMeta?.kind || document.getElementById('pickKind')?.value || 'JRA', resultRaceId);
+  const simUrlEl = document.getElementById('simResultUrl');
+  if(simUrlEl) simUrlEl.value = canonicalResultUrl;
   if(st) st.innerHTML = '<div class="url-status ok">⚡ 結果・払戻を取得中... GREEN EDGE 起動</div>';
   try{
-    const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(raw);
+    const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(canonicalResultUrl);
     const res = await fetch(proxyReq, { cache:'no-store' });
     if(!res.ok) throw new Error('HTTP ' + res.status);
     const html = await res.text();
     const doc = new DOMParser().parseFromString(html, 'text/html');
     const finish = parseFinishFromResultDoc(doc);
     const payouts = parsePayoutsFromResultDoc(doc);
-    renderSimulation(finish, payouts, raw);
+    renderSimulation(finish, payouts, canonicalResultUrl);
     if(st) st.innerHTML = `<div class="url-status ok">✅ 結果取得完了：着順 ${finish.slice(0,3).map(x=>x.horseNo).join('-')} / 払戻 ${Object.keys(payouts).length}件</div>`;
   }catch(e){
     console.error(e);
@@ -2159,6 +2279,9 @@ async function loadActiveNarVenuesByRaceId(date){
 function resetRaceState(message){
   currentRaceId = '';
   currentRaceName = '';
+  currentRaceMeta = null;
+  raceMap = {};
+  clearRaceScopedWorkingData();
 
   const raceSelect = document.getElementById('raceSelect');
   if(raceSelect) raceSelect.innerHTML = '<option value="">開催場を選んでレース一覧を取得</option>';
@@ -2166,11 +2289,10 @@ function resetRaceState(message){
   const raceUrl = document.getElementById('raceUrl');
   if(raceUrl) raceUrl.value = '';
 
-  const box = document.getElementById('raceTitleBox');
-  if(box){
-    box.style.display = 'none';
-    box.textContent = '';
-  }
+  const simUrl = document.getElementById('simResultUrl');
+  if(simUrl) simUrl.value = '';
+
+  showRaceMeta(null);
 
   const status = document.getElementById('urlStatus');
   if(status) status.innerHTML = message ? `<div class="url-status">${message}</div>` : '';
@@ -2199,6 +2321,16 @@ function validateRaceUrlForCurrentSelection(rawUrl){
 
   const raceId = u.searchParams.get('race_id') || '';
   if(!/^\d{10,14}$/.test(raceId)) return {ok:false, message:'race_id が取得できません'};
+
+  const currentCheck = assertCurrentRaceId(raceId);
+  if(!currentCheck.ok) return currentCheck;
+
+  const meta = raceMap[raceId] || null;
+  if(meta){
+    if(meta.date !== date) return {ok:false, message:`日付が一致しません。選択日=${date} / race_id登録日=${meta.date}`};
+    if(meta.kind !== kind) return {ok:false, message:`区分が一致しません。選択=${kind} / race_id登録=${meta.kind}`};
+    if(venueCode && meta.venueCode !== venueCode) return {ok:false, message:`開催場が一致しません。選択=${venueName(kind, venueCode)} / race_id=${raceId}`};
+  }
 
   if(!raceIdVenueMatches(kind, raceId, venueCode)){
     return {ok:false, message:`開催場が一致しません。選択=${venueName(kind, venueCode)} / race_id=${raceId}`};
@@ -2530,6 +2662,20 @@ function buildJraRacesFromOneRaceId(seedRaceId, names){
   return races;
 }
 
+function weekendCorrectedJraSeedRaceId(seedRaceId, date){
+  // v5.18.4: JRAのrace_idはMMDDを持たないため、一覧HTMLが土曜分を返すと
+  // 日曜選択でも 09日目(欅S) のままになる。土曜=奇数開催日、日曜=偶数開催日を
+  // 最終補正として使い、5/24(日)東京11Rを 09日目→10日目 に直す。
+  const k = jraRaceIdToKaisai(seedRaceId);
+  if(!k) return '';
+  const wd = parseLocalDateYMD(date).getDay(); // 0=日, 6=土
+  let fixedDay = k.day;
+  if(wd === 0 && fixedDay % 2 === 1) fixedDay += 1;
+  if(wd === 6 && fixedDay % 2 === 0) fixedDay -= 1;
+  if(fixedDay < 1 || fixedDay > 12 || fixedDay === k.day) return '';
+  return `${k.year}${k.venueCode}${String(k.kai).padStart(2,'0')}${String(fixedDay).padStart(2,'0')}${String(k.raceNo).padStart(2,'0')}`;
+}
+
 async function chooseJraRaceDayByDateProbe(html, date, venueCode, direct){
   // 代表レース(11R優先、なければ1R)を基点に、開催日を±2だけずらして実ページの日付で照合する。
   // 2026/05/24 東京11Rが欅S(前日)になる事故は、ここで 09日目→10日目 に補正される。
@@ -2537,6 +2683,17 @@ async function chooseJraRaceDayByDateProbe(html, date, venueCode, direct){
   if(!list.length) return [];
   const seed = list.find(r => Number(r.raceNo) === 11) || list.find(r => Number(r.raceNo) === 1) || list[0];
   const names = extractJraRaceNamesFromList(html, venueCode);
+
+  // まず土日補正を最優先で試す。日曜選択で土曜race_idが返るケースをここで潰す。
+  const weekendCandidate = weekendCorrectedJraSeedRaceId(seed.raceId, date);
+  if(weekendCandidate){
+    try{
+      const v = await verifyJraRaceAndTitleByShutuba(date, weekendCandidate);
+      if(v.ok){
+        return buildJraRacesFromOneRaceId(weekendCandidate, names);
+      }
+    }catch(e){}
+  }
 
   const deltas = [0, 1, -1, 2, -2, 3, -3];
   for(const d of deltas){
@@ -2550,7 +2707,16 @@ async function chooseJraRaceDayByDateProbe(html, date, venueCode, direct){
     }catch(e){}
   }
 
-  // 日付照合に失敗した場合は、一覧のrace_idをそのまま返す。空にすると操作不能になるため。
+  // 日付照合に失敗した場合でも、土日補正候補が実在するならそちらを採用する。
+  // 空にすると操作不能、一覧のままだと土曜/日曜が逆になるため。
+  if(weekendCandidate){
+    try{
+      const v = await verifyJraRaceAndTitleByShutuba(date, weekendCandidate);
+      if(v.ok) return buildJraRacesFromOneRaceId(weekendCandidate, names);
+    }catch(e){}
+  }
+
+  // 最後だけ一覧のrace_idを返す。
   return await filterJraDirectRacesBySelectedDate(list, date);
 }
 
@@ -2651,7 +2817,8 @@ async function getReliableJraRacesFromList(html, date, venueCode){
 // ============================================================
 function raceListDateLabel(date){
   const d = ymdParts(date).yyyymmdd;
-  return `${d.slice(0,4)}/${d.slice(4,6)}/${d.slice(6,8)}`;
+  const w = ['日','月','火','水','木','金','土'][parseLocalDateYMD(date).getDay()];
+  return `${d.slice(0,4)}/${d.slice(4,6)}/${d.slice(6,8)}(${w})`;
 }
 
 function dedupeRacesByRaceIdAndNo(races){
@@ -2685,8 +2852,9 @@ async function enrichJraRaceNamesFromShutuba(races, date){
   if(!list.length) return list;
   for(const r of list){
     try{
-      const v = await verifyJraRaceActualDateAndTitleByShutuba(date, r.raceId);
-      // v5.17.8: 出馬表本文の日付が選択日と一致したrace_idだけ正式名にする。
+      // v5.18.4: レース名は日付判定に使わない。選択済みrace_idの出馬表本文から必ず取り直す。
+      // 日付判定に失敗すると「11R」だけに戻るため、オークス/欅Sの表示が崩れていた。
+      const v = await verifyJraRaceAndTitleByShutuba(date, r.raceId);
       r.raceName = (v.ok && v.title && !/俺プロ|払戻|オッズ|予想|結果|レース一覧/.test(v.title))
         ? v.title
         : `${Number(String(r.raceId).slice(-2))}R`;
@@ -2745,6 +2913,9 @@ async function loadRaceList(){
 
   currentRaceId = '';
   currentRaceName = '';
+  currentRaceMeta = null;
+  raceMap = {};
+  clearRaceScopedWorkingData();
   const raceUrl = document.getElementById('raceUrl');
   if(raceUrl) raceUrl.value = '';
   const box = document.getElementById('raceTitleBox');
@@ -2793,11 +2964,12 @@ async function loadRaceList(){
     }
 
     const dateLabel = raceListDateLabel(date);
-    raceSelect.innerHTML = races.map(r => {
-      const raceName = escapeHtml(r.raceName || `${r.raceNo}R`);
-      const displayName = /^\d{1,2}R$/.test(r.raceName || '') ? `${r.raceNo}R` : `${raceName}（${r.raceNo}R）`;
-      const label = `${displayName}　${dateLabel} ${venueName(kind, venueCode)} / ${r.raceId}`;
-      return `<option value="${r.raceId}" data-race-id="${r.raceId}" data-race-no="${r.raceNo}" data-race-name="${raceName}" data-date-label="${dateLabel}" data-venue-name="${escapeHtml(venueName(kind, venueCode))}">${label}</option>`;
+    raceMap = {};
+    const metas = races.map(r => registerRaceMeta(buildRaceMeta(kind, date, r)));
+    raceSelect.innerHTML = metas.map(meta => {
+      const safeName = escapeHtml(meta.raceName || `${meta.raceNo}R`);
+      const label = `${meta.weekday} ${meta.venue}${Number(meta.raceNo)}R ${safeName} / race_id=${meta.raceId}`;
+      return `<option value="${meta.raceId}" data-race-id="${meta.raceId}">${label}</option>`;
     }).join('');
 
     applySelectedRaceUrl();
@@ -2811,31 +2983,20 @@ async function loadRaceList(){
 
 function applySelectedRaceUrl(){
   const raceSelect = document.getElementById('raceSelect');
-  const raceUrl = document.getElementById('raceUrl');
-  const box = document.getElementById('raceTitleBox');
-  const kind = document.getElementById('pickKind')?.value || 'JRA';
-  if(!raceSelect || !raceUrl) return;
+  if(!raceSelect) return;
 
   const opt = raceSelect.options[raceSelect.selectedIndex];
-  const raceId = opt?.dataset?.raceId || '';
+  const raceId = opt?.dataset?.raceId || opt?.value || '';
 
   if(raceId){
-    // ここで必ずJRA/NAR別にURLを再生成し、前回のURL残留を完全に防ぐ。
-    raceUrl.value = shutubaUrl(kind, raceId);
-    currentRaceName = opt?.dataset?.raceName || opt?.textContent || '';
-    currentRaceId = raceId;
-    if(box){
-      box.style.display = currentRaceName ? 'block' : 'none';
-      const raceNo = opt?.dataset?.raceNo || String(raceId).slice(-2);
-      const dateLabel = opt?.dataset?.dateLabel || raceListDateLabel(document.getElementById('pickDate')?.value || todayYmd());
-      const venue = opt?.dataset?.venueName || venueName(kind, extractVenueCodeFromRaceId(raceId, kind));
-      box.innerHTML = currentRaceName ? `<div class="race-name-main">選択中：${escapeHtml(currentRaceName)}（${Number(raceNo)}R）</div><div class="race-name-sub">${escapeHtml(dateLabel)} / ${escapeHtml(venue)} / race_id=${escapeHtml(raceId)}</div>` : '';
-    }
+    const meta = raceMap[raceId] || registerRaceMeta(buildRaceMeta(
+      document.getElementById('pickKind')?.value || 'JRA',
+      document.getElementById('pickDate')?.value || todayYmd(),
+      { raceId, raceNo:Number(String(raceId).slice(-2)), venueCode:extractVenueCodeFromRaceId(raceId, document.getElementById('pickKind')?.value || 'JRA'), raceName: opt?.textContent || `${Number(String(raceId).slice(-2))}R` }
+    ));
+    setCurrentRaceFromMeta(meta, true);
   }else{
-    raceUrl.value = '';
-    currentRaceName = '';
-    currentRaceId = '';
-    if(box){ box.style.display = 'none'; box.textContent = ''; }
+    setCurrentRaceFromMeta(null, false);
   }
 }
 
@@ -2896,6 +3057,16 @@ async function fetchRace(){
     return;
   }
 
+  if(!raceMap[validation.raceId]){
+    registerRaceMeta(buildRaceMeta(validation.kind, validation.date, {
+      raceId: validation.raceId,
+      raceNo: Number(String(validation.raceId).slice(-2)),
+      venueCode: validation.venueCode || extractVenueCodeFromRaceId(validation.raceId, validation.kind),
+      raceName: currentRaceName || `${Number(String(validation.raceId).slice(-2))}R`
+    }));
+  }
+  setCurrentRaceFromMeta(raceMap[validation.raceId], false);
+
   const progress = document.getElementById('fetchProgress');
   progress.classList.add('show');
   status.innerHTML = '';
@@ -2915,15 +3086,11 @@ async function fetchRace(){
     const doc = parser.parseFromString(html, 'text/html');
 
     const titleFromDoc = parseRaceTitleFromDoc(doc);
-    if(titleFromDoc) currentRaceName = titleFromDoc;
     const rid = validation.raceId || normalized.raceId || extractRaceIdFromAnyUrl(canonicalUrl);
-    if(rid) currentRaceId = rid;
-    const box = document.getElementById('raceTitleBox');
-    if(box && currentRaceName){
-      box.style.display = 'block';
-      const dateLabel = raceListDateLabel(document.getElementById('pickDate')?.value || todayYmd());
-      const venue = venueName(selectedKind, extractVenueCodeFromRaceId(rid, selectedKind));
-      box.innerHTML = `<div class="race-name-main">選択中：${escapeHtml(currentRaceName)}（${Number(String(rid).slice(-2))}R）</div><div class="race-name-sub">${escapeHtml(dateLabel)} / ${escapeHtml(venue)} / race_id=${escapeHtml(rid)}</div>`;
+    if(titleFromDoc && raceMap[rid]) raceMap[rid].raceName = titleFromDoc;
+    if(rid){
+      if(!raceMap[rid]) registerRaceMeta(buildRaceMeta(selectedKind, document.getElementById('pickDate')?.value || todayYmd(), { raceId:rid, raceNo:Number(String(rid).slice(-2)), venueCode:extractVenueCodeFromRaceId(rid, selectedKind), raceName:titleFromDoc || `${Number(String(rid).slice(-2))}R` }));
+      setCurrentRaceFromMeta(raceMap[rid], false);
     }
 
     horses = parseHorsesFromDoc(doc, canonicalUrl);
@@ -2931,8 +3098,10 @@ async function fetchRace(){
       throw new Error('出走馬を十分に取得できませんでした。race_idまたは開催情報を確認してください。');
     }
     renderHorseRows();
+    saveRaceCache();
+    showRaceMeta(currentRaceMeta);
 
-    status.innerHTML = `<div class="url-status ok">✅ race_id=${escapeHtml(currentRaceId || '')} / ${escapeHtml(currentRaceName || '')} / ${horses.length}頭 取得しました</div>`;
+    status.innerHTML = `<div class="url-status ok">✅ ${escapeHtml(currentRaceMeta?.weekday || '')} ${escapeHtml(currentRaceMeta?.venue || '')}${Number(currentRaceMeta?.raceNo || 0)}R / race_id=${escapeHtml(currentRaceId || '')} / ${escapeHtml(currentRaceName || '')} / ${horses.length}頭 取得しました</div>`;
 
     // 取得後すぐにタブを馬データへ
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));

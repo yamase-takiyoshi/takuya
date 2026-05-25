@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.5 RaceIdStrict</title>
+<title>The競馬 EV分析 v5.19.0</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -210,7 +210,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.5</span>
+    <span class="ver">v5.19.0</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -790,7 +790,14 @@ function loadSettings(){
   } catch(e) { profitHistory = []; }
 }
 function saveSettings(){
-  settings.nar = document.getElementById('setNar')?.value === '1';
+  // setNar と pickKind の両方から nar を決定（どちらを変えても同期する）
+  const setNarEl = document.getElementById('setNar');
+  const pickKindEl = document.getElementById('pickKind');
+  if(setNarEl) settings.nar = setNarEl.value === '1';
+  // pickKind が NAR になっている場合も nar=true に揃える
+  if(pickKindEl && pickKindEl.value === 'NAR') settings.nar = true;
+  if(pickKindEl && pickKindEl.value === 'JRA') settings.nar = false;
+
   settings.budget = Number(document.getElementById('setBudget')?.value || 500);
   settings.unit = Number(document.getElementById('setUnit')?.value || 100);
   settings.maxTickets = Number(document.getElementById('setMaxTickets')?.value || 5);
@@ -799,7 +806,10 @@ function saveSettings(){
     const el = document.getElementById('ev-' + t);
     if(el) settings.minEVByType[t] = Number(el.value || DEFAULT_MIN_EV[t]);
   });
-  document.getElementById('narBadge').style.display = settings.nar ? '' : 'none';
+  // setNar と narBadge を settings.nar に同期
+  if(setNarEl) setNarEl.value = settings.nar ? '1' : '0';
+  const nb = document.getElementById('narBadge');
+  if(nb) nb.style.display = settings.nar ? '' : 'none';
   localStorage.setItem('tk-html-settings', JSON.stringify(settings));
 }
 function saveProxy(){
@@ -1395,10 +1405,13 @@ function renderSimEditRows(){
   const container = document.getElementById('simEditRows');
   if(!container) return;
   const totalBet = simTickets.reduce((s,t)=>s+Number(t.amount||0),0);
-  // トリガミ判定
+  // トリガミ判定: 的中時払戻 = floor(購入額/100) * (オッズ×100円払戻)
+  // オッズは「100円あたりの払戻額」ではなく「倍率」なので 100円単位で計算する。
   const tgList = simTickets.filter(t => {
-    const retPer100 = Number(t.odds||0) * 100;
-    const ret = Math.floor(Number(t.amount||0)/100)*retPer100;
+    const odds = Number(t.odds||0);
+    if(odds <= 0) return false;
+    const units = Math.floor(Number(t.amount||0) / 100);
+    const ret = units * Math.round(odds * 100); // 100円あたり odds*100円
     return ret > 0 && ret < totalBet;
   });
   const warnEl = document.getElementById('simTrigamiWarn');
@@ -2058,11 +2071,11 @@ function renderVenueOptions(listOverride){
     ? list.map(([code,name,count]) => `<option value="${code}">${name}${count ? '（' + count + 'R）' : ''}</option>`).join('')
     : '<option value="">開催なし</option>';
 
+  // v5.18.6: setNar の同期だけ行い saveSettings は呼ばない。
+  // renderVenueOptions は開催場変更・初期化のたびに呼ばれるため、
+  // ここで saveSettings を呼ぶと pickKind 変更前の kind で settings.nar が上書きされる副作用があった。
   const setNar = document.getElementById('setNar');
-  if(setNar){
-    setNar.value = kind === 'NAR' ? '1' : '0';
-    saveSettings();
-  }
+  if(setNar) setNar.value = kind === 'NAR' ? '1' : '0';
 }
 
 function ymdParts(date){
@@ -2380,6 +2393,18 @@ async function loadNarRaceListByRaceId(date, venueCode){
 let activeVenueLoadSeq = 0;
 
 async function onRaceDateKindChanged(){
+  // pickKind の変更を settings.nar に即時反映する。
+  // renderVenueOptions / loadActiveVenuesForDate は kind を pickKind から読むが、
+  // settings.nar と乖離したままだと「JRA選択→NAR開催場表示」等の混乱が起きる。
+  const kindEl = document.getElementById('pickKind');
+  if(kindEl){
+    settings.nar = kindEl.value === 'NAR';
+    const nb = document.getElementById('narBadge');
+    if(nb) nb.style.display = settings.nar ? '' : 'none';
+    const setNarEl = document.getElementById('setNar');
+    if(setNarEl) setNarEl.value = settings.nar ? '1' : '0';
+    localStorage.setItem('tk-html-settings', JSON.stringify(settings));
+  }
   resetRaceState('条件変更のためレース選択を初期化しました');
   // v5.17.5: 取得中に開催場が空のまま固まる事故を防ぐ。
   // まず全場を選べる状態にしてから、取得に成功した場合だけ開催場ありの一覧へ絞り込む。
@@ -2393,8 +2418,10 @@ async function confirmActiveJraVenuesFromHtml(html, date, candidates){
   // 出馬表本文の日付照合まで済んだレースだけを数える。
   const confirmed = [];
   const status = document.getElementById('urlStatus');
+  const seqAtStart = activeVenueLoadSeq;
 
   for(const [code, name] of candidates){
+    if(seqAtStart !== activeVenueLoadSeq) return confirmed; // 別のloadが始まったら即返す
     try{
       if(status) status.innerHTML = `<div class="url-status">📅 JRA開催確認中... ${name}</div>`;
       const races = await getReliableJraRacesFromList(html, date, code);
@@ -2427,6 +2454,7 @@ async function loadActiveVenuesForDate(){
   }
 
   try{
+    if(seq !== activeVenueLoadSeq) return;
     if(status) status.innerHTML = `<div class="url-status">📅 ${date} の開催場を自動確認中...</div>`;
 
     let venues = [];
@@ -2450,16 +2478,19 @@ async function loadActiveVenuesForDate(){
         }
         venues = confirmed;
       }else{
+        if(seq !== activeVenueLoadSeq) return;
         if(status) status.innerHTML = `<div class="url-status">📅 NAR全場確認中...</div>`;
         venues = await loadActiveNarVenuesByRaceId(date);
       }
     }else{
       const url = raceListUrl(kind, date);
       const html = await fetchHtmlViaProxy(url);
+      if(seq !== activeVenueLoadSeq) return;
       const fromHtml = parseActiveVenuesFromList(html, kind, date);
       venues = await confirmActiveJraVenuesFromHtml(html, date, fromHtml);
     }
 
+    // seqチェック: 非同期処理中に別のloadが開始されていたら結果を捨てる
     if(seq !== activeVenueLoadSeq) return;
 
     renderVenueOptions(venues);
@@ -3005,6 +3036,10 @@ function initCalendarPicker(){
   if(d && !d.value) d.value = todayYmd();
 
   const kindEl = document.getElementById('pickKind');
+  // settings.nar は loadSettings() 済みなので、ここで確実に pickKind へ反映する。
+  // renderVenueOptions / loadActiveVenuesForDate より前に設定しておかないと
+  // 初回ロード時に kindEl.value が 'JRA' のまま loadActiveVenuesForDate が走り、
+  // その後ユーザーが変更しても古い JRA 結果で上書きされる競合が起きる。
   if(kindEl) kindEl.value = settings.nar ? 'NAR' : 'JRA';
 
   // iPad/Safariでは date picker の確定タイミングに差があるため、change/input の両方で拾う。
@@ -3020,6 +3055,10 @@ function initCalendarPicker(){
     kindEl.dataset.activeVenueBound = '1';
     kindEl.addEventListener('change', onRaceDateKindChanged);
   }
+
+  // narBadge を初期状態に合わせる
+  const nb = document.getElementById('narBadge');
+  if(nb) nb.style.display = settings.nar ? '' : 'none';
 
   // v5.17.5: 初期表示で空プルダウンにしない。
   renderVenueOptions();

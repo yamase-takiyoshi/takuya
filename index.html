@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.19.2 Date Fix</title>
+<title>The競馬 EV分析 v5.19.3</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.19.2</span>
+    <span class="ver">v5.19.3</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2524,8 +2524,12 @@ async function fetchHtmlViaProxy(url){
 async function verifyJraRaceDateByShutuba(date, raceId){
   const url = shutubaUrl('JRA', raceId);
   const html = await fetchHtmlViaProxy(url);
-  if(!html.includes(String(raceId))) return false;
-  return jraHtmlMatchesSelectedDate(html, date);
+  // race_idが含まれない場合でも日付照合は試みる（netkeibaのHTMLにrace_idが埋め込まれない場合がある）
+  const idOk = html.includes(String(raceId));
+  const dateOk = jraHtmlMatchesSelectedDate(html, date);
+  console.log('[verify]', raceId, 'idOk:', idOk, 'dateOk:', dateOk);
+  if(!idOk && !dateOk) return false; // 両方NGのみ失敗
+  return dateOk;
 }
 
 async function fixJraKaisaiByProbe(date, venueCode, kd){
@@ -2691,6 +2695,7 @@ async function finalFilterRacesForSelection(races, kind, date, venueCode){
   });
 
   // グループが1つでも必ず日付照合する（土日混在で同一グループのみ残った場合でも別日のrace_idを通さない）
+  let _fallbackGroup = null;
   for(const group of groups.values()){
     const sorted = group.slice().sort((a,b) => Number(a.raceNo) - Number(b.raceNo));
     const probe = sorted.find(r => Number(r.raceNo) === 1) || sorted[0];
@@ -2699,6 +2704,13 @@ async function finalFilterRacesForSelection(races, kind, date, venueCode){
         return dedupeRacesByRaceIdAndNo(sorted);
       }
     }catch(e){}
+    if(!_fallbackGroup) _fallbackGroup = sorted;
+  }
+
+  // 照合全失敗でもグループが1つだけなら採用（平日開催など日付照合困難なケースへの救済）
+  if(groups.size === 1 && _fallbackGroup && _fallbackGroup.length){
+    console.warn('[finalFilter] 照合失敗・グループ1つのためフォールバック採用:', _fallbackGroup.map(r=>r.raceId));
+    return dedupeRacesByRaceIdAndNo(_fallbackGroup);
   }
 
   // 全グループが照合失敗 → 空を返して「見つからない」表示にする（別日race_idは絶対に返さない）

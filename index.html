@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.20.2 Odds Popularity Fixed</title>
+<title>The競馬 EV分析 v5.20.3 Display Fixed</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.20.2</span>
+    <span class="ver">v5.20.3</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -3285,7 +3285,7 @@ function corsHeaders(contentType) {
 
 
 /* ============================================================
-   v5.20.2 Odds Popularity Fixed / 以前UI保持版
+   v5.20.3 Display Fixed / 以前UI保持版
    目的：カレンダー日付・区分・開催場が変わった時、前回のrace_id/URL/レース選択を絶対に残さない。
    ============================================================ */
 let __raceListSeqV5188 = 0;
@@ -3567,7 +3567,7 @@ function initCalendarPicker(){
 
 
 /* ============================================================
-   v5.20.2 Odds Popularity Fixed
+   v5.20.3 Display Fixed
    ネット上のテキストデータ優先：race_list本文テキスト＋リンクhrefを同時参照。
    目的：カレンダーの日付を変えた時、前回race_idを絶対に流用せず、
          選択日・開催場・R番号・レース名をテキストから再構築する。
@@ -3840,6 +3840,140 @@ async function finalFilterRacesForSelection(races, kind, date, venueCode){
   }
   // JRAはrace_idにMMDDが無いので、ここでも出馬表ページ日付で最終防壁を掛ける。
   return await __v5198_enrichJraRacesByShutuba(dedupeRacesByRaceIdAndNo(list), date);
+}
+
+
+
+// ============================================================
+// v5.20.3 表示復旧パッチ
+// 開催場自動取得が失敗・空結果でも、開催場プルダウンを空欄にしない。
+// まず全開催場を表示し、その後ネット上テキストで開催場だけに絞れる場合は絞る。
+// ============================================================
+function __v5203_masterVenues(kind){
+  return kind === 'NAR' ? NAR_VENUES : JRA_VENUES;
+}
+function __v5203_optionLabel(name, count){
+  return `${name}${Number(count||0) > 0 ? '（' + Number(count) + 'R）' : ''}`;
+}
+function renderVenueOptions(listOverride){
+  const kind = document.getElementById('pickKind')?.value || 'JRA';
+  const venueEl = document.getElementById('pickVenue');
+  if(!venueEl) return;
+  const master = __v5203_masterVenues(kind);
+  const list = (Array.isArray(listOverride) && listOverride.length) ? listOverride : master.map(v => [v[0], v[1], 0]);
+  const old = venueEl.value;
+  venueEl.innerHTML = '<option value="">開催場を選択</option>' + list.map(([code,name,count]) => {
+    return `<option value="${escapeHtml(code)}">${escapeHtml(__v5203_optionLabel(name, count))}</option>`;
+  }).join('');
+  if(old && list.some(v => String(v[0]) === String(old))) venueEl.value = old;
+  else if(list.length === 1) venueEl.value = list[0][0];
+
+  if(!venueEl.dataset.v5203Bound){
+    venueEl.dataset.v5203Bound = '1';
+    venueEl.addEventListener('change', () => {
+      currentRaceId = '';
+      currentRaceName = '';
+      __selectedRaceMetaV5188 = null;
+      const raceUrl = document.getElementById('raceUrl');
+      if(raceUrl) raceUrl.value = '';
+      const raceSelect = document.getElementById('raceSelect');
+      if(raceSelect) raceSelect.innerHTML = '<option value="">レース一覧を取得してください</option>';
+      const box = document.getElementById('raceTitleBox');
+      if(box){ box.style.display='none'; box.textContent=''; }
+      horses = [];
+      renderHorseRows();
+    });
+  }
+
+  const setNar = document.getElementById('setNar');
+  if(setNar){
+    setNar.value = kind === 'NAR' ? '1' : '0';
+    try{ saveSettings(); }catch(e){}
+  }
+}
+
+async function loadActiveVenuesForDate(){
+  const seq = ++__activeVenueSeqV5188;
+  const date = document.getElementById('pickDate')?.value || todayYmd();
+  const kind = document.getElementById('pickKind')?.value || 'JRA';
+  const status = document.getElementById('urlStatus');
+  const raceSelect = document.getElementById('raceSelect');
+  if(raceSelect) raceSelect.innerHTML = '<option value="">開催場を選んでレース一覧を取得</option>';
+
+  // 先に全場を表示して、通信失敗でも画面が空にならないようにする。
+  renderVenueOptions(__v5203_masterVenues(kind).map(v => [v[0], v[1], 0]));
+
+  if(!settings.proxyUrl){
+    if(status) status.innerHTML = '<div class="url-status err">⚠️ プロキシURL未設定です。開催場は全場表示にしています。</div>';
+    return;
+  }
+
+  try{
+    if(status) status.innerHTML = `<div class="url-status">📅 ${escapeHtml(date)} の開催場を確認中...</div>`;
+    const html = await fetchHtmlViaProxy(raceListUrl(kind, date));
+    let venues = parseActiveVenuesFromList(html, kind, date);
+    if(kind === 'JRA' && (!venues || !venues.length)){
+      // JRA一覧HTMLのDOMが変わった場合でも、全場表示で操作不能を避ける。
+      venues = [];
+    }
+    if(kind === 'NAR' && (!venues || !venues.length)){
+      venues = [];
+    }
+    if(seq !== __activeVenueSeqV5188) return;
+    if(Array.isArray(venues) && venues.length){
+      renderVenueOptions(venues);
+      if(status) status.innerHTML = `<div class="url-status ok">✅ ${escapeHtml(date)}（${__v5188_weekday(date)}）の開催場を表示しました：${venues.map(v => escapeHtml(v[1]) + '（' + v[2] + 'R）').join('、')}</div>`;
+    }else{
+      renderVenueOptions(__v5203_masterVenues(kind).map(v => [v[0], v[1], 0]));
+      if(status) status.innerHTML = `<div class="url-status ok">✅ 開催場リストを表示しました。開催場を選んで「レース一覧」を押してください。</div>`;
+    }
+  }catch(e){
+    if(seq !== __activeVenueSeqV5188) return;
+    renderVenueOptions(__v5203_masterVenues(kind).map(v => [v[0], v[1], 0]));
+    if(status) status.innerHTML = `<div class="url-status err">⚠️ 開催場の自動絞り込みに失敗。全開催場を表示しています：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function onRaceDateKindChanged(){
+  __raceListSeqV5188++;
+  __activeVenueSeqV5188++;
+  currentRaceId = '';
+  currentRaceName = '';
+  __selectedRaceMetaV5188 = null;
+  const raceUrl = document.getElementById('raceUrl');
+  if(raceUrl) raceUrl.value = '';
+  const raceSelect = document.getElementById('raceSelect');
+  if(raceSelect) raceSelect.innerHTML = '<option value="">開催場を選んでレース一覧を取得</option>';
+  const box = document.getElementById('raceTitleBox');
+  if(box){ box.style.display='none'; box.textContent=''; }
+  horses = [];
+  lastRecs = [];
+  lastTickets = [];
+  renderHorseRows();
+  renderVenueOptions(__v5203_masterVenues(document.getElementById('pickKind')?.value || 'JRA').map(v => [v[0], v[1], 0]));
+  await loadActiveVenuesForDate();
+}
+
+function initCalendarPicker(){
+  const d = document.getElementById('pickDate');
+  if(d && !d.value) d.value = todayYmd();
+  const kindEl = document.getElementById('pickKind');
+  if(kindEl) kindEl.value = settings.nar ? 'NAR' : 'JRA';
+
+  if(d && !d.dataset.v5203Bound){
+    d.dataset.v5203Bound = '1';
+    d.addEventListener('change', onRaceDateKindChanged);
+    d.addEventListener('input', () => {
+      clearTimeout(window.__v5203DateTimer);
+      window.__v5203DateTimer = setTimeout(onRaceDateKindChanged, 250);
+    });
+  }
+  if(kindEl && !kindEl.dataset.v5203Bound){
+    kindEl.dataset.v5203Bound = '1';
+    kindEl.addEventListener('change', onRaceDateKindChanged);
+  }
+  renderVenueOptions(__v5203_masterVenues(kindEl?.value || 'JRA').map(v => [v[0], v[1], 0]));
+  setTimeout(loadActiveVenuesForDate, 50);
 }
 
 // ─── 起動 ────────────────────────────────────────

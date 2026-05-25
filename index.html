@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.17.2 AutoSettle</title>
+<title>The競馬 EV分析 v5.17.3 AutoSettle</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -80,7 +80,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
 .settings-row label { font-size: 12px; }
 .settings-row input[type=number] { width: 80px; background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 4px 8px; font-size: 12px; text-align: right; }
 .settings-row input[type=checkbox] { width: 18px; height: 18px; }
-.tabs { display: flex; gap: 4px; margin-bottom: 12px; overflow-x: auto; }
+.tabs { display: flex; gap: 4px; margin-bottom: 12px; flex-wrap: wrap; }
 .tab-btn { padding: 7px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; background: var(--surface); color: var(--muted); white-space: nowrap; }
 .tab-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 .empty { color: var(--muted); text-align: center; padding: 20px; font-size: 12px; }
@@ -204,7 +204,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.17.2 AutoSettle</span>
+    <span class="ver">v5.17.3 AutoSettle</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -549,7 +549,7 @@ body{
 
 <script>
 // ============================================================
-// The競馬 EV分析 HTML版 v5.17.2 AutoSettle (統合・完全版)
+// The競馬 EV分析 HTML版 v5.17.3 AutoSettle (統合・完全版)
 // ============================================================
 
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
@@ -2172,8 +2172,8 @@ async function loadActiveVenuesForDate(){
   const status = document.getElementById('urlStatus');
   
   if(!settings.proxyUrl){
-    renderVenueOptions([]);
-    if(status) status.innerHTML = '<div class="url-status err">⚠️ プロキシURL未設定のため、開催場を自動取得できません</div>';
+    renderVenueOptions(null);
+    if(status) status.innerHTML = '<div class="url-status err">⚠️ プロキシURL未設定のため開催場を自動絞り込みできません。全場を表示しています</div>';
     return;
   }
 
@@ -2594,6 +2594,24 @@ async function fetchRace(){
     }
 
     horses = parseHorsesFromDoc(doc, rawUrl);
+
+    // オッズページからオッズ・人気を補完
+    const rid2 = (rawUrl.match(/race_id=(\d{10,14})/) || [])[1];
+    if(rid2){
+      try {
+        const isNar = rawUrl.includes('nar.netkeiba.com');
+        const oddsHost = isNar ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com';
+        const oddsUrl = `${oddsHost}/race/odds.html?race_id=${rid2}`;
+        const oddsReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(oddsUrl);
+        const oddsRes = await fetch(oddsReq, { cache:'no-store' });
+        if(oddsRes.ok){
+          const oddsHtml = await oddsRes.text();
+          const oddsDoc = parser.parseFromString(oddsHtml, 'text/html');
+          mergeOddsFromOddsDoc(oddsDoc);
+        }
+      } catch(e2){ console.warn('オッズ取得失敗:', e2); }
+    }
+
     renderHorseRows();
     
     saveCurrentRaceState(); 
@@ -2602,6 +2620,74 @@ async function fetchRace(){
     console.error(e);
   } finally {
     if(progress) progress.classList.remove('show');
+  }
+}
+
+function mergeOddsFromOddsDoc(doc){
+  // netkeiba オッズページの単勝オッズテーブルを解析
+  // 馬番→オッズ・人気のマップを作る
+  const map = new Map(); // num -> {odds, pop}
+  const rows = Array.from(doc.querySelectorAll('tr.HorseList, tr[class*="HorseList"], tbody tr, table tr'));
+  rows.forEach(tr => {
+    // 馬番セル
+    const numCell = cellByHeader(tr, /^馬番$/);
+    const num = firstNumberInCell(numCell, false);
+    if(!num || num < 1 || num > 18) return;
+    // オッズセル（単勝）
+    const oddsCell = cellByHeader(tr, /単勝|^オッズ$/);
+    let odds = 0;
+    if(oddsCell){
+      odds = firstNumberInCell(oddsCell, true);
+    }
+    // オッズが取れない場合、id/classに "Odds" を持つ要素から探す
+    if(!odds || odds < 1){
+      const oddsEl = tr.querySelector('[class*="Odds"],[id*="odds_"]');
+      if(oddsEl){
+        const t = toHalfNumberText(normCellText(oddsEl));
+        const m = t.match(/(\d{1,4}\.\d)/);
+        if(m) odds = Number(m[1]);
+      }
+    }
+    // 人気セル
+    const popCell = cellByHeader(tr, /^人気$/);
+    let pop = firstNumberInCell(popCell, false);
+    if(!pop || pop < 1 || pop > 18) pop = 0;
+
+    if(odds >= 1 || pop >= 1) map.set(num, { odds, pop });
+  });
+
+  // マップが空の場合、別セレクタで単勝オッズリストを探す（odds_list等）
+  if(!map.size){
+    doc.querySelectorAll('[id*="odds_list"] tr, .OddsList tr, table tr').forEach(tr => {
+      const tds = Array.from(tr.querySelectorAll('td'));
+      if(tds.length < 2) return;
+      const num = firstNumberInCell(tds[0], false);
+      if(!num || num < 1 || num > 18) return;
+      // 2列目以降からオッズを探す
+      for(let i=1; i<tds.length; i++){
+        const t = toHalfNumberText(normCellText(tds[i]));
+        const m = t.match(/^(\d{1,4}\.\d)$/);
+        if(m){
+          const odds = Number(m[1]);
+          if(odds >= 1) { map.set(num, { odds, pop: map.get(num)?.pop || 0 }); break; }
+        }
+      }
+    });
+  }
+
+  // horsesに反映
+  horses.forEach(h => {
+    const d = map.get(h.num);
+    if(!d) return;
+    if(d.odds >= 1) h.odds = d.odds;
+    if(d.pop >= 1) h.pop = d.pop;
+  });
+
+  // 人気が全部0の場合、オッズ順で人気を付番
+  const hasPop = horses.some(h => h.pop >= 1);
+  if(!hasPop){
+    const sorted = [...horses].filter(h => h.odds >= 1).sort((a,b) => a.odds - b.odds);
+    sorted.forEach((h, i) => { h.pop = i + 1; });
   }
 }
 

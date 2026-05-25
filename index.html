@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.20.2 Odds Popularity Fixed</title>
+<title>The競馬 EV分析 v5.20.8 Odds Popularity Fixed</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.20.2</span>
+    <span class="ver">v5.20.8</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2528,7 +2528,7 @@ function initCalendarPicker(){
 
 
 /* ============================================================
-   v5.20.2 Odds Popularity Fixed
+   v5.20.8 Odds Popularity Fixed
    ネット上のテキストデータ優先：race_list本文テキスト＋リンクhrefを同時参照。
    目的：カレンダーの日付を変えた時、前回race_idを絶対に流用せず、
          選択日・開催場・R番号・レース名をテキストから再構築する。
@@ -2801,6 +2801,63 @@ async function finalFilterRacesForSelection(races, kind, date, venueCode){
   }
   // JRAはrace_idにMMDDが無いので、ここでも出馬表ページ日付で最終防壁を掛ける。
   return await __v5198_enrichJraRacesByShutuba(dedupeRacesByRaceIdAndNo(list), date);
+}
+
+
+
+/* ============================================================
+   v5.20.8 Safari固定：開催場プルダウンは「開催場名だけ」を全件表示
+   - JRA/NAR切替時にネット取得で絞り込まない
+   - 「開催なし」を表示しない
+   - Safariで壊れやすい innerHTML/appendChild 混在を避け、options.add で再生成
+   ============================================================ */
+function renderVenueOptions(listOverride){
+  const kind = document.getElementById('pickKind')?.value || 'JRA';
+  const venueEl = document.getElementById('pickVenue');
+  if(!venueEl) return;
+
+  const master = Array.isArray(listOverride) && listOverride.length
+    ? listOverride
+    : (kind === 'NAR' ? NAR_VENUES : JRA_VENUES);
+
+  while(venueEl.options.length) venueEl.remove(0);
+
+  const first = new Option('開催場を選択', '');
+  venueEl.options.add(first);
+
+  master.forEach(v => {
+    const code = String(v[0] || '');
+    const name = String(v[1] || code);
+    if(!code || !name) return;
+    // 表示は「門別」「東京」など開催場だけ。R数・開催なし表記は出さない。
+    venueEl.options.add(new Option(name, code));
+  });
+
+  const setNar = document.getElementById('setNar');
+  if(setNar){
+    setNar.value = kind === 'NAR' ? '1' : '0';
+    settings.nar = kind === 'NAR';
+    localStorage.setItem('tk-html-settings', JSON.stringify(settings));
+  }
+}
+
+async function loadActiveVenuesForDate(){
+  // ユーザー指定：開催場だけを全て選択可能にする。
+  // ここではネット取得で開催場を絞り込まない。レース一覧ボタン押下後に選択場のレースだけ取得する。
+  const kind = document.getElementById('pickKind')?.value || 'JRA';
+  const date = document.getElementById('pickDate')?.value || todayYmd();
+  renderVenueOptions(kind === 'NAR' ? NAR_VENUES : JRA_VENUES);
+  resetRaceState(`${date} の${kind === 'NAR' ? '地方' : 'JRA'}開催場を全て表示しました。開催場を選んで「レース一覧」を押してください。`);
+}
+
+async function onRaceDateKindChanged(){
+  try{ __raceListSeqV5188++; }catch(e){}
+  try{ __activeVenueSeqV5188++; }catch(e){}
+  horses = [];
+  lastRecs = [];
+  lastTickets = [];
+  renderHorseRows();
+  await loadActiveVenuesForDate();
 }
 
 // ─── 起動 ────────────────────────────────────────

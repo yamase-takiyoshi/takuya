@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.19.1 Date Fix</title>
+<title>The競馬 EV分析 v5.19.2 Date Fix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.19.1</span>
+    <span class="ver">v5.19.2</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2370,17 +2370,35 @@ function parseJraKaisaiFromListText(html, venueCode){
   const escVenue = venue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const patterns = [
     new RegExp(`(\\d{1,2})回\\s*${escVenue}\\s*(\\d{1,2})日(?:目)?`),
-    new RegExp(`${escVenue}[^0-9０-９]{0,12}(\\d{1,2})回[^0-9０-９]{0,12}(\\d{1,2})日(?:目)?`)
+    new RegExp(`${escVenue}[^0-9０-９]{0,12}(\\d{1,2})回[^0-9０-９]{0,12}(\\d{1,2})日(?:目)?`),
+    // ページタイトル・見出し等の「第○回」「○日目」バリエーション
+    new RegExp(`第\\s*(\\d{1,2})\\s*回\\s*${escVenue}\\s*(\\d{1,2})\\s*日`),
+    // 開催場タブ・リンクテキストが「東京 2回8日」のようなスペース区切りの場合
+    new RegExp(`${escVenue}\\s+(\\d{1,2})\\s*回\\s*(\\d{1,2})\\s*日`),
   ];
   for(const re of patterns){
     const m = text.match(re);
     if(m){
-      // 2番目のパターンも「回」「日」の順で捕まえる。
       const kai = Number(m[1]);
       const day = Number(m[2]);
       if(kai >= 1 && kai <= 12 && day >= 1 && day <= 12) return {kai, day};
     }
   }
+
+  // テキストパターン全滅の場合：HTMLリンクの race_id から逆算する（最終手段）
+  // race_id = YYYY + 場コード2桁 + 開催回2桁 + 開催日2桁 + R2桁
+  const links = Array.from(doc.querySelectorAll('a[href*="race_id="]'));
+  for(const a of links){
+    const href = a.getAttribute('href') || a.href || '';
+    const m = href.match(/race_id=(\d{12})/);
+    if(!m) continue;
+    const id = m[1];
+    if(id.slice(4,6) !== venueCode) continue;
+    const kai = Number(id.slice(6,8));
+    const day = Number(id.slice(8,10));
+    if(kai >= 1 && kai <= 12 && day >= 1 && day <= 12) return {kai, day};
+  }
+
   return null;
 }
 
@@ -2595,8 +2613,29 @@ async function getReliableJraRacesFromList(html, date, venueCode){
   // 直接リンクが前日・別日だった場合は、「○回東京○日目」から仮生成した上で
   // day±2を実ページ照合して正しい開催日へ補正する。
   const kdRaw = parseJraKaisaiFromListText(html, venueCode);
-  const kdFixed = await fixJraKaisaiByProbe(date, venueCode, kdRaw);
-  return buildJraRacesFromFixedKaisai(html, date, venueCode, kdFixed);
+  if(kdRaw){
+    const kdFixed = await fixJraKaisaiByProbe(date, venueCode, kdRaw);
+    const built = buildJraRacesFromFixedKaisai(html, date, venueCode, kdFixed);
+    if(built.length) return built;
+  }
+  // parseJraKaisaiFromListText が null の場合：一覧HTML内の任意race_idから回・日を推測してプローブ
+  const anyId2 = (() => {
+    const parser2 = new DOMParser();
+    const doc2 = parser2.parseFromString(html, 'text/html');
+    for(const a of doc2.querySelectorAll('a[href*="race_id="]')){
+      const href2 = a.getAttribute('href') || '';
+      const m2 = href2.match(/race_id=(\d{12})/);
+      if(m2 && m2[1].slice(4,6) === venueCode) return m2[1];
+    }
+    return null;
+  })();
+  if(anyId2){
+    const kdGuess2 = { kai: Number(anyId2.slice(6,8)), day: Number(anyId2.slice(8,10)) };
+    const kdProbed2 = await fixJraKaisaiByProbe(date, venueCode, kdGuess2);
+    const built3 = buildJraRacesFromFixedKaisai(html, date, venueCode, kdProbed2);
+    if(built3.length) return built3;
+  }
+  return [];
 }
 
 // ============================================================
@@ -3575,8 +3614,37 @@ async function getReliableJraRacesFromList(html, date, venueCode){
   }
 
   const kdRaw = parseJraKaisaiFromListText(html, venueCode);
-  const kdFixed = await fixJraKaisaiByProbe(date, venueCode, kdRaw);
-  return buildJraRacesFromFixedKaisai(html, date, venueCode, kdFixed).map(r=>({...r, source:'generated-from-text'}));
+  if(kdRaw){
+    const kdFixed = await fixJraKaisaiByProbe(date, venueCode, kdRaw);
+    const built = buildJraRacesFromFixedKaisai(html, date, venueCode, kdFixed);
+    if(built.length) return built.map(r=>({...r, source:'generated-from-text'}));
+  }
+
+  // 最終手段：kaisai_date パラメータを出馬表URLに付けて1R〜12Rを順に叩き、
+  // 実在するものだけ採用する（1Rが見つかれば以降は同じ開催日グループで一括生成）。
+  // これにより「○回○日目」テキストが取れない場合でも復旧できる。
+  const p = ymdParts(date);
+  // まず一覧HTMLに含まれる任意のrace_idから回・日を推測してプローブ範囲を絞る
+  const anyId = (() => {
+    const parser2 = new DOMParser();
+    const doc2 = parser2.parseFromString(html, 'text/html');
+    for(const a of doc2.querySelectorAll('a[href*="race_id="]')){
+      const href = a.getAttribute('href') || '';
+      const m = href.match(/race_id=(\d{12})/);
+      if(m && m[1].slice(4,6) === venueCode) return m[1];
+    }
+    return null;
+  })();
+
+  if(anyId){
+    // anyIdと同じ kai・day グループで1Rをプローブ
+    const kdGuess = { kai: Number(anyId.slice(6,8)), day: Number(anyId.slice(8,10)) };
+    const kdProbed = await fixJraKaisaiByProbe(date, venueCode, kdGuess);
+    const built2 = buildJraRacesFromFixedKaisai(html, date, venueCode, kdProbed);
+    if(built2.length) return built2.map(r=>({...r, source:'probed-from-any-id'}));
+  }
+
+  return [];
 }
 async function loadRaceList(){
   const seq = ++__raceListSeqV5188;

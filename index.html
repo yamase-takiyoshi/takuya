@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.17.5 RaceIDLock</title>
+<title>The競馬 EV分析 v5.17.6 RaceIDStrict</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -207,7 +207,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.17.5 RaceIDLock</span>
+    <span class="ver">v5.17.6 RaceIDStrict</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1970,7 +1970,7 @@ function shutubaUrl(kind, raceId){
 }
 
 
-// v5.17.5 RaceIDLock: netkeibaのSP/PC/結果URL混在をrace_id基準で正規化する。
+// v5.17.6 RaceIDStrict: netkeibaのSP/PC/結果URL混在をrace_id基準で正規化する。
 // ここを入口にすることで「表示中のnetkeibaページ」と「アプリ側の取得レース」が別物になる事故を防ぐ。
 function normalizeNetkeibaRaceUrl(rawUrl, fallbackKind){
   const raw = String(rawUrl || '').trim();
@@ -2431,19 +2431,52 @@ function jraHtmlMatchesSelectedDate(html, date){
   const p = ymdParts(date);
   const mm = Number(p.mmdd.slice(0,2));
   const dd = Number(p.mmdd.slice(2,4));
+  const mm2 = String(mm).padStart(2,'0');
+  const dd2 = String(dd).padStart(2,'0');
+
+  // v5.17.6: JRAはrace_idにMMDDが無いので、ページ本文全体の「5/24」ではなく
+  // レースヘッダー周辺だけで日付を判定する。前日/翌日タブの混入を拾わないため。
+  let headerText = '';
+  try{
+    const doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
+    const selectors = [
+      '.RaceData01', '.RaceData02', '.RaceList_ItemTitle', '.RaceList_ItemHeader',
+      '[class*=RaceData]', '[class*=RaceName]', 'h1'
+    ];
+    headerText = selectors.map(sel => Array.from(doc.querySelectorAll(sel)).map(el => el.textContent || '').join(' ')).join(' ');
+    if(!headerText.trim()){
+      headerText = (doc.body ? doc.body.textContent : String(html || '')).slice(0, 5000);
+    }
+  }catch(e){
+    headerText = String(html || '').slice(0, 5000);
+  }
+
   const text = normalizeJapaneseSpaces(
-    String(html || '')
+    String(headerText || '')
       .replace(/<script[\s\S]*?<\/script>/gi, ' ')
       .replace(/<style[\s\S]*?<\/style>/gi, ' ')
       .replace(/<[^>]+>/g, ' ')
   );
   const patterns = [
+    `${p.yyyy}年${mm}月${dd}日`,
+    `${p.yyyy}/${mm2}/${dd2}`,
+    `${p.yyyy}-${mm2}-${dd2}`,
     `${mm}月${dd}日`,
-    `${String(mm).padStart(2,'0')}月${String(dd).padStart(2,'0')}日`,
+    `${mm2}月${dd2}日`,
     `${mm}/${dd}`,
-    `${String(mm).padStart(2,'0')}/${String(dd).padStart(2,'0')}`
+    `${mm2}/${dd2}`
   ];
   return patterns.some(x => text.includes(x));
+}
+
+async function verifyJraRaceAndTitleByShutuba(date, raceId){
+  const url = shutubaUrl('JRA', raceId);
+  const html = await fetchHtmlViaProxy(url);
+  if(!html.includes(String(raceId))) return { ok:false, title:'' };
+  if(!jraHtmlMatchesSelectedDate(html, date)) return { ok:false, title:'' };
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const title = parseRaceTitleFromDoc(doc) || `${Number(String(raceId).slice(-2))}R`;
+  return { ok:true, title };
 }
 
 async function fetchHtmlViaProxy(url){
@@ -2454,10 +2487,8 @@ async function fetchHtmlViaProxy(url){
 }
 
 async function verifyJraRaceDateByShutuba(date, raceId){
-  const url = shutubaUrl('JRA', raceId);
-  const html = await fetchHtmlViaProxy(url);
-  if(!html.includes(String(raceId))) return false;
-  return jraHtmlMatchesSelectedDate(html, date);
+  const v = await verifyJraRaceAndTitleByShutuba(date, raceId);
+  return !!v.ok;
 }
 
 async function fixJraKaisaiByProbe(date, venueCode, kd){
@@ -2592,16 +2623,14 @@ async function enrichJraRaceNamesFromShutuba(races, date){
   if(!list.length) return list;
   for(const r of list){
     try{
-      const html = await fetchHtmlViaProxy(shutubaUrl('JRA', r.raceId));
-      if(!html.includes(String(r.raceId))) continue;
-      if(!jraHtmlMatchesSelectedDate(html, date)) continue;
-      const doc = new DOMParser().parseFromString(html, 'text/html');
-      const title = parseRaceTitleFromDoc(doc);
-      if(title && !/俺プロ|払戻|オッズ|予想|結果|レース一覧/.test(title)){
-        r.raceName = title;
-      }
+      const v = await verifyJraRaceAndTitleByShutuba(date, r.raceId);
+      // v5.17.6: 一覧HTML由来のレース名は前日分が混ざるため信用しない。
+      // 出馬表本文で日付一致したものだけ正式名にする。失敗時は「11R」のように安全表示。
+      r.raceName = (v.ok && v.title && !/俺プロ|払戻|オッズ|予想|結果|レース一覧/.test(v.title))
+        ? v.title
+        : `${Number(String(r.raceId).slice(-2))}R`;
     }catch(e){
-      // 1R分の名称補正失敗で一覧全体は止めない
+      r.raceName = `${Number(String(r.raceId).slice(-2))}R`;
     }
   }
   return list;
@@ -2820,6 +2849,9 @@ async function fetchRace(){
     const html = await res.text();
     if(validation.raceId && !html.includes(validation.raceId)){
       throw new Error(`取得HTML内に選択race_id ${validation.raceId} がありません。別日・別場への遷移を検出したため中止しました。`);
+    }
+    if(validation.kind === 'JRA' && !jraHtmlMatchesSelectedDate(html, validation.date)){
+      throw new Error(`取得ページの日付が選択日 ${validation.date} と一致しません。前日/翌日race_id混入を検出したため中止しました。`);
     }
 
     const parser = new DOMParser();

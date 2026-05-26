@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.25.6 RaceDay Complete</title>
+<title>The競馬 EV分析 v5.25.7 RaceDay Complete</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -199,7 +199,7 @@ body {
 .sim-payout-ok { color: var(--green); font-weight: 800; } .sim-payout-est { color: var(--yellow); font-weight: 800; }
 @media(max-width:560px){ .sim-toolbar, .sim-finish-picker { grid-template-columns: 1fr; } }
 
-/* iPad Safari tap stability fix v5.25.6 */
+/* iPad Safari tap stability fix v5.25.7 */
 button, select, input, textarea, .tab-btn, .btn, .btn-sm, .mode-btn, .sim-cand-row, .del-btn {
   -webkit-tap-highlight-color: rgba(0,255,136,.18);
   touch-action: manipulation;
@@ -224,7 +224,7 @@ button, select, input, textarea, .tab-btn, .btn, .btn-sm, .mode-btn, .sim-cand-r
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.25.6</span>
+    <span class="ver">v5.25.7</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -566,7 +566,7 @@ function cleanRaceName(raw) {
 function fetchTextViaProxy(url) {
   return new Promise(function (resolve, reject) {
     var proxy = settings.proxyUrl.replace(/\/$/, '');
-    var cacheBust = url + (url.indexOf('?') >= 0 ? '&' : '?') + '_tk=' + Date.now();
+    var cacheBust = url + (url.indexOf('?') >= 0 ? '&' : '?') + '_tk=' + Date.now() + '_' + Math.floor(Math.random()*1000000);
     var target = proxy + '?url=' + encodeURIComponent(cacheBust);
     
     var xhr = new XMLHttpRequest();
@@ -1156,6 +1156,62 @@ function mergeOddsPopularityIntoHorses(map) {
   });
 }
 
+
+function sanitizeOddsPopularity() {
+  // 斤量(55,56,57等)がオッズ欄へ混入した場合は必ず消す。
+  var counts = {};
+  horses.forEach(function (h) {
+    var v = Number(h.odds || 0);
+    if (v >= 48 && v <= 62 && Math.abs(v - Math.round(v)) < 0.001) {
+      counts[String(v)] = (counts[String(v)] || 0) + 1;
+    }
+  });
+  horses.forEach(function (h) {
+    var v = Number(h.odds || 0);
+    if (v >= 48 && v <= 62 && Math.abs(v - Math.round(v)) < 0.001 && counts[String(v)] >= 2) {
+      h.odds = 0;
+    }
+  });
+
+  // 人気が馬番と同じ 1,2,3... で並んだだけなら、人気ではなく馬番誤認なので消す。
+  var same = 0, withPop = 0;
+  horses.forEach(function (h) {
+    if (Number(h.pop || 0) >= 1) {
+      withPop++;
+      if (Number(h.pop) === Number(h.num)) same++;
+    }
+  });
+  if (withPop >= 6 && same / withPop >= 0.7) {
+    horses.forEach(function (h) { h.pop = 0; });
+  }
+}
+
+function buildOddsUrls(raceId, kind) {
+  var host = (kind === 'NAR') ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com';
+  return [
+    host + '/odds/index.html?race_id=' + raceId + '&type=b1',
+    host + '/odds/index.html?race_id=' + raceId + '&rf=race_submenu',
+    host + '/odds/index.html?race_id=' + raceId,
+    host + '/odds/o1.html?race_id=' + raceId
+  ];
+}
+
+function fetchOddsPagesSequential(urls, parser, idx) {
+  idx = idx || 0;
+  if (!urls || idx >= urls.length) return Promise.resolve(false);
+  return fetchTextViaProxy(urls[idx]).then(function (oHtml) {
+    var oDoc = parser.parseFromString(oHtml, 'text/html');
+    mergeOddsPopularityIntoHorses(parseOddsPopularityMapFromDoc(oDoc));
+    sanitizeOddsPopularity();
+    var oddsCount = horses.filter(function (h) { return Number(h.odds || 0) > 1; }).length;
+    var popCount = horses.filter(function (h) { return Number(h.pop || 0) >= 1; }).length;
+    if (oddsCount >= Math.max(1, Math.floor(horses.length * 0.35)) || popCount >= Math.max(1, Math.floor(horses.length * 0.35))) return true;
+    return fetchOddsPagesSequential(urls, parser, idx + 1);
+  }).catch(function () {
+    return fetchOddsPagesSequential(urls, parser, idx + 1);
+  });
+}
+
 function parseHorsesFromDoc(doc) {
   var list = [];
   var seen = {};
@@ -1239,19 +1295,18 @@ function fetchRace() {
     // 出馬表内に既にある単勝オッズ・人気を先に反映
     mergeOddsPopularityIntoHorses(parseOddsPopularityMapFromDoc(doc));
 
-    // オッズページから単勝オッズ・人気を完全補完（iPad Safari対応）
-    var oddsUrl = (settings.nar ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com') + '/odds/index.html?race_id=' + currentRaceId;
-    return fetchTextViaProxy(oddsUrl).then(function (oHtml) {
-      var oDoc = parser.parseFromString(oHtml, 'text/html');
-      mergeOddsPopularityIntoHorses(parseOddsPopularityMapFromDoc(oDoc));
+    sanitizeOddsPopularity();
 
+    // オッズページから単勝オッズ・人気を完全補完（iPad Safari対応）
+    var oddsUrls = buildOddsUrls(currentRaceId, settings.nar ? 'NAR' : 'JRA');
+    return fetchOddsPagesSequential(oddsUrls, parser, 0).then(function () {
+      sanitizeOddsPopularity();
       renderHorseRows();
       var oddsCount = horses.filter(function (h) { return Number(h.odds || 0) > 1; }).length;
       var popCount = horses.filter(function (h) { return Number(h.pop || 0) >= 1; }).length;
-      setStatus(currentRaceName + ' ' + horses.length + '頭データ取得完了 / オッズ' + oddsCount + '頭 / 人気' + popCount + '頭', 'ok');
-    }).catch(function () {
-      renderHorseRows();
-      setStatus(currentRaceName + ' ' + horses.length + '頭データ取得完了（オッズページ補完は未取得）', 'ok');
+      var msg = currentRaceName + ' ' + horses.length + '頭データ取得完了 / オッズ' + oddsCount + '頭 / 人気' + popCount + '頭';
+      if (oddsCount === 0) msg += '（斤量誤認防止のため空欄）';
+      setStatus(msg, 'ok');
     });  }).catch(function (e) {
     setStatus('データ取得失敗: ' + e.message, 'err');
   }).finally(function () {

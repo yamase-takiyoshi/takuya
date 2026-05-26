@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.25.4 RaceDay Complete</title>
+<title>The競馬 EV分析 v5.25.5 RaceDay Complete</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -198,6 +198,23 @@ body {
 .sim-finish-picker .field { margin-bottom: 0; }
 .sim-payout-ok { color: var(--green); font-weight: 800; } .sim-payout-est { color: var(--yellow); font-weight: 800; }
 @media(max-width:560px){ .sim-toolbar, .sim-finish-picker { grid-template-columns: 1fr; } }
+
+/* iPad Safari tap stability fix v5.25.5 */
+button, select, input, textarea, .tab-btn, .btn, .btn-sm, .mode-btn, .sim-cand-row, .del-btn {
+  -webkit-tap-highlight-color: rgba(0,255,136,.18);
+  touch-action: manipulation;
+  pointer-events: auto;
+}
+.sim-hero, .sim-panel, .sim-score-card, .card, .sim-edit-row { position: relative; }
+.sim-hero > *, .card > *, .sim-edit-row > * { position: relative; z-index: 2; }
+.sim-hero:before { pointer-events: none !important; z-index: 0; }
+.sim-edit-row select, .sim-edit-row input, .sim-edit-row button { min-height: 34px; }
+@supports (-webkit-touch-callout: none) {
+  select, input, button { font-size: 16px; }
+  .sim-action-grid .btn-sm, .sim-toolbar .btn-sm { min-height: 44px; }
+  .sim-edit-row { grid-template-columns: 18px 1.2fr .9fr .8fr 34px; }
+}
+
 </style>
 </head>
 <body>
@@ -207,7 +224,7 @@ body {
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.25.4</span>
+    <span class="ver">v5.25.5</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1196,7 +1213,7 @@ function renderHorseRows() {
     inputs[1].onchange = function () { horses[i].name = this.value; };
     inputs[2].onchange = function () { horses[i].odds = Number(this.value); };
     inputs[3].onchange = function () { horses[i].pop = Number(this.value); };
-    row.querySelector('.del-btn').onclick = function () { horses.splice(i, 1); renderHorseRows(); };
+    bindTap(row.querySelector('.del-btn'), function () { horses.splice(i, 1); renderHorseRows(); });
     container.appendChild(row);
   });
 }
@@ -1374,7 +1391,7 @@ function renderSimEditRows() {
     selects.onchange = function () { simTickets[i].type = this.value; };
     inputs[0].onchange = function () { simTickets[i].nums = this.value.split('-').map(Number); };
     inputs[1].onchange = function () { simTickets[i].amount = Number(this.value); renderSimEditRows(); };
-    row.querySelector('.del-btn').onclick = function () { simTickets.splice(i, 1); renderSimEditRows(); };
+    bindTap(row.querySelector('.del-btn'), function () { simTickets.splice(i, 1); renderSimEditRows(); });
     
     container.appendChild(row);
   });
@@ -1496,47 +1513,52 @@ function setupEvents() {
     rs.onchange = function () { applySelectedRaceUrl(); };
   }
   
-  document.getElementById('loadRaceListBtn').onclick = function () { loadRaceList(); };
-  document.getElementById('applyUrlBtn').onclick = function () { applySelectedRaceUrl(); };
-  document.getElementById('fetchBtn').onclick = function () { fetchRace(); };
-  document.getElementById('addHorseRowBtn').onclick = function () { horses.push({ num: horses.length + 1, name: '', odds: 0, pop: 0, frame: 1 }); renderHorseRows(); };
-  document.getElementById('clearHorsesBtn').onclick = function () { horses = []; renderHorseRows(); };
-  document.getElementById('runPredictBtn').onclick = function () { runPredict(); };
+  bindTap(document.getElementById('loadRaceListBtn'), function () { loadRaceList(); });
+  bindTap(document.getElementById('applyUrlBtn'), function () { applySelectedRaceUrl(); });
+  bindTap(document.getElementById('fetchBtn'), function () { fetchRace(); });
+  bindTap(document.getElementById('addHorseRowBtn'), function () { horses.push({ num: horses.length + 1, name: '', odds: 0, pop: 0, frame: 1 }); renderHorseRows(); });
+  bindTap(document.getElementById('clearHorsesBtn'), function () { horses = []; renderHorseRows(); });
+  bindTap(document.getElementById('runPredictBtn'), function () { runPredict(); });
   
-  document.getElementById('recordProfitBtn').onclick = function () {
+  bindTap(document.getElementById('recordProfitBtn'), function () {
     var bet = Number(document.getElementById('profitBet').value || 0);
     var ret = Number(document.getElementById('profitReturn').value || 0);
     profitHistory.push({ bet: bet, ret: ret });
     localStorage.setItem('tk-profit-history', JSON.stringify(profitHistory));
     renderProfitChart();
-  };
-  document.getElementById('clearProfitHistoryBtn').onclick = function () { profitHistory = []; localStorage.removeItem('tk-profit-history'); renderProfitChart(); };
+  });
+  bindTap(document.getElementById('clearProfitHistoryBtn'), function () { profitHistory = []; localStorage.removeItem('tk-profit-history'); renderProfitChart(); });
   
-  document.getElementById('simLoadFromRecommendBtn').onclick = function () {
+  bindTap(document.getElementById('fillSimResultUrlBtn'), function () { fillSimResultUrl(); });
+  bindTap(document.getElementById('runSimulationFromResultBtn'), function () { runSimulationFromResult(); });
+  bindTap(document.getElementById('runManualSimulationBtn'), function () { var el = document.getElementById('manualFinishNums'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); });
+  bindTap(document.getElementById('simAutoAddCandidatesBtn'), function () { autoAddSimCandidates(); });
+  bindTap(document.getElementById('runAutoSimulationBtn'), function () { runAutoSimulation(); });
+  bindTap(document.getElementById('simLoadFromRecommendBtn'), function () {
     simTickets = lastTickets.map(function (t) { return Object.assign({}, t, { nums: [].concat(t.nums) }); });
     renderSimEditRows();
-  };
-  document.getElementById('simAddBlankRowBtn').onclick = function () {
+  });
+  bindTap(document.getElementById('simAddBlankRowBtn'), function () {
     simTickets.push({ type: '単勝', nums: [1], amount: settings.unit, odds: 2.0, ev: 1.0 });
     renderSimEditRows();
-  };
-  document.getElementById('simApplyBulkAmountBtn').onclick = function () {
+  });
+  bindTap(document.getElementById('simApplyBulkAmountBtn'), function () {
     var amt = Number(document.getElementById('simBulkAmount').value);
     simTickets.forEach(function (t) { t.amount = amt; });
     renderSimEditRows();
-  };
-  document.getElementById('runManualSimExecuteBtn').onclick = function () { runManualSimulation(); };
-  document.getElementById('simClearHistoryBtn').onclick = function () { simHistory = []; localStorage.removeItem('tk-sim-history'); renderSimProfitChart(); };
+  });
+  bindTap(document.getElementById('runManualSimExecuteBtn'), function () { runManualSimulation(); });
+  bindTap(document.getElementById('simClearHistoryBtn'), function () { simHistory = []; localStorage.removeItem('tk-sim-history'); renderSimProfitChart(); });
   
   // タブ遷移
   document.querySelectorAll('.tab-btn').forEach(function (btn) {
-    btn.onclick = function (e) {
+    bindTap(btn, function (e) {
       e.preventDefault();
       document.querySelectorAll('.tab-btn').forEach(function (b) { b.classList.remove('active'); });
       this.classList.add('active');
       document.querySelectorAll('[id^="tab-"]').forEach(function (p) { p.style.display = 'none'; });
       document.getElementById('tab-' + this.dataset.tab).style.display = 'block';
-    };
+    });
   });
   
   // モードボタン生成
@@ -1546,12 +1568,12 @@ function setupEvents() {
     var btn = document.createElement('button');
     btn.className = 'mode-btn' + (settings.mode === opt[0] ? ' active' : '');
     btn.textContent = opt[1];
-    btn.onclick = function () {
+    bindTap(btn, function () {
       settings.mode = opt[0];
       document.querySelectorAll('.mode-btn').forEach(function (b) { b.classList.remove('active'); });
       btn.classList.add('active');
       localStorage.setItem('tk-html-settings', JSON.stringify(settings));
-    };
+    });
     mg.appendChild(btn);
   });
 }

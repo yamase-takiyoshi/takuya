@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.20.5 Venue Direct RaceID Fixed</title>
+<title>The競馬 EV分析 v5.20.6 NAR Venue Fallback Fixed</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.20.5</span>
+    <span class="ver">v5.20.6</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -4393,7 +4393,7 @@ if(horses.length === 0){
    ============================================================ */
 (function(){
   'use strict';
-  const FIX_VER = 'v5.20.5-direct-raceid-final';
+  const FIX_VER = 'v5.20.6-nar-venue-fallback';
   let venueSeq = 0;
   let raceSeq = 0;
 
@@ -4512,10 +4512,10 @@ if(horses.length === 0){
     return Array.from(ids).sort((a,b)=>a.slice(4,10).localeCompare(b.slice(4,10)) || Number(a.slice(-2))-Number(b.slice(-2)));
   }
   function extractKaisaiVenuesLoose(html, kind, date){
-    if(kind !== 'NAR') return [];
     const p = ymd(date);
     const src = decodeLoose(html);
     const out = [];
+    // kaisai_id形式: yyyy+場コード2桁+mmdd (NARのURL埋め込み)
     const re = new RegExp(`${p.yyyy}(\\d{2})${p.mmdd}`, 'g');
     let m;
     while((m = re.exec(src))) out.push([m[1], venueNameLocal(kind, m[1])]);
@@ -4575,7 +4575,9 @@ if(horses.length === 0){
     if(!venues.length && kind === 'NAR'){
       const jobs = master('NAR').map(async ([code,name])=>{
         try{
-          const html = await fetchHtmlLocal(raceListUrlLocal('NAR', date, code), 6500);
+          const html = await fetchHtmlLocal(raceListUrlLocal('NAR', date, code), 9000);
+          // kaisai_idベースで場コードを直接確認
+          if(html.includes(`${ymd(date).yyyy}${code}${ymd(date).mmdd}`)) return [code,name];
           return venuesFromHtml(html, 'NAR', date).some(v=>v[0]===code) ? [code,name] : null;
         }catch(e){ return null; }
       });
@@ -4593,8 +4595,10 @@ if(horses.length === 0){
         renderVenues(kind, all, '開催場を手動選択');
         setStatus(`⚠️ ${esc(date)} JRA の自動絞り込みに失敗しました。空欄にせず全開催場を表示しました。開催場を選んで「レース一覧」を押してください。`, 'err');
       }else{
-        renderVenues(kind, [], '開催場を取得してください');
-        setStatus(`⚠️ ${esc(date)} ${esc(kind)} の開催場を取得できませんでした。プロキシ設定を確認してください。`, 'err');
+        // NAR も JRA と同様に全場を手動選択可能にする
+        const all = master('NAR').map(v=>[v[0],v[1]]);
+        renderVenues(kind, all, '開催場を手動選択');
+        setStatus(`⚠️ ${esc(date)} NAR の自動絞り込みに失敗しました。全開催場を表示しました。開催場を選んで「レース一覧」を押してください。`, 'err');
       }
     }
   };

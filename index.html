@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.17 Simulation Auto Settle</title>
+<title>The競馬 EV分析 v5.18.0 JRA RaceId Fix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.17 AutoSettle</span>
+    <span class="ver">v5.18.0 RaceIdFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2515,9 +2515,12 @@ function buildJraRacesFromFixedKaisai(html, date, venueCode, kd){
 function jraRaceDayKey(raceId){
   const id = String(raceId || '');
   // JRA race_id = YYYY + 場コード2桁 + 開催回2桁 + 開催日2桁 + R2桁
-  // 例: 202605020701 = 2026 / 東京(05) / 2回 / 7日目 / 1R
+  // 例: 202605021011 = 2026 / 東京(05) / 2回 / 10日目 / 11R
+  // 年+場+開催回+開催日までの10桁でグループ化する。
+  // 8桁だと「2回東京9日目」と「2回東京10日目」が同じグループになり、
+  // 5/24のオークスが5/23の欅S race_idへズレる原因になる。
   if(id.length < 10) return '';
-  return id.slice(0, 8); // 年+場+回+日で同一開催日のグループ化
+  return id.slice(0, 10);
 }
 
 async function filterJraDirectRacesBySelectedDate(direct, date){
@@ -2545,19 +2548,95 @@ async function filterJraDirectRacesBySelectedDate(direct, date){
   return [];
 }
 
+
+async function findJraKaisaiByFullProbe(date, venueCode, kdHint){
+  // JRA race_id はMMDDを持たないため、一覧HTML内のリンクだけで日付判定しない。
+  // 選択日と一致する「開催回・開催日」を出馬表本文の日付で確定する。
+  const p = ymdParts(date);
+  const kaiCandidates = [];
+  if(kdHint && kdHint.kai >= 1 && kdHint.kai <= 12) kaiCandidates.push(kdHint.kai);
+  for(let k=1; k<=12; k++) if(!kaiCandidates.includes(k)) kaiCandidates.push(k);
+
+  const dayHint = kdHint && kdHint.day ? Number(kdHint.day) : 0;
+  const dayCandidates = [];
+  if(dayHint >= 1 && dayHint <= 12){
+    for(const d of [dayHint, dayHint+1, dayHint-1, dayHint+2, dayHint-2, dayHint+3, dayHint-3]){
+      if(d >= 1 && d <= 12 && !dayCandidates.includes(d)) dayCandidates.push(d);
+    }
+  }
+  for(let d=1; d<=12; d++) if(!dayCandidates.includes(d)) dayCandidates.push(d);
+
+  for(const kai of kaiCandidates){
+    for(const day of dayCandidates){
+      const raceId = `${p.yyyy}${venueCode}${String(kai).padStart(2,'0')}${String(day).padStart(2,'0')}01`;
+      try{
+        if(await verifyJraRaceDateByShutuba(date, raceId)){
+          return { kai, day };
+        }
+      }catch(e){}
+    }
+  }
+  return null;
+}
+
+function extractJraRaceNamesFromActualListText(html, venueCode){
+  // 選択日の一覧本文から「R番号→レース名」をできるだけ安全に拾う。
+  // race_idが前日へズレていても、本文の見出し名を優先して使う。
+  const base = extractJraRaceNamesFromList(html, venueCode);
+  const text = normalizeJapaneseSpaces(String(html || '').replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' '));
+  const ng = /オッズ|予想|結果|払戻|映像|掲示板|俺プロ|お気に入り|ログイン|広告|PR|データ分析/;
+  for(let r=1; r<=12; r++){
+    if(base.has(r) && !/^\d{1,2}R$/.test(base.get(r))) continue;
+    const re = new RegExp(`${r}R\\s*([^0-9０-９]{2,40}?)(?:\\s*(?:芝|ダ|障|発走|[0-9０-９]{3,4}m|G[123]|L|OP|オープン|未勝利|新馬|勝|特別))`);
+    const m = text.match(re);
+    if(m){
+      let name = cleanRaceName(`${r}R ${m[1]}`, r)
+        .replace(/[\s　]+$/,'')
+        .trim();
+      if(name && !ng.test(name) && !/^\d{1,2}R$/.test(name)) base.set(r, name);
+    }
+  }
+  return base;
+}
+
+function buildJraRacesFromExactKaisai(html, date, venueCode, kd){
+  if(!kd) return [];
+  const p = ymdParts(date);
+  const names = extractJraRaceNamesFromActualListText(html, venueCode);
+  const races = [];
+  for(let r=1; r<=12; r++){
+    const raceId = `${p.yyyy}${venueCode}${String(kd.kai).padStart(2,'0')}${String(kd.day).padStart(2,'0')}${String(r).padStart(2,'0')}`;
+    races.push({
+      raceId,
+      raceNo:r,
+      venueCode,
+      raceName:names.get(r) || `${r}R`,
+      shutuba:shutubaUrl('JRA', raceId),
+      builtFromVerifiedKaisai:true
+    });
+  }
+  return races;
+}
+
 async function getReliableJraRacesFromList(html, date, venueCode){
   const direct = parseRaceIdsFromList(html, 'JRA', venueCode, date)
     .filter(r => r.shutuba.includes('https://race.netkeiba.com/') && raceIdVenueMatches('JRA', r.raceId, venueCode));
 
-  // JRAの一覧HTMLには同一場の「前日/翌日」リンクが混入することがある。
-  // race_idの開催日グループ単位で出馬表本文の日付を照合し、選択日と一致したグループだけを採用する。
+  // 最重要：JRA race_idにはMMDDが無い。
+  // 一覧HTMLに出ているrace_idをそのまま信用せず、出馬表本文の日付で
+  // 「選択日に対応する開催回・開催日」を先に確定してから12Rを再生成する。
+  const kdHint = parseJraKaisaiFromListText(html, venueCode) || (direct[0] ? jraRaceIdToKaisai(direct[0].raceId) : null);
+  const kdExact = await findJraKaisaiByFullProbe(date, venueCode, kdHint);
+  if(kdExact){
+    return buildJraRacesFromExactKaisai(html, date, venueCode, kdExact);
+  }
+
+  // プローブが全滅した場合だけ、直接リンクを日付検証して採用する。
   if(direct.length){
     const verified = await filterJraDirectRacesBySelectedDate(direct, date);
     if(verified.length) return verified;
   }
 
-  // 直接リンクが前日・別日だった場合は、「○回東京○日目」から仮生成した上で
-  // day±2を実ページ照合して正しい開催日へ補正する。
   const kdRaw = parseJraKaisaiFromListText(html, venueCode);
   const kdFixed = await fixJraKaisaiByProbe(date, venueCode, kdRaw);
   return buildJraRacesFromFixedKaisai(html, date, venueCode, kdFixed);
@@ -2616,7 +2695,17 @@ async function finalFilterRacesForSelection(races, kind, date, venueCode){
   });
 
   if(groups.size <= 1){
-    return dedupeRacesByRaceIdAndNo(list);
+    const only = Array.from(groups.values())[0] || [];
+    if(!only.length) return [];
+    const sorted = only.slice().sort((a,b) => Number(a.raceNo) - Number(b.raceNo));
+    const probe = sorted.find(r => Number(r.raceNo) === 1) || sorted[0];
+    try{
+      if(await verifyJraRaceDateByShutuba(date, probe.raceId)){
+        return dedupeRacesByRaceIdAndNo(sorted);
+      }
+    }catch(e){}
+    // 単一グループでも日付照合できない場合は、別日race_idの可能性が高いので返さない。
+    return [];
   }
 
   for(const group of groups.values()){
@@ -2701,7 +2790,7 @@ async function loadRaceList(){
     }).join('');
 
     applySelectedRaceUrl();
-    status.innerHTML = `<div class="url-status ok">✅ ${date} ${venueName(kind, venueCode)} ${races.length}レースを取得しました</div>`;
+    status.innerHTML = `<div class="url-status ok">✅ ${date} ${venueName(kind, venueCode)} ${races.length}レースを取得しました（race_id日付照合済み）</div>`;
 
   }catch(e){
     console.error(e);

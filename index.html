@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.19.5 ShutubaOddsFieldFix</title>
+<title>The競馬 EV分析 v5.17.1 AutoSettle</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -198,16 +198,6 @@ body{
 .sim-cand-row .ev-badge{font-size:11px;font-weight:700;margin-left:auto}
 .nums-sel-wrap{display:flex;gap:3px;flex-wrap:wrap}
 
-
-/* v5.17 シミュレーション強化 */
-.sim-toolbar{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:10px}
-.sim-toolbar .btn-sm{height:38px;background:rgba(0,255,136,.12);border-color:rgba(0,255,136,.28);color:#d9ffe8;font-weight:850}
-.sim-auto-box{margin-top:10px;padding:10px;border:1px solid rgba(0,255,136,.22);background:rgba(0,255,136,.07);border-radius:12px;font-size:12px;color:#c8ffe0;line-height:1.65}
-.sim-finish-picker{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:8px 0 10px}
-.sim-finish-picker .field{margin-bottom:0}
-.sim-payout-ok{color:var(--green);font-weight:800}.sim-payout-est{color:var(--yellow);font-weight:800}
-@media(max-width:560px){.sim-toolbar,.sim-finish-picker{grid-template-columns:1fr}}
-
 </style>
 </head>
 <body>
@@ -217,7 +207,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.19.5 ShutubaOddsFieldFix</span>
+    <span class="ver">v5.17.1 AutoSettle</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -358,7 +348,7 @@ body{
   <div id="tab-sim" style="display:none">
     <div class="sim-hero">
       <div class="sim-hero-title"><span class="sim-logo">♞</span><div>GREEN EDGE SIMULATOR<div class="sim-led">PRODUCT MODE</div></div></div>
-      <div class="sim-hero-sub">推奨買い目を「購入→結果取得→払戻→回収率」まで一画面で精算します。旧版の緑アイコン系テーマを復活し、的中時はカード演出・回収率ゲージ・券種別ランキングで確認できます。</div>
+      <div class="sim-hero-sub">推奨買い目を「購入→結果取得→払戻→回収率」まで一画面で精算。EV計算後は買い目が自動セットされます。</div>
       <div class="field" style="margin-top:14px">
         <label>結果URL（自動入力可）</label>
         <input type="url" id="simResultUrl" placeholder="https://race.netkeiba.com/race/result.html?race_id=..." />
@@ -366,14 +356,21 @@ body{
       <div class="sim-action-grid">
         <button class="btn-sm" onclick="fillSimResultUrl()">🔗 結果URL自動入力</button>
         <button class="btn-sm" onclick="runSimulationFromResult()">⚡ 結果取得・本精算</button>
-        <button class="btn-sm" onclick="runManualSimulation()">✍️ 手入力で仮精算</button>
+        <button class="btn-sm" onclick="toggleManualInput()">✍️ 手入力で仮精算</button>
       </div>
-      <div class="sim-toolbar">
-        <button class="btn-sm" onclick="simAutoAddCandidates()">🤖 候補を自動追加</button>
-        <button class="btn-sm" onclick="runAutoSimulation()">🚀 自動追加＋結果取得＋精算</button>
-      </div>
-      <div class="sim-auto-box">
-        自動モードは、現在の推奨買い目が空ならEV候補から買い目を作成し、結果URLを自動生成して、払戻表から100円払戻を読み取り、投資額に応じて精算・履歴グラフへ記録します。
+      <!-- 手入力（折りたたみ） -->
+      <div id="manualInputArea" style="display:none;margin-top:10px;background:rgba(0,0,0,0.2);border-radius:10px;padding:10px">
+        <div class="pick-grid">
+          <div class="field">
+            <label>着順 馬番（例: 5-2-8）</label>
+            <input type="text" id="manualFinishNums" placeholder="1着-2着-3着">
+          </div>
+          <div class="field">
+            <label>枠番（枠連用・任意）</label>
+            <input type="text" id="manualFinishFrames" placeholder="1着枠-2着枠-3着枠">
+          </div>
+        </div>
+        <button class="btn btn-primary" style="margin-top:6px" onclick="runManualSimulation()">♞ 仮精算実行</button>
       </div>
       <div id="simStatus" style="margin-top:10px"></div>
     </div>
@@ -382,8 +379,10 @@ body{
     <div class="card" style="margin-top:12px" id="simEditCard">
       <div class="section-header">
         <h2>🎫 シミュレーション買い目</h2>
-        <div style="display:flex;gap:6px;align-items:center">
-          <button class="btn-sm" onclick="simLoadFromRecommend()">📥 推奨から読込</button>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <button class="btn-sm" onclick="simLoadFromRecommend()">📥 推奨読込</button>
+          <button class="btn-sm" onclick="simAddAllCands()" id="simAddAllBtn" style="display:none">📋 候補全追加</button>
+          <button class="btn-sm" onclick="simClearTickets()" style="color:var(--red);border-color:rgba(248,113,113,0.4)">🗑 全削除</button>
           <button class="btn-sm" onclick="simAddBlankRow()">＋ 追加</button>
         </div>
       </div>
@@ -409,29 +408,14 @@ body{
       <!-- 買い目行リスト -->
       <div id="simEditRows"></div>
       <!-- 候補から追加 -->
-      <div style="margin-top:10px">
-        <div style="font-size:12px;color:var(--muted);margin-bottom:4px">📋 候補から追加（全候補EV順）</div>
+      <div style="margin-top:10px" id="simCandSection">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+          <span style="font-size:12px;color:var(--muted)">📋 候補から追加（EV順・タップで追加）</span>
+        </div>
         <div id="simCandList" style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:4px;background:rgba(15,23,42,0.4)">
           <div class="empty" style="padding:12px">先にEV計算を実行してください</div>
         </div>
       </div>
-    </div>
-
-    <div class="card" style="margin-top:12px">
-      <h2>✍️ 手入力シミュレーション</h2>
-      <div class="pick-grid">
-        <div class="field">
-          <label>着順 馬番（例: 5-2-8）</label>
-          <input type="text" id="manualFinishNums" placeholder="1着-2着-3着">
-        </div>
-        <div class="field">
-          <label>着順 枠番（枠連用・任意）</label>
-          <input type="text" id="manualFinishFrames" placeholder="1着枠-2着枠-3着枠">
-        </div>
-      </div>
-      <div style="font-size:12px;color:var(--muted);margin-bottom:4px">または着順をドロップダウンで選択</div>
-      <div class="sim-finish-picker" id="manualFinishPicker"></div>
-      <button class="btn btn-primary" onclick="runManualSimulation()">♞ シミュレーション実行</button>
     </div>
 
     <div class="card" id="simSummaryCard" style="display:none">
@@ -720,6 +704,14 @@ function initUI(){
       btn.classList.add('active');
       document.querySelectorAll('[id^="tab-"]').forEach(t => t.style.display = 'none');
       document.getElementById('tab-' + btn.dataset.tab).style.display = '';
+      // シミュレーションタブを開いた時、買い目が空なら推奨を自動反映
+      if(btn.dataset.tab === 'sim'){
+        if(!simTickets.length && lastTickets.length){
+          simTickets = lastTickets.map(t => ({...t, nums:[...t.nums]}));
+          renderSimEditRows();
+        }
+        renderSimCandList();
+      }
     });
   });
 
@@ -764,7 +756,6 @@ function initUI(){
   renderSimCandList();
   loadSimHistory();
   renderSimProfitChart();
-  renderManualFinishPicker();
 }
 
 // ─── 馬データUI ─────────────────────────────────
@@ -791,7 +782,6 @@ function renderHorseRows(){
 function addHorseRow(){
   horses.push({ num: horses.length + 1, name: '', odds: 0, pop: 0, frame: 0 });
   renderHorseRows();
-  renderManualFinishPicker();
 }
 function removeHorse(i){ horses.splice(i, 1); renderHorseRows(); }
 function clearHorses(){ horses = []; renderHorseRows(); }
@@ -1368,7 +1358,35 @@ function simApplyBulkAmount(){
   renderSimEditRows();
 }
 
-function simAddBlankRow(){
+function simClearTickets(){
+  if(simTickets.length && !confirm('買い目をすべて削除しますか？')) return;
+  simTickets = [];
+  renderSimEditRows();
+}
+
+function simAddAllCands(){
+  if(!lastRecs.length){ alert('先にEV計算を実行してください。'); return; }
+  const existing = new Set(simTickets.map(t => t.type + ':' + t.nums.join('-')));
+  let added = 0;
+  lastRecs.forEach(r => {
+    const key = r.type + ':' + r.nums.join('-');
+    if(!existing.has(key)){
+      simTickets.push({type:r.type, nums:[...r.nums], amount:settings.unit||100, odds:r.odds, ev:r.ev, p:r.p});
+      existing.add(key);
+      added++;
+    }
+  });
+  renderSimEditRows();
+  if(added) alert(`${added}件追加しました。`);
+}
+
+function toggleManualInput(){
+  const el = document.getElementById('manualInputArea');
+  if(!el) return;
+  el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+
   const defaultNum = horses.length ? horses[0].num : 1;
   simTickets.push({type:'単勝', nums:[defaultNum], amount:settings.unit||100, odds:0, ev:0, p:0});
   renderSimEditRows();
@@ -1387,11 +1405,14 @@ function simLoadFromRecommend(){
 
 function renderSimCandList(){
   const box = document.getElementById('simCandList');
+  const addAllBtn = document.getElementById('simAddAllBtn');
   if(!box) return;
   if(!lastRecs.length){
     box.innerHTML = '<div class="empty" style="padding:12px">先にEV計算を実行してください</div>';
+    if(addAllBtn) addAllBtn.style.display = 'none';
     return;
   }
+  if(addAllBtn) addAllBtn.style.display = '';
   box.innerHTML = lastRecs.slice(0,40).map((r,i) => {
     const evColor = r.ev>=1.2?'var(--green)':r.ev>=1.0?'var(--yellow)':'var(--red)';
     return `<div class="sim-cand-row" onclick="simAddFromCand(${i})">
@@ -1409,54 +1430,6 @@ function simAddFromCand(i){
   if(!r) return;
   simTickets.push({type:r.type, nums:[...r.nums], amount:settings.unit||100, odds:r.odds, ev:r.ev, p:r.p});
   renderSimEditRows();
-}
-
-function simAutoAddCandidates(){
-  if(!lastRecs.length){
-    const valid = horses.filter(h => Number(h.num) > 0 && h.name);
-    if(valid.length >= 2){
-      const made = generateCandidates(valid);
-      lastRecs = made.recs.sort((a,b)=>b.ev-a.ev);
-      lastTickets = buildTickets(made.recs);
-      renderResult(valid, made.rated);
-    }
-  }
-  if(lastTickets.length){
-    simTickets = lastTickets.map(t => ({...t, nums:[...t.nums], amount:Number(t.amount||settings.unit||100)}));
-  }else if(lastRecs.length){
-    simTickets = lastRecs
-      .filter(r => Number(r.ev||0) >= 1.0)
-      .slice(0, settings.maxTickets || 5)
-      .map(r => ({type:r.type, nums:[...r.nums], amount:settings.unit||100, odds:r.odds, ev:r.ev, p:r.p}));
-  }
-  renderSimEditRows();
-  renderSimCandList();
-  const st = document.getElementById('simStatus');
-  const total = simTickets.reduce((s,t)=>s+Number(t.amount||0),0);
-  if(st) st.innerHTML = simTickets.length
-    ? `<div class="url-status ok">✅ 候補を${simTickets.length}点追加しました。合計 ${total.toLocaleString()}円</div>`
-    : '<div class="url-status err">⚠️ 追加できる候補がありません。先に馬データ取得またはEV計算を実行してください。</div>';
-}
-
-async function runAutoSimulation(){
-  if(!simTickets.length) simAutoAddCandidates();
-  fillSimResultUrl();
-  await runSimulationFromResult();
-}
-
-function renderManualFinishPicker(){
-  const box = document.getElementById('manualFinishPicker');
-  if(!box) return;
-  const opts = (horses.length ? horses : Array.from({length:18},(_,i)=>({num:i+1,name:''})))
-    .map(h => `<option value="${Number(h.num)}">${Number(h.num)}${h.name ? '.' + escapeHtml(String(h.name).slice(0,6)) : ''}</option>`).join('');
-  box.innerHTML = [1,2,3].map(i => `<div class="field"><label>${i}着</label><select id="manualFinish${i}" onchange="syncManualFinishInputs()"><option value="">未選択</option>${opts}</select></div>`).join('');
-}
-
-function syncManualFinishInputs(){
-  const vals = [1,2,3].map(i => Number(document.getElementById('manualFinish'+i)?.value || 0)).filter(n=>n>0);
-  if(vals.length) document.getElementById('manualFinishNums').value = vals.join('-');
-  const frames = vals.map(n => Number((horses.find(h=>Number(h.num)===n)||{}).frame||0)).filter(n=>n>0);
-  if(frames.length === vals.length) document.getElementById('manualFinishFrames').value = frames.join('-');
 }
 
 // simTicketsからlastTicketsを同期してシミュレーションを実行
@@ -1512,7 +1485,6 @@ function simClearHistory(){
   simHistory = [];
   saveSimHistory();
   renderSimProfitChart();
-  renderManualFinishPicker();
 }
 
 function renderSimProfitChart(){
@@ -1746,30 +1718,6 @@ function parsePayoutsFromResultDoc(doc){
       if(amount) payouts[`${type}:${comboKey(type, nums)}`] = amount;
     });
   });
-  // テーブル構造が崩れている場合の本文フォールバック（払戻エリア全体のテキストから券種別に抽出）
-  const allText = normSimDigits(doc.body?.innerText || doc.body?.textContent || '');
-  const blocks = allText.split(/(?=単勝|複勝|枠連|馬連|ワイド|馬単|3連複|3連単)/);
-  blocks.forEach(block => {
-    const type = types.find(t => block.startsWith(t));
-    if(!type) return;
-    const amounts = [...block.matchAll(/([0-9,]+)\s*円/g)].map(m=>Number(m[1].replace(/,/g,''))).filter(n=>n>0 && n%10===0);
-    if(!amounts.length) return;
-    let combos = [];
-    if(type === '単勝' || type === '複勝'){
-      const nums = [...block.matchAll(/(?:^|[^0-9])([1-9]|1[0-8])(?:[^0-9]|$)/g)].map(m=>Number(m[1]));
-      combos = [...new Set(nums)].slice(0, amounts.length).map(n=>[n]);
-    }else{
-      [...block.matchAll(/([1-9]|1[0-8])\s*-\s*([1-9]|1[0-8])(?:\s*-\s*([1-9]|1[0-8]))?/g)].forEach(m=>{
-        const a=[Number(m[1]),Number(m[2])];
-        if(m[3]) a.push(Number(m[3]));
-        combos.push(a);
-      });
-    }
-    combos.forEach((nums,i)=>{
-      const k = `${type}:${comboKey(type, nums)}`;
-      if(!payouts[k] && amounts[i]) payouts[k] = amounts[i];
-    });
-  });
   return payouts;
 }
 
@@ -1794,8 +1742,8 @@ function judgeTicketHit(ticket, finish){
 
 function payoutForTicket(ticket, payouts){
   const key = `${ticket.type}:${comboKey(ticket.type, ticket.nums)}`;
-  if(payouts && payouts[key]) return {amount:payouts[key], source:'real'};
-  return {amount:Math.max(0, Math.round((Number(ticket.odds || 0) * 100) / 10) * 10), source:'estimate'};
+  if(payouts && payouts[key]) return payouts[key];
+  return Math.max(0, Math.round((Number(ticket.odds || 0) * 100) / 10) * 10);
 }
 
 function renderSimulation(finish, payouts, sourceLabel){
@@ -1820,8 +1768,7 @@ function renderSimulation(finish, payouts, sourceLabel){
 
   activeTickets.forEach(t => {
     const hit = judgeTicketHit(t, finish);
-    const payInfo = hit ? payoutForTicket(t, payouts) : {amount:0, source:'none'};
-    const per100 = Number(payInfo.amount||0);
+    const per100 = hit ? payoutForTicket(t, payouts) : 0;
     const ret = hit ? Math.floor(Number(t.amount||0) / 100) * per100 : 0;
     if(hit) hitCount++;
     totalReturn += ret;
@@ -1836,7 +1783,7 @@ function renderSimulation(finish, payouts, sourceLabel){
       <span class="chip ${CHIP_CLASS[t.type]||''}">${t.type}</span>
       <div class="sim-ticket-main">
         <b>${t.nums.join('-')}</b>
-        <div class="sim-ticket-meta">購入 ${Number(t.amount||0).toLocaleString()}円 / 100円払戻 ${per100 ? per100.toLocaleString() + '円' : '-'} <span class="${payInfo.source==='real'?'sim-payout-ok':'sim-payout-est'}">${hit ? (payInfo.source==='real'?'実払戻':'推定') : ''}</span> / EV ${Number(t.ev||0).toFixed(2)}</div>
+        <div class="sim-ticket-meta">購入 ${Number(t.amount||0).toLocaleString()}円 / 100円払戻 ${per100 ? per100.toLocaleString() + '円' : '-'} / EV ${Number(t.ev||0).toFixed(2)}</div>
       </div>
       <div class="sim-return ${hit?'hit':''}">${hit ? '＋' : ''}${ret.toLocaleString()}円<div class="sim-ticket-meta">${hit ? '的中' : '不的中'} / ROI ${roiOne.toFixed(0)}%</div></div>
     </div>`;
@@ -1903,6 +1850,11 @@ function renderSimulation(finish, payouts, sourceLabel){
 
 async function runSimulationFromResult(){
   fillSimResultUrl();
+  // 買い目が空なら推奨を自動読込
+  if(!simTickets.length && lastTickets.length){
+    simTickets = lastTickets.map(t => ({...t, nums:[...t.nums]}));
+    renderSimEditRows();
+  }
   const st = document.getElementById('simStatus');
   const raw = document.getElementById('simResultUrl')?.value || '';
   if(!raw){ if(st) st.innerHTML = '<div class="url-status err">⚠️ 結果URLがありません。</div>'; return; }
@@ -1925,6 +1877,11 @@ async function runSimulationFromResult(){
 }
 
 function runManualSimulation(){
+  // 買い目が空なら推奨を自動読込
+  if(!simTickets.length && lastTickets.length){
+    simTickets = lastTickets.map(t => ({...t, nums:[...t.nums]}));
+    renderSimEditRows();
+  }
   const nums = normSimDigits(document.getElementById('manualFinishNums')?.value || '').split('-').map(Number).filter(n=>n>0);
   let frames = normSimDigits(document.getElementById('manualFinishFrames')?.value || '').split('-').map(Number).filter(n=>n>0);
   if(nums.length < 2){
@@ -2222,9 +2179,6 @@ function validateRaceUrlForCurrentSelection(rawUrl){
   if(!raceIdMatchesSelectedDate(kind, raceId, date)){
     return {ok:false, message:`日付が一致しません。選択日=${date} / race_id=${raceId}`};
   }
-  if(kind === 'JRA' && !jraRaceIdPlausibleForSelectedDate(date, raceId)){
-    return {ok:false, message:`JRA race_idの開催日目が選択日と一致しません。選択日=${date} / race_id=${raceId}`};
-  }
 
   return {ok:true, raceId, kind, date, venueCode};
 }
@@ -2233,7 +2187,7 @@ async function probeNarRaceById(date, venueCode, raceNo){
   const p = ymdParts(date);
   const raceId = `${p.yyyy}${venueCode}${p.mmdd}${String(raceNo).padStart(2,'0')}`;
   const url = shutubaUrl('NAR', raceId);
-  const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(url + '&_tk=' + Date.now());
+  const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(url);
   const res = await fetch(proxyReq);
   if(!res.ok) return null;
   const html = await res.text();
@@ -2445,112 +2399,36 @@ function jraRaceIdToKaisai(raceId){
 }
 
 function jraHtmlMatchesSelectedDate(html, date){
-  // JRA race_id にはMMDDが無い。
-  // 旧実装はページ全体の本文を見ていたため、日付タブ/カレンダーの「5月24日」を拾い、
-  // 5/23(9日目)のrace_idを5/24として誤採用していた。
-  // ここでは title / og:title / レース見出し / RaceData 周辺だけを照合対象にする。
   const p = ymdParts(date);
   const mm = Number(p.mmdd.slice(0,2));
   const dd = Number(p.mmdd.slice(2,4));
+  const text = normalizeJapaneseSpaces(
+    String(html || '')
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+  );
   const patterns = [
     `${mm}月${dd}日`,
     `${String(mm).padStart(2,'0')}月${String(dd).padStart(2,'0')}日`,
     `${mm}/${dd}`,
-    `${String(mm).padStart(2,'0')}/${String(dd).padStart(2,'0')}`,
-    `${p.yyyy}年${mm}月${dd}日`,
-    `${p.yyyy}/${String(mm).padStart(2,'0')}/${String(dd).padStart(2,'0')}`
+    `${String(mm).padStart(2,'0')}/${String(dd).padStart(2,'0')}`
   ];
-
-  try{
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(String(html || ''), 'text/html');
-    const parts = [];
-    const title = doc.querySelector('title')?.textContent || '';
-    const ogTitle = doc.querySelector('meta[property="og:title"], meta[name="twitter:title"]')?.getAttribute('content') || '';
-    const desc = doc.querySelector('meta[name="description"], meta[property="og:description"]')?.getAttribute('content') || '';
-    parts.push(title, ogTitle, desc);
-
-    const selectors = [
-      '.RaceName', '[class*="RaceName"]',
-      '.RaceData01', '.RaceData02', '[class*="RaceData"]',
-      '.RaceList_Item02', '.RaceList_Item01',
-      'h1'
-    ];
-    selectors.forEach(sel => {
-      doc.querySelectorAll(sel).forEach(el => parts.push(el.textContent || ''));
-    });
-
-    const strictText = normalizeJapaneseSpaces(parts.join(' '));
-    // 本文全体は日付タブ/カレンダーの隣接日を拾って誤判定するため使わない。
-    // RaceData/Title/Meta など、レース固有領域だけで一致した場合のみ true。
-    return patterns.some(x => strictText.includes(x));
-  }catch(e){
-    const text = normalizeJapaneseSpaces(String(html || '').replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' '));
-    return patterns.some(x => text.includes(x));
-  }
+  return patterns.some(x => text.includes(x));
 }
 
 async function fetchHtmlViaProxy(url){
-  const sep = String(url).includes('?') ? '&' : '?';
-  const targetUrl = String(url) + sep + '_tk=' + Date.now();
-  const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(targetUrl);
+  const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(url);
   const res = await fetch(proxyReq, { cache:'no-store' });
   if(!res.ok) throw new Error('HTTP ' + res.status);
   return await res.text();
 }
 
 async function verifyJraRaceDateByShutuba(date, raceId){
-  if(!jraRaceIdPlausibleForSelectedDate(date, raceId)) return false;
   const url = shutubaUrl('JRA', raceId);
   const html = await fetchHtmlViaProxy(url);
-  const id = String(raceId);
-
-  // netkeibaが別race_idへ内部遷移/差し替えした場合を検出する。
-  // canonical/og:urlに別IDが出ていれば、そのIDを正とみなして不一致を除外。
-  try{
-    const doc = new DOMParser().parseFromString(html, 'text/html');
-    const canonical = doc.querySelector('link[rel="canonical"]')?.getAttribute('href') || '';
-    const ogUrl = doc.querySelector('meta[property="og:url"]')?.getAttribute('content') || '';
-    const cm = String(canonical || ogUrl || '').match(/race_id=(\d{10,14})/);
-    if(cm && cm[1] !== id) return false;
-  }catch(e){}
-
-  if(!html.includes(id)) return false;
+  if(!html.includes(String(raceId))) return false;
   return jraHtmlMatchesSelectedDate(html, date);
-}
-
-async function probeJraRaceById(date, raceId){
-  if(!jraRaceIdPlausibleForSelectedDate(date, raceId)) return null;
-  const url = shutubaUrl('JRA', raceId);
-  const html = await fetchHtmlViaProxy(url);
-  if(!html.includes(String(raceId))) return null;
-  if(!jraHtmlMatchesSelectedDate(html, date)) return null;
-  const doc = new DOMParser().parseFromString(html, 'text/html');
-  const horsesFound = parseHorsesFromDoc(doc, url).length;
-  if(horsesFound < 2) return null;
-  const kd = jraRaceIdToKaisai(raceId);
-  return {
-    raceId: String(raceId),
-    raceNo: kd ? kd.raceNo : Number(String(raceId).slice(-2)),
-    venueCode: kd ? kd.venueCode : extractVenueCodeFromRaceId(raceId, 'JRA'),
-    raceName: parseRaceTitleFromDoc(doc) || `${Number(String(raceId).slice(-2))}R`,
-    shutuba: url,
-    horsesFound
-  };
-}
-
-async function buildVerifiedJraRacesByProbe(date, venueCode, kd){
-  if(!kd) return [];
-  const p = ymdParts(date);
-  const out = [];
-  for(let r=1; r<=12; r++){
-    const raceId = `${p.yyyy}${venueCode}${String(kd.kai).padStart(2,'0')}${String(kd.day).padStart(2,'0')}${String(r).padStart(2,'0')}`;
-    try{
-      const item = await probeJraRaceById(date, raceId);
-      if(item) out.push(item);
-    }catch(e){}
-  }
-  return out.sort((a,b) => a.raceNo - b.raceNo);
 }
 
 async function fixJraKaisaiByProbe(date, venueCode, kd){
@@ -2594,34 +2472,9 @@ function buildJraRacesFromFixedKaisai(html, date, venueCode, kd){
 function jraRaceDayKey(raceId){
   const id = String(raceId || '');
   // JRA race_id = YYYY + 場コード2桁 + 開催回2桁 + 開催日2桁 + R2桁
-  // 例: 202605021011 = 2026 / 東京(05) / 2回 / 10日目 / 11R
-  // 年+場+開催回+開催日までの10桁でグループ化する。
-  // 8桁だと「2回東京9日目」と「2回東京10日目」が同じグループになり、
-  // 5/24のオークスが5/23の欅S race_idへズレる原因になる。
+  // 例: 202605020701 = 2026 / 東京(05) / 2回 / 7日目 / 1R
   if(id.length < 10) return '';
-  return id.slice(0, 10);
-}
-
-function jraRaceIdPlausibleForSelectedDate(date, raceId){
-  // NAR方式に近づけるため、JRAもrace_idの「開催日目」を選択日カレンダーで最終ガードする。
-  // JRA race_idはMMDDを持たないが、通常の土日連続開催では土曜=奇数日目、日曜=偶数日目。
-  // これにより 2026/05/24(日) に 2026050209xx(5/23相当) を誤採用する事故を止める。
-  const kd = jraRaceIdToKaisai(raceId);
-  if(!kd) return false;
-  const dow = parseLocalDateYMD(date).getDay();
-  if(dow === 0) return kd.day % 2 === 0; // 日曜
-  if(dow === 6) return kd.day % 2 === 1; // 土曜
-  return true; // 祝日・平日開催は本文照合に任せる
-}
-
-function normalizeJraRaceIdByCalendar(date, raceId){
-  const kd = jraRaceIdToKaisai(raceId);
-  if(!kd) return String(raceId || '');
-  const dow = parseLocalDateYMD(date).getDay();
-  let day = kd.day;
-  if(dow === 0 && day % 2 === 1 && day < 12) day += 1;
-  if(dow === 6 && day % 2 === 0 && day > 1) day -= 1;
-  return `${kd.year}${kd.venueCode}${String(kd.kai).padStart(2,'0')}${String(day).padStart(2,'0')}${String(kd.raceNo).padStart(2,'0')}`;
+  return id.slice(0, 8); // 年+場+回+日で同一開催日のグループ化
 }
 
 async function filterJraDirectRacesBySelectedDate(direct, date){
@@ -2649,157 +2502,22 @@ async function filterJraDirectRacesBySelectedDate(direct, date){
   return [];
 }
 
-
-async function findJraKaisaiByFullProbe(date, venueCode, kdHint){
-  // JRA race_id はMMDDを持たないため、一覧HTML内のリンクだけで日付判定しない。
-  // 選択日と一致する「開催回・開催日」を出馬表本文の日付で確定する。
-  const p = ymdParts(date);
-  const kaiCandidates = [];
-  if(kdHint && kdHint.kai >= 1 && kdHint.kai <= 12) kaiCandidates.push(kdHint.kai);
-  for(let k=1; k<=12; k++) if(!kaiCandidates.includes(k)) kaiCandidates.push(k);
-
-  const dayHint = kdHint && kdHint.day ? Number(kdHint.day) : 0;
-  const dayCandidates = [];
-  if(dayHint >= 1 && dayHint <= 12){
-    for(const d of [dayHint, dayHint+1, dayHint-1, dayHint+2, dayHint-2, dayHint+3, dayHint-3]){
-      if(d >= 1 && d <= 12 && !dayCandidates.includes(d)) dayCandidates.push(d);
-    }
-  }
-  for(let d=1; d<=12; d++) if(!dayCandidates.includes(d)) dayCandidates.push(d);
-
-  for(const kai of kaiCandidates){
-    for(const day of dayCandidates){
-      const raceId = `${p.yyyy}${venueCode}${String(kai).padStart(2,'0')}${String(day).padStart(2,'0')}01`;
-      try{
-        if(await verifyJraRaceDateByShutuba(date, raceId)){
-          return { kai, day };
-        }
-      }catch(e){}
-    }
-  }
-  return null;
-}
-
-
-
-function correctJraKaisaiByCalendarDate(date, venueCode, kd){
-  // v5.18.2: netkeibaのJRA一覧HTMLは、日曜タブでも前日(土曜)のrace_id群を
-  // そのまま含むことがある。JRA race_id は YYYY + 場 + 開催回 + 開催日 + R なので、
-  // 同一開催・同一場の土日連続開催では「日曜 = 土曜 + 100」になる。
-  // 例: 2026/05/23 東京11R = 202605020911、2026/05/24 東京11R = 202605021011。
-  // 出馬表HTMLの日付タブを拾ってしまう誤検証を避けるため、カレンダー曜日で最終補正する。
-  if(!kd) return kd;
-  const d = parseLocalDateYMD(date);
-  const dow = d.getDay(); // 0=日, 6=土
-  const out = { kai: Number(kd.kai), day: Number(kd.day) };
-  if(!(out.kai >= 1 && out.kai <= 12 && out.day >= 1 && out.day <= 12)) return kd;
-
-  // 通常のJRA連続開催は土曜=奇数日、日曜=偶数日。
-  // 日曜なのに奇数開催日を掴んでいる場合は、前日race_idを掴んだと判断して +1。
-  if(dow === 0 && out.day % 2 === 1 && out.day < 12){
-    out.day += 1;
-    out.correctedByCalendar = true;
-  }
-  // 土曜なのに偶数開催日を掴んでいる場合は、翌日race_idを掴んだ可能性が高いため -1。
-  if(dow === 6 && out.day % 2 === 0 && out.day > 1){
-    out.day -= 1;
-    out.correctedByCalendar = true;
-  }
-  return out;
-}
-
-function extractJraRaceNamesFromActualListText(html, venueCode){
-  // 選択日の一覧本文から「R番号→レース名」をできるだけ安全に拾う。
-  // race_idが前日へズレていても、本文の見出し名を優先して使う。
-  const base = extractJraRaceNamesFromList(html, venueCode);
-  const text = normalizeJapaneseSpaces(String(html || '').replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' '));
-  const ng = /オッズ|予想|結果|払戻|映像|掲示板|俺プロ|お気に入り|ログイン|広告|PR|データ分析/;
-  for(let r=1; r<=12; r++){
-    if(base.has(r) && !/^\d{1,2}R$/.test(base.get(r))) continue;
-    const re = new RegExp(`${r}R\\s*([^0-9０-９]{2,40}?)(?:\\s*(?:芝|ダ|障|発走|[0-9０-９]{3,4}m|G[123]|L|OP|オープン|未勝利|新馬|勝|特別))`);
-    const m = text.match(re);
-    if(m){
-      let name = cleanRaceName(`${r}R ${m[1]}`, r)
-        .replace(/[\s　]+$/,'')
-        .trim();
-      if(name && !ng.test(name) && !/^\d{1,2}R$/.test(name)) base.set(r, name);
-    }
-  }
-  return base;
-}
-
-function buildJraRacesFromExactKaisai(html, date, venueCode, kd){
-  if(!kd) return [];
-  const p = ymdParts(date);
-  const names = extractJraRaceNamesFromActualListText(html, venueCode);
-  const races = [];
-  for(let r=1; r<=12; r++){
-    const raceId = `${p.yyyy}${venueCode}${String(kd.kai).padStart(2,'0')}${String(kd.day).padStart(2,'0')}${String(r).padStart(2,'0')}`;
-    races.push({
-      raceId,
-      raceNo:r,
-      venueCode,
-      raceName:names.get(r) || `${r}R`,
-      shutuba:shutubaUrl('JRA', raceId),
-      builtFromVerifiedKaisai:true
-    });
-  }
-  return races;
-}
-
 async function getReliableJraRacesFromList(html, date, venueCode){
-  // v5.19.2: JRAもNARの「race_idを直接確認する」方式へ寄せる。
-  // 一覧HTMLに出たrace_idを起点にするが、JRA race_idはMMDDを持たないため、
-  // 土日ズレは normalizeJraRaceIdByCalendar() で補正し、各Rの出馬表を実取得して存在確認する。
-  // 俺プロ/オッズ/予想リンク由来の名前は使わず、レース名は出馬表ページのRaceNameから取る。
   const direct = parseRaceIdsFromList(html, 'JRA', venueCode, date)
-    .filter(r => r && raceIdVenueMatches('JRA', r.raceId, venueCode));
+    .filter(r => r.shutuba.includes('https://race.netkeiba.com/') && raceIdVenueMatches('JRA', r.raceId, venueCode));
 
-  const kdSeeds = [];
-  const pushSeed = (kai, day) => {
-    kai = Number(kai); day = Number(day);
-    if(!(kai >= 1 && kai <= 12 && day >= 1 && day <= 12)) return;
-    const key = `${kai}-${day}`;
-    if(!kdSeeds.some(x => x.key === key)) kdSeeds.push({kai, day, key});
-  };
-
-  // 1) 一覧に出た実race_idをカレンダー補正して候補化。
-  direct.forEach(r => {
-    const fixedId = normalizeJraRaceIdByCalendar(date, r.raceId);
-    const kd = jraRaceIdToKaisai(fixedId);
-    if(kd) pushSeed(kd.kai, kd.day);
-  });
-
-  // 2) 本文の「2回東京10日目」等が取れれば候補化。
-  const kdText = parseJraKaisaiFromListText(html, venueCode);
-  if(kdText){
-    const corrected = correctJraKaisaiByCalendarDate(date, venueCode, kdText);
-    if(corrected) pushSeed(corrected.kai, corrected.day);
+  // JRAの一覧HTMLには同一場の「前日/翌日」リンクが混入することがある。
+  // race_idの開催日グループ単位で出馬表本文の日付を照合し、選択日と一致したグループだけを採用する。
+  if(direct.length){
+    const verified = await filterJraDirectRacesBySelectedDate(direct, date);
+    if(verified.length) return verified;
   }
 
-  // 3) 候補がなければ、その年・その場で総当たり。実出馬表で存在確認する。
-  if(!kdSeeds.length){
-    for(let kai=1; kai<=12; kai++) for(let day=1; day<=12; day++) pushSeed(kai, day);
-  }
-
-  // 選択曜日に合う候補を優先。
-  const dow = parseLocalDateYMD(date).getDay();
-  kdSeeds.sort((a,b) => {
-    const aw = (dow === 0 && a.day % 2 === 0) || (dow === 6 && a.day % 2 === 1) ? 0 : 1;
-    const bw = (dow === 0 && b.day % 2 === 0) || (dow === 6 && b.day % 2 === 1) ? 0 : 1;
-    return aw - bw || a.day - b.day || a.kai - b.kai;
-  });
-
-  for(const kd of kdSeeds){
-    const races = await buildVerifiedJraRacesByProbe(date, venueCode, kd);
-    if(races.length >= 2){
-      return dedupeRacesByRaceIdAndNo(races)
-        .filter(r => r.raceNo >= 1 && r.raceNo <= 12)
-        .sort((a,b) => Number(a.raceNo) - Number(b.raceNo));
-    }
-  }
-
-  return [];
+  // 直接リンクが前日・別日だった場合は、「○回東京○日目」から仮生成した上で
+  // day±2を実ページ照合して正しい開催日へ補正する。
+  const kdRaw = parseJraKaisaiFromListText(html, venueCode);
+  const kdFixed = await fixJraKaisaiByProbe(date, venueCode, kdRaw);
+  return buildJraRacesFromFixedKaisai(html, date, venueCode, kdFixed);
 }
 
 // ============================================================
@@ -2834,6 +2552,32 @@ function dedupeRacesByRaceIdAndNo(races){
   return out;
 }
 
+// ============================================================
+// v5.17.1: JRA土日レース名混同対策
+// netkeibaの一覧HTMLは、選択日と隣接日の同一場リンク・表示名が混ざることがある。
+// race_idは出馬表ページで検証できても、一覧HTML由来の raceName だけが前日分のまま残るため、
+// 最終的に各 race_id の出馬表本文からレース名を取り直す。
+// ============================================================
+async function enrichJraRaceNamesFromShutuba(races, date){
+  const list = Array.isArray(races) ? races.slice() : [];
+  if(!list.length) return list;
+  for(const r of list){
+    try{
+      const html = await fetchHtmlViaProxy(shutubaUrl('JRA', r.raceId));
+      if(!html.includes(String(r.raceId))) continue;
+      if(!jraHtmlMatchesSelectedDate(html, date)) continue;
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const title = parseRaceTitleFromDoc(doc);
+      if(title && !/俺プロ|払戻|オッズ|予想|結果|レース一覧/.test(title)){
+        r.raceName = title;
+      }
+    }catch(e){
+      // 1R分の名称補正失敗で一覧全体は止めない
+    }
+  }
+  return list;
+}
+
 async function finalFilterRacesForSelection(races, kind, date, venueCode){
   let list = Array.isArray(races) ? races.slice() : [];
 
@@ -2845,9 +2589,6 @@ async function finalFilterRacesForSelection(races, kind, date, venueCode){
     return dedupeRacesByRaceIdAndNo(list);
   }
 
-  // v5.19.2: JRAは本文照合済み＋カレンダー開催日目ガード済みのリストだけを通す。
-  list = list.filter(r => jraRaceIdPlausibleForSelectedDate(date, r.raceId));
-
   // JRA: race_idだけではMMDDが分からないため、開催日グループ単位で実ページ照合。
   const groups = new Map();
   list.forEach(r => {
@@ -2858,17 +2599,7 @@ async function finalFilterRacesForSelection(races, kind, date, venueCode){
   });
 
   if(groups.size <= 1){
-    const only = Array.from(groups.values())[0] || [];
-    if(!only.length) return [];
-    const sorted = only.slice().sort((a,b) => Number(a.raceNo) - Number(b.raceNo));
-    const probe = sorted.find(r => Number(r.raceNo) === 1) || sorted[0];
-    try{
-      if(await verifyJraRaceDateByShutuba(date, probe.raceId)){
-        return dedupeRacesByRaceIdAndNo(sorted);
-      }
-    }catch(e){}
-    // 単一グループでも日付照合できない場合は、別日race_idの可能性が高いので返さない。
-    return [];
+    return dedupeRacesByRaceIdAndNo(list);
   }
 
   for(const group of groups.values()){
@@ -2938,6 +2669,10 @@ async function loadRaceList(){
     // 同じプルダウンへ同時に入る事故を防止する。
     races = await finalFilterRacesForSelection(races, kind, date, venueCode);
 
+    // JRAは race_id は正しくても、一覧HTML由来のレース名だけ前日分が残ることがある。
+    // ここで出馬表本文から名称を再取得し、5/23・5/24が両方「欅S」になる事故を防ぐ。
+    if(kind === 'JRA') races = await enrichJraRaceNamesFromShutuba(races, date);
+
     if(!races.length){
       raceSelect.innerHTML = '<option value="">レースが見つかりません</option>';
       status.innerHTML = `<div class="url-status err">⚠️ ${date} の ${venueName(kind, venueCode)} はレースが見つかりません。別日・別場のrace_idは除外しました。</div>`;
@@ -2953,7 +2688,7 @@ async function loadRaceList(){
     }).join('');
 
     applySelectedRaceUrl();
-    status.innerHTML = `<div class="url-status ok">✅ ${date} ${venueName(kind, venueCode)} ${races.length}レースを取得しました（実race_id参照）</div>`;
+    status.innerHTML = `<div class="url-status ok">✅ ${date} ${venueName(kind, venueCode)} ${races.length}レースを取得しました</div>`;
 
   }catch(e){
     console.error(e);
@@ -3014,343 +2749,6 @@ function initCalendarPicker(){
 }
 
 
-
-function buildNetkeibaOddsUrls(kind, raceId){
-  if(!raceId) return [];
-  // v5.19.5: 記入欄取り違え防止。
-  // JRA/NARとも、まず race_id の出馬表(shutuba)を正として同じ馬行から
-  // 「馬番・単勝オッズ・人気」を読む。odds/index は取得不能時だけの保険。
-  if(kind === 'NAR'){
-    return [
-      `https://nar.netkeiba.com/race/shutuba.html?race_id=${raceId}&rf=race_submenu`,
-      `https://nar.netkeiba.com/odds/index.html?race_id=${raceId}`,
-      `https://nar.netkeiba.com/odds/index.html?race_id=${raceId}&type=b1`
-    ];
-  }
-  return [
-    `https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}&rf=race_submenu`,
-    `https://race.netkeiba.com/odds/index.html?race_id=${raceId}`,
-    `https://race.netkeiba.com/odds/index.html?race_id=${raceId}&type=b1`,
-    `https://race.netkeiba.com/odds/index.html?race_id=${raceId}&rf=shutuba_submenu`
-  ];
-}
-
-function readStrictHorseNoFromShutubaRow(tr){
-  const byHead = firstNumberInCell(cellByHeader(tr, /^馬番$/), false);
-  if(byHead >= 1 && byHead <= 18) return byHead;
-  const el = tr.querySelector('.Umaban, [class*="Umaban"], td[class*="HorseNum"], td[class*="Horse_Num"]');
-  const v = firstNumberInCell(el, false);
-  if(v >= 1 && v <= 18) return v;
-  const cells = Array.from(tr.querySelectorAll('td,th')).slice(0, 5);
-  for(const td of cells){
-    const t = toHalfNumberText(normCellText(td));
-    if(/^([1-9]|1[0-8])$/.test(t)) return Number(t);
-  }
-  return 0;
-}
-
-function readStrictOddsFromShutubaRow(tr){
-  // 単勝オッズ欄だけを見る。斤量・馬体重・人気欄は絶対に採用しない。
-  const targets = [
-    cellByHeader(tr, /^(単勝)?オッズ$|予想オッズ/),
-    ...Array.from(tr.querySelectorAll('td.Odds, td[class~="Odds"], td[class*="Tansho"], span.OddsVal, span[class*="OddsVal"], .RaceOdds, .Popular_Odds'))
-  ].filter(Boolean);
-  for(const el of targets){
-    const cls = String(el.className || '').toLowerCase();
-    const txt = toHalfNumberText(normCellText(el)).replace(/,/g, '');
-    if(/popular|ninki|rank|kinryo|weight|futan|jockey|trainer|stable|time|margin|body|馬体重|斤量|人気/.test(cls + ' ' + txt)) continue;
-    const m = txt.match(/^(\d{1,4}\.\d+)$/) || txt.match(/(\d{1,4}\.\d+)/);
-    if(!m) continue;
-    const v = sanitizeWinOddsValue(Number(m[1]), txt);
-    if(v >= 1) return v;
-  }
-  return 0;
-}
-
-function readStrictPopularityFromShutubaRow(tr, horseNo){
-  // 人気欄だけを見る。単勝オッズ小数や馬番は採用しない。
-  const targets = [
-    cellByHeader(tr, /^人気$|人気順/),
-    ...Array.from(tr.querySelectorAll('td.Popular, td[class*="Popular"], td[class*="Ninki"], span[class*="Popular"], span[class*="Ninki"]'))
-  ].filter(Boolean);
-  for(const el of targets){
-    const txt = toHalfNumberText(normCellText(el));
-    const m = txt.match(/^([1-9]|1[0-8])\s*人気?$/) || txt.match(/^([1-9]|1[0-8])$/);
-    if(!m) continue;
-    const v = Number(m[1]);
-    if(v >= 1 && v <= 18 && v !== Number(horseNo)) return v;
-  }
-  return 0;
-}
-
-function parseWinOddsPopularityFromShutubaDocStrict(doc){
-  const map = new Map();
-  const rows = Array.from(doc.querySelectorAll('tr.HorseList, tr[class*="HorseList"], tbody tr, table tr'));
-  rows.forEach(tr => {
-    if(!tr.querySelector('a[href*="/horse/"]')) return;
-    const num = readStrictHorseNoFromShutubaRow(tr);
-    if(!(num >= 1 && num <= 18)) return;
-    const odds = readStrictOddsFromShutubaRow(tr);
-    const pop = readStrictPopularityFromShutubaRow(tr, num);
-    if(odds >= 1 || pop >= 1){
-      const prev = map.get(num) || {};
-      map.set(num, {
-        odds: odds >= 1 ? Math.round(odds * 10) / 10 : Number(prev.odds || 0),
-        pop: pop >= 1 ? pop : Number(prev.pop || 0)
-      });
-    }
-  });
-  return map;
-}
-
-// ============================================================
-// v5.18.6 OddsFix4: race_id → odds/index.html を正とする単勝オッズ・人気取得
-// 出馬表の表セルは斤量/馬体重/人気列の連結で誤読しやすいため、
-// race_idで単勝オッズページを取得し、行セル単位で「馬番・単勝・人気」を再構成する。
-// 例: "724.412" のようにオッズ724.4＋人気12が結合した値も分割補正する。
-// ============================================================
-function parseOddsPopFromCellsStrict(cells, horseNo){
-  const clean = cells.map(x => toHalfNumberText(String(x || '')).replace(/,/g,'').trim());
-  let odds = 0;
-  let pop = 0;
-
-  // 人気は右側にあることが多い。馬番・枠番を避けて右から拾う。
-  for(let i=clean.length-1; i>=0; i--){
-    const t = clean[i];
-    const m = t.match(/^([1-9]|1[0-8])\s*人気$/) || t.match(/^([1-9]|1[0-8])$/);
-    if(!m) continue;
-    const v = Number(m[1]);
-    if(v !== Number(horseNo)){ pop = v; break; }
-  }
-
-  // まず完全な小数セルを優先。斤量・馬体重系の近辺は除外。
-  for(let i=0; i<clean.length; i++){
-    const t = clean[i];
-    if(!t || /kg|㎏|斤量|馬体重|増減|歳|牡|牝|セ|--/.test(t)) continue;
-    const m = t.match(/^(\d{1,4}\.\d+)$/);
-    if(!m) continue;
-    let v = Number(m[1]);
-    v = sanitizeWinOddsValue(v, t);
-    if(v >= 1 && v !== Number(horseNo)){
-      odds = v;
-      break;
-    }
-  }
-
-  // netkeiba/iPad経由でセル間スペースが潰れた "724.412" = 724.4 + 12人気 を補正。
-  if(!(odds >= 1)){
-    for(const t of clean){
-      if(!/^\d{2,5}\.\d{2,3}$/.test(t)) continue;
-      const m = t.match(/^(\d{1,4}\.\d)(\d{1,2})$/);
-      if(!m) continue;
-      const od = Number(m[1]);
-      const pp = Number(m[2]);
-      const safeOd = sanitizeWinOddsValue(od, t);
-      if(safeOd >= 1 && pp >= 1 && pp <= 18){
-        odds = safeOd;
-        if(!pop) pop = pp;
-        break;
-      }
-    }
-  }
-
-  // 最後に「オッズ 35.6 人気 5」形式のテキストから拾う。
-  if(!(odds >= 1)){
-    const joined = clean.join(' ');
-    const m = joined.match(/(?:単勝|オッズ|Odds)?\s*(\d{1,4}\.\d+)\s*(?:倍)?\s*(?:人気)?\s*([1-9]|1[0-8])?/i);
-    if(m){
-      const od = Number(m[1]);
-      const pp = m[2] ? Number(m[2]) : 0;
-      const safeOd = sanitizeWinOddsValue(od, m[1]);
-      if(safeOd >= 1){
-        odds = safeOd;
-        if(!pop && pp >= 1 && pp <= 18 && pp !== Number(horseNo)) pop = pp;
-      }
-    }
-  }
-
-  return { odds, pop };
-}
-
-// 過去レース用：result.html の単勝払戻テーブルから確定オッズ・人気を取得する。
-// payouts の 単勝:N → 払戻額÷100 = オッズ。人気は払戻額昇順で1位=1人気として推定する。
-function parseWinOddsFromResultDoc(doc){
-  const map = new Map();
-  // parsePayoutsFromResultDoc を流用して単勝払戻を取得
-  const payouts = parsePayoutsFromResultDoc(doc);
-  const tanEntries = Object.entries(payouts)
-    .filter(([k]) => k.startsWith('単勝:'))
-    .map(([k, amount]) => {
-      const num = Number(k.replace('単勝:', ''));
-      const odds = Math.round((amount / 100) * 10) / 10;
-      return { num, odds, amount };
-    })
-    .filter(e => e.num >= 1 && e.num <= 18 && e.odds >= 1);
-
-  if(!tanEntries.length) return map;
-
-  // 払戻額昇順 → 人気順（1位=1人気）
-  const sorted = [...tanEntries].sort((a, b) => a.amount - b.amount);
-  sorted.forEach((e, i) => {
-    map.set(e.num, { odds: e.odds, pop: i + 1 });
-  });
-  return map;
-}
-
-function parseWinOddsPopularityFromDoc(doc){
-  const map = new Map();
-
-  const put = (num, odds, pop) => {
-    num = Number(num); odds = Number(odds); pop = Number(pop || 0);
-    if(!(num >= 1 && num <= 18)) return;
-    odds = sanitizeWinOddsValue(odds, String(odds));
-    if(!(odds >= 1 && odds <= 9999)) return;
-    const prev = map.get(num) || {};
-    map.set(num, {
-      odds: Math.round(odds * 10) / 10,
-      pop: (pop >= 1 && pop <= 18) ? pop : (prev.pop || 0)
-    });
-  };
-
-  // Strategy 0: CSSセレクタ直撃（JRA/NAR単勝オッズページの標準テーブル構造）
-  const oddsTableSels = [
-    '#odds_tan_tableWrap tbody tr',
-    '.OddsTableWrap tbody tr',
-    '.Odds_Table tbody tr',
-    'table[id*="odds"] tbody tr',
-    'table[class*="Odds"] tbody tr',
-    'table[class*="odds"] tbody tr',
-  ];
-  for(const sel of oddsTableSels){
-    const rows0 = Array.from(doc.querySelectorAll(sel));
-    if(!rows0.length) continue;
-    rows0.forEach(tr => {
-      let num = 0;
-      const numEl = tr.querySelector('.Umaban, [class*="Umaban"], [class*="HorseNum"], td:first-child');
-      if(numEl) num = firstNumberInCell(numEl, false);
-      if(!(num >= 1 && num <= 18)) return;
-      let odds = 0;
-      const oddsSpan = tr.querySelector('span.OddsVal, span[class*="Odds"], td.Odds span, td[class*="Odds"] span');
-      if(oddsSpan){
-        const t = toHalfNumberText(normCellText(oddsSpan));
-        const m = t.match(/(\d{1,4}(?:\.\d+)?)/);
-        if(m) odds = Number(m[1]);
-      }
-      if(!(odds >= 1)){
-        const oddsTd = tr.querySelector('td.Odds, td[class*="Odds"], td[class*="odds"]');
-        if(oddsTd){
-          const t = toHalfNumberText(normCellText(oddsTd));
-          const m = t.match(/(\d{1,4}(?:\.\d+)?)/);
-          if(m) odds = Number(m[1]);
-        }
-      }
-      let pop = 0;
-      const popEl = tr.querySelector('td.Popular, td[class*="Popular"], td[class*="Ninki"], span[class*="Popular"]');
-      if(popEl){
-        const t = toHalfNumberText(normCellText(popEl));
-        const m = t.match(/(\d{1,2})/);
-        if(m) pop = Number(m[1]);
-      }
-      put(num, odds, pop);
-    });
-    if(map.size >= 2) return map;
-    map.clear();
-  }
-
-  // Strategy A: 単勝オッズ表・出馬表の行をセル単位で解析。
-  const rows = Array.from(doc.querySelectorAll('tr'));
-  rows.forEach(tr => {
-    const cells = Array.from(tr.querySelectorAll('td,th')).map(td => toHalfNumberText(normCellText(td)));
-    if(cells.length < 3) return;
-    const rowText = cells.join(' ');
-    if(/払戻|馬連|馬単|ワイド|3連|枠連|馬体重\(増減\)|ラップ/.test(rowText)) return;
-
-    let num = 0;
-    const umaban = tr.querySelector('.Umaban, [class*="Umaban"], [class*="HorseNum"], [class*="horse_num"]');
-    if(umaban) num = firstNumberInCell(umaban, false);
-    if(!(num >= 1 && num <= 18)){
-      // 左側4セルから馬番を取得。オッズページは先頭セルが馬番であることが多い。
-      for(const c of cells.slice(0,4)){
-        const m = String(c).trim().match(/^([1-9]|1[0-8])$/) || String(c).trim().match(/^([1-9]|1[0-8])\s*番$/);
-        if(m){ num = Number(m[1]); break; }
-      }
-    }
-    if(!(num >= 1 && num <= 18)) return;
-
-    const parsed = parseOddsPopFromCellsStrict(cells, num);
-    put(num, parsed.odds, parsed.pop);
-  });
-
-  // Strategy B: script内の断片データを保険で拾う。
-  // 厳密JSONでなくても、同一オブジェクト断片内の horse_num / odds / popularity を抽出する。
-  const scripts = Array.from(doc.querySelectorAll('script')).map(s => s.textContent || '').join('\n');
-  if(scripts){
-    const blocks = scripts.match(/\{[^{}]{0,900}(?:horse_num|umaban|馬番)[^{}]{0,900}\}/gi) || [];
-    blocks.forEach(b => {
-      const n = b.match(/(?:horse_num|umaban|馬番|horseNo|number)["'\s:＝=]+"?([1-9]|1[0-8])"?/i);
-      const o = b.match(/(?:odds|win_odds|tansho|単勝)["'\s:＝=]+"?(\d{1,4}\.\d+)"?/i);
-      const pp = b.match(/(?:popular|popularity|ninki|人気)["'\s:＝=]+"?([1-9]|1[0-8])"?/i);
-      if(n && o) put(Number(n[1]), Number(o[1]), pp ? Number(pp[1]) : 0);
-    });
-  }
-
-  return map;
-}
-
-async function fetchWinOddsPopularity(kind, raceId){
-  if(!settings.proxyUrl || !raceId) return new Map();
-  for(const url of buildNetkeibaOddsUrls(kind, raceId)){
-    try{
-      const html = await fetchHtmlViaProxy(url);
-      if(!html || html.length < 500) continue;
-      // NARは race_id がHTMLに直接含まれるので照合する。
-      // JRAは odds/index.html がJS動的レンダリングのため race_id が
-      // HTMLソースに含まれないことがある → 照合をスキップしてパースで判定。
-      if(kind === 'NAR' && !html.includes(raceId)) continue;
-      const doc = new DOMParser().parseFromString(html, 'text/html');
-      let map = /shutuba\.html/.test(url)
-        ? parseWinOddsPopularityFromShutubaDocStrict(doc)
-        : parseWinOddsPopularityFromDoc(doc);
-      if(map.size >= 2) return map;
-      // shutubaで人気だけ/オッズだけの行が一部欠けた場合は汎用parserで補完。ただし代入先はmerge側で固定。
-      if(/shutuba\.html/.test(url)){
-        const loose = parseWinOddsPopularityFromDoc(doc);
-        if(loose.size > map.size){
-          loose.forEach((v, k) => {
-            const p = map.get(k) || {};
-            map.set(k, {
-              odds: Number(p.odds || 0) >= 1 ? p.odds : Number(v.odds || 0),
-              pop: Number(p.pop || 0) >= 1 ? p.pop : Number(v.pop || 0)
-            });
-          });
-        }
-      }
-      if(map.size >= 2) return map;
-    }catch(e){
-      // 次のURLを試す
-    }
-  }
-  return new Map();
-}
-
-function mergeOddsPopularityIntoHorses(baseHorses, oddsMap){
-  if(!oddsMap || !oddsMap.size) return baseHorses;
-  return baseHorses.map(h => {
-    const o = oddsMap.get(Number(h.num));
-    if(!o) return h;
-    const safeOdds = sanitizeWinOddsValue(Number(o.odds || 0), String(o.odds || ''));
-    const safePop = Number(o.pop || 0);
-    return {
-      ...h,
-      // 記入欄固定: odds は単勝オッズ欄へ、pop は人気欄へ。
-      // 斤量っぽい 54/55/56 等は sanitizeWinOddsValue 側で 0 にする。
-      odds: (safeOdds >= 1) ? safeOdds : Number(h.odds || 0),
-      pop: (safePop >= 1 && safePop <= 18) ? safePop : Number(h.pop || 0)
-    };
-  });
-}
-
-
 // ─── netkeibaプロキシ取得 ────────────────────────
 async function fetchRace(){
   const rawUrl = document.getElementById('raceUrl').value.trim();
@@ -3371,13 +2769,9 @@ async function fetchRace(){
   const progress = document.getElementById('fetchProgress');
   progress.classList.add('show');
   status.innerHTML = '';
-  // 前回データやデモデータを残したまま失敗表示しない。実取得できた馬だけ表示する。
-  horses = [];
-  renderHorseRows();
 
   try {
-    const sepFetch = rawUrl.includes('?') ? '&' : '?';
-    const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(rawUrl + sepFetch + '_tk=' + Date.now());
+    const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(rawUrl);
     const res = await fetch(proxyReq, { cache:'no-store' });
     if(!res.ok) throw new Error('HTTP ' + res.status);
     const html = await res.text();
@@ -3402,48 +2796,9 @@ async function fetchRace(){
     if(horses.length < 2){
       throw new Error('出走馬を十分に取得できませんでした。race_idまたは開催情報を確認してください。');
     }
-
-    // 単勝オッズ・人気: race_id → shutuba.html を正とする。
-    // 同じ馬行の「単勝オッズ欄」「人気欄」だけを読む。
-    // 斤量・馬体重・馬番は単勝オッズ/人気へ代入しない。
-    const kind = document.getElementById('pickKind')?.value || (rawUrl.includes('nar.netkeiba') ? 'NAR' : 'JRA');
-
-    if(rid){
-      const oddsMap = await fetchWinOddsPopularity(kind, rid);
-      if(oddsMap.size >= 2){
-        horses = mergeOddsPopularityIntoHorses(horses, oddsMap);
-      }else{
-        // 保険①：出馬表内の値を試す。
-        const shutubaOddsMap = parseWinOddsPopularityFromDoc(doc);
-        if(shutubaOddsMap.size >= 2){
-          horses = mergeOddsPopularityIntoHorses(horses, shutubaOddsMap);
-        }
-        // 保険②：過去レースはodds/index.htmlがJS動的レンダリングのため空になる場合がある。
-        // result.html（確定結果ページ）の単勝払戻テーブルから確定オッズ・人気を取得する。
-        if(horses.filter(h=>Number(h.odds)>=1).length < 2){
-          try{
-            const resUrl = resultUrl(kind, rid);
-            const resHtml = await fetchHtmlViaProxy(resUrl);
-            if(resHtml && resHtml.length > 500){
-              const resDoc = new DOMParser().parseFromString(resHtml, 'text/html');
-              const resultOddsMap = parseWinOddsFromResultDoc(resDoc);
-              if(resultOddsMap.size >= 1){
-                horses = mergeOddsPopularityIntoHorses(horses, resultOddsMap);
-              }
-            }
-          }catch(e){
-            // result取得失敗は無視して続行
-          }
-        }
-      }
-    }
-
     renderHorseRows();
 
-    const oddsCount = horses.filter(h => Number(h.odds) >= 1).length;
-    const popCount = horses.filter(h => Number(h.pop) >= 1).length;
-    const oddsNote = oddsCount < horses.length ? ' / ※斤量誤読防止で未確定オッズは空欄' : '';
-    status.innerHTML = `<div class="url-status ok">✅ ${escapeHtml(currentRaceName || '')} ${horses.length}頭 取得しました / 単勝オッズ ${oddsCount}件 / 人気 ${popCount}件${oddsNote}</div>`;
+    status.innerHTML = `<div class="url-status ok">✅ ${escapeHtml(currentRaceName || '')} ${horses.length}頭 取得しました</div>`;
 
     // 取得後すぐにタブを馬データへ
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -3522,103 +2877,23 @@ function firstNumberInCell(el, allowDecimal=false){
   return m ? Number(m[1]) : 0;
 }
 
-
-// v5.18.6 OddsFix4: 斤量(50〜60kg)を単勝オッズとして表示しないための共通ガード。
-// 出馬表HTMLでは「斤量」列が td index / ヘッダーずれでオッズ列として拾われやすい。
-function isLikelyWeightOdds(value, rawText=''){
-  const n = Number(value);
-  if(!Number.isFinite(n)) return true;
-  const t = toHalfNumberText(String(rawText || '')).trim();
-  if(/kg|㎏|斤量|負担重量|futan|weight|kinryo/i.test(t)) return true;
-  // 54,55,56 などの整数はNAR出馬表ではほぼ斤量。単勝オッズは odds/index.html 側で小数として再取得する。
-  if(Number.isInteger(n) && n >= 50 && n <= 60) return true;
-  return false;
-}
-function sanitizeWinOddsValue(value, rawText=''){
-  const n = Number(value);
-  if(!(n >= 1 && n <= 9999)) return 0;
-  if(isLikelyWeightOdds(n, rawText)) return 0;
-  return Math.round(n * 10) / 10;
-}
-
-
-function cellTextsOfRow(tr){
-  return Array.from(tr.querySelectorAll('td,th')).map(td => toHalfNumberText(normCellText(td)));
-}
-
-function isPureIntText(t){
-  return /^\d{1,2}$/.test(String(t || '').trim());
-}
-
-function isPureDecimalText(t){
-  return /^\d{1,4}(?:\.\d+)?$/.test(String(t || '').trim());
-}
-
-function findPopularityIndexByRightScan(tr, horseNo){
-  const cells = cellTextsOfRow(tr);
-  // 右端側の「1〜18だけ」のセルを人気として採用。
-  // 馬番や枠番は左側にあるため、右から見ることで誤読を避ける。
-  for(let i=cells.length-1; i>=0; i--){
-    const tx = cells[i];
-    const m = tx.match(/^(\d{1,2})\s*人気$/) || tx.match(/^(\d{1,2})$/);
-    if(!m) continue;
-    const v = Number(m[1]);
-    if(v >= 1 && v <= 18 && v !== Number(horseNo)){
-      return { index:i, value:v };
-    }
-  }
-  return { index:-1, value:0 };
-}
-
-function findOddsNearPopularityByRightScan(tr, horseNo){
-  const cells = cellTextsOfRow(tr);
-  const popInfo = findPopularityIndexByRightScan(tr, horseNo);
-  const start = popInfo.index > 0 ? popInfo.index - 1 : cells.length - 1;
-
-  // 人気セルの左側から一番近い小数/数値を単勝オッズとして採用。
-  // 斤量55.0は通常かなり左側なので、右端優先にして誤読を抑える。
-  for(let i=start; i>=0 && i>=start-5; i--){
-    const tx = cells[i].replace(/,/g,'');
-    if(!tx || /kg|㎏|歳|牡|牝|セ|斤量|馬体重|増減|--/.test(tx)) continue;
-    // ここでは小数だけ採用。54/55/56 の整数は斤量誤検出の典型なので採用しない。
-    const m = tx.match(/^(\d{1,4}\.\d+)$/) || tx.match(/(\d{1,4}\.\d+)/);
-    if(!m) continue;
-    const v = sanitizeWinOddsValue(Number(m[1]), tx);
-    if(v >= 1 && v !== Number(horseNo)) return v;
-  }
-
-  // それでも無ければ、右側に現れる小数だけを拾う。
-  for(let i=cells.length-1; i>=Math.max(0, cells.length-8); i--){
-    const tx = cells[i].replace(/,/g,'');
-    const m = tx.match(/^(\d{1,4}\.\d+)$/);
-    if(!m) continue;
-    const v = Number(m[1]);
-    if(v >= 1 && v <= 9999) return v;
-  }
-  return 0;
-}
-
-
-function extractOddsFromRow(tr, horseNo){
+function extractOddsFromRow(tr){
   // 最優先: 表ヘッダー「オッズ」「予想オッズ」に対応するセル。
   // これによりJRAの斤量55.0を単勝オッズとして誤読しない。
   const byHead = cellByHeader(tr, /^(予想)?オッズ$|単勝オッズ|人気オッズ/);
   let v = firstNumberInCell(byHead, true);
-  v = sanitizeWinOddsValue(v, normCellText(byHead));
-  if(v >= 1) return v;
+  if(v >= 1 && v <= 9999) return v;
 
   const selectors = [
-    'td.Odds span', 'td.Odds', 'td[class~="Odds"]',
-    'span.OddsVal', 'span[class*="OddsVal"]',
-    '[class*="Tansho"]', '[class*="Odds"]',
+    'td.Odds', 'td[class~="Odds"]', '[class*="Tansho"]', '[class*="Odds"]',
     '[class*="odds"]', '.RaceOdds', '.Popular_Odds'
   ];
   for(const sel of selectors){
     for(const el of tr.querySelectorAll(sel)){
       const cls = String(el.className || '').toLowerCase();
       if(/kinryo|weight|futan|sex|age|jockey|trainer|stable|time|margin/.test(cls)) continue;
-      v = sanitizeWinOddsValue(firstNumberInCell(el, true), normCellText(el));
-      if(v >= 1) return v;
+      v = firstNumberInCell(el, true);
+      if(v >= 1 && v <= 9999) return v;
     }
   }
 
@@ -3630,14 +2905,11 @@ function extractOddsFromRow(tr, horseNo){
       const txt = toHalfNumberText(normCellText(cells[i]));
       const m = txt.match(/^(\d{1,4}\.\d+)$/) || txt.match(/(\d{1,4}\.\d+)/);
       if(m){
-        v = sanitizeWinOddsValue(Number(m[1]), txt);
-        if(v >= 1) return v;
+        v = Number(m[1]);
+        if(v >= 1 && v <= 9999) return v;
       }
     }
   }
-  v = findOddsNearPopularityByRightScan(tr, horseNo);
-  if(v >= 1 && v <= 9999) return v;
-
   return 0;
 }
 
@@ -3646,8 +2918,7 @@ function extractPopularityFromRow(tr, horseNo){
   let v = firstNumberInCell(byHead, false);
   if(v >= 1 && v <= 18) return v;
 
-  const selectors = ['td.Popular', 'td[class*="Popular"]', 'td[class*="Ninki"]', '.Rank',
-    'span[class*="Popular"]', 'span[class*="Ninki"]', 'td[class*="rank"]'];
+  const selectors = ['td.Popular', '[class*="Popular"]', '[class*="Ninki"]', '.Rank'];
   for(const sel of selectors){
     for(const el of tr.querySelectorAll(sel)){
       const tx = toHalfNumberText(normCellText(el));
@@ -3658,9 +2929,6 @@ function extractPopularityFromRow(tr, horseNo){
       }
     }
   }
-  const byRight = findPopularityIndexByRightScan(tr, horseNo);
-  if(byRight.value >= 1 && byRight.value <= 18) return byRight.value;
-
   return 0;
 }
 
@@ -3723,7 +2991,7 @@ function parseHorsesFromDoc(doc, url){
     }
     if(frame < 1 || frame > 8) frame = Math.ceil(num / 2);
 
-    const odds = extractOddsFromRow(tr, num);
+    const odds = extractOddsFromRow(tr);
     const pop = extractPopularityFromRow(tr, num);
 
     seen.add(num);
@@ -3837,7 +3105,20 @@ function corsHeaders(contentType) {
 initUI();
 initCalendarPicker();
 
-// デモデータは廃止。実取得に失敗した場合は空欄のままにし、サンプル馬を表示しない。
+// デモデータ
+if(horses.length === 0){
+  horses = [
+    {num:1,name:'サンプルA',odds:3.2,pop:1,frame:1},
+    {num:2,name:'サンプルB',odds:5.8,pop:2,frame:1},
+    {num:3,name:'サンプルC',odds:8.4,pop:3,frame:2},
+    {num:4,name:'サンプルD',odds:12.0,pop:4,frame:2},
+    {num:5,name:'サンプルE',odds:15.5,pop:5,frame:3},
+    {num:6,name:'サンプルF',odds:22.0,pop:6,frame:3},
+    {num:7,name:'サンプルG',odds:35.0,pop:7,frame:4},
+    {num:8,name:'サンプルH',odds:48.0,pop:8,frame:4},
+  ];
+  renderHorseRows();
+}
 </script>
 </body>
 </html>

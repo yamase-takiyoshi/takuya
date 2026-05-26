@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.19.6 AutoFetchOnSelect</title>
+<title>The競馬 EV分析 v5.19.7 OddsAllHorsesFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.19.6 AutoFetchOnSelect</span>
+    <span class="ver">v5.19.7 OddsAllHorsesFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -3092,8 +3092,19 @@ function parseWinOddsPopularityFromShutubaDocStrict(doc){
     if(!tr.querySelector('a[href*="/horse/"]')) return;
     const num = readStrictHorseNoFromShutubaRow(tr);
     if(!(num >= 1 && num <= 18)) return;
-    const odds = readStrictOddsFromShutubaRow(tr);
-    const pop = readStrictPopularityFromShutubaRow(tr, num);
+
+    let odds = readStrictOddsFromShutubaRow(tr);
+    let pop = readStrictPopularityFromShutubaRow(tr, num);
+
+    // セレクタがヒットしなかった場合は汎用セル解析でフォールバック
+    if(!(odds >= 1) || !(pop >= 1)){
+      const cells = Array.from(tr.querySelectorAll('td,th')).map(td => toHalfNumberText(normCellText(td)));
+      const parsed = parseOddsPopFromCellsStrict(cells, num);
+      if(!(odds >= 1) && parsed.odds >= 1) odds = parsed.odds;
+      if(!(pop >= 1) && parsed.pop >= 1) pop = parsed.pop;
+    }
+
+    // odds/pop どちらか1つでも取れたら登録（もう片方は後でmerge時に補完）
     if(odds >= 1 || pop >= 1){
       const prev = map.get(num) || {};
       map.set(num, {
@@ -3301,38 +3312,40 @@ function parseWinOddsPopularityFromDoc(doc){
 
 async function fetchWinOddsPopularity(kind, raceId){
   if(!settings.proxyUrl || !raceId) return new Map();
+  let bestMap = new Map();
   for(const url of buildNetkeibaOddsUrls(kind, raceId)){
     try{
       const html = await fetchHtmlViaProxy(url);
       if(!html || html.length < 500) continue;
-      // NARは race_id がHTMLに直接含まれるので照合する。
-      // JRAは odds/index.html がJS動的レンダリングのため race_id が
-      // HTMLソースに含まれないことがある → 照合をスキップしてパースで判定。
       if(kind === 'NAR' && !html.includes(raceId)) continue;
       const doc = new DOMParser().parseFromString(html, 'text/html');
+
+      // strict parser（shutuba）と汎用parserの両方を実行して良い方を採用
       let map = /shutuba\.html/.test(url)
         ? parseWinOddsPopularityFromShutubaDocStrict(doc)
         : parseWinOddsPopularityFromDoc(doc);
-      if(map.size >= 2) return map;
-      // shutubaで人気だけ/オッズだけの行が一部欠けた場合は汎用parserで補完。ただし代入先はmerge側で固定。
-      if(/shutuba\.html/.test(url)){
-        const loose = parseWinOddsPopularityFromDoc(doc);
-        if(loose.size > map.size){
-          loose.forEach((v, k) => {
-            const p = map.get(k) || {};
-            map.set(k, {
-              odds: Number(p.odds || 0) >= 1 ? p.odds : Number(v.odds || 0),
-              pop: Number(p.pop || 0) >= 1 ? p.pop : Number(v.pop || 0)
-            });
-          });
-        }
-      }
-      if(map.size >= 2) return map;
+
+      // 常に汎用parserで補完：strict側で取れなかったフィールドを埋める
+      const loose = parseWinOddsPopularityFromDoc(doc);
+      loose.forEach((v, k) => {
+        const p = map.get(k) || {};
+        map.set(k, {
+          odds: Number(p.odds || 0) >= 1 ? p.odds : Number(v.odds || 0),
+          pop: Number(p.pop || 0) >= 1 ? p.pop : Number(v.pop || 0)
+        });
+      });
+
+      // オッズが1件以上取れている頭数で比較し、より多い方を bestMap として保持
+      const countOdds = m => [...m.values()].filter(e => Number(e.odds) >= 1).length;
+      if(countOdds(map) > countOdds(bestMap)) bestMap = map;
+
+      // 全頭（2頭以上）のオッズが揃ったら即返す
+      if(countOdds(bestMap) >= 2 && bestMap.size >= horses.length && horses.length >= 2) return bestMap;
     }catch(e){
       // 次のURLを試す
     }
   }
-  return new Map();
+  return bestMap;
 }
 
 function mergeOddsPopularityIntoHorses(baseHorses, oddsMap){
@@ -3415,8 +3428,16 @@ async function fetchRace(auto=false){
       if(oddsMap.size >= 2){
         horses = mergeOddsPopularityIntoHorses(horses, oddsMap);
       }else{
-        // 保険①：出馬表内の値を試す。
-        const shutubaOddsMap = parseWinOddsPopularityFromDoc(doc);
+        // 保険①：出馬表内の値を試す（strict + 汎用 両方で補完）
+        const shutubaOddsMap = parseWinOddsPopularityFromShutubaDocStrict(doc);
+        const shutubaLoose = parseWinOddsPopularityFromDoc(doc);
+        shutubaLoose.forEach((v, k) => {
+          const p = shutubaOddsMap.get(k) || {};
+          shutubaOddsMap.set(k, {
+            odds: Number(p.odds || 0) >= 1 ? p.odds : Number(v.odds || 0),
+            pop: Number(p.pop || 0) >= 1 ? p.pop : Number(v.pop || 0)
+          });
+        });
         if(shutubaOddsMap.size >= 2){
           horses = mergeOddsPopularityIntoHorses(horses, shutubaOddsMap);
         }

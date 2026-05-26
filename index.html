@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.19.3 UnifiedOddsStrategy</title>
+<title>The競馬 EV分析 v5.19.4 PastOddsFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.19.3 UnifiedOddsStrategy</span>
+    <span class="ver">v5.19.4 PastOddsFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -3099,6 +3099,31 @@ function parseOddsPopFromCellsStrict(cells, horseNo){
   return { odds, pop };
 }
 
+// 過去レース用：result.html の単勝払戻テーブルから確定オッズ・人気を取得する。
+// payouts の 単勝:N → 払戻額÷100 = オッズ。人気は払戻額昇順で1位=1人気として推定する。
+function parseWinOddsFromResultDoc(doc){
+  const map = new Map();
+  // parsePayoutsFromResultDoc を流用して単勝払戻を取得
+  const payouts = parsePayoutsFromResultDoc(doc);
+  const tanEntries = Object.entries(payouts)
+    .filter(([k]) => k.startsWith('単勝:'))
+    .map(([k, amount]) => {
+      const num = Number(k.replace('単勝:', ''));
+      const odds = Math.round((amount / 100) * 10) / 10;
+      return { num, odds, amount };
+    })
+    .filter(e => e.num >= 1 && e.num <= 18 && e.odds >= 1);
+
+  if(!tanEntries.length) return map;
+
+  // 払戻額昇順 → 人気順（1位=1人気）
+  const sorted = [...tanEntries].sort((a, b) => a.amount - b.amount);
+  sorted.forEach((e, i) => {
+    map.set(e.num, { odds: e.odds, pop: i + 1 });
+  });
+  return map;
+}
+
 function parseWinOddsPopularityFromDoc(doc){
   const map = new Map();
 
@@ -3295,10 +3320,27 @@ async function fetchRace(){
       if(oddsMap.size >= 2){
         horses = mergeOddsPopularityIntoHorses(horses, oddsMap);
       }else{
-        // 保険：oddsページが空/未発売の場合のみ出馬表内の値を使う。
+        // 保険①：出馬表内の値を試す。
         const shutubaOddsMap = parseWinOddsPopularityFromDoc(doc);
         if(shutubaOddsMap.size >= 2){
           horses = mergeOddsPopularityIntoHorses(horses, shutubaOddsMap);
+        }
+        // 保険②：過去レースはodds/index.htmlがJS動的レンダリングのため空になる場合がある。
+        // result.html（確定結果ページ）の単勝払戻テーブルから確定オッズ・人気を取得する。
+        if(horses.filter(h=>Number(h.odds)>=1).length < 2){
+          try{
+            const resUrl = resultUrl(kind, rid);
+            const resHtml = await fetchHtmlViaProxy(resUrl);
+            if(resHtml && resHtml.length > 500){
+              const resDoc = new DOMParser().parseFromString(resHtml, 'text/html');
+              const resultOddsMap = parseWinOddsFromResultDoc(resDoc);
+              if(resultOddsMap.size >= 1){
+                horses = mergeOddsPopularityIntoHorses(horses, resultOddsMap);
+              }
+            }
+          }catch(e){
+            // result取得失敗は無視して続行
+          }
         }
       }
     }

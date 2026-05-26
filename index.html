@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.25.7 RaceDay Complete</title>
+<title>The競馬 EV分析 v5.25.8 RaceDay Complete</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -199,7 +199,7 @@ body {
 .sim-payout-ok { color: var(--green); font-weight: 800; } .sim-payout-est { color: var(--yellow); font-weight: 800; }
 @media(max-width:560px){ .sim-toolbar, .sim-finish-picker { grid-template-columns: 1fr; } }
 
-/* iPad Safari tap stability fix v5.25.7 */
+/* iPad Safari tap stability fix v5.25.8 */
 button, select, input, textarea, .tab-btn, .btn, .btn-sm, .mode-btn, .sim-cand-row, .del-btn {
   -webkit-tap-highlight-color: rgba(0,255,136,.18);
   touch-action: manipulation;
@@ -224,7 +224,7 @@ button, select, input, textarea, .tab-btn, .btn, .btn-sm, .mode-btn, .sim-cand-r
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.25.7</span>
+    <span class="ver">v5.25.8</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -551,6 +551,41 @@ function parseYmd(str) {
 }
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, function (m) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]); });
+}
+
+
+// iPad Safari / desktop 両対応の安全タップバインド
+// これが無いと setupEvents() の途中で停止し、上部タブ・取得ボタンが無反応になります。
+function bindTap(el, handler) {
+  if (!el || typeof handler !== 'function') return;
+  el._tkTapHandler = handler;
+  if (el.dataset && el.dataset.tkTapBound === '1') return;
+  if (el.dataset) el.dataset.tkTapBound = '1';
+
+  var lastTouch = 0;
+  function run(ev) {
+    if (!el._tkTapHandler) return;
+    try {
+      return el._tkTapHandler.call(el, ev || window.event);
+    } catch (e) {
+      console.error('[RaceDay] tap handler error:', e);
+      setStatus('操作処理エラー: ' + (e && e.message ? e.message : e), 'err');
+    }
+  }
+
+  el.addEventListener('touchend', function (ev) {
+    lastTouch = Date.now();
+    // select/input は標準操作を邪魔しない。button系だけ即時実行。
+    var tag = String(el.tagName || '').toLowerCase();
+    if (tag === 'select' || tag === 'input' || tag === 'textarea') return;
+    ev.preventDefault();
+    run(ev);
+  }, { passive: false });
+
+  el.addEventListener('click', function (ev) {
+    if (Date.now() - lastTouch < 450) return;
+    run(ev);
+  }, false);
 }
 function cleanRaceName(raw) {
   var div = document.createElement('div');
@@ -1275,8 +1310,12 @@ function fetchRace() {
   if (!url) return;
   
   var val = document.getElementById('raceSelect').options[document.getElementById('raceSelect').selectedIndex];
-  if (!val || !val.value || !currentRaceId) {
-    console.log('開催なし日');
+  if (!currentRaceId) {
+    var mid = url.match(/race_id=(\d{12})/);
+    if (mid) currentRaceId = mid[1];
+  }
+  if (!url || !currentRaceId) {
+    setStatus('race_idが未選択です。レース一覧から選択して下さい。', 'err');
     return false;
   }
   
@@ -1696,6 +1735,23 @@ function setupEvents() {
   });
 }
 
+
+
+function forceBindTabsSafe() {
+  Array.prototype.slice.call(document.querySelectorAll('.tab-btn')).forEach(function (btn) {
+    btn.onclick = function (e) {
+      if (e && e.preventDefault) e.preventDefault();
+      var tab = btn.getAttribute('data-tab');
+      Array.prototype.slice.call(document.querySelectorAll('.tab-btn')).forEach(function (b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      Array.prototype.slice.call(document.querySelectorAll('[id^="tab-"]')).forEach(function (p) { p.style.display = 'none'; });
+      var panel = document.getElementById('tab-' + tab);
+      if (panel) panel.style.display = 'block';
+      return false;
+    };
+  });
+}
+
 function initUI() {
   try {
     var s = JSON.parse(localStorage.getItem('tk-html-settings') || '{}');
@@ -1712,6 +1768,7 @@ function initUI() {
   document.getElementById('setAntigami').checked = settings.antigami;
   
   setupEvents();
+  forceBindTabsSafe();
   loadActiveVenues();
 }
 

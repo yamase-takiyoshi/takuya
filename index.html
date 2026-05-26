@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.20.8 Safari ES5 Final</title>
+<title>The競馬 EV分析 v5.20.9 Safari ES5 Ultimate</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.20.8</span>
+    <span class="ver">v5.20.9</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -592,6 +592,56 @@ function corsHeaders(contentType) {<br>
 
 </div>
 
+
+<script>
+/* v5.20.9 Safari ES5 polyfills - must run before app script */
+(function(){
+  if (!String.prototype.padStart) {
+    String.prototype.padStart = function padStart(targetLength, padString) {
+      targetLength = targetLength >> 0;
+      padString = String(typeof padString !== 'undefined' ? padString : ' ');
+      if (this.length >= targetLength) return String(this);
+      targetLength = targetLength - this.length;
+      if (targetLength > padString.length) {
+        padString += padString.repeat(Math.ceil(targetLength / padString.length));
+      }
+      return padString.slice(0, targetLength) + String(this);
+    };
+  }
+  if (!Object.assign) {
+    Object.assign = function(target) {
+      if (target == null) throw new TypeError('Cannot convert undefined or null to object');
+      var to = Object(target);
+      for (var index = 1; index < arguments.length; index++) {
+        var nextSource = arguments[index];
+        if (nextSource != null) {
+          for (var nextKey in nextSource) {
+            if (Object.prototype.hasOwnProperty.call(nextSource, nextKey)) to[nextKey] = nextSource[nextKey];
+          }
+        }
+      }
+      return to;
+    };
+  }
+  if (!Array.from) {
+    Array.from = function(arrayLike, mapFn, thisArg) {
+      var arr = [];
+      if (!arrayLike) return arr;
+      var len = Number(arrayLike.length) || 0;
+      for (var i = 0; i < len; i++) {
+        arr.push(mapFn ? mapFn.call(thisArg, arrayLike[i], i) : arrayLike[i]);
+      }
+      return arr;
+    };
+  }
+  if (window.NodeList && !NodeList.prototype.forEach) {
+    NodeList.prototype.forEach = Array.prototype.forEach;
+  }
+  if (window.HTMLCollection && !HTMLCollection.prototype.forEach) {
+    HTMLCollection.prototype.forEach = Array.prototype.forEach;
+  }
+})();
+</script>
 <script>
 // ============================================================
 // The競馬 EV分析 HTML版 v5.15.3
@@ -5806,7 +5856,7 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
    ============================================================ */
 (function () {
     'use strict';
-    var VER = 'v5.20.8';
+    var VER = 'v5.20.9';
     var JRA = [
         ['01', '札幌'], ['02', '函館'], ['03', '福島'], ['04', '新潟'], ['05', '東京'],
         ['06', '中山'], ['07', '中京'], ['08', '京都'], ['09', '阪神'], ['10', '小倉']
@@ -6173,6 +6223,242 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
     console.log('[The競馬]', VER, 'final guard loaded');
 })();
 
+</script>
+
+
+<script>
+/* ============================================================
+   v5.20.9 Safari ES5 Ultimate Guard
+   - NodeList.forEach / Array.from / optional系に依存しない最終上書き
+   - タブ、開催場、レース一覧、URL反映を最後に再接続
+   - XHR + race_id直接抽出で iPad Safari / GitHub Pages 向けに固定
+   ============================================================ */
+(function(){
+  'use strict';
+  var VER='v5.20.9';
+  var JRA=[['01','札幌'],['02','函館'],['03','福島'],['04','新潟'],['05','東京'],['06','中山'],['07','中京'],['08','京都'],['09','阪神'],['10','小倉']];
+  var NAR=[['30','門別'],['35','盛岡'],['36','水沢'],['42','浦和'],['43','船橋'],['44','大井'],['45','川崎'],['46','金沢'],['47','笠松'],['48','名古屋'],['50','園田'],['51','姫路'],['54','高知'],['55','佐賀'],['65','帯広']];
+  function $(id){ return document.getElementById(id); }
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+  function getVal(id,def){ var e=$(id); return e ? e.value : def; }
+  function kindNow(){ return getVal('pickKind','JRA') || 'JRA'; }
+  function localDate(){ var d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+  function dateNow(){ return getVal('pickDate',localDate()) || localDate(); }
+  function compact(d){ return String(d||'').replace(/[^\d]/g,'').slice(0,8); }
+  function parts(d){ var ymd=compact(d||localDate()); return {ymd:ymd,y:ymd.slice(0,4),md:ymd.slice(4,8)}; }
+  function venuesOf(kind){ return kind==='NAR'?NAR:JRA; }
+  function venueName(kind,code){ var arr=venuesOf(kind), i; code=String(code||''); for(i=0;i<arr.length;i++){ if(arr[i][0]===code) return arr[i][1]; } return code; }
+  function setStatus(msg, cls){ var s=$('urlStatus'); if(s) s.innerHTML='<div class="url-status '+(cls||'')+'">'+msg+'</div>'; }
+  function proxyBase(){
+    var p='';
+    try{ if(window.settings && settings.proxyUrl) p=settings.proxyUrl; }catch(e){}
+    if(!p){ var pe=$('proxyUrl'); if(pe) p=pe.value; }
+    if(!p) p='https://takuya.nitta-katsuhiko.workers.dev/';
+    return String(p).replace(/\/$/,'');
+  }
+  function xhrText(url, ok, ng){
+    var x, timer;
+    try{
+      x=new XMLHttpRequest();
+      x.open('GET', proxyBase()+'?url='+encodeURIComponent(url), true);
+      x.onreadystatechange=function(){
+        if(x.readyState===4){
+          clearTimeout(timer);
+          if(x.status>=200 && x.status<300) ok(x.responseText||'');
+          else ng(new Error('HTTP '+x.status));
+        }
+      };
+      x.onerror=function(){ clearTimeout(timer); ng(new Error('通信エラー')); };
+      timer=setTimeout(function(){ try{x.abort();}catch(e){} ng(new Error('タイムアウト')); }, 12000);
+      x.send(null);
+    }catch(e){ ng(e); }
+  }
+  function raceListUrl(kind,date,venue){
+    var p=parts(date), url;
+    if(kind==='NAR'){
+      url='https://nar.netkeiba.com/top/race_list.html?kaisai_date='+p.ymd;
+      if(venue) url+='&kaisai_id='+p.y+String(venue)+p.md;
+      return url;
+    }
+    return 'https://race.netkeiba.com/top/race_list.html?kaisai_date='+p.ymd;
+  }
+  function shutubaUrl(kind,id){
+    return (kind==='NAR'?'https://nar.netkeiba.com':'https://race.netkeiba.com') + '/race/shutuba.html?race_id=' + id + '&rf=race_submenu';
+  }
+  function parseIds(html,kind,date,venue){
+    var p=parts(date), arr=venuesOf(kind), valid={}, re=/race_id=(\d{10,14})/g, m, out=[], seen={}, id, code, rno, key;
+    for(var i=0;i<arr.length;i++) valid[arr[i][0]]=1;
+    html=String(html||'');
+    while((m=re.exec(html))){
+      id=m[1];
+      if(id.slice(0,4)!==p.y) continue;
+      code=id.slice(4,6);
+      if(!valid[code]) continue;
+      if(venue && code!==String(venue)) continue;
+      rno=Number(id.slice(-2));
+      if(!(rno>=1 && rno<=12)) continue;
+      if(kind==='NAR' && id.slice(6,10)!==p.md) continue;
+      key=id;
+      if(seen[key]) continue;
+      seen[key]=1;
+      out.push({raceId:id, venueCode:code, raceNo:rno});
+    }
+    out.sort(function(a,b){
+      if(a.venueCode<b.venueCode) return -1;
+      if(a.venueCode>b.venueCode) return 1;
+      return a.raceNo-b.raceNo;
+    });
+    return out;
+  }
+  function uniqueRaceNo(list){
+    var seen={}, out=[], i, r;
+    for(i=0;i<list.length;i++){
+      r=list[i];
+      if(!seen[r.venueCode+'-'+r.raceNo]){
+        seen[r.venueCode+'-'+r.raceNo]=1;
+        out.push(r);
+      }
+    }
+    return out;
+  }
+  function clearRace(){
+    var rs=$('raceSelect'), ru=$('raceUrl'), rb=$('raceTitleBox');
+    if(rs) rs.innerHTML='<option value="">先にレース一覧を取得</option>';
+    if(ru) ru.value='';
+    if(rb){ rb.textContent=''; rb.style.display='none'; }
+  }
+  function renderVenues(list,fallback){
+    var kind=kindNow(), v=$('pickVenue'), rows=[], i, item, code, name, count, opt;
+    if(!v) return;
+    while(v.options.length) v.remove(0);
+    if(!list || !list.length){
+      list=venuesOf(kind);
+      fallback=true;
+    }
+    for(i=0;i<list.length;i++){
+      item=list[i]; code=String(item[0]); name=item[1]||venueName(kind,code); count=item[2]?('（'+item[2]+'R）'):(fallback?'（候補）':'');
+      opt=document.createElement('option');
+      opt.value=code; opt.text=name+count;
+      v.add(opt);
+    }
+    try{
+      var setNar=$('setNar'); if(setNar) setNar.value=(kind==='NAR'?'1':'0');
+      if(window.settings) settings.nar=(kind==='NAR');
+      var badge=$('narBadge'); if(badge) badge.style.display=(kind==='NAR'?'':'none');
+    }catch(e){}
+  }
+  function bindTabs(){
+    var btns=document.querySelectorAll ? document.querySelectorAll('.tab-btn[data-tab]') : [];
+    for(var i=0;i<btns.length;i++){
+      (function(btn){
+        btn.onclick=function(ev){
+          if(ev && ev.preventDefault) ev.preventDefault();
+          var all=document.querySelectorAll('.tab-btn'), panes=document.querySelectorAll('[id^="tab-"]'), j;
+          for(j=0;j<all.length;j++) all[j].classList.remove('active');
+          btn.classList.add('active');
+          for(j=0;j<panes.length;j++) panes[j].style.display='none';
+          var tab=btn.getAttribute('data-tab'), pane=$('tab-'+tab);
+          if(pane) pane.style.display='';
+          return false;
+        };
+        btn.style.pointerEvents='auto';
+        btn.style.touchAction='manipulation';
+      })(btns[i]);
+    }
+  }
+  window.applySelectedRaceUrl=function(){
+    var rs=$('raceSelect'), ru=$('raceUrl'), rb=$('raceTitleBox'), opt;
+    if(!rs || !ru) return;
+    opt=rs.options[rs.selectedIndex];
+    ru.value=rs.value || '';
+    if(rb && opt && rs.value){ rb.textContent=opt.text || opt.textContent || ''; rb.style.display=''; }
+  };
+  window.loadActiveVenuesForDate=function(){
+    bindTabs(); clearRace();
+    var kind=kindNow(), date=dateNow();
+    setStatus('📅 '+esc(date)+' '+esc(kind)+' の開催場を確認中...', '');
+    xhrText(raceListUrl(kind,date,''), function(html){
+      var ids=parseIds(html,kind,date,''), counts={}, list=[], i, r, code;
+      for(i=0;i<ids.length;i++){
+        r=ids[i]; code=r.venueCode+'-'+r.raceNo;
+        if(!counts[r.venueCode]) counts[r.venueCode]={name:venueName(kind,r.venueCode), nums:{}};
+        counts[r.venueCode].nums[r.raceNo]=1;
+      }
+      for(code in counts){
+        if(counts.hasOwnProperty(code)){
+          var n=0, nums=counts[code].nums, k;
+          for(k in nums){ if(nums.hasOwnProperty(k)) n++; }
+          list.push([code, counts[code].name, n]);
+        }
+      }
+      list.sort(function(a,b){ return String(a[0]).localeCompare(String(b[0])); });
+      if(list.length){
+        renderVenues(list,false);
+        var names=[]; for(i=0;i<list.length;i++) names.push(esc(list[i][1]+'（'+list[i][2]+'R）'));
+        setStatus('✅ '+esc(date)+' '+esc(kind)+' 開催場：'+names.join('、'), 'ok');
+      }else{
+        renderVenues([],true);
+        setStatus('⚠️ 自動絞り込みできませんでした。全開催場候補を表示しました。', 'err');
+      }
+    }, function(e){
+      renderVenues([],true);
+      setStatus('⚠️ 開催場取得失敗: '+esc(e && e.message ? e.message : e)+'。全開催場候補を表示しました。', 'err');
+    });
+  };
+  window.onRaceDateKindChanged=function(){
+    try{ if(window.horses){ horses=[]; } if(typeof renderHorseRows==='function') renderHorseRows(); if(typeof renderManualFinishPicker==='function') renderManualFinishPicker(); }catch(e){}
+    window.loadActiveVenuesForDate();
+  };
+  window.loadRaceList=function(){
+    bindTabs();
+    var kind=kindNow(), date=dateNow(), v=$('pickVenue'), venue=v?v.value:'', rs=$('raceSelect');
+    if(!venue){ setStatus('⚠️ 開催場を選択してください。','err'); return; }
+    if(rs) rs.innerHTML='<option value="">レース一覧取得中...</option>';
+    setStatus('📅 '+esc(venueName(kind,venue))+' のレース一覧を取得中...', '');
+    xhrText(raceListUrl(kind,date,venue), function(html){
+      var races=uniqueRaceNo(parseIds(html,kind,date,venue)), i, opt, label, dlabel=String(date).replace(/-/g,'/');
+      if(!races.length && kind==='NAR'){
+        var p=parts(date);
+        for(i=1;i<=12;i++) races.push({raceNo:i, venueCode:venue, raceId:p.y+String(venue)+p.md+String(i).padStart(2,'0'), synthetic:true});
+      }
+      if(!races.length){
+        if(rs) rs.innerHTML='<option value="">取得失敗</option>';
+        setStatus('⚠️ レース一覧を取得できません。race_id付き出馬表URLを直接貼ってください。','err');
+        return;
+      }
+      if(rs){
+        while(rs.options.length) rs.remove(0);
+        for(i=0;i<races.length;i++){
+          label=dlabel+' '+venueName(kind,venue)+' '+races[i].raceNo+'R '+(races[i].synthetic?'（推定URL）':'')+' / '+races[i].raceId;
+          opt=document.createElement('option');
+          opt.value=shutubaUrl(kind,races[i].raceId);
+          opt.text=label;
+          opt.setAttribute('data-race-id', races[i].raceId);
+          rs.add(opt);
+        }
+      }
+      window.applySelectedRaceUrl();
+      setStatus('✅ '+esc(venueName(kind,venue))+' '+races.length+'レースを表示しました。','ok');
+    }, function(e){
+      if(rs) rs.innerHTML='<option value="">取得失敗</option>';
+      setStatus('❌ レース一覧取得失敗: '+esc(e && e.message ? e.message : e),'err');
+    });
+  };
+  function boot5209(){
+    bindTabs();
+    var ver=document.querySelector('.ver'); if(ver) ver.textContent=VER;
+    var d=$('pickDate'), k=$('pickKind'), v=$('pickVenue');
+    if(d && !d.value) d.value=localDate();
+    if(d && !d.getAttribute('data-v5209')){ d.setAttribute('data-v5209','1'); d.onchange=window.onRaceDateKindChanged; d.oninput=window.onRaceDateKindChanged; d.onblur=window.onRaceDateKindChanged; }
+    if(k && !k.getAttribute('data-v5209')){ k.setAttribute('data-v5209','1'); k.onchange=window.onRaceDateKindChanged; k.oninput=window.onRaceDateKindChanged; k.onblur=window.onRaceDateKindChanged; }
+    if(v && !v.getAttribute('data-v5209')){ v.setAttribute('data-v5209','1'); v.onchange=clearRace; }
+    if(v && !v.options.length) renderVenues([],true);
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot5209, false);
+  else boot5209();
+  window.addEventListener('pageshow', function(){ setTimeout(boot5209,80); }, false);
+  console.log('[The競馬] '+VER+' ultimate guard loaded');
+})();
 </script>
 
 </body>

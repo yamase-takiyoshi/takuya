@@ -850,6 +850,12 @@ function loadActiveVenues() {
       return;
     }
     
+    if (kind === 'NAR' && narRaces.length === 0) {
+      updateControlsState(false);
+      setStatus('この日はNAR開催がありません', 'info');
+      return;
+    }
+    
     // 開催会場集計（実レース数版）
     // race_list.htmlには同じrace_idや同じR番号のリンクが複数出るため、
     // 単純加算は禁止。会場ごとに「1〜12RのユニークR番号」だけを数える。
@@ -1522,7 +1528,9 @@ function evProbRaw(h, all) {
   var pop = Number(h.pop || 0);
   if (odds <= 1) return 1 / all.length;
   
-  var overround = all.reduce(function (acc, x) { return acc + (x.odds > 0 ? (1 / x.odds) : 0); }, 0) || 1.25;
+  // JRA: 控除率22.5% → オーバーラウンド推定ベース1.225、NAR: 30% → 1.30
+  var deductBase = settings.nar ? 1.30 : 1.225;
+  var overround = all.reduce(function (acc, x) { return acc + (x.odds > 0 ? (1 / x.odds) : 0); }, 0) || deductBase;
   var pOdds = (1 / odds) / overround;
   var pPop = pop > 0 ? (1 / Math.pow(pop, 1.08)) / all.reduce(function (acc, x, idx) { return acc + (1 / Math.pow(idx + 1, 1.08)); }, 0) : pOdds;
   
@@ -1534,6 +1542,8 @@ function runPredict() {
   if (valid.length < 2) { alert('有効な出走馬を2頭以上入力してください。'); return; }
   
   var totalRaw = valid.reduce(function (acc, h) { return acc + evProbRaw(h, valid); }, 0) || 1;
+  // NAR: 払戻率70%ベースで複勝オッズ係数を調整（JRA: 77.5%ベース）
+  var placeOddsCoeff = settings.nar ? 0.28 : 0.32;
   var rated = valid.map(function (h) {
     var winP = evProbRaw(h, valid) / totalRaw;
     var placeP = Math.min(0.92, winP * 2.5 + 0.02);
@@ -1550,7 +1560,7 @@ function runPredict() {
       var kWin = (evWin - 1) / (h.odds - 1);
       lastRecs.push({ type: '単勝', nums: [h.num], p: h.winP, odds: h.odds, ev: evWin, kelly: Math.max(0, kWin), amount: unit });
       
-      var fOdds = Math.max(1.1, h.odds * 0.32);
+      var fOdds = Math.max(1.1, h.odds * placeOddsCoeff);
       var evPlace = h.placeP * fOdds;
       var kPlace = (evPlace - 1) / (fOdds - 1);
       lastRecs.push({ type: '複勝', nums: [h.num], p: h.placeP, odds: fOdds, ev: evPlace, kelly: Math.max(0, kPlace), amount: unit });
@@ -2288,6 +2298,41 @@ function setupEvents() {
   bindTap(document.getElementById('runManualSimExecuteBtn'), function () { runManualSimulation(); });
   bindTap(document.getElementById('simClearHistoryBtn'), function () { simHistory = []; localStorage.removeItem('tk-sim-history'); renderSimProfitChart(); });
   
+  // 設定変更時の自動保存バインド（JRAと同等の扱いでNARも即時反映）
+  var sNar = document.getElementById('setNar');
+  if (sNar && !sNar.dataset.bound) {
+    sNar.dataset.bound = '1';
+    sNar.onchange = function () {
+      settings.nar = (this.value === '1');
+      document.getElementById('narBadge').style.display = settings.nar ? '' : 'none';
+      // pickKindセレクトと連動
+      var pk = document.getElementById('pickKind');
+      if (pk) pk.value = settings.nar ? 'NAR' : 'JRA';
+      localStorage.setItem('tk-html-settings', JSON.stringify(settings));
+      loadActiveVenues();
+    };
+  }
+  ['setBudget','setUnit','setMaxTickets'].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el && !el.dataset.bound) {
+      el.dataset.bound = '1';
+      el.onchange = function () {
+        if (id === 'setBudget') settings.budget = Number(this.value) || 500;
+        if (id === 'setUnit') settings.unit = Number(this.value) || 100;
+        if (id === 'setMaxTickets') settings.maxTickets = Number(this.value) || 5;
+        localStorage.setItem('tk-html-settings', JSON.stringify(settings));
+      };
+    }
+  });
+  var sAnti = document.getElementById('setAntigami');
+  if (sAnti && !sAnti.dataset.bound) {
+    sAnti.dataset.bound = '1';
+    sAnti.onchange = function () {
+      settings.antigami = this.checked;
+      localStorage.setItem('tk-html-settings', JSON.stringify(settings));
+    };
+  }
+  
   // タブ遷移
   document.querySelectorAll('.tab-btn').forEach(function (btn) {
     bindTap(btn, function (e) {
@@ -2362,6 +2407,10 @@ function initUI() {
   document.getElementById('setUnit').value = settings.unit;
   document.getElementById('setMaxTickets').value = settings.maxTickets;
   document.getElementById('setAntigami').checked = settings.antigami;
+  document.getElementById('setNar').value = settings.nar ? '1' : '0';
+  document.getElementById('narBadge').style.display = settings.nar ? '' : 'none';
+  var pkInit = document.getElementById('pickKind');
+  if (pkInit && settings.nar) pkInit.value = 'NAR';
   
   setupEvents();
   forceBindTabsSafe();

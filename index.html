@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.9 JRARealRaceId</title>
+<title>The競馬 EV分析 v5.19.0 JRA_REAL_ONLY</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.9 JRARealRaceId</span>
+    <span class="ver">v5.19.0 JRA_REAL_ONLY</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2409,24 +2409,10 @@ function extractJraRaceNamesFromList(html, venueCode){
 }
 
 function buildJraRacesFromKaisai(html, date, venueCode){
-  const kd = parseJraKaisaiFromListText(html, venueCode);
-  if(!kd) return [];
-  const p = ymdParts(date);
-  const names = extractJraRaceNamesFromList(html, venueCode);
-  const races = [];
-  for(let r=1; r<=12; r++){
-    const raceId = `${p.yyyy}${venueCode}${String(kd.kai).padStart(2,'0')}${String(kd.day).padStart(2,'0')}${String(r).padStart(2,'0')}`;
-    races.push({
-      raceId,
-      raceNo:r,
-      venueCode,
-      raceName:names.get(r) || `${r}R`,
-      shutuba:shutubaUrl('JRA', raceId),
-      builtFromKaisai:true
-    });
-  }
-  return races;
+  // v5.19.0: JRA race_id推測生成は禁止。実race_id一覧から取得する。
+  return [];
 }
+
 
 
 function jraRaceIdToKaisai(raceId){
@@ -2536,56 +2522,22 @@ async function probeJraRaceById(date, raceId){
 }
 
 async function buildVerifiedJraRacesByProbe(date, venueCode, kd){
-  if(!kd) return [];
-  const p = ymdParts(date);
-  const out = [];
-  for(let r=1; r<=12; r++){
-    const raceId = `${p.yyyy}${venueCode}${String(kd.kai).padStart(2,'0')}${String(kd.day).padStart(2,'0')}${String(r).padStart(2,'0')}`;
-    try{
-      const item = await probeJraRaceById(date, raceId);
-      if(item) out.push(item);
-    }catch(e){}
-  }
-  return out.sort((a,b) => a.raceNo - b.raceNo);
+  // v5.19.0: JRA race_id推測生成は禁止。
+  return [];
 }
+
 
 async function fixJraKaisaiByProbe(date, venueCode, kd){
-  if(!kd) return null;
-  const p = ymdParts(date);
-  const candidateDays = [];
-  for(const d of [kd.day, kd.day + 1, kd.day - 1, kd.day + 2, kd.day - 2]){
-    if(d >= 1 && d <= 12 && !candidateDays.includes(d)) candidateDays.push(d);
-  }
-
-  for(const day of candidateDays){
-    const raceId = `${p.yyyy}${venueCode}${String(kd.kai).padStart(2,'0')}${String(day).padStart(2,'0')}01`;
-    try{
-      if(await verifyJraRaceDateByShutuba(date, raceId)){
-        return { kai: kd.kai, day };
-      }
-    }catch(e){}
-  }
-  return kd;
+  // v5.19.0: JRA race_id推測補正は禁止。
+  return null;
 }
+
 
 function buildJraRacesFromFixedKaisai(html, date, venueCode, kd){
-  if(!kd) return [];
-  const p = ymdParts(date);
-  const names = extractJraRaceNamesFromList(html, venueCode);
-  const races = [];
-  for(let r=1; r<=12; r++){
-    const raceId = `${p.yyyy}${venueCode}${String(kd.kai).padStart(2,'0')}${String(kd.day).padStart(2,'0')}${String(r).padStart(2,'0')}`;
-    races.push({
-      raceId,
-      raceNo:r,
-      venueCode,
-      raceName:names.get(r) || `${r}R`,
-      shutuba:shutubaUrl('JRA', raceId),
-      builtFromKaisai:true
-    });
-  }
-  return races;
+  // v5.19.0: JRA race_id推測生成は禁止。
+  return [];
 }
+
 
 function jraRaceDayKey(raceId){
   const id = String(raceId || '');
@@ -2625,62 +2577,18 @@ async function filterJraDirectRacesBySelectedDate(direct, date){
 
 
 async function findJraKaisaiByFullProbe(date, venueCode, kdHint){
-  // JRA race_id はMMDDを持たないため、一覧HTML内のリンクだけで日付判定しない。
-  // 選択日と一致する「開催回・開催日」を出馬表本文の日付で確定する。
-  const p = ymdParts(date);
-  const kaiCandidates = [];
-  if(kdHint && kdHint.kai >= 1 && kdHint.kai <= 12) kaiCandidates.push(kdHint.kai);
-  for(let k=1; k<=12; k++) if(!kaiCandidates.includes(k)) kaiCandidates.push(k);
-
-  const dayHint = kdHint && kdHint.day ? Number(kdHint.day) : 0;
-  const dayCandidates = [];
-  if(dayHint >= 1 && dayHint <= 12){
-    for(const d of [dayHint, dayHint+1, dayHint-1, dayHint+2, dayHint-2, dayHint+3, dayHint-3]){
-      if(d >= 1 && d <= 12 && !dayCandidates.includes(d)) dayCandidates.push(d);
-    }
-  }
-  for(let d=1; d<=12; d++) if(!dayCandidates.includes(d)) dayCandidates.push(d);
-
-  for(const kai of kaiCandidates){
-    for(const day of dayCandidates){
-      const raceId = `${p.yyyy}${venueCode}${String(kai).padStart(2,'0')}${String(day).padStart(2,'0')}01`;
-      try{
-        if(await verifyJraRaceDateByShutuba(date, raceId)){
-          return { kai, day };
-        }
-      }catch(e){}
-    }
-  }
+  // v5.19.0: JRA race_id総当たり生成は禁止。
   return null;
 }
 
 
 
-function correctJraKaisaiByCalendarDate(date, venueCode, kd){
-  // v5.18.2: netkeibaのJRA一覧HTMLは、日曜タブでも前日(土曜)のrace_id群を
-  // そのまま含むことがある。JRA race_id は YYYY + 場 + 開催回 + 開催日 + R なので、
-  // 同一開催・同一場の土日連続開催では「日曜 = 土曜 + 100」になる。
-  // 例: 2026/05/23 東京11R = 202605020911、2026/05/24 東京11R = 202605021011。
-  // 出馬表HTMLの日付タブを拾ってしまう誤検証を避けるため、カレンダー曜日で最終補正する。
-  if(!kd) return kd;
-  const d = parseLocalDateYMD(date);
-  const dow = d.getDay(); // 0=日, 6=土
-  const out = { kai: Number(kd.kai), day: Number(kd.day) };
-  if(!(out.kai >= 1 && out.kai <= 12 && out.day >= 1 && out.day <= 12)) return kd;
 
-  // 通常のJRA連続開催は土曜=奇数日、日曜=偶数日。
-  // 日曜なのに奇数開催日を掴んでいる場合は、前日race_idを掴んだと判断して +1。
-  if(dow === 0 && out.day % 2 === 1 && out.day < 12){
-    out.day += 1;
-    out.correctedByCalendar = true;
-  }
-  // 土曜なのに偶数開催日を掴んでいる場合は、翌日race_idを掴んだ可能性が高いため -1。
-  if(dow === 6 && out.day % 2 === 0 && out.day > 1){
-    out.day -= 1;
-    out.correctedByCalendar = true;
-  }
-  return out;
+function correctJraKaisaiByCalendarDate(date, venueCode, kd){
+  // v5.19.0: カレンダー曜日によるrace_id補正は禁止。
+  return kd || null;
 }
+
 
 function extractJraRaceNamesFromActualListText(html, venueCode){
   // 選択日の一覧本文から「R番号→レース名」をできるだけ安全に拾う。
@@ -2703,37 +2611,23 @@ function extractJraRaceNamesFromActualListText(html, venueCode){
 }
 
 function buildJraRacesFromExactKaisai(html, date, venueCode, kd){
-  if(!kd) return [];
-  const p = ymdParts(date);
-  const names = extractJraRaceNamesFromActualListText(html, venueCode);
-  const races = [];
-  for(let r=1; r<=12; r++){
-    const raceId = `${p.yyyy}${venueCode}${String(kd.kai).padStart(2,'0')}${String(kd.day).padStart(2,'0')}${String(r).padStart(2,'0')}`;
-    races.push({
-      raceId,
-      raceNo:r,
-      venueCode,
-      raceName:names.get(r) || `${r}R`,
-      shutuba:shutubaUrl('JRA', raceId),
-      builtFromVerifiedKaisai:true
-    });
-  }
-  return races;
+  // v5.19.0: JRA race_id推測生成は禁止。
+  return [];
 }
 
+
 async function getReliableJraRacesFromList(html, date, venueCode){
-  // v5.18.9: JRAもNARと同じく「一覧HTMLに実在するrace_id」だけを採用する。
-  // 旧版の開催回/開催日プローブ生成は、土日連続開催で +100 / -100 ズレや
-  // 別レース混入を起こすため、レース一覧では使用しない。
+  // v5.19.0: JRAもNAR同様、race_list.html内に実在する shutuba race_id のみ採用。
+  // 重要: 開催回・開催日からの race_id 推測生成は絶対に行わない。
+  // race_list に前日/翌日のリンクが混入する場合は、HTML内に存在したrace_id群を
+  // グループ化し、各グループの実出馬表本文の日付で選択日と一致するものだけ採用する。
   const direct = parseRaceIdsFromList(html, 'JRA', venueCode, date)
-    .filter(r => r.shutuba.includes('https://race.netkeiba.com/') && raceIdVenueMatches('JRA', r.raceId, venueCode))
+    .filter(r => r && r.raceId && raceIdVenueMatches('JRA', r.raceId, venueCode))
+    .filter(r => Number(r.raceNo) >= 1 && Number(r.raceNo) <= 12)
     .map(r => ({ ...r, source:'realRaceIdFromRaceList' }));
 
   if(!direct.length) return [];
 
-  // 同一ページにナビや隣接開催日のリンクが混入しても、
-  // YYYY+場+開催回+開催日 の実race_idグループ単位で最大グループだけを採用する。
-  // race_id自体は生成せず、HTML内に存在したものだけを残す。
   const groups = new Map();
   direct.forEach(r => {
     const key = jraRaceDayKey(r.raceId);
@@ -2742,12 +2636,39 @@ async function getReliableJraRacesFromList(html, date, venueCode){
     groups.get(key).push(r);
   });
 
-  const best = Array.from(groups.values())
-    .sort((a,b) => b.length - a.length || Number(a[0].raceId) - Number(b[0].raceId))[0] || [];
+  const grouped = Array.from(groups.values())
+    .map(g => dedupeRacesByRaceIdAndNo(g).sort((a,b) => Number(a.raceNo) - Number(b.raceNo)))
+    .filter(g => g.length);
 
-  return dedupeRacesByRaceIdAndNo(best)
-    .filter(r => r.raceNo >= 1 && r.raceNo <= 12)
-    .sort((a,b) => Number(a.raceNo) - Number(b.raceNo));
+  // 実ページの日付で確定。ここでも新規race_id生成はしない。
+  for(const group of grouped){
+    const probe = group.find(r => Number(r.raceNo) === 1) || group[0];
+    try{
+      if(await verifyJraRaceDateByShutuba(date, probe.raceId)){
+        return group.map(r => ({...r, source:'realRaceIdFromRaceListVerified'}));
+      }
+    }catch(e){}
+  }
+
+  // 検証に失敗しても推測生成はしない。
+  // HTMLに存在したrace_idのうち、選択日の曜日に近いグループだけを安全側で採用する。
+  // 土曜=開催日奇数、日曜=開催日偶数の一般パターンを使うが、race_id自体はHTML由来のみ。
+  const dow = parseLocalDateYMD(date).getDay();
+  const preferredParity = dow === 0 ? 0 : (dow === 6 ? 1 : null);
+  const parityGroups = preferredParity === null ? [] : grouped.filter(g => {
+    const kd = jraRaceIdToKaisai(g[0].raceId);
+    return kd && (Number(kd.day) % 2) === preferredParity;
+  });
+  const candidates = parityGroups.length ? parityGroups : grouped;
+
+  // 最大件数、同数なら選択日が日曜なら開催日が大きい方、土曜なら小さい方を優先。
+  candidates.sort((a,b) => {
+    if(b.length !== a.length) return b.length - a.length;
+    const ka = jraRaceIdToKaisai(a[0].raceId) || {day:0};
+    const kb = jraRaceIdToKaisai(b[0].raceId) || {day:0};
+    return dow === 0 ? Number(kb.day) - Number(ka.day) : Number(ka.day) - Number(kb.day);
+  });
+  return (candidates[0] || []).map(r => ({...r, source:'realRaceIdFromRaceListUnverified'}));
 }
 
 // ============================================================
@@ -2795,7 +2716,7 @@ async function finalFilterRacesForSelection(races, kind, date, venueCode){
 
   // v5.18.9: JRA一覧から直接抽出した実race_idは、ここで再プローブ補正しない。
   // 再プローブ/再生成が中央の土日ズレの原因だったため、実HTML由来のIDをそのまま通す。
-  if(kind === 'JRA' && list.length && list.every(r => r.source === 'realRaceIdFromRaceList')){
+  if(kind === 'JRA' && list.length && list.every(r => String(r.source || '').startsWith('realRaceIdFromRaceList'))){
     return dedupeRacesByRaceIdAndNo(list);
   }
 

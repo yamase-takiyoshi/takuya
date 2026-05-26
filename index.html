@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.25.0 RaceDay Complete</title>
+<title>The競馬 EV分析 v5.25.1 RaceDay Complete</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -207,7 +207,7 @@ body {
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.25.0</span>
+    <span class="ver">v5.25.1</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -682,24 +682,84 @@ function parseRaceIdsFromHtml(html, kind, date, filterVenue) {
 }
 
 // JRA出馬表の日付厳密チェック
-function checkJraPageDate(id, date) {
-  var targetUrl = (settings.nar ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com') + '/race/shutuba.html?race_id=' + id;
+function extractSelectedDateTokens(date) {
+  var p = parseYmd(date);
+  var y = Number(p.y);
+  var m = Number(p.md.slice(0, 2));
+  var d = Number(p.md.slice(2, 4));
+  return {
+    y: String(y), m: String(m), d: String(d),
+    mm: pad2(m), dd: pad2(d),
+    ymd: p.ymd,
+    jp1: String(y) + '年' + String(m) + '月' + String(d) + '日',
+    jp2: String(y) + '年' + pad2(m) + '月' + pad2(d) + '日',
+    slash1: String(y) + '/' + String(m) + '/' + String(d),
+    slash2: String(y) + '/' + pad2(m) + '/' + pad2(d),
+    hyphen: String(y) + '-' + pad2(m) + '-' + pad2(d)
+  };
+}
+
+function stripHtmlToText(html) {
+  var parser = new DOMParser();
+  var doc = parser.parseFromString(String(html || ''), 'text/html');
+  Array.prototype.slice.call(doc.querySelectorAll('script,style,noscript')).forEach(function (el) { el.remove(); });
+  return { doc: doc, text: (doc.body ? doc.body.textContent : String(html || '')).replace(/\s+/g, ' ').trim() };
+}
+
+function textHasExactSelectedDate(text, date) {
+  var t = String(text || '').replace(/\s+/g, ' ');
+  var x = extractSelectedDateTokens(date);
+  if (t.indexOf(x.jp1) >= 0 || t.indexOf(x.jp2) >= 0 || t.indexOf(x.slash1) >= 0 || t.indexOf(x.slash2) >= 0 || t.indexOf(x.hyphen) >= 0) return true;
+  // 「2026.05.24」などの表記も許可。ただし年なしの「5/24」だけでは誤一致が出るため不可。
+  var re = new RegExp('(^|[^0-9])' + x.y + '[./年\\-]\s*0?' + x.m + '[./月\\-]\s*0?' + x.d + '(日)?([^0-9]|$)');
+  return re.test(t);
+}
+
+function pageHasSelectedRaceDate(html, date) {
+  var parsed = stripHtmlToText(html);
+  var doc = parsed.doc;
+  var zones = [];
+  var sels = [
+    '.RaceData01', '.RaceData02', '.RaceData', '[class*="RaceData"]',
+    '.RaceHeader', '[class*="RaceHeader"]', 'title', 'h1'
+  ];
+  sels.forEach(function (sel) {
+    Array.prototype.slice.call(doc.querySelectorAll(sel)).forEach(function (el) {
+      zones.push((el.textContent || '').replace(/\s+/g, ' ').trim());
+    });
+  });
+  var focused = zones.join(' / ');
+  if (textHasExactSelectedDate(focused, date)) return true;
+  return textHasExactSelectedDate(parsed.text.slice(0, 8000), date);
+}
+
+// JRA/NAR出馬表の日付厳密チェック（年付き日付のみ許可）
+function checkRacePageDate(id, date, kind) {
+  var targetUrl = (kind === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com') + '/race/shutuba.html?race_id=' + id;
   return fetchTextViaProxy(targetUrl).then(function (html) {
     if (html.indexOf(id) < 0) return false;
-    var p = parseYmd(date);
-    var mo = String(Number(p.md.slice(0, 2)));
-    var da = String(Number(p.md.slice(2, 4)));
-    var formats = [mo + '月' + da + '日', p.md.slice(0, 2) + '月' + p.md.slice(2, 4) + '日', mo + '/' + da];
-    
-    var parser = new DOMParser();
-    var doc = parser.parseFromString(html, 'text/html');
-    var txt = (doc.body ? doc.body.textContent : html).replace(/\s+/g, ' ');
-    
-    for (var i = 0; i < formats.length; i++) {
-      if (txt.indexOf(formats[i]) >= 0) return true;
-    }
-    return false;
+    return pageHasSelectedRaceDate(html, date);
   }).catch(function () { return false; });
+}
+
+// 旧関数名互換
+function checkJraPageDate(id, date) {
+  return checkRacePageDate(id, date, settings.nar ? 'NAR' : 'JRA');
+}
+
+function dedupeRaceNoPreferValidDate(races) {
+  var map = {};
+  races.forEach(function (r) {
+    var key = String(r.raceNo);
+    if (!map[key]) {
+      map[key] = r;
+      return;
+    }
+    // ここに来た時点で同じR番号。正式日付チェック後の先勝ちにする。
+    // race_idの大小で勝手に差し替えると土曜/日曜が逆転するため禁止。
+    console.log('[RaceDay] 同一R番号重複除外: ' + pad2(r.raceNo) + 'R id=' + r.id + ' 採用済=' + map[key].id);
+  });
+  return Object.keys(map).map(function (k) { return map[k]; }).sort(function (a, b) { return a.raceNo - b.raceNo; });
 }
 
 // ─── 開催地・レース一覧ロード処理群 ───
@@ -790,24 +850,19 @@ function loadRaceList() {
   fetchTextViaProxy(getNetkeibaUrl(kind, date)).then(function (html) {
     var races = parseRaceIdsFromHtml(html, kind, date, venue);
     
-    // 重複カット
+    // race_id重複を先に除外。R番号重複は「日付厳密検証後」に除外する。
     var uniqueMap = {};
-    races.forEach(function (r) { uniqueMap[r.id] = r; });
-    var cleanRaces = Object.keys(uniqueMap).map(function (k) { return uniqueMap[k]; }).sort(function (a, b) { return a.raceNo - b.raceNo; });
+    races.forEach(function (r) { if (!uniqueMap[r.id]) uniqueMap[r.id] = r; });
+    var cleanRaces = Object.keys(uniqueMap).map(function (k) { return uniqueMap[k]; }).sort(function (a, b) { return a.raceNo - b.raceNo || a.id.localeCompare(b.id); });
     
     // 外部から正式名と日付を非同期検証・取得するコアタスク
     var tasks = cleanRaces.map(function (r) {
       var shutuba = (kind === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com') + '/race/shutuba.html?race_id=' + r.id;
       return fetchTextViaProxy(shutuba).then(function (sHtml) {
-        // JRA日付検証
-        if (kind === 'JRA') {
-          var p = parseYmd(date);
-          var mo = String(Number(p.md.slice(0, 2)));
-          var da = String(Number(p.md.slice(2, 4)));
-          if (sHtml.indexOf(mo + '月' + da + '日') < 0 && sHtml.indexOf(p.md.slice(0, 2) + '月' + p.md.slice(2, 4) + '日') < 0 && sHtml.indexOf(mo + '/' + da) < 0) {
-            console.warn('[RaceDay] 日付不一致のため除外: id=' + r.id);
-            return null;
-          }
+        // 年付き日付で厳密検証。年なしの「5月24日」だけでは土日混在するため採用しない。
+        if (!pageHasSelectedRaceDate(sHtml, date)) {
+          console.log('[RaceDay] 日付不一致のため除外: id=' + r.id + ', R=' + pad2(r.raceNo));
+          return null;
         }
         
         var m = sHtml.match(/<h1[^>]*class=["'][^"']*RaceName[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i) ||
@@ -826,14 +881,20 @@ function loadRaceList() {
     });
     
     return Promise.all(tasks).then(function (completed) {
-      var finalRaces = completed.filter(Boolean);
+      var finalRaces = dedupeRaceNoPreferValidDate(completed.filter(Boolean));
       rs.innerHTML = '';
       
       if (finalRaces.length === 0) {
-        rs.add(new Option('有効なレースがありません', ''));
-        updateControlsState(false);
+        rs.add(new Option('この日は開催がありません', ''));
+        rs.disabled = true;
+        document.getElementById('raceUrl').value = '';
+        document.getElementById('fetchBtn').disabled = true;
+        console.log('開催なし日');
+        setStatus('開催なし日', 'info');
         return;
       }
+      rs.disabled = false;
+      document.getElementById('fetchBtn').disabled = false;
       
       finalRaces.forEach(function (r) {
         var label = pad2(r.raceNo) + 'R ' + r.formalName;

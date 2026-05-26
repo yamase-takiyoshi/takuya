@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.25.2 RaceDay Complete</title>
+<title>The競馬 EV分析 v5.25.3 RaceDay Complete</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -207,7 +207,7 @@ body {
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.25.2</span>
+    <span class="ver">v5.25.3</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -978,27 +978,56 @@ function parseHorsesFromDoc(doc) {
   var rows = doc.querySelectorAll('tr');
   
   rows.forEach(function (tr) {
-    var link = tr.querySelector('a[href*="/horse/"]');
+    // iPad Safari / netkeiba HTML差異対策：相対URL・絶対URL・旧dbURLをすべて許可
+    var link = tr.querySelector('a[href*="/horse/"], a[href*="db.netkeiba.com/horse"], a[href*="horse.html?id="], a[href*="horse_id="]');
     if (!link) return;
+
     var name = normCellText(link).replace(/のデータベース|データベース/g, '').replace(/\s+/g, '').trim();
-    if (!name) return;
+    if (!name || /^\d+$/.test(name)) return;
     
-    var numIn = tr.querySelector('.Umaban, [class*="Umaban"], td[class*="Num"]');
-    var num = numIn ? Number(toHalfNumberText(normCellText(numIn))) : 0;
-    if (!num) {
-      var cells = tr.querySelectorAll('td');
-      if (cells.length > 2) num = Number(toHalfNumberText(normCellText(cells[2])));
+    var cells = tr.querySelectorAll('td,th');
+    var numIn = tr.querySelector('.Umaban, [class*="Umaban"], td[class*="Num"], [class*="HorseNum"], [class*="Horse_Number"]');
+    var num = numIn ? Number(toHalfNumberText(normCellText(numIn)).match(/\d{1,2}/)?.[0] || 0) : 0;
+
+    // netkeibaの標準表は「枠番」「馬番」が別セル。馬名リンクより前のセルから1〜18を拾う。
+    if (!num && cells.length) {
+      var linkCellIndex = -1;
+      for (var ci = 0; ci < cells.length; ci++) {
+        if (cells[ci].contains(link)) { linkCellIndex = ci; break; }
+      }
+      var limit = linkCellIndex >= 0 ? linkCellIndex : Math.min(cells.length, 5);
+      for (var i = 0; i < limit; i++) {
+        var ct = toHalfNumberText(normCellText(cells[i]));
+        var mm = ct.match(/^\s*([1-9]|1[0-8])\s*$/);
+        if (mm) num = Number(mm[1]);
+      }
     }
+
+    // 最終fallback：行頭付近の単独数字のみ。払戻や人気などの大きい数字は拾わない。
+    if (!num) {
+      var headTxt = toHalfNumberText(normCellText(tr)).slice(0, 80);
+      var m = headTxt.match(/(?:^|\s)([1-9]|1[0-8])(?:\s|$)/);
+      if (m) num = Number(m[1]);
+    }
+
     if (num < 1 || num > 18 || seen[num]) return;
     
     var frameIn = tr.querySelector('.Waku, [class*="Waku"], [class*="Frame"]');
-    var frame = frameIn ? Number(toHalfNumberText(normCellText(frameIn))) : Math.ceil(num / 2);
+    var frame = frameIn ? Number(toHalfNumberText(normCellText(frameIn)).match(/\d{1,2}/)?.[0] || 0) : Math.ceil(num / 2);
+    if (!frame || frame < 1 || frame > 8) frame = Math.ceil(num / 2);
     
-    var odds = extractOddsValueFromText(toHalfNumberText(normCellText(tr)));
+    var rowTxt = toHalfNumberText(normCellText(tr));
+    var odds = extractOddsValueFromText(rowTxt);
     var pop = 0;
-    var txt = toHalfNumberText(normCellText(tr));
-    var pMatch = txt.match(/(\d{1,2})\s*人気/);
+    var pMatch = rowTxt.match(/(\d{1,2})\s*人気/);
     if (pMatch) pop = Number(pMatch[1]);
+    if (!pop) {
+      var popCell = tr.querySelector('[class*="Popular"], [class*="Ninki"], [class*="Popularity"]');
+      if (popCell) {
+        var pm = toHalfNumberText(normCellText(popCell)).match(/\d{1,2}/);
+        if (pm) pop = Number(pm[0]);
+      }
+    }
     
     seen[num] = true;
     list.push({ num: num, name: name, odds: odds || 0, pop: pop || 0, frame: frame });

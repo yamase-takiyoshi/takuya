@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.25.5 RaceDay Complete</title>
+<title>The競馬 EV分析 v5.25.6 RaceDay Complete</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -199,7 +199,7 @@ body {
 .sim-payout-ok { color: var(--green); font-weight: 800; } .sim-payout-est { color: var(--yellow); font-weight: 800; }
 @media(max-width:560px){ .sim-toolbar, .sim-finish-picker { grid-template-columns: 1fr; } }
 
-/* iPad Safari tap stability fix v5.25.5 */
+/* iPad Safari tap stability fix v5.25.6 */
 button, select, input, textarea, .tab-btn, .btn, .btn-sm, .mode-btn, .sim-cand-row, .del-btn {
   -webkit-tap-highlight-color: rgba(0,255,136,.18);
   touch-action: manipulation;
@@ -224,7 +224,7 @@ button, select, input, textarea, .tab-btn, .btn, .btn-sm, .mode-btn, .sim-cand-r
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.25.5</span>
+    <span class="ver">v5.25.6</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -980,13 +980,12 @@ function normCellText(el) { return String(el ? el.textContent : '').replace(/\u0
 function toHalfNumberText(v) { return String(v || '').replace(/[０-９．]/g, function (c) { return c === '．' ? '.' : String.fromCharCode(c.charCodeAt(0) - 0xFEE0); }); }
 
 function extractOddsValueFromText(txt) {
-  var matches = txt.match(/(\d{1,4}\.\d+)/g) || [];
-  var valid = [];
-  matches.forEach(function (m) {
-    var v = Number(m);
-    if (v >= 1.1 && v <= 999.9 && (v < 50 || v > 60)) valid.push(v);
-  });
-  return valid.length > 0 ? valid[0] : 0;
+  var matches = String(txt || '').match(/(\d{1,4}\.\d+)/g) || [];
+  for (var i = 0; i < matches.length; i++) {
+    var v = Number(matches[i]);
+    if (v >= 1.1 && v <= 999.9) return v;
+  }
+  return 0;
 }
 
 function extractPopularityFromText(txt) {
@@ -996,38 +995,127 @@ function extractPopularityFromText(txt) {
   return 0;
 }
 
-function extractOddsFromCells(cells) {
-  var prefer = [];
-  var fallback = [];
+function isWeightCell(cell) {
+  var txt = toHalfNumberText(normCellText(cell)).replace(/\s+/g, '');
+  var cls = String(cell && cell.className || '');
+  var title = String(cell && (cell.getAttribute('title') || cell.getAttribute('aria-label')) || '');
+  if (/斤量|負担|Weight|Futan|JockeyWeight|Handicap/i.test(cls + ' ' + title)) return true;
+  // 55 / 55.0 / 56.0 など、斤量セルとして単独表示される典型値は除外。
+  if (/^(4[8-9]|5[0-9]|6[0-2])(\.0)?$/.test(txt)) return true;
+  return false;
+}
+
+function normalizeHeaderText(t) {
+  return toHalfNumberText(String(t || '')).replace(/[\s\n\r\t　]/g, '').trim();
+}
+
+function buildHeaderMap(table) {
+  var map = {};
+  if (!table) return map;
+  var headerRows = table.querySelectorAll('thead tr');
+  if (!headerRows.length) headerRows = table.querySelectorAll('tr');
+  for (var r = 0; r < Math.min(headerRows.length, 3); r++) {
+    var cells = headerRows[r].querySelectorAll('th,td');
+    for (var i = 0; i < cells.length; i++) {
+      var t = normalizeHeaderText(cells[i].textContent);
+      if (!t) continue;
+      if (map.num == null && /^(馬番|馬No|馬番号|番)$/.test(t)) map.num = i;
+      if (map.name == null && /馬名/.test(t)) map.name = i;
+      if (map.odds == null && /(単勝オッズ|単オッズ|オッズ)$/.test(t) && !/複勝|馬連|ワイド|枠|連|三連|3連/.test(t)) map.odds = i;
+      if (map.pop == null && /^(人気|単勝人気|順位)$/.test(t)) map.pop = i;
+    }
+    if (map.odds != null || map.pop != null) break;
+  }
+  return map;
+}
+
+function findParentTable(el) {
+  while (el && el.nodeType === 1) {
+    if (String(el.tagName).toLowerCase() === 'table') return el;
+    el = el.parentElement;
+  }
+  return null;
+}
+
+function getNumFromRow(tr, cells, link) {
+  var numEl = tr.querySelector('.Umaban, [class*="Umaban"], [class*="HorseNum"], [class*="Horse_Number"]');
+  if (numEl) {
+    var nt = toHalfNumberText(normCellText(numEl));
+    var nm = nt.match(/^([1-9]|1[0-8])$/) || nt.match(/\b([1-9]|1[0-8])\b/);
+    if (nm) return Number(nm[1]);
+  }
+  var table = findParentTable(tr);
+  var hm = buildHeaderMap(table);
+  if (hm.num != null && cells[hm.num]) {
+    var ht = toHalfNumberText(normCellText(cells[hm.num]));
+    var hmNum = ht.match(/^([1-9]|1[0-8])$/);
+    if (hmNum) return Number(hmNum[1]);
+  }
+  var limit = link ? cells.length : Math.min(cells.length, 4);
+  if (link) {
+    for (var li = 0; li < cells.length; li++) {
+      if (cells[li].contains(link)) { limit = li; break; }
+    }
+  }
+  var found = 0;
+  for (var i = 0; i < limit; i++) {
+    var t = toHalfNumberText(normCellText(cells[i]));
+    var m = t.match(/^([1-9]|1[0-8])$/);
+    if (m) found = Number(m[1]);
+  }
+  return found;
+}
+
+function readOddsFromCell(cell) {
+  if (!cell || isWeightCell(cell)) return 0;
+  var txt = toHalfNumberText(normCellText(cell)).replace(/,/g, '');
+  var m = txt.match(/^(\d{1,4}\.\d+)$/) || txt.match(/(\d{1,4}\.\d+)/);
+  if (!m) return 0;
+  var v = Number(m[1]);
+  if (v < 1.1 || v > 999.9) return 0;
+  return v;
+}
+
+function readPopularityFromCell(cell) {
+  if (!cell) return 0;
+  var txt = toHalfNumberText(normCellText(cell)).replace(/\s+/g, '');
+  var m = txt.match(/^([1-9]|1[0-8])$/) || txt.match(/([1-9]|1[0-8])人気/);
+  if (!m) return 0;
+  return Number(m[1]);
+}
+
+function extractOddsFromCells(cells, headerMap) {
+  if (headerMap && headerMap.odds != null && cells[headerMap.odds]) {
+    var hv = readOddsFromCell(cells[headerMap.odds]);
+    if (hv) return hv;
+  }
   for (var i = 0; i < cells.length; i++) {
     var cell = cells[i];
-    var txt = toHalfNumberText(normCellText(cell));
     var cls = String(cell.className || '');
-    var ms = txt.match(/(\d{1,4}\.\d+)/g) || [];
-    ms.forEach(function (m) {
-      var v = Number(m);
-      if (v >= 1.1 && v <= 999.9) {
-        if (/Odds|odd|オッズ|Tansho|Tan/i.test(cls)) prefer.push(v);
-        else fallback.push(v);
-      }
-    });
+    var attr = cls + ' ' + String(cell.getAttribute('data-title') || '') + ' ' + String(cell.getAttribute('aria-label') || '');
+    if (/Odds|Tansho|TanOdds|オッズ|単勝/i.test(attr) && !/Fuku|Place|複勝|馬連|ワイド|枠|連|3連/i.test(attr)) {
+      var cv = readOddsFromCell(cell);
+      if (cv) return cv;
+    }
   }
-  if (prefer.length) return prefer[0];
-  if (fallback.length) return fallback[0];
   return 0;
 }
 
-function extractPopularityFromCells(cells) {
+function extractPopularityFromCells(cells, headerMap) {
+  if (headerMap && headerMap.pop != null && cells[headerMap.pop]) {
+    var hp = readPopularityFromCell(cells[headerMap.pop]);
+    if (hp) return hp;
+  }
   for (var i = 0; i < cells.length; i++) {
     var cell = cells[i];
-    var txt = toHalfNumberText(normCellText(cell));
     var cls = String(cell.className || '');
-    var m = txt.match(/([1-9]|1[0-8])\s*人気/);
-    if (m) return Number(m[1]);
-    if (/Popular|Ninki|Popularity|人気/i.test(cls)) {
-      var n = txt.match(/^([1-9]|1[0-8])$/);
-      if (n) return Number(n[1]);
+    var attr = cls + ' ' + String(cell.getAttribute('data-title') || '') + ' ' + String(cell.getAttribute('aria-label') || '');
+    if (/Popular|Ninki|Popularity|人気/i.test(attr)) {
+      var cp = readPopularityFromCell(cell);
+      if (cp) return cp;
     }
+    var pt = extractPopularityFromText(normCellText(cell));
+    if (pt) return pt;
   }
   return 0;
 }
@@ -1040,36 +1128,16 @@ function parseOddsPopularityMapFromDoc(doc) {
     if (!cells || cells.length < 2) return;
 
     var link = tr.querySelector('a[href*="/horse/"], a[href*="db.netkeiba.com/horse"], a[href*="horse.html?id="], a[href*="horse_id="]');
-    var num = 0;
-
-    var numEl = tr.querySelector('.Umaban, [class*="Umaban"], [class*="HorseNum"], [class*="Horse_Number"]');
-    if (numEl) {
-      var nt = toHalfNumberText(normCellText(numEl));
-      var nm = nt.match(/^([1-9]|1[0-8])$/) || nt.match(/\b([1-9]|1[0-8])\b/);
-      if (nm) num = Number(nm[1]);
-    }
-
-    if (!num) {
-      var limit = link ? cells.length : Math.min(cells.length, 4);
-      if (link) {
-        for (var li = 0; li < cells.length; li++) {
-          if (cells[li].contains(link)) { limit = li; break; }
-        }
-      }
-      for (var i = 0; i < limit; i++) {
-        var t = toHalfNumberText(normCellText(cells[i]));
-        var m = t.match(/^([1-9]|1[0-8])$/);
-        if (m) num = Number(m[1]);
-      }
-    }
-
+    var table = findParentTable(tr);
+    var headerMap = buildHeaderMap(table);
+    var num = getNumFromRow(tr, cells, link);
     if (num < 1 || num > 18) return;
 
-    var odds = extractOddsFromCells(cells);
-    if (!odds) odds = extractOddsValueFromText(toHalfNumberText(normCellText(tr)));
-    var pop = extractPopularityFromCells(cells);
-    if (!pop) pop = extractPopularityFromText(normCellText(tr));
+    var odds = extractOddsFromCells(cells, headerMap);
+    var pop = extractPopularityFromCells(cells, headerMap);
 
+    // ヘッダもクラスもない行全文からのオッズ推定は禁止。
+    // ここで拾うと 55.0kg など斤量を単勝オッズとして誤表示するため。
     if (odds || pop) {
       if (!map[num]) map[num] = { odds: 0, pop: 0 };
       if (odds && odds > 1) map[num].odds = odds;
@@ -1132,18 +1200,13 @@ function parseHorsesFromDoc(doc) {
     var frame = frameIn ? Number(toHalfNumberText(normCellText(frameIn)).match(/\d{1,2}/)?.[0] || 0) : Math.ceil(num / 2);
     if (!frame || frame < 1 || frame > 8) frame = Math.ceil(num / 2);
     
-    var rowTxt = toHalfNumberText(normCellText(tr));
-    var odds = extractOddsValueFromText(rowTxt);
-    var pop = 0;
-    var pMatch = rowTxt.match(/(\d{1,2})\s*人気/);
-    if (pMatch) pop = Number(pMatch[1]);
-    if (!pop) {
-      var popCell = tr.querySelector('[class*="Popular"], [class*="Ninki"], [class*="Popularity"]');
-      if (popCell) {
-        var pm = toHalfNumberText(normCellText(popCell)).match(/\d{1,2}/);
-        if (pm) pop = Number(pm[0]);
-      }
-    }
+    // 単勝オッズ・人気は固定列や行全文から拾わない。
+    // iPad/Safariのnetkeibaでは斤量(55.0等)をオッズとして誤認するため、
+    // ヘッダ名・class名で確認できる場合だけ採用し、残りはオッズページで補完する。
+    var tableForOdds = findParentTable(tr);
+    var headerMapForOdds = buildHeaderMap(tableForOdds);
+    var odds = extractOddsFromCells(cells, headerMapForOdds);
+    var pop = extractPopularityFromCells(cells, headerMapForOdds);
     
     seen[num] = true;
     list.push({ num: num, name: name, odds: odds || 0, pop: pop || 0, frame: frame });

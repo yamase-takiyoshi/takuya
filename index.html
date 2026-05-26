@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.26.5 RaceDay NAR Direct Fix</title>
+<title>The競馬 EV分析 v5.26.6 RaceID Direct Resolver</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -224,7 +224,7 @@ button, select, input, textarea, .tab-btn, .btn, .btn-sm, .mode-btn, .sim-cand-r
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.26.5</span>
+    <span class="ver">v5.26.6</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -542,8 +542,19 @@ var currentRaceId = '';
 // ─── 汎用ヘルパー ───
 function pad2(n) { return String(n).padStart(2, '0'); }
 function getLocalDateString(d) {
+  // v5.26.6: iPad/Safariの履歴復元・環境TZ差で日付が1日戻る事故を防ぐ。
+  // 競馬開催日は日本時間で固定する。
   var date = d || new Date();
-  return date.getFullYear() + '-' + pad2(date.getMonth() + 1) + '-' + pad2(date.getDate());
+  try {
+    var parts = new Intl.DateTimeFormat('ja-JP', {
+      timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit'
+    }).formatToParts(date);
+    var obj = {};
+    parts.forEach(function (x) { obj[x.type] = x.value; });
+    return obj.year + '-' + obj.month + '-' + obj.day;
+  } catch (e) {
+    return date.getFullYear() + '-' + pad2(date.getMonth() + 1) + '-' + pad2(date.getDate());
+  }
 }
 function parseYmd(str) {
   var clean = String(str || '').replace(/[^\d]/g, '');
@@ -673,13 +684,32 @@ function parseRaceIdsFromHtml(html, kind, date, filterVenue) {
   
   var seenIds = {};
   var list = [];
-  var regex = /race_id=(\d+)/g;
-  var match;
+  var ids = [];
+  function pushId(x) {
+    x = String(x || '').replace(/[^0-9]/g, '');
+    if (x.length === 12) ids.push(x);
+  }
+
+  // v5.26.6: NARの開催一覧は race_id= がHTMLエンコード/URLエンコード/JSON埋め込みに変わることがある。
+  // 「race_id=」だけでなく、12桁IDを拾ってから年月日・会場コードで厳密に絞る。
+  var rxList = [
+    /race_id(?:=|%3D|\u003d|&amp;#61;)(\d{10,12})/gi,
+    /race_id["'\s:：=]+(\d{10,12})/gi,
+    /shutuba\.html\?[^"'<>\s]*race_id(?:=|%3D)(\d{10,12})/gi
+  ];
+  rxList.forEach(function (rx) {
+    var m;
+    while ((m = rx.exec(String(html || ''))) !== null) pushId(m[1]);
+  });
+  if (kind === 'NAR') {
+    var broad = /(\d{12})/g, bm;
+    while ((bm = broad.exec(String(html || ''))) !== null) pushId(bm[1]);
+  }
   
-  console.log('[RaceDay] 開始解析: 日付=' + p.ymd + ', 区分=' + kind + ', フィルタ会場=' + (filterVenue || 'なし'));
+  console.log('[RaceDay] 開始解析: 日付=' + p.ymd + ', 区分=' + kind + ', フィルタ会場=' + (filterVenue || 'なし') + ', 候補ID=' + ids.length);
   
-  while ((match = regex.exec(html)) !== null) {
-    var id = match[1];
+  for (var idxId = 0; idxId < ids.length; idxId++) {
+    var id = ids[idxId];
     if (id.length !== 12) {
       console.warn('[RaceDay] 12桁以外のため除外: id=' + id);
       continue;
@@ -921,11 +951,23 @@ function loadActiveVenues() {
     console.log('[RaceDay] ' + kind + ' 採用件数: ' + currentActiveRaces.length);
 
     if (currentActiveRaces.length === 0) {
+      // v5.26.6: 履歴復元で前日が残った場合は、日本時間の今日で1回だけ再照合する。
+      var jstToday = getLocalDateString();
+      if (kind === 'NAR' && date !== jstToday && !loadActiveVenues._retryToday) {
+        loadActiveVenues._retryToday = true;
+        var pd = document.getElementById('pickDate');
+        if (pd) pd.value = jstToday;
+        setStatus('選択日が古いため、日本時間の本日 ' + jstToday + ' で race_id を再参照中...', 'info');
+        loadActiveVenues();
+        return;
+      }
+      loadActiveVenues._retryToday = false;
       console.log('開催なし日');
       updateControlsState(false);
       setStatus('この日は' + kind + '開催がありません', 'info');
       return;
     }
+    loadActiveVenues._retryToday = false;
 
     // ここが重要：以前に「開催なし」でdisabledになったUIを必ず復帰させる。
     updateControlsState(true);

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.26.1 RaceDay Complete</title>
+<title>The競馬 EV分析 v5.26.3 RaceDay Complete</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -224,7 +224,7 @@ button, select, input, textarea, .tab-btn, .btn, .btn-sm, .mode-btn, .sim-cand-r
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.26.1</span>
+    <span class="ver">v5.26.3</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -708,8 +708,9 @@ function parseRaceIdsFromHtml(html, kind, date, filterVenue) {
     }
     
     var rNo = Number(id.slice(-2));
-    if (rNo < 1 || rNo > 12) {
-      console.warn('[RaceDay] R番号範囲外(1~12以外)のため除外: id=' + id + ', R=' + rNo);
+    var maxR = (kind === 'NAR') ? 20 : 12;
+    if (rNo < 1 || rNo > maxR) {
+      console.warn('[RaceDay] R番号範囲外のため除外: id=' + id + ', R=' + rNo);
       continue;
     }
     
@@ -822,47 +823,37 @@ function loadActiveVenues() {
   updateControlsState(true);
   setStatus('実開催地を race_id から直接検証中...', 'info');
   
-  var jraPromise = fetchTextViaProxy(getNetkeibaUrl('JRA', date)).then(function (h) { return parseRaceIdsFromHtml(h, 'JRA', date, ''); }).catch(function () { return []; });
-  var narPromise = fetchTextViaProxy(getNetkeibaUrl('NAR', date)).then(function (h) { return parseRaceIdsFromHtml(h, 'NAR', date, ''); }).catch(function () { return []; });
-  
-  Promise.all([jraPromise, narPromise]).then(function (results) {
-    var jraRaces = results[0];
-    var narRaces = results[1];
+  // 選択中のkindのみfetchする（同時fetch問題回避・高速化）
+  var activeFetch = fetchTextViaProxy(getNetkeibaUrl(kind, date))
+    .then(function (h) { return parseRaceIdsFromHtml(h, kind, date, ''); })
+    .catch(function (e) { console.warn('[RaceDay] fetch失敗(' + kind + '):', e); return []; });
+
+  Promise.all([activeFetch]).then(function (results) {
+    var currentActiveRaces = results[0];
     
-    console.log('[RaceDay] JRA開催有無: ' + (jraRaces.length > 0));
-    console.log('[RaceDay] 開催なし判定: ' + (jraRaces.length === 0 && narRaces.length === 0));
+    console.log('[RaceDay] ' + kind + ' 取得件数: ' + currentActiveRaces.length);
     
-    setJraVisibility(jraRaces.length > 0);
-    
-    // 選択切り替え対応
-    kind = document.getElementById('pickKind').value;
-    var currentActiveRaces = (kind === 'JRA') ? jraRaces : narRaces;
-    
-    if (jraRaces.length === 0 && narRaces.length === 0) {
-      console.log('開催なし日');
-      updateControlsState(false);
-      return;
+    if (kind === 'NAR') {
+      setJraVisibility(false);
+    } else {
+      setJraVisibility(currentActiveRaces.length > 0);
     }
     
-    if (kind === 'JRA' && jraRaces.length === 0) {
+    if (currentActiveRaces.length === 0) {
       updateControlsState(false);
-      setStatus('この日はJRA開催がありません', 'info');
-      return;
-    }
-    
-    if (kind === 'NAR' && narRaces.length === 0) {
-      updateControlsState(false);
-      setStatus('この日はNAR開催がありません', 'info');
+      setStatus('この日は' + kind + '開催がありません', 'info');
       return;
     }
     
     // 開催会場集計（実レース数版）
     // race_list.htmlには同じrace_idや同じR番号のリンクが複数出るため、
-    // 単純加算は禁止。会場ごとに「1〜12RのユニークR番号」だけを数える。
+    // 単純加算は禁止。会場ごとに「ユニークR番号」だけを数える。
+    // JRAは1〜12R、NARは帯広ばんえい等もあるため1〜20Rまで許容。
+    var maxRaceNo = (kind === 'NAR') ? 20 : 12;
     var venueMap = {};
     currentActiveRaces.forEach(function (r) {
       var raceNo = Number(r.raceNo);
-      if (!r || !r.venueCode || raceNo < 1 || raceNo > 12) return;
+      if (!r || !r.venueCode || raceNo < 1 || raceNo > maxRaceNo) return;
       if (!venueMap[r.venueCode]) {
         venueMap[r.venueCode] = { code: r.venueCode, name: r.venueName, count: 0, raceNos: {} };
       }

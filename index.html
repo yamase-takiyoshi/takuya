@@ -1881,32 +1881,135 @@ function parseFinishOrderFromResultHtml(html) {
   var doc = parsed.doc;
   var out = [];
 
+  // ── Strategy 1: DOM tr解析（リンクあり行・リンクなし行の両方を試みる） ──
   Array.prototype.slice.call(doc.querySelectorAll('tr')).forEach(function (tr) {
     if (out.length >= 3) return;
-    var cells = Array.prototype.slice.call(tr.querySelectorAll('td,th')).map(normCellText);
-    var line = toHalfNumberText(cells.join(' '));
-    var mRank = line.match(/^\s*([1-3])\s+/);
-    if (!mRank) return;
+    var cells = Array.prototype.slice.call(tr.querySelectorAll('td,th')).map(function (td) {
+      return toHalfNumberText(normCellText(td));
+    });
+    if (cells.length < 2) return;
+    var line = cells.join(' ');
+
+    // 先頭セルが1〜3の着順かチェック
+    var rank = Number(cells[0].replace(/[^\d]/g, ''));
+    if (rank < 1 || rank > 3) return;
+
     var link = tr.querySelector('a[href*="/horse/"], a[href*="db.netkeiba.com/horse"]');
     var horseNo = 0;
 
-    // result table is normally: 着順 / 枠 / 馬番 / 馬名...
-    for (var i = 1; i < Math.min(cells.length, 5); i++) {
-      var n = Number(toHalfNumberText(cells[i]).replace(/[^\d]/g, ''));
-      if (n >= 1 && n <= 18) { horseNo = n; if (i >= 2) break; }
+    // netkeiba result: 着順 / 枠番 / 馬番 / 馬名...
+    // 馬番は2列目か3列目に来ることが多い。最大6列まで探す。
+    for (var i = 1; i < Math.min(cells.length, 6); i++) {
+      var v = cells[i].replace(/[^\d]/g, '');
+      var n = Number(v);
+      if (n >= 1 && n <= 18) {
+        // 枠番(1〜8)のみの列をスキップして馬番(1〜18)を優先
+        if (i >= 2) { horseNo = n; break; }
+        horseNo = n; // i===1 の場合は仮置き、より後方で上書き可
+      }
     }
-    if (link && horseNo >= 1 && horseNo <= 18) out.push(horseNo);
+
+    // リンクあり行ならそのまま採用。リンクなし行でも horseNo が確定なら採用。
+    if (horseNo >= 1 && horseNo <= 18) {
+      if (out.indexOf(horseNo) < 0) out.push(horseNo);
+    }
   });
 
   if (out.length >= 2) return out.slice(0, 3);
 
-  // text fallback: lines beginning with rank followed by frame/horse no.
-  text.split(/\n|(?=\s[1-3]\s+)/).forEach(function (line) {
-    if (out.length >= 3) return;
-    var s = String(line || '').replace(/\s+/g, ' ').trim();
-    var m = s.match(/^([1-3])\s+([1-8])\s+([1-9]|1[0-8])\s+/);
-    if (m) out.push(Number(m[3]));
+  // ── Strategy 2: .Result_HorseList / .RaceResult 等の専用クラスから取得 ──
+  out = [];
+  var rankSelectors = [
+    '[class*="Result"] tr',
+    '[class*="result"] tr',
+    '.RaceResultTable tr',
+    '.ResultHorse tr'
+  ];
+  rankSelectors.some(function (sel) {
+    if (out.length >= 2) return true;
+    Array.prototype.slice.call(doc.querySelectorAll(sel)).forEach(function (tr) {
+      if (out.length >= 3) return;
+      var cells = Array.prototype.slice.call(tr.querySelectorAll('td,th')).map(function (td) {
+        return toHalfNumberText(normCellText(td));
+      });
+      if (cells.length < 3) return;
+      var rank = Number(cells[0].replace(/[^\d]/g, ''));
+      if (rank < 1 || rank > 3) return;
+      for (var i = 1; i < Math.min(cells.length, 6); i++) {
+        var n = Number(cells[i].replace(/[^\d]/g, ''));
+        if (n >= 1 && n <= 18 && i >= 2) { if (out.indexOf(n) < 0) out.push(n); break; }
+        if (n >= 1 && n <= 18 && i === 1) { if (out.indexOf(n) < 0) out.push(n); }
+      }
+    });
+    return out.length >= 2;
   });
+
+  if (out.length >= 2) return out.slice(0, 3);
+
+  // ── Strategy 3: テキスト行パース（正規表現を複数パターンで試す） ──
+  out = [];
+  var lines = text.split(/[\n\r]+/);
+  // パターンA: 「着順 枠番 馬番」の3カラム形式
+  var patA = /^([1-3])\s+([1-8])\s+([1-9]|1[0-8])[\s\D]/;
+  // パターンB: 「着順 馬番」（枠番省略）
+  var patB = /^([1-3])\s+([1-9]|1[0-8])[\s\D]/;
+  // パターンC: テキスト中どこかに「1着 ○番」等
+  var patC = /([1-3])着.*?([1-9]|1[0-8])番/;
+  // パターンD: 「着 馬番」表記（NAR等）
+  var patD = /^([1-3])着?\s+([1-9]|1[0-8])\b/;
+
+  [patA, patB, patD].forEach(function (pat) {
+    if (out.length >= 2) return;
+    var tmp = [];
+    lines.forEach(function (raw) {
+      if (tmp.length >= 3) return;
+      var s = raw.replace(/\s+/g, ' ').trim();
+      var m = s.match(pat);
+      if (!m) return;
+      var rank = Number(m[1]);
+      var horseNo = Number(m[pat === patA ? 3 : 2]);
+      if (rank >= 1 && rank <= 3 && horseNo >= 1 && horseNo <= 18) {
+        if (tmp.indexOf(horseNo) < 0) tmp.push(horseNo);
+      }
+    });
+    if (tmp.length >= 2) out = tmp;
+  });
+
+  if (out.length >= 2) return out.slice(0, 3);
+
+  // パターンC: 「1着」「2着」テキスト検索
+  out = [];
+  [1, 2, 3].forEach(function (rank) {
+    if (out.length >= rank) return;
+    var m = text.match(new RegExp(rank + '着.*?([1-9]|1[0-8])番'));
+    if (m) {
+      var n = Number(m[1]);
+      if (n >= 1 && n <= 18 && out.indexOf(n) < 0) out.push(n);
+    }
+  });
+
+  // ── Strategy 4: 払戻テーブルの単勝から1着馬番を推定 ──
+  if (out.length === 0) {
+    var tanMatch = text.match(/単勝\s*([1-9]|1[0-8])\s+\d{3,}/);
+    if (tanMatch) out.push(Number(tanMatch[1]));
+    // 複勝から2〜3着候補を補完
+    var fukuMatches = [];
+    var fukuRe = /複勝\s*((?:[1-9]|1[0-8])(?:\s+(?:[1-9]|1[0-8])){0,2})/g;
+    var fm;
+    while ((fm = fukuRe.exec(text))) {
+      String(fm[1]).split(/\s+/).forEach(function (s) {
+        var n = Number(s);
+        if (n >= 1 && n <= 18 && fukuMatches.indexOf(n) < 0) fukuMatches.push(n);
+      });
+    }
+    // 複勝に含まれる馬番のうち、単勝1着以外を2〜3着候補として追加
+    fukuMatches.forEach(function (n) {
+      if (out.length >= 3) return;
+      if (out.indexOf(n) < 0) out.push(n);
+    });
+  }
+
+  console.log('[RaceDay] parseFinishOrder result:', out);
   return out.slice(0, 3);
 }
 
@@ -1917,27 +2020,71 @@ function normComboKey(nums, ordered) {
 }
 
 function parsePayoutMapFromResultHtml(html) {
-  var text = toHalfNumberText(stripHtmlToText(html).text || '').replace(/,/g, '');
+  var parsed = stripHtmlToText(html);
+  var text = toHalfNumberText(parsed.text || '').replace(/,/g, '');
+  var doc = parsed.doc;
   var map = {};
   var types = ['単勝','複勝','枠連','馬連','ワイド','馬単','3連複','3連単'];
 
   function add(type, combo, yen) {
     yen = Number(String(yen || '').replace(/[^\d]/g, ''));
-    if (!yen) return;
+    if (!yen || yen < 100) return;
     var ordered = (type === '馬単' || type === '3連単');
-    var key = type + ':' + normComboKey(combo, ordered);
-    map[key] = yen;
+    var key = type + ':' + normComboKey(String(combo), ordered);
+    if (!map[key]) map[key] = yen; // 先勝ち
   }
 
-  // loose line parser for netkeiba payout text.
-  types.forEach(function (type) {
-    var idx = text.indexOf(type);
-    if (idx < 0) return;
-    var part = text.slice(idx, idx + 500);
-    var re = /((?:[1-9]|1[0-8])(?:[-ー―−ｰ→>＞](?:[1-9]|1[0-8])){0,2})\s+(\d{2,7})円/g;
-    var m;
-    while ((m = re.exec(part))) add(type, m[1], m[2]);
+  // ── DOM解析: 払戻テーブルの tr を直接読む ──
+  // netkeiba result.html の払戻テーブル: <td>券種名</td><td>馬番</td><td>払戻金</td> が多い
+  Array.prototype.slice.call(doc.querySelectorAll('tr')).forEach(function (tr) {
+    var cells = Array.prototype.slice.call(tr.querySelectorAll('td,th')).map(function (td) {
+      return toHalfNumberText(normCellText(td)).replace(/,/g, '').trim();
+    });
+    if (cells.length < 2) return;
+
+    // 券種がどのセルにあるか探す
+    var typeIdx = -1, type = '';
+    cells.forEach(function (c, i) {
+      types.forEach(function (t) { if (c === t || c.indexOf(t) === 0) { typeIdx = i; type = t; } });
+    });
+    if (typeIdx < 0) return;
+
+    // 馬番セルと金額セルを残りのセルから探す
+    var comboCell = '', yenCell = '';
+    cells.forEach(function (c, i) {
+      if (i === typeIdx) return;
+      // 馬番: 数字とハイフンのみ
+      if (!comboCell && /^([1-9]|1[0-8])([-ー―]([1-9]|1[0-8])){0,2}$/.test(c.replace(/\s/g,''))) {
+        comboCell = c.replace(/\s/g,'');
+      }
+      // 金額: 3〜7桁の数字＋円
+      if (!yenCell && /^\d{3,7}円?$/.test(c)) yenCell = c;
+    });
+    if (comboCell && yenCell) add(type, comboCell, yenCell);
   });
+
+  // ── テキスト解析 (既存ロジック + 強化) ──
+  types.forEach(function (type) {
+    // 券種名出現箇所を全て検索（複数箇所に分かれる場合も対応）
+    var searchFrom = 0;
+    while (true) {
+      var idx = text.indexOf(type, searchFrom);
+      if (idx < 0) break;
+      searchFrom = idx + 1;
+      var part = text.slice(idx, idx + 600);
+
+      // パターン1: 「馬番 払戻円」（スペース区切り）
+      var re1 = /((?:[1-9]|1[0-8])(?:[-ー―−ｰ→>＞](?:[1-9]|1[0-8])){0,2})\s+(\d{3,7})円?/g;
+      var m;
+      while ((m = re1.exec(part))) add(type, m[1], m[2]);
+
+      // パターン2: 「馬番\n払戻\n円」など改行混じり
+      var re2 = /((?:[1-9]|1[0-8])(?:[-ー―−ｰ](?:[1-9]|1[0-8])){0,2})\s*[\n\r\s]+(\d{3,7})/g;
+      while ((m = re2.exec(part))) add(type, m[1], m[2]);
+    }
+  });
+
+  console.log('[RaceDay] payoutMap keys:', Object.keys(map));
   return map;
 }
 
@@ -2046,17 +2193,27 @@ function runSimulationFromResult() {
 
   setSimStatus('result.html を取得して本精算中...', 'info');
   fetchTextViaProxy(url).then(function (html) {
+    // レースが終了しているか確認（払戻テーブルの存在チェック）
+    var hasResult = /単勝|払戻|着順|1着/.test(html);
+    if (!hasResult) {
+      setSimStatus('結果ページにレース結果データが見つかりません。レースがまだ終了していないか、URLが正しくない可能性があります。', 'err');
+      return;
+    }
     var finish = parseFinishOrderFromResultHtml(html);
     if (finish.length < 2) {
-      setSimStatus('結果ページから着順を解析できませんでした。', 'err');
+      // 追加診断: テキスト抜粋をコンソールへ
+      var preview = toHalfNumberText((stripHtmlToText(html).text || '').slice(0, 500));
+      console.warn('[RaceDay] 着順解析失敗。テキスト先頭500字:', preview);
+      setSimStatus('結果ページから着順を解析できませんでした。ページが正しい結果URLか確認してください（race_id=' + (url.match(/race_id=(\w+)/) || [,'不明'])[1] + '）', 'err');
       return;
     }
     var payoutMap = parsePayoutMapFromResultHtml(html);
+    var payoutCount = Object.keys(payoutMap).length;
     renderSimulationSettlement(finish, payoutMap, 'result.html');
-    setSimStatus('本精算完了: 着順 ' + finish.join('-'), 'ok');
+    setSimStatus('本精算完了: 着順 ' + finish.join('-') + '（払戻' + payoutCount + '件取得）', 'ok');
   }).catch(function (e) {
     console.error(e);
-    setSimStatus('結果取得失敗: ' + (e && e.message ? e.message : e), 'err');
+    setSimStatus('結果取得失敗: ' + (e && e.message ? e.message : e) + '　プロキシ設定を確認してください。', 'err');
   });
 }
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.26.3 RaceDay Complete</title>
+<title>The競馬 EV分析 v5.26.4 RaceDay NAR Probe Fix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -224,7 +224,7 @@ button, select, input, textarea, .tab-btn, .btn, .btn-sm, .mode-btn, .sim-cand-r
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.26.3</span>
+    <span class="ver">v5.26.4</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -651,17 +651,11 @@ function updateControlsState(hasRace) {
 }
 
 function setJraVisibility(visible) {
-  var select = document.getElementById('pickKind');
-  if (!select) return;
-  var jraOpt = select.querySelector('option[value="JRA"]');
-  if (jraOpt) {
-    jraOpt.disabled = !visible;
-    if (!visible && select.value === 'JRA') {
-      select.value = 'NAR';
-      settings.nar = true;
-    }
-  }
-  document.getElementById('narBadge').style.display = settings.nar ? '' : 'none';
+  // v5.26.4: JRA選択肢を勝手に無効化しない。
+  // NAR読み込み時にJRAをdisabledにすると、iPad Safariで区分状態が混線して
+  // 「NARなのにJRA開催なし」と表示される原因になるため、バッジ表示だけ更新する。
+  var badge = document.getElementById('narBadge');
+  if (badge) badge.style.display = settings.nar ? '' : 'none';
 }
 
 // ─── コアロジック: レース・開催情報抽出 ───
@@ -732,6 +726,92 @@ function parseRaceIdsFromHtml(html, kind, date, filterVenue) {
   list.sort(function (a, b) { return a.venueCode.localeCompare(b.venueCode) || a.raceNo - b.raceNo; });
   console.log('[RaceDay] 解析完了。採用件数: ' + list.length);
   return list;
+}
+
+// ─── v5.26.4 NAR開催検出フォールバック ───
+// netkeiba側のrace_list.htmlが空・変更・キャッシュ不整合でも、NARはrace_idに月日が入るため
+// yyyy + 場コード + MMDD + R番号 を直接確認して開催判定する。
+function mapLimit(items, limit, iterator) {
+  var results = [];
+  var idx = 0;
+  var running = 0;
+  return new Promise(function (resolve) {
+    function next() {
+      if (idx >= items.length && running === 0) return resolve(results);
+      while (running < limit && idx < items.length) {
+        (function (item, pos) {
+          running++;
+          Promise.resolve(iterator(item, pos)).then(function (res) {
+            results[pos] = res;
+          }).catch(function () {
+            results[pos] = null;
+          }).then(function () {
+            running--;
+            next();
+          });
+        })(items[idx], idx);
+        idx++;
+      }
+    }
+    next();
+  });
+}
+
+function buildNarRaceId(date, venueCode, raceNo) {
+  var p = parseYmd(date);
+  return p.y + String(venueCode).padStart(2, '0') + p.md + pad2(raceNo);
+}
+
+function extractRaceNameFromHtml(html) {
+  var sHtml = String(html || '');
+  var m = sHtml.match(/<h1[^>]*class=["'][^"']*RaceName[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i) ||
+          sHtml.match(/<div[^>]*class=["'][^"']*RaceName[^"']*["'][^>]*>([\s\S]*?)<\/div>/i) ||
+          sHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  return m ? cleanRaceName(m[1]) : '';
+}
+
+function narRacePageLooksValid(html, id, date) {
+  var sHtml = String(html || '');
+  if (sHtml.length < 1000) return false;
+  if (sHtml.indexOf('race_id=' + id) < 0 && sHtml.indexOf(id) < 0) return false;
+  if (/ページが見つかりません|Not Found|404|存在しません/.test(sHtml)) return false;
+  // NARはrace_id自体に月日が入るため、ページ内に馬リンクまたはレース名があれば実在扱い。
+  // pageHasSelectedRaceDate() が年付き日付だけ要求して落とす問題をここで回避する。
+  if (pageHasSelectedRaceDate(sHtml, date)) return true;
+  if (/<a[^>]+href=["'][^"']*\/horse\//i.test(sHtml)) return true;
+  if (extractRaceNameFromHtml(sHtml)) return true;
+  return false;
+}
+
+function probeNarRaceById(date, venueCode, venueName, raceNo) {
+  var id = buildNarRaceId(date, venueCode, raceNo);
+  var url = 'https://nar.netkeiba.com/race/shutuba.html?race_id=' + id;
+  return fetchTextViaProxy(url).then(function (html) {
+    if (!narRacePageLooksValid(html, id, date)) return null;
+    var name = extractRaceNameFromHtml(html) || (pad2(raceNo) + 'R');
+    return { id: id, venueCode: String(venueCode), venueName: venueName, raceNo: raceNo, nearName: name, formalName: name, probed: true };
+  }).catch(function () { return null; });
+}
+
+function probeActiveNarRaces(date, filterVenue) {
+  var jobs = [];
+  NAR_MASTER.forEach(function (v) {
+    if (filterVenue && String(v[0]) !== String(filterVenue)) return;
+    for (var r = 1; r <= 12; r++) {
+      jobs.push({ venueCode: v[0], venueName: v[1], raceNo: r });
+    }
+  });
+  console.log('[RaceDay] NAR race_id直接検証開始: jobs=' + jobs.length + ', venue=' + (filterVenue || 'ALL'));
+  return mapLimit(jobs, 6, function (job) {
+    return probeNarRaceById(date, job.venueCode, job.venueName, job.raceNo);
+  }).then(function (arr) {
+    var seen = {};
+    return arr.filter(Boolean).filter(function (r) {
+      if (seen[r.id]) return false;
+      seen[r.id] = true;
+      return true;
+    }).sort(function (a, b) { return a.venueCode.localeCompare(b.venueCode) || a.raceNo - b.raceNo; });
+  });
 }
 
 // JRA出馬表の日付厳密チェック
@@ -819,36 +899,27 @@ function dedupeRaceNoPreferValidDate(races) {
 function loadActiveVenues() {
   var date = document.getElementById('pickDate').value || getLocalDateString();
   var kind = document.getElementById('pickKind').value;
-  
+  settings.nar = (kind === 'NAR');
+  setJraVisibility(true);
   updateControlsState(true);
-  setStatus('実開催地を race_id から直接検証中...', 'info');
-  
-  // 選択中のkindのみfetchする（同時fetch問題回避・高速化）
-  var activeFetch = fetchTextViaProxy(getNetkeibaUrl(kind, date))
-    .then(function (h) { return parseRaceIdsFromHtml(h, kind, date, ''); })
-    .catch(function (e) { console.warn('[RaceDay] fetch失敗(' + kind + '):', e); return []; });
+  setStatus('実開催地を race_id から検証中...', 'info');
 
-  Promise.all([activeFetch]).then(function (results) {
-    var currentActiveRaces = results[0];
-    
-    console.log('[RaceDay] ' + kind + ' 取得件数: ' + currentActiveRaces.length);
-    
-    if (kind === 'NAR') {
-      setJraVisibility(false);
-    } else {
-      setJraVisibility(currentActiveRaces.length > 0);
+  fetchTextViaProxy(getNetkeibaUrl(kind, date)).then(function (html) {
+    var races = parseRaceIdsFromHtml(html, kind, date, '');
+    if (kind === 'NAR' && races.length === 0) {
+      setStatus('race_listが空のため、NAR race_idを直接検証中...', 'info');
+      return probeActiveNarRaces(date, '');
     }
-    
+    return races;
+  }).then(function (currentActiveRaces) {
+    console.log('[RaceDay] ' + kind + ' 採用件数: ' + currentActiveRaces.length);
     if (currentActiveRaces.length === 0) {
+      console.log('開催なし日');
       updateControlsState(false);
       setStatus('この日は' + kind + '開催がありません', 'info');
       return;
     }
-    
-    // 開催会場集計（実レース数版）
-    // race_list.htmlには同じrace_idや同じR番号のリンクが複数出るため、
-    // 単純加算は禁止。会場ごとに「ユニークR番号」だけを数える。
-    // JRAは1〜12R、NARは帯広ばんえい等もあるため1〜20Rまで許容。
+
     var maxRaceNo = (kind === 'NAR') ? 20 : 12;
     var venueMap = {};
     currentActiveRaces.forEach(function (r) {
@@ -860,34 +931,29 @@ function loadActiveVenues() {
       if (!venueMap[r.venueCode].raceNos[raceNo]) {
         venueMap[r.venueCode].raceNos[raceNo] = true;
         venueMap[r.venueCode].count++;
-      } else {
-        console.log('[RaceDay] 開催場カウント重複除外: ' + r.venueName + ' ' + pad2(raceNo) + 'R id=' + r.id);
       }
     });
-    
+
     var list = Object.keys(venueMap).sort().map(function (k) { return venueMap[k]; });
-    console.log('[RaceDay] 生成された開催場一覧: ', list.map(function (v) { return v.name + '(' + v.count + 'R)'; }));
-    
     var pv = document.getElementById('pickVenue');
+    var rs = document.getElementById('raceSelect');
     pv.innerHTML = '<option value="">開催場を選択</option>';
-    list.forEach(function (v) {
-      pv.add(new Option(v.name + '（' + v.count + 'R）', v.code));
-    });
-    
-    setStatus(date + ' ' + kind + ' 実開催地抽出完了', 'ok');
-    
-    // Safari等で確実に動かすため、微小遅延を入れて次ステップをキック
+    list.forEach(function (v) { pv.add(new Option(v.name + '（' + v.count + 'R）', v.code)); });
+    if (rs) { rs.disabled = false; rs.innerHTML = '<option value="">開催場を選択してください</option>'; }
+    document.getElementById('fetchBtn').disabled = false;
+    setStatus(date + ' ' + kind + ' 開催地抽出完了', 'ok');
+
     setTimeout(function () {
       if (pv.options.length > 1) {
         pv.selectedIndex = 1;
         loadRaceList();
       }
     }, 50);
-    
   }).catch(function (e) {
     console.error(e);
     console.log('開催なし日');
     updateControlsState(false);
+    setStatus('この日は' + kind + '開催がありません', 'info');
   });
 }
 
@@ -896,40 +962,41 @@ function loadRaceList() {
   var kind = document.getElementById('pickKind').value;
   var venue = document.getElementById('pickVenue').value;
   var rs = document.getElementById('raceSelect');
-  
+  settings.nar = (kind === 'NAR');
+  setJraVisibility(true);
+
   if (!venue) {
     rs.innerHTML = '<option value="">開催場を選択してください</option>';
     return;
   }
-  
+
+  rs.disabled = true;
   rs.innerHTML = '<option value="">正式レース名取得中...</option>';
-  setStatus('正式レース名をパラレル取得中...', 'info');
-  
+  setStatus('正式レース名を取得中...', 'info');
+
   fetchTextViaProxy(getNetkeibaUrl(kind, date)).then(function (html) {
     var races = parseRaceIdsFromHtml(html, kind, date, venue);
-    
-    // race_id重複を先に除外。R番号重複は「日付厳密検証後」に除外する。
+    if (kind === 'NAR' && races.length === 0) {
+      setStatus('race_listが空のため、選択開催場をrace_id直接検証中...', 'info');
+      return probeActiveNarRaces(date, venue);
+    }
+    return races;
+  }).then(function (races) {
     var uniqueMap = {};
-    races.forEach(function (r) { if (!uniqueMap[r.id]) uniqueMap[r.id] = r; });
+    races.forEach(function (r) { if (r && !uniqueMap[r.id]) uniqueMap[r.id] = r; });
     var cleanRaces = Object.keys(uniqueMap).map(function (k) { return uniqueMap[k]; }).sort(function (a, b) { return a.raceNo - b.raceNo || a.id.localeCompare(b.id); });
-    
-    // 外部から正式名と日付を非同期検証・取得するコアタスク
+
     var tasks = cleanRaces.map(function (r) {
+      if (kind === 'NAR' && r.probed && r.formalName) return Promise.resolve(r);
       var shutuba = (kind === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com') + '/race/shutuba.html?race_id=' + r.id;
       return fetchTextViaProxy(shutuba).then(function (sHtml) {
-        // 年付き日付で厳密検証。年なしの「5月24日」だけでは土日混在するため採用しない。
-        if (!pageHasSelectedRaceDate(sHtml, date)) {
+        var validDate = (kind === 'NAR') ? narRacePageLooksValid(sHtml, r.id, date) : pageHasSelectedRaceDate(sHtml, date);
+        if (!validDate) {
           console.log('[RaceDay] 日付不一致のため除外: id=' + r.id + ', R=' + pad2(r.raceNo));
           return null;
         }
-        
-        var m = sHtml.match(/<h1[^>]*class=["'][^"']*RaceName[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i) ||
-                sHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-        var formal = m ? cleanRaceName(m[1]) : '';
-        if (!formal) {
-          console.warn('[RaceDay] レース名取得失敗で除外: id=' + r.id + ', 理由=正式名空欄');
-          return null;
-        }
+        var formal = extractRaceNameFromHtml(sHtml) || cleanRaceName(r.nearName) || (pad2(r.raceNo) + 'R');
+        if (!formal) return null;
         r.formalName = formal;
         return r;
       }).catch(function (err) {
@@ -937,38 +1004,37 @@ function loadRaceList() {
         return null;
       });
     });
-    
-    return Promise.all(tasks).then(function (completed) {
-      var finalRaces = dedupeRaceNoPreferValidDate(completed.filter(Boolean));
-      rs.innerHTML = '';
-      
-      if (finalRaces.length === 0) {
-        rs.add(new Option('この日は開催がありません', ''));
-        rs.disabled = true;
-        document.getElementById('raceUrl').value = '';
-        document.getElementById('fetchBtn').disabled = true;
-        console.log('開催なし日');
-        setStatus('開催なし日', 'info');
-        return;
-      }
-      rs.disabled = false;
-      document.getElementById('fetchBtn').disabled = false;
-      
-      finalRaces.forEach(function (r) {
-        var label = pad2(r.raceNo) + 'R ' + r.formalName;
-        var opt = new Option(label, (kind === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com') + '/race/shutuba.html?race_id=' + r.id);
-        opt.dataset.raceId = r.id;
-        opt.dataset.raceName = r.formalName;
-        opt.dataset.raceNo = String(r.raceNo);
-        rs.add(opt);
-        console.log('[RaceDay] 表示した正式レース名: ' + label);
-      });
-      
-      applySelectedRaceUrl();
-      setStatus('レース選択リスト展開完了', 'ok');
+
+    return Promise.all(tasks);
+  }).then(function (completed) {
+    var finalRaces = dedupeRaceNoPreferValidDate((completed || []).filter(Boolean));
+    rs.innerHTML = '';
+    if (finalRaces.length === 0) {
+      rs.add(new Option('この日は開催がありません', ''));
+      rs.disabled = true;
+      document.getElementById('raceUrl').value = '';
+      document.getElementById('fetchBtn').disabled = true;
+      console.log('開催なし日');
+      setStatus('開催なし日', 'info');
+      return;
+    }
+
+    rs.disabled = false;
+    document.getElementById('fetchBtn').disabled = false;
+    finalRaces.forEach(function (r) {
+      var label = pad2(r.raceNo) + 'R ' + r.formalName;
+      var opt = new Option(label, (kind === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com') + '/race/shutuba.html?race_id=' + r.id);
+      opt.dataset.raceId = r.id;
+      opt.dataset.raceName = r.formalName;
+      opt.dataset.raceNo = String(r.raceNo);
+      rs.add(opt);
     });
+    applySelectedRaceUrl();
+    setStatus('レース選択リスト展開完了', 'ok');
   }).catch(function (e) {
     console.error(e);
+    rs.innerHTML = '<option value="">レース一覧取得失敗</option>';
+    rs.disabled = true;
     setStatus('レース一覧の取得に失敗しました', 'err');
   });
 }

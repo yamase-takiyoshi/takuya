@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.25.1 RaceDay Complete</title>
+<title>The競馬 EV分析 v5.25.2 RaceDay Complete</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -207,7 +207,7 @@ body {
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.25.1</span>
+    <span class="ver">v5.25.2</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -798,17 +798,26 @@ function loadActiveVenues() {
       return;
     }
     
-    // 開催会場集計
+    // 開催会場集計（実レース数版）
+    // race_list.htmlには同じrace_idや同じR番号のリンクが複数出るため、
+    // 単純加算は禁止。会場ごとに「1〜12RのユニークR番号」だけを数える。
     var venueMap = {};
     currentActiveRaces.forEach(function (r) {
+      var raceNo = Number(r.raceNo);
+      if (!r || !r.venueCode || raceNo < 1 || raceNo > 12) return;
       if (!venueMap[r.venueCode]) {
-        venueMap[r.venueCode] = { code: r.venueCode, name: r.venueName, count: 0 };
+        venueMap[r.venueCode] = { code: r.venueCode, name: r.venueName, count: 0, raceNos: {} };
       }
-      venueMap[r.venueCode].count++;
+      if (!venueMap[r.venueCode].raceNos[raceNo]) {
+        venueMap[r.venueCode].raceNos[raceNo] = true;
+        venueMap[r.venueCode].count++;
+      } else {
+        console.log('[RaceDay] 開催場カウント重複除外: ' + r.venueName + ' ' + pad2(raceNo) + 'R id=' + r.id);
+      }
     });
     
     var list = Object.keys(venueMap).sort().map(function (k) { return venueMap[k]; });
-    console.log('[RaceDay] 生成された開催場一覧: ', list.map(function (v) { return v.name; }));
+    console.log('[RaceDay] 生成された開催場一覧: ', list.map(function (v) { return v.name + '(' + v.count + 'R)'; }));
     
     var pv = document.getElementById('pickVenue');
     pv.innerHTML = '<option value="">開催場を選択</option>';

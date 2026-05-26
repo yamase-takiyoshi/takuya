@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.29.0</title>
+<title>The競馬 EV分析 v5.29.1</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -224,7 +224,7 @@ button, select, input, textarea, .tab-btn, .btn, .btn-sm, .mode-btn, .sim-cand-r
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.29.0</span>
+    <span class="ver">v5.29.1</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -519,7 +519,8 @@ var MODE_EV = {
   auto: { '単勝': 1.05, '複勝': 1.05, '枠連': 1.10, 'ワイド': 1.05, '馬連': 1.10, '馬単': 1.15, '3連複': 1.20, '3連単': 1.30 },
   trigami: { '単勝': 1.10, '複勝': 1.08, '枠連': 1.15, 'ワイド': 1.12, '馬連': 1.18, '馬単': 1.25, '3連複': 1.30, '3連単': 1.45 },
   balance: { '単勝': 1.05, '複勝': 1.05, '枠連': 1.10, 'ワイド': 1.05, '馬連': 1.10, '馬単': 1.15, '3連複': 1.20, '3連単': 1.30 },
-  evpro: { '単勝': 1.08, '複勝': 1.05, '枠連': 1.12, 'ワイド': 1.08, '馬連': 1.12, '馬単': 1.18, '3連複': 1.25, '3連単': 1.40 },
+  evpro: { '単勝': 1.08, '複勝': 1.05, '枠連': 1.12, 'ワイド': 1.08, '馬連': 1.12, '馬単': 1.18, '3連複': 1.25, '30
+単': 1.40 },
   ev_roi: { '単勝': 1.12, '複勝': 1.08, '枠連': 1.18, 'ワイド': 1.12, '馬連': 1.20, '馬単': 1.30, '3連複': 1.40, '3連単': 1.60 },
   roi_plus: { '単勝': 1.00, '複勝': 1.00, '枠連': 1.10, 'ワイド': 1.00, '馬連': 1.10, '馬単': 9.99, '3連複': 1.00, '3連単': 9.99 }
 };
@@ -541,8 +542,6 @@ var currentRaceId = '';
 // ─── 汎用ヘルパー ───
 function pad2(n) { return String(n).padStart(2, '0'); }
 function getLocalDateString(d) {
-  // v5.26.6: iPad/Safariの履歴復元・環境TZ差で日付が1日戻る事故を防ぐ。
-  // 競馬開催日は日本時間で固定する。
   var date = d || new Date();
   try {
     var parts = new Intl.DateTimeFormat('ja-JP', {
@@ -563,9 +562,6 @@ function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, function (m) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]); });
 }
 
-
-// iPad Safari / desktop 両対応の安全タップバインド
-// これが無いと setupEvents() の途中で停止し、上部タブ・取得ボタンが無反応になります。
 function bindTap(el, handler) {
   if (!el || typeof handler !== 'function') return;
   el._tkTapHandler = handler;
@@ -585,7 +581,6 @@ function bindTap(el, handler) {
 
   el.addEventListener('touchend', function (ev) {
     lastTouch = Date.now();
-    // select/input は標準操作を邪魔しない。button系だけ即時実行。
     var tag = String(el.tagName || '').toLowerCase();
     if (tag === 'select' || tag === 'input' || tag === 'textarea') return;
     ev.preventDefault();
@@ -597,6 +592,7 @@ function bindTap(el, handler) {
     run(ev);
   }, false);
 }
+
 function cleanRaceName(raw) {
   var div = document.createElement('div');
   div.innerHTML = String(raw || '').replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ');
@@ -607,7 +603,7 @@ function cleanRaceName(raw) {
   return s;
 }
 
-// ─── ネットワーク通信 (XMLHttpRequestベース・キャッシュ破棄) ───
+// ─── ネットワーク通信 ───
 function fetchTextViaProxy(url) {
   return new Promise(function (resolve, reject) {
     var proxy = settings.proxyUrl.replace(/\/$/, '');
@@ -644,26 +640,25 @@ function updateControlsState(hasRace) {
   var pv = document.getElementById('pickVenue');
   var rs = document.getElementById('raceSelect');
   var fb = document.getElementById('fetchBtn');
+  var dBtn = document.getElementById('loadRaceListBtn');
   
+  // どんな状態であれ、カレンダー再読み込みとデータロードはロックしない
+  if (dBtn) dBtn.disabled = false;
+  if (fb) fb.disabled = false;
+  if (pv) pv.disabled = false;
+
   if (!hasRace) {
-    if (pv) { pv.innerHTML = '<option value="">開催なし</option>'; pv.disabled = false; }
-    if (rs) { rs.innerHTML = '<option value="">この日は開催がありません</option>'; rs.disabled = true; }
-    if (fb) fb.disabled = true;
-    document.getElementById('raceUrl').value = '';
-    currentRaceId = '';
-    currentRaceName = '';
+    if (rs) {
+      rs.innerHTML = '<option value="">この日は選択可能な自動レースがありません（URL直接入力可）</option>';
+      rs.disabled = false; 
+    }
     document.getElementById('raceTitleBox').style.display = 'none';
   } else {
-    if (pv) pv.disabled = false;
     if (rs) rs.disabled = false;
-    if (fb) fb.disabled = false;
   }
 }
 
 function setJraVisibility(visible) {
-  // v5.26.4: JRA選択肢を勝手に無効化しない。
-  // NAR読み込み時にJRAをdisabledにすると、iPad Safariで区分状態が混線して
-  // 「NARなのにJRA開催なし」と表示される原因になるため、バッジ表示だけ更新する。
   var badge = document.getElementById('narBadge');
   if (badge) badge.style.display = settings.nar ? '' : 'none';
 }
@@ -689,8 +684,6 @@ function parseRaceIdsFromHtml(html, kind, date, filterVenue) {
     if (x.length === 12) ids.push(x);
   }
 
-  // v5.26.6: NARの開催一覧は race_id= がHTMLエンコード/URLエンコード/JSON埋め込みに変わることがある。
-  // 「race_id=」だけでなく、12桁IDを拾ってから年月日・会場コードで厳密に絞る。
   var rxList = [
     /race_id(?:=|%3D|\u003d|&amp;#61;)(\d{10,12})/gi,
     /race_id["'\s:：=]+(\d{10,12})/gi,
@@ -705,42 +698,22 @@ function parseRaceIdsFromHtml(html, kind, date, filterVenue) {
     while ((bm = broad.exec(String(html || ''))) !== null) pushId(bm[1]);
   }
   
-  console.log('[RaceDay] 開始解析: 日付=' + p.ymd + ', 区分=' + kind + ', フィルタ会場=' + (filterVenue || 'なし') + ', 候補ID=' + ids.length);
-  
   for (var idxId = 0; idxId < ids.length; idxId++) {
     var id = ids[idxId];
-    if (id.length !== 12) {
-      console.warn('[RaceDay] 12桁以外のため除外: id=' + id);
-      continue;
-    }
-    if (id.slice(0, 4) !== p.y) {
-      console.warn('[RaceDay] 年不一致のため除外: id=' + id + ' (レース年=' + id.slice(0, 4) + ', 選択年=' + p.y + ')');
-      continue;
-    }
+    if (id.length !== 12) continue;
+    if (id.slice(0, 4) !== p.y) continue;
     var vCode = id.slice(4, 6);
-    if (!validVenues[vCode]) {
-      console.warn('[RaceDay] 不明な会場コードのため除外: id=' + id + ', コード=' + vCode);
-      continue;
-    }
-    if (filterVenue && vCode !== String(filterVenue)) {
-      continue;
-    }
-    if (kind === 'NAR' && id.slice(6, 10) !== p.md) {
-      console.warn('[RaceDay] NAR月日不一致のため除外: id=' + id + ' (レース月日=' + id.slice(6, 10) + ', 選択月日=' + p.md + ')');
-      continue;
-    }
+    if (!validVenues[vCode]) continue;
+    if (filterVenue && vCode !== String(filterVenue)) continue;
+    if (kind === 'NAR' && id.slice(6, 10) !== p.md) continue;
     
     var rNo = Number(id.slice(-2));
     var maxR = (kind === 'NAR') ? 20 : 12;
-    if (rNo < 1 || rNo > maxR) {
-      console.warn('[RaceDay] R番号範囲外のため除外: id=' + id + ', R=' + rNo);
-      continue;
-    }
+    if (rNo < 1 || rNo > maxR) continue;
     
     if (seenIds[id]) continue;
     seenIds[id] = true;
     
-    // 付近のHTMLから簡易名抽出（match.indexは未定義のため文字列検索で代替）
     var nearName = '';
     var idPos = String(html || '').indexOf(id);
     if (idPos >= 0) {
@@ -751,18 +724,12 @@ function parseRaceIdsFromHtml(html, kind, date, filterVenue) {
         if (m) { nearName = cleanRaceName(m[1]); if (nearName) break; }
       }
     }
-    
     list.push({ id: id, venueCode: vCode, venueName: validVenues[vCode], raceNo: rNo, nearName: nearName });
   }
-  
   list.sort(function (a, b) { return a.venueCode.localeCompare(b.venueCode) || a.raceNo - b.raceNo; });
-  console.log('[RaceDay] 解析完了。採用件数: ' + list.length);
   return list;
 }
 
-// ─── v5.26.4 NAR開催検出フォールバック ───
-// netkeiba側のrace_list.htmlが空・変更・キャッシュ不整合でも、NARはrace_idに月日が入るため
-// yyyy + 場コード + MMDD + R番号 を直接確認して開催判定する。
 function mapLimit(items, limit, iterator) {
   var results = [];
   var idx = 0;
@@ -807,8 +774,6 @@ function narRacePageLooksValid(html, id, date) {
   if (sHtml.length < 1000) return false;
   if (sHtml.indexOf('race_id=' + id) < 0 && sHtml.indexOf(id) < 0) return false;
   if (/ページが見つかりません|Not Found|404|存在しません/.test(sHtml)) return false;
-  // NARはrace_id自体に月日が入るため、ページ内に馬リンクまたはレース名があれば実在扱い。
-  // pageHasSelectedRaceDate() が年付き日付だけ要求して落とす問題をここで回避する。
   if (pageHasSelectedRaceDate(sHtml, date)) return true;
   if (/<a[^>]+href=["'][^"']*\/horse\//i.test(sHtml)) return true;
   if (extractRaceNameFromHtml(sHtml)) return true;
@@ -826,22 +791,13 @@ function probeNarRaceById(date, venueCode, venueName, raceNo) {
 }
 
 function probeActiveNarRaces(date, filterVenue) {
-  // v5.29.0: NARは開催一覧DOMを信用しない。
-  // race_id = YYYY + 場コード + MMDD + RR を直接生成し、実在する出馬表だけを採用する。
-  // これで「門別だけ残る」「前日/翌日混入」「race_id空欄」「Safariキャッシュ由来のズレ」を潰す。
-  console.log('[RaceDay] NAR race_id直接サーチ開始: date=' + date + ', venue=' + (filterVenue || 'ALL'));
   return probeNarRacesFallback(date, filterVenue).then(function (races) {
-    races = (races || []).filter(Boolean);
-    console.log('[RaceDay] NAR race_id直接サーチ完了: ' + races.length + '件');
-    return races;
+    return (races || []).filter(Boolean);
   });
 }
 
 function probeNarRacesFallback(date, filterVenue) {
-  // v5.28.0: 2段階方式。
-  // Step1: 各場の代表R(1,4,7)を検証して開催場を特定（最大15場×3=45リクエスト、12並列）
-  // Step2: 開催確認できた場のみ全Rを検証（無駄な検証を大幅削減）
-  var probeRnos = [1, 4, 7]; // 代表R番号
+  var probeRnos = [1, 4, 7];
   var step1Jobs = [];
   NAR_MASTER.forEach(function (v) {
     if (filterVenue && String(v[0]) !== String(filterVenue)) return;
@@ -849,21 +805,16 @@ function probeNarRacesFallback(date, filterVenue) {
       step1Jobs.push({ venueCode: v[0], venueName: v[1], raceNo: r });
     });
   });
-  console.log('[RaceDay] NAR Step1 開催場検出開始: jobs=' + step1Jobs.length + ', venue=' + (filterVenue || 'ALL'));
   return mapLimit(step1Jobs, 12, function (job) {
     return probeNarRaceById(date, job.venueCode, job.venueName, job.raceNo);
   }).then(function (step1Results) {
-    // Step1で開催確認できた場コードを収集
     var activeVenueCodes = {};
     step1Results.filter(Boolean).forEach(function (r) {
       activeVenueCodes[r.venueCode] = r.venueName;
     });
     var activeCodes = Object.keys(activeVenueCodes);
-    console.log('[RaceDay] NAR Step1 開催場特定: ' + activeCodes.length + '場 = [' + activeCodes.map(function(c){return activeVenueCodes[c];}).join(', ') + ']');
 
     if (activeCodes.length === 0) {
-      // Step1で1件も取れなかった場合は全件フォールバック（旧来方式）
-      console.warn('[RaceDay] NAR Step1 0件。全場全R検証にフォールバック');
       var allJobs = [];
       NAR_MASTER.forEach(function (v) {
         if (filterVenue && String(v[0]) !== String(filterVenue)) return;
@@ -874,7 +825,6 @@ function probeNarRacesFallback(date, filterVenue) {
       });
     }
 
-    // Step2: 開催確認済みの場のみ全R検証
     var step2Jobs = [];
     activeCodes.forEach(function (code) {
       var vName = activeVenueCodes[code];
@@ -882,8 +832,6 @@ function probeNarRacesFallback(date, filterVenue) {
         step2Jobs.push({ venueCode: code, venueName: vName, raceNo: r });
       }
     });
-    console.log('[RaceDay] NAR Step2 全R検証開始: jobs=' + step2Jobs.length);
-    // Step1で既に取得済みのIDは使い回す
     var step1Map = {};
     step1Results.filter(Boolean).forEach(function (r) { step1Map[r.id] = r; });
     var remaining = step2Jobs.filter(function (j) {
@@ -904,7 +852,6 @@ function probeNarRacesFallback(date, filterVenue) {
   });
 }
 
-// JRA出馬表の日付厳密チェック
 function extractSelectedDateTokens(date) {
   var p = parseYmd(date);
   var y = Number(p.y);
@@ -922,6 +869,7 @@ function extractSelectedDateTokens(date) {
   };
 }
 
+// ─── DOM解析・文字列パース ───
 function stripHtmlToText(html) {
   var parser = new DOMParser();
   var doc = parser.parseFromString(String(html || ''), 'text/html');
@@ -933,7 +881,6 @@ function textHasExactSelectedDate(text, date) {
   var t = String(text || '').replace(/\s+/g, ' ');
   var x = extractSelectedDateTokens(date);
   if (t.indexOf(x.jp1) >= 0 || t.indexOf(x.jp2) >= 0 || t.indexOf(x.slash1) >= 0 || t.indexOf(x.slash2) >= 0 || t.indexOf(x.hyphen) >= 0) return true;
-  // 「2026.05.24」などの表記も許可。ただし年なしの「5/24」だけでは誤一致が出るため不可。
   var re = new RegExp('(^|[^0-9])' + x.y + '[./年\\-]\s*0?' + x.m + '[./月\\-]\s*0?' + x.d + '(日)?([^0-9]|$)');
   return re.test(t);
 }
@@ -956,7 +903,6 @@ function pageHasSelectedRaceDate(html, date) {
   return textHasExactSelectedDate(parsed.text.slice(0, 8000), date);
 }
 
-// JRA/NAR出馬表の日付厳密チェック（年付き日付のみ許可）
 function checkRacePageDate(id, date, kind) {
   var targetUrl = (kind === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com') + '/race/shutuba.html?race_id=' + id;
   return fetchTextViaProxy(targetUrl).then(function (html) {
@@ -965,22 +911,13 @@ function checkRacePageDate(id, date, kind) {
   }).catch(function () { return false; });
 }
 
-// 旧関数名互換
-function checkJraPageDate(id, date) {
-  return checkRacePageDate(id, date, settings.nar ? 'NAR' : 'JRA');
-}
-
 function dedupeRaceNoPreferValidDate(races) {
   var map = {};
   races.forEach(function (r) {
     var key = String(r.raceNo);
     if (!map[key]) {
       map[key] = r;
-      return;
     }
-    // ここに来た時点で同じR番号。正式日付チェック後の先勝ちにする。
-    // race_idの大小で勝手に差し替えると土曜/日曜が逆転するため禁止。
-    console.log('[RaceDay] 同一R番号重複除外: ' + pad2(r.raceNo) + 'R id=' + r.id + ' 採用済=' + map[key].id);
   });
   return Object.keys(map).map(function (k) { return map[k]; }).sort(function (a, b) { return a.raceNo - b.raceNo; });
 }
@@ -996,7 +933,6 @@ function loadActiveVenues() {
 
   var racePromise;
   if (kind === 'NAR') {
-    // v5.29.0: NARはrace_id直接サーチのみ。開催一覧DOMには依存しない。
     racePromise = probeActiveNarRaces(date, '');
   } else {
     racePromise = fetchTextViaProxy(getNetkeibaUrl(kind, date)).then(function (html) {
@@ -1006,28 +942,26 @@ function loadActiveVenues() {
 
   racePromise.then(function (currentActiveRaces) {
     currentActiveRaces = (currentActiveRaces || []).filter(Boolean);
-    console.log('[RaceDay] ' + kind + ' 採用件数: ' + currentActiveRaces.length);
 
     if (currentActiveRaces.length === 0) {
-      // v5.26.6: 履歴復元で前日が残った場合は、日本時間の今日で1回だけ再照合する。
       var jstToday = getLocalDateString();
-      if (kind === 'NAR' && date !== jstToday && !loadActiveVenues._retryToday) {
+      if (date !== jstToday && !loadActiveVenues._retryToday) {
         loadActiveVenues._retryToday = true;
         var pd = document.getElementById('pickDate');
         if (pd) pd.value = jstToday;
-        setStatus('選択日が古いため、日本時間の本日 ' + jstToday + ' で race_id を再参照中...', 'info');
+        setStatus('選択日が古いため、本日の日付 ' + jstToday + ' で再参照中...', 'info');
         loadActiveVenues();
         return;
       }
       loadActiveVenues._retryToday = false;
-      console.log('開催なし日');
       updateControlsState(false);
-      setStatus('この日は' + kind + '開催がありません', 'info');
+      setStatus('この日は自動リスト化可能な' + kind + '開催がありません。URLから直接取得可能です。', 'info');
+      
+      var pv = document.getElementById('pickVenue');
+      if (pv) pv.innerHTML = '<option value="">開催なし</option>';
       return;
     }
     loadActiveVenues._retryToday = false;
-
-    // ここが重要：以前に「開催なし」でdisabledになったUIを必ず復帰させる。
     updateControlsState(true);
 
     var maxRaceNo = (kind === 'NAR') ? 20 : 12;
@@ -1054,8 +988,6 @@ function loadActiveVenues() {
       rs.disabled = false;
       rs.innerHTML = '<option value="">開催場を選択してください</option>';
     }
-    var fb = document.getElementById('fetchBtn');
-    if (fb) fb.disabled = false;
     setStatus(date + ' ' + kind + ' 開催地抽出完了', 'ok');
 
     setTimeout(function () {
@@ -1066,9 +998,8 @@ function loadActiveVenues() {
     }, 50);
   }).catch(function (e) {
     console.error(e);
-    console.log('開催なし日');
     updateControlsState(false);
-    setStatus('この日は' + kind + '開催がありません', 'info');
+    setStatus('開催情報取得エラー。URLを直接入力して取得できます。', 'info');
   });
 }
 
@@ -1081,20 +1012,22 @@ function loadRaceList() {
   setJraVisibility(true);
 
   if (!venue) {
-    rs.disabled = false;
-    rs.innerHTML = '<option value="">開催場を選択してください</option>';
+    if (rs) {
+      rs.disabled = false;
+      rs.innerHTML = '<option value="">開催場を選択してください</option>';
+    }
     return;
   }
 
-  // 開催場が選ばれた時点で「開催あり」状態へ復帰。
   updateControlsState(true);
-  rs.disabled = true;
-  rs.innerHTML = '<option value="">正式レース名取得中...</option>';
-  setStatus(kind === 'NAR' ? 'race_idから正式レース名を取得中...' : '正式レース名を取得中...', 'info');
+  if (rs) {
+    rs.disabled = true;
+    rs.innerHTML = '<option value="">正式レース名取得中...</option>';
+  }
+  setStatus('正式レース名を取得中...', 'info');
 
   var racePromise;
   if (kind === 'NAR') {
-    // v5.29.0: NARはrace_id直接サーチのみ。選択開催場の実在レースだけを採用する。
     racePromise = probeActiveNarRaces(date, venue);
   } else {
     racePromise = fetchTextViaProxy(getNetkeibaUrl(kind, date)).then(function (html) {
@@ -1115,39 +1048,31 @@ function loadRaceList() {
     var tasks = cleanRaces.map(function (r) {
       var shutuba = 'https://race.netkeiba.com/race/shutuba.html?race_id=' + r.id;
       return fetchTextViaProxy(shutuba).then(function (sHtml) {
-        if (!pageHasSelectedRaceDate(sHtml, date)) {
-          console.log('[RaceDay] 日付不一致のため除外: id=' + r.id + ', R=' + pad2(r.raceNo));
-          return null;
-        }
+        if (!pageHasSelectedRaceDate(sHtml, date)) return null;
         var formal = extractRaceNameFromHtml(sHtml) || cleanRaceName(r.nearName) || (pad2(r.raceNo) + 'R');
         if (!formal) return null;
         r.formalName = formal;
         return r;
-      }).catch(function (err) {
-        console.warn('[RaceDay] レース名取得失敗で除外: id=' + r.id + ', 理由=' + err.message);
+      }).catch(function () {
         return null;
       });
     });
     return Promise.all(tasks);
   }).then(function (completed) {
     var finalRaces = dedupeRaceNoPreferValidDate((completed || []).filter(Boolean));
+    
+    if (!rs) return;
     rs.innerHTML = '';
 
     if (finalRaces.length === 0) {
-      rs.add(new Option('この日は開催がありません', ''));
-      rs.disabled = true;
-      var ru0 = document.getElementById('raceUrl');
-      if (ru0) ru0.value = '';
-      var fb0 = document.getElementById('fetchBtn');
-      if (fb0) fb0.disabled = true;
-      console.log('開催なし日');
-      setStatus('開催なし日', 'info');
+      rs.add(new Option('この日は選択可能な自動レースがありません（URL直接入力可）', ''));
+      rs.disabled = false;
+      updateControlsState(true);
+      setStatus('選択可能なレース一覧がありません。', 'info');
       return;
     }
 
-    // ここも重要：レースが1件でもあれば必ず取得ボタンを復帰。
     updateControlsState(true);
-    rs.innerHTML = '';
     rs.disabled = false;
 
     finalRaces.forEach(function (r) {
@@ -1160,20 +1085,19 @@ function loadRaceList() {
       rs.add(opt);
     });
 
-    var fb = document.getElementById('fetchBtn');
-    if (fb) fb.disabled = false;
     applySelectedRaceUrl();
     setStatus('レース選択リスト展開完了', 'ok');
   }).catch(function (e) {
     console.error(e);
-    rs.innerHTML = '<option value="">レース一覧取得失敗</option>';
-    rs.disabled = true;
-    setStatus('レース一覧の取得に失敗しました', 'err');
+    if (rs) {
+      rs.innerHTML = '<option value="">レース一覧取得失敗（URL直接入力可）</option>';
+      rs.disabled = false;
+    }
+    updateControlsState(true);
+    setStatus('レース一覧の自動取得に失敗しました。', 'err');
   });
 }
 
-
-// ─── v5.26.1 race_id 永続化・復元ヘルパー ───
 function extractRaceIdFromAny(value) {
   var s = String(value || '');
   var m = s.match(/[?&]race_id=(\d{10,12})/);
@@ -1186,11 +1110,6 @@ function detectHostFromAny(value) {
   var s = String(value || '');
   if (s.indexOf('nar.netkeiba.com') >= 0) return 'https://nar.netkeiba.com';
   if (s.indexOf('race.netkeiba.com') >= 0) return 'https://race.netkeiba.com';
-  try {
-    var savedHost = localStorage.getItem('tk-last-race-host') || '';
-    if (savedHost.indexOf('nar.netkeiba.com') >= 0) return 'https://nar.netkeiba.com';
-    if (savedHost.indexOf('race.netkeiba.com') >= 0) return 'https://race.netkeiba.com';
-  } catch(e) {}
   return settings.nar ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com';
 }
 
@@ -1215,8 +1134,6 @@ function applySelectedRaceUrl() {
   if (!rs || rs.selectedIndex < 0) return;
   var opt = rs.options[rs.selectedIndex];
   if (!opt || !opt.value) {
-    if (ru) ru.value = '';
-    if (rb) rb.style.display = 'none';
     return;
   }
 
@@ -1233,10 +1150,8 @@ function applySelectedRaceUrl() {
     rb.textContent = '選択中: ' + (raceNo ? pad2(raceNo) + 'R ' : '') + (currentRaceName || raceName || '') + ' [ID: ' + currentRaceId + ']';
     rb.style.display = 'block';
   }
-  console.log('[RaceDay] 最終的に選択された race_id: ' + currentRaceId);
 }
 
-// ─── レースデータスクレイピングとパース ───
 function parseRaceTitleFromDoc(doc) {
   var bad = /データ分析|オッズ|購入|予想|結果|払戻|レース映像|掲示板/i;
   var el = doc.querySelector('.RaceName, [class*="RaceName"], h1');
@@ -1250,28 +1165,11 @@ function parseRaceTitleFromDoc(doc) {
 function normCellText(el) { return String(el ? el.textContent : '').replace(/\u00a0/g, ' ').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim(); }
 function toHalfNumberText(v) { return String(v || '').replace(/[０-９．]/g, function (c) { return c === '．' ? '.' : String.fromCharCode(c.charCodeAt(0) - 0xFEE0); }); }
 
-function extractOddsValueFromText(txt) {
-  var matches = String(txt || '').match(/(\d{1,4}\.\d+)/g) || [];
-  for (var i = 0; i < matches.length; i++) {
-    var v = Number(matches[i]);
-    if (v >= 1.1 && v <= 999.9) return v;
-  }
-  return 0;
-}
-
-function extractPopularityFromText(txt) {
-  var s = toHalfNumberText(String(txt || '')).replace(/\s+/g, ' ');
-  var m = s.match(/([1-9]|1[0-8])\s*人気/);
-  if (m) return Number(m[1]);
-  return 0;
-}
-
 function isWeightCell(cell) {
   var txt = toHalfNumberText(normCellText(cell)).replace(/\s+/g, '');
   var cls = String(cell && cell.className || '');
   var title = String(cell && (cell.getAttribute('title') || cell.getAttribute('aria-label')) || '');
   if (/斤量|負担|Weight|Futan|JockeyWeight|Handicap/i.test(cls + ' ' + title)) return true;
-  // 55 / 55.0 / 56.0 など、斤量セルとして単独表示される典型値は除外。
   if (/^(4[8-9]|5[0-9]|6[0-2])(\.0)?$/.test(txt)) return true;
   return false;
 }
@@ -1347,14 +1245,6 @@ function readOddsFromCell(cell) {
   return v;
 }
 
-function readPopularityFromCell(cell) {
-  if (!cell) return 0;
-  var txt = toHalfNumberText(normCellText(cell)).replace(/\s+/g, '');
-  var m = txt.match(/^([1-9]|1[0-8])$/) || txt.match(/([1-9]|1[0-8])人気/);
-  if (!m) return 0;
-  return Number(m[1]);
-}
-
 function extractOddsFromCells(cells, headerMap) {
   if (headerMap && headerMap.odds != null && cells[headerMap.odds]) {
     var hv = readOddsFromCell(cells[headerMap.odds]);
@@ -1370,6 +1260,21 @@ function extractOddsFromCells(cells, headerMap) {
     }
   }
   return 0;
+}
+
+function extractPopularityFromText(txt) {
+  var s = toHalfNumberText(String(txt || '')).replace(/\s+/g, ' ');
+  var m = s.match(/([1-9]|1[0-8])\s*人気/);
+  if (m) return Number(m[1]);
+  return 0;
+}
+
+function readPopularityFromCell(cell) {
+  if (!cell) return 0;
+  var txt = toHalfNumberText(normCellText(cell)).replace(/\s+/g, '');
+  var m = txt.match(/^([1-9]|1[0-8])$/) || txt.match(/([1-9]|1[0-8])人気/);
+  if (!m) return 0;
+  return Number(m[1]);
 }
 
 function extractPopularityFromCells(cells, headerMap) {
@@ -1407,8 +1312,6 @@ function parseOddsPopularityMapFromDoc(doc) {
     var odds = extractOddsFromCells(cells, headerMap);
     var pop = extractPopularityFromCells(cells, headerMap);
 
-    // ヘッダもクラスもない行全文からのオッズ推定は禁止。
-    // ここで拾うと 55.0kg など斤量を単勝オッズとして誤表示するため。
     if (odds || pop) {
       if (!map[num]) map[num] = { odds: 0, pop: 0 };
       if (odds && odds > 1) map[num].odds = odds;
@@ -1418,10 +1321,6 @@ function parseOddsPopularityMapFromDoc(doc) {
   return map;
 }
 
-
-// オッズページ・結果ページ用の緩い補完パーサ。
-// 出馬表では固定列禁止だが、odds/resultページは単勝オッズ・人気が別表に出るため、
-// 馬名リンク行を基準に「小数オッズ」と「人気」を安全に拾う。
 function parseOddsPopularityMapLooseFromDoc(doc) {
   var map = {};
   if (!doc || !horses || !horses.length) return map;
@@ -1468,7 +1367,6 @@ function parseOddsPopularityMapLooseFromDoc(doc) {
     for (var i = 0; i < cells.length; i++) {
       if (isWeightCell(cells[i])) continue;
       var txt = toHalfNumberText(normCellText(cells[i])).replace(/,/g, '').replace(/\s+/g, '');
-      // 単勝オッズは原則小数表記のみ採用。55/56等の斤量を絶対に拾わない。
       var om = txt.match(/^(\d{1,4}\.\d+)$/) || txt.match(/(\d{1,4}\.\d+)/);
       if (om) {
         var ov = Number(om[1]);
@@ -1480,7 +1378,6 @@ function parseOddsPopularityMapLooseFromDoc(doc) {
       }
     }
 
-    // 人気は「人気」文字付き優先。無ければオッズセル近辺の1〜18整数を使う。
     for (var j = 0; j < cells.length; j++) {
       var pt = extractPopularityFromText(normCellText(cells[j]));
       if (pt) { pop = pt; break; }
@@ -1491,16 +1388,9 @@ function parseOddsPopularityMapLooseFromDoc(doc) {
         var pm = t.match(/^([1-9]|1[0-8])$/);
         if (pm && Number(pm[1]) !== num) { pop = Number(pm[1]); break; }
       }
-      for (var k2 = Math.max(0, oddsCellIndex - 3); !pop && k2 < oddsCellIndex; k2++) {
-        var t2 = toHalfNumberText(normCellText(cells[k2])).replace(/\s+/g, '');
-        var pm2 = t2.match(/^([1-9]|1[0-8])$/);
-        if (pm2 && Number(pm2[1]) !== num) { pop = Number(pm2[1]); break; }
-      }
     }
-
     if (odds || pop) add(num, odds, pop);
   });
-
   return map;
 }
 
@@ -1524,9 +1414,7 @@ function mergeOddsPopularityIntoHorses(map) {
   });
 }
 
-
 function sanitizeOddsPopularity() {
-  // 斤量(55,56,57等)がオッズ欄へ混入した場合は必ず消す。
   var counts = {};
   horses.forEach(function (h) {
     var v = Number(h.odds || 0);
@@ -1540,29 +1428,14 @@ function sanitizeOddsPopularity() {
       h.odds = 0;
     }
   });
-
-  // 人気が馬番と同じ 1,2,3... で並んだだけなら、人気ではなく馬番誤認なので消す。
-  var same = 0, withPop = 0;
-  horses.forEach(function (h) {
-    if (Number(h.pop || 0) >= 1) {
-      withPop++;
-      if (Number(h.pop) === Number(h.num)) same++;
-    }
-  });
-  if (withPop >= 6 && same / withPop >= 0.7) {
-    horses.forEach(function (h) { h.pop = 0; });
-  }
 }
 
 function buildOddsUrls(raceId, kind) {
   var host = (kind === 'NAR') ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com';
   return [
-    host + '/odds/index.html?race_id=' + raceId + '&type=b1',
-    host + '/odds/index.html?type=b1&race_id=' + raceId,
-    host + '/odds/index.html?race_id=' + raceId + '&rf=race_submenu',
     host + '/odds/index.html?race_id=' + raceId,
     host + '/odds/o1.html?race_id=' + raceId,
-    host + '/race/result.html?race_id=' + raceId + '&rf=race_submenu'
+    host + '/race/result.html?race_id=' + raceId
   ];
 }
 
@@ -1575,10 +1448,7 @@ function fetchOddsPagesSequential(urls, parser, idx) {
     var looseMap = parseOddsPopularityMapLooseFromDoc(oDoc);
     mergeOddsPopularityIntoHorses(mergeMaps(strictMap, looseMap));
     sanitizeOddsPopularity();
-    var oddsCount = horses.filter(function (h) { return Number(h.odds || 0) > 1; }).length;
-    var popCount = horses.filter(function (h) { return Number(h.pop || 0) >= 1; }).length;
-    if (oddsCount >= Math.max(1, Math.floor(horses.length * 0.35)) || popCount >= Math.max(1, Math.floor(horses.length * 0.35))) return true;
-    return fetchOddsPagesSequential(urls, parser, idx + 1);
+    return true;
   }).catch(function () {
     return fetchOddsPagesSequential(urls, parser, idx + 1);
   });
@@ -1590,7 +1460,6 @@ function parseHorsesFromDoc(doc) {
   var rows = doc.querySelectorAll('tr');
   
   rows.forEach(function (tr) {
-    // iPad Safari / netkeiba HTML差異対策：相対URL・絶対URL・旧dbURLをすべて許可
     var link = tr.querySelector('a[href*="/horse/"], a[href*="db.netkeiba.com/horse"], a[href*="horse.html?id="], a[href*="horse_id="]');
     if (!link) return;
 
@@ -1601,7 +1470,6 @@ function parseHorsesFromDoc(doc) {
     var numIn = tr.querySelector('.Umaban, [class*="Umaban"], td[class*="Num"], [class*="HorseNum"], [class*="Horse_Number"]');
     var num = numIn ? Number(toHalfNumberText(normCellText(numIn)).match(/\d{1,2}/)?.[0] || 0) : 0;
 
-    // netkeibaの標準表は「枠番」「馬番」が別セル。馬名リンクより前のセルから1〜18を拾う。
     if (!num && cells.length) {
       var linkCellIndex = -1;
       for (var ci = 0; ci < cells.length; ci++) {
@@ -1615,22 +1483,11 @@ function parseHorsesFromDoc(doc) {
       }
     }
 
-    // 最終fallback：行頭付近の単独数字のみ。払戻や人気などの大きい数字は拾わない。
-    if (!num) {
-      var headTxt = toHalfNumberText(normCellText(tr)).slice(0, 80);
-      var m = headTxt.match(/(?:^|\s)([1-9]|1[0-8])(?:\s|$)/);
-      if (m) num = Number(m[1]);
-    }
-
     if (num < 1 || num > 18 || seen[num]) return;
     
     var frameIn = tr.querySelector('.Waku, [class*="Waku"], [class*="Frame"]');
     var frame = frameIn ? Number(toHalfNumberText(normCellText(frameIn)).match(/\d{1,2}/)?.[0] || 0) : Math.ceil(num / 2);
-    if (!frame || frame < 1 || frame > 8) frame = Math.ceil(num / 2);
     
-    // 単勝オッズ・人気は固定列や行全文から拾わない。
-    // iPad/Safariのnetkeibaでは斤量(55.0等)をオッズとして誤認するため、
-    // ヘッダ名・class名で確認できる場合だけ採用し、残りはオッズページで補完する。
     var tableForOdds = findParentTable(tr);
     var headerMapForOdds = buildHeaderMap(tableForOdds);
     var odds = extractOddsFromCells(cells, headerMapForOdds);
@@ -1644,20 +1501,24 @@ function parseHorsesFromDoc(doc) {
 
 function fetchRace() {
   var url = document.getElementById('raceUrl').value.trim();
-  if (!url) return;
+  if (!url) {
+    var selectEl = document.getElementById('raceSelect');
+    if (selectEl && selectEl.value) {
+      url = selectEl.value;
+      document.getElementById('raceUrl').value = url;
+    }
+  }
   
-  var val = document.getElementById('raceSelect').options[document.getElementById('raceSelect').selectedIndex];
-  if (!currentRaceId) {
-    var mid = url.match(/race_id=(\d{12})/);
-    if (mid) currentRaceId = mid[1];
+  if (!currentRaceId && url) {
+    currentRaceId = extractRaceIdFromAny(url);
   }
   if (!url || !currentRaceId) {
-    setStatus('race_idが未選択です。レース一覧から選択して下さい。', 'err');
+    setStatus('URLまたはレースIDが未選択です。開催場・レースを選択するか直入力してください。', 'err');
     return false;
   }
   
   var prog = document.getElementById('fetchProgress');
-  prog.classList.add('show');
+  if (prog) prog.classList.add('show');
   
   fetchTextViaProxy(url).then(function (html) {
     var parser = new DOMParser();
@@ -1666,32 +1527,29 @@ function fetchRace() {
     if (parsedTitle) currentRaceName = parsedTitle;
     
     horses = parseHorsesFromDoc(doc);
-    if (horses.length < 2) throw new Error('出走馬を十分に解析できませんでした。');
+    if (horses.length < 2) throw new Error('出走馬を十分に自動解析できませんでした。手動追加・編集可能です。');
     
-    // 出馬表内に既にある単勝オッズ・人気を先に反映
     mergeOddsPopularityIntoHorses(parseOddsPopularityMapFromDoc(doc));
-
     sanitizeOddsPopularity();
 
-    // オッズページから単勝オッズ・人気を完全補完（iPad Safari対応）
     var oddsUrls = buildOddsUrls(currentRaceId, settings.nar ? 'NAR' : 'JRA');
     return fetchOddsPagesSequential(oddsUrls, parser, 0).then(function () {
       sanitizeOddsPopularity();
       renderHorseRows();
       var oddsCount = horses.filter(function (h) { return Number(h.odds || 0) > 1; }).length;
-      var popCount = horses.filter(function (h) { return Number(h.pop || 0) >= 1; }).length;
-      var msg = currentRaceName + ' ' + horses.length + '頭データ取得完了 / オッズ' + oddsCount + '頭 / 人気' + popCount + '頭';
-      if (oddsCount === 0) msg += '（斤量誤認防止のため空欄）';
-      setStatus(msg, 'ok');
-    });  }).catch(function (e) {
-    setStatus('データ取得失敗: ' + e.message, 'err');
+      setStatus(currentRaceName + ' ' + horses.length + '頭データ取得完了', 'ok');
+    });
+  }).catch(function (e) {
+    setStatus('データ取得失敗: ' + e.message + ' (手動で「+追加」して計算可能です)', 'err');
+    renderHorseRows();
   }).finally(function () {
-    prog.classList.remove('show');
+    if (prog) prog.classList.remove('show');
   });
 }
 
 function renderHorseRows() {
   var container = document.getElementById('horseRows');
+  if (!container) return;
   container.innerHTML = '';
   horses.forEach(function (h, i) {
     var row = document.createElement('div');
@@ -1712,13 +1570,12 @@ function renderHorseRows() {
   });
 }
 
-// ─── 数理計算・期待値・ケリー基準モデル ───
+// ─── 数理計算・ケリー基準モデル ───
 function evProbRaw(h, all) {
   var odds = Number(h.odds || 0);
   var pop = Number(h.pop || 0);
   if (odds <= 1) return 1 / all.length;
   
-  // JRA: 控除率22.5% → オーバーラウンド推定ベース1.225、NAR: 30% → 1.30
   var deductBase = settings.nar ? 1.30 : 1.225;
   var overround = all.reduce(function (acc, x) { return acc + (x.odds > 0 ? (1 / x.odds) : 0); }, 0) || deductBase;
   var pOdds = (1 / odds) / overround;
@@ -1728,11 +1585,10 @@ function evProbRaw(h, all) {
 }
 
 function runPredict() {
-  var valid = horses.filter(function (h) { return h.num > 0 && h.name; });
-  if (valid.length < 2) { alert('有効な出走馬を2頭以上入力してください。'); return; }
+  var valid = horses.filter(function (h) { return h.num > 0; });
+  if (valid.length < 2) { alert('有効な馬番号データがありません。馬データ行を追加してください。'); return; }
   
   var totalRaw = valid.reduce(function (acc, h) { return acc + evProbRaw(h, valid); }, 0) || 1;
-  // NAR: 払戻率70%ベースで複勝オッズ係数を調整（JRA: 77.5%ベース）
   var placeOddsCoeff = settings.nar ? 0.28 : 0.32;
   var rated = valid.map(function (h) {
     var winP = evProbRaw(h, valid) / totalRaw;
@@ -1747,17 +1603,14 @@ function runPredict() {
   rated.forEach(function (h) {
     if (h.odds > 1) {
       var evWin = h.winP * h.odds;
-      var kWin = (evWin - 1) / (h.odds - 1);
-      lastRecs.push({ type: '単勝', nums: [h.num], p: h.winP, odds: h.odds, ev: evWin, kelly: Math.max(0, kWin), amount: unit });
+      lastRecs.push({ type: '単勝', nums: [h.num], p: h.winP, odds: h.odds, ev: evWin, kelly: Math.max(0, (evWin - 1) / (h.odds - 1)), amount: unit });
       
       var fOdds = Math.max(1.1, h.odds * placeOddsCoeff);
       var evPlace = h.placeP * fOdds;
-      var kPlace = (evPlace - 1) / (fOdds - 1);
-      lastRecs.push({ type: '複勝', nums: [h.num], p: h.placeP, odds: fOdds, ev: evPlace, kelly: Math.max(0, kPlace), amount: unit });
+      lastRecs.push({ type: '複勝', nums: [h.num], p: h.placeP, odds: fOdds, ev: evPlace, kelly: Math.max(0, (evPlace - 1) / (fOdds - 1)), amount: unit });
     }
   });
   
-  // 連勝複式擬似ペア生成
   for (var i = 0; i < Math.min(5, rated.length); i++) {
     for (var j = i + 1; j < Math.min(6, rated.length); j++) {
       var a = rated[i], b = rated[j];
@@ -1778,52 +1631,59 @@ function runPredict() {
   simTickets = lastTickets.map(function (t) { return Object.assign({}, t, { nums: [].concat(t.nums) }); });
   renderSimEditRows();
   
-  // タブ移動
-  document.querySelectorAll('.tab-btn')[1].click();
+  var tabs = document.querySelectorAll('.tab-btn');
+  if (tabs && tabs[1]) tabs[1].click();
 }
 
 function renderResult() {
   var tb = lastTickets.reduce(function (acc, t) { return acc + t.amount; }, 0);
-  document.getElementById('summaryCard').style.display = 'block';
+  var sc = document.getElementById('summaryCard');
+  if (sc) sc.style.display = 'block';
   
   var evSum = lastTickets.reduce(function (acc, t) { return acc + t.ev * t.amount; }, 0);
   var expectedROI = tb > 0 ? (evSum / tb) * 100 : 0;
   
   var sg = document.getElementById('summaryGrid');
-  sg.innerHTML = '<div class="summary-item"><div class="val" style="font-size:12px">' + escapeHtml(currentRaceName || '未確認') + '</div><div class="lbl">レース</div></div>' +
-                 '<div class="summary-item"><div class="val">' + lastTickets.length + '点</div><div class="lbl">買い目数</div></div>' +
-                 '<div class="summary-item"><div class="val">' + expectedROI.toFixed(1) + '%</div><div class="lbl">期待ROI</div></div>';
+  if (sg) {
+    sg.innerHTML = '<div class="summary-item"><div class="val" style="font-size:12px">' + escapeHtml(currentRaceName || 'カスタムレース') + '</div><div class="lbl">レース</div></div>' +
+                   '<div class="summary-item"><div class="val">' + lastTickets.length + '点</div><div class="lbl">買い目数</div></div>' +
+                   '<div class="summary-item"><div class="val">' + expectedROI.toFixed(1) + '%</div><div class="lbl">期待ROI</div></div>';
+  }
                  
   var tl = document.getElementById('ticketList');
-  tl.innerHTML = '';
-  if (lastTickets.length === 0) {
-    tl.innerHTML = '<div class="empty">推奨買い目基準に達する候補がありません。</div>';
-  } else {
-    lastTickets.forEach(function (t) {
-      var row = document.createElement('div');
-      row.className = 'ticket-row';
-      row.innerHTML = '<span class="chip ' + CHIP_CLASS[t.type] + '">' + t.type + '</span>' +
-                      '<div class="info"><b>' + t.nums.join('-') + '</b><span style="color:var(--muted); font-size:11px; margin-left:6px;">推定' + t.odds.toFixed(1) + '倍</span></div>' +
-                      '<div><div style="font-size:10px; color:var(--muted); text-align:right;">EV ' + t.ev.toFixed(2) + '</div><div class="stake">' + t.amount + '円</div></div>';
-      tl.appendChild(row);
-    });
+  if (tl) {
+    tl.innerHTML = '';
+    if (lastTickets.length === 0) {
+      tl.innerHTML = '<div class="empty">推奨買い目基準に達する候補がありません。</div>';
+    } else {
+      lastTickets.forEach(function (t) {
+        var row = document.createElement('div');
+        row.className = 'ticket-row';
+        row.innerHTML = '<span class="chip ' + CHIP_CLASS[t.type] + '">' + t.type + '</span>' +
+                        '<div class="info"><b>' + t.nums.join('-') + '</b><span style="color:var(--muted); font-size:11px; margin-left:6px;">推定' + t.odds.toFixed(1) + '倍</span></div>' +
+                        '<div><div style="font-size:10px; color:var(--muted); text-align:right;">EV ' + t.ev.toFixed(2) + '</div><div class="stake">' + t.amount + '円</div></div>';
+        tl.appendChild(row);
+      });
+    }
   }
   
   var cb = document.getElementById('candBody');
-  cb.innerHTML = lastRecs.slice(0, 30).map(function (r) {
-    return '<tr><td><span class="chip ' + CHIP_CLASS[r.type] + '">' + r.type + '</span></td>' +
-           '<td>' + r.nums.join('-') + '</td>' +
-           '<td>' + (r.p * 100).toFixed(1) + '%</td>' +
-           '<td>' + r.odds.toFixed(1) + '倍</td>' +
-           '<td class="' + (r.ev >= 1.2 ? 'ev-hi' : r.ev >= 1.0 ? 'ev-mid' : 'ev-lo') + '">' + r.ev.toFixed(2) + '</td>' +
-           '<td>' + (r.kelly * 100).toFixed(1) + '%</td></tr>';
-  }).join('');
+  if (cb) {
+    cb.innerHTML = lastRecs.slice(0, 30).map(function (r) {
+      return '<tr><td><span class="chip ' + CHIP_CLASS[r.type] + '">' + r.type + '</span></td>' +
+             '<td>' + r.nums.join('-') + '</td>' +
+             '<td>' + (r.p * 100).toFixed(1) + '%</td>' +
+             '<td>' + r.odds.toFixed(1) + '倍</td>' +
+             '<td class="' + (r.ev >= 1.2 ? 'ev-hi' : r.ev >= 1.0 ? 'ev-mid' : 'ev-lo') + '">' + r.ev.toFixed(2) + '</td>' +
+             '<td>' + (r.kelly * 100).toFixed(1) + '%</td></tr>';
+    }).join('');
+  }
   
-  document.getElementById('profitBet').value = tb;
+  var pbInput = document.getElementById('profitBet');
+  if (pbInput) pbInput.value = tb;
   renderProfitChart();
 }
 
-// ─── 収支管理・グラフ描画 ───
 function renderProfitChart() {
   var canvas = document.getElementById('profitChart');
   if (!canvas) return;
@@ -1837,9 +1697,11 @@ function renderProfitChart() {
   var diff = totalRet - totalBet;
   
   var summary = document.getElementById('profitSummary');
-  summary.innerHTML = '<div class="summary-item"><div class="val">' + profitHistory.length + '</div><div class="lbl">記録数</div></div>' +
-                      '<div class="summary-item"><div class="val" style="color:' + (diff >= 0 ? 'var(--green)' : 'var(--red)') + '">' + diff.toLocaleString() + '円</div><div class="lbl">累計収支</div></div>' +
-                      '<div class="summary-item"><div class="val">' + (totalBet > 0 ? (totalRet / totalBet * 100).toFixed(1) : '0.0') + '%</div><div class="lbl">回収率</div></div>';
+  if (summary) {
+    summary.innerHTML = '<div class="summary-item"><div class="val">' + profitHistory.length + '</div><div class="lbl">記録数</div></div>' +
+                        '<div class="summary-item"><div class="val" style="color:' + (diff >= 0 ? 'var(--green)' : 'var(--red)') + '">' + diff.toLocaleString() + '円</div><div class="lbl">累計収支</div></div>' +
+                        '<div class="summary-item"><div class="val">' + (totalBet > 0 ? (totalRet / totalBet * 100).toFixed(1) : '0.0') + '%</div><div class="lbl">回収率</div></div>';
+  }
                       
   if (profitHistory.length === 0) {
     ctx.fillStyle = '#94a3b8';
@@ -1848,7 +1710,6 @@ function renderProfitChart() {
     return;
   }
   
-  // 簡易折れ線描画
   ctx.strokeStyle = '#3b82f6';
   ctx.lineWidth = 2;
   ctx.beginPath();
@@ -1859,14 +1720,13 @@ function renderProfitChart() {
   profitHistory.forEach(function (h, idx) {
     currentVal += (h.ret - h.bet);
     var x = 30 + (idx + 1) * stepX;
-    var y = (canvas.height / 2) - (currentVal / 100); // スケール簡易調整
+    var y = (canvas.height / 2) - (currentVal / 100);
     y = Math.max(10, Math.min(canvas.height - 10, y));
     ctx.lineTo(x, y);
   });
   ctx.stroke();
 }
 
-// ─── シミュレーション機能 ───
 function renderSimEditRows() {
   var container = document.getElementById('simEditRows');
   if (!container) return;
@@ -1894,7 +1754,8 @@ function renderSimEditRows() {
     container.appendChild(row);
   });
   
-  document.getElementById('simTotalBetLabel').textContent = '合計: ' + total.toLocaleString() + '円';
+  var label = document.getElementById('simTotalBetLabel');
+  if (label) label.textContent = '合計: ' + total.toLocaleString() + '円';
 }
 
 function judgeHit(t, winNo, placeNos) {
@@ -1918,6 +1779,7 @@ function runManualSimulation() {
   var placeNos = [parts[0], parts[1], parts[2] || 0];
   
   var container = document.getElementById('simTicketList');
+  if (!container) return;
   container.innerHTML = '';
   
   var totalBet = 0;
@@ -1927,14 +1789,14 @@ function runManualSimulation() {
   simTickets.forEach(function (t) {
     totalBet += t.amount;
     var hit = judgeHit(t, winNo, placeNos);
-    var ret = hit ? Math.floor(t.amount * t.odds) : 0;
+    var ret = hit ? Math.floor(t.amount * (t.odds || 2)) : 0;
     if (hit) { hitCount++; totalRet += ret; }
     
     var row = document.createElement('div');
     row.className = 'sim-ticket-card ' + (hit ? 'hit' : 'miss');
     row.innerHTML = '<span class="chip ' + CHIP_CLASS[t.type] + '">' + t.type + '</span>' +
-                    '<div class="sim-ticket-main"><b>' + t.nums.join('-') + '</b><div class="sim-ticket-meta">購入 ' + t.amount + '円 / 倍率 ' + t.odds.toFixed(1) + '倍</div></div>' +
-                    '<div class="sim-return ' + (hit ? 'hit' : '') + '">' + ret.toLocaleString() + '円<div class="sim-ticket-meta">' + (hit ? '的中' : '不的中') + '</div></div>';
+                    '<div class="sim-ticket-main"><b>' + t.nums.join('-') + '</b><div class="sim-ticket-meta">購入 ' + t.amount + '円 / 倍率 ' + (t.odds ? t.odds.toFixed(1) : '2.0') + '倍</div></div>' +
+                    '<div class="sim-return ' + (hit ? 'hit' : '') + '">' + ret.toLocaleString() + '円<div class="sim-ticket-meta">' + (hit ? '的中' : '不不定中') + '</div></div>';
     container.appendChild(row);
   });
   
@@ -1942,17 +1804,19 @@ function runManualSimulation() {
   var roi = totalBet > 0 ? (totalRet / totalBet * 100) : 0;
   
   var card = document.getElementById('simSummaryCard');
-  card.style.display = 'block';
+  if (card) card.style.display = 'block';
   var summary = document.getElementById('simSummary');
-  summary.innerHTML = '<div class="sim-dashboard"><div class="sim-score-card">' +
-                      '<span class="sim-result-badge ' + (roi >= 100 ? '' : 'loss') + '">' + (roi >= 100 ? '勝利' : '不的中') + '</span>' +
-                      '<div class="sim-score-big">' + roi.toFixed(1) + '%</div><div class="sim-score-label">RETURN ON BETTING</div>' +
-                      '<div class="sim-gauge"><i style="width:' + Math.min(100, roi) + '%"></i></div></div>' +
-                      '<div class="sim-panel"><div class="sim-kpi-grid">' +
-                      '<div class="sim-kpi"><div class="v">' + hitCount + '/' + simTickets.length + '</div><div class="l">的中数</div></div>' +
-                      '<div class="sim-kpi"><div class="v">' + totalBet + '</div><div class="l">投資額</div></div>' +
-                      '<div class="sim-kpi"><div class="v">' + totalRet + '</div><div class="l">払戻金</div></div>' +
-                      '</div></div></div>';
+  if (summary) {
+    summary.innerHTML = '<div class="sim-dashboard"><div class="sim-score-card">' +
+                        '<span class="sim-result-badge ' + (roi >= 100 ? '' : 'loss') + '">' + (roi >= 100 ? '勝利' : '不的中') + '</span>' +
+                        '<div class="sim-score-big">' + roi.toFixed(1) + '%</div><div class="sim-score-label">RETURN ON BETTING</div>' +
+                        '<div class="sim-gauge"><i style="width:' + Math.min(100, roi) + '%"></i></div></div>' +
+                        '<div class="sim-panel"><div class="sim-kpi-grid">' +
+                        '<div class="sim-kpi"><div class="v">' + hitCount + '/' + simTickets.length + '</div><div class="l">的中数</div></div>' +
+                        '<div class="sim-kpi"><div class="v">' + totalBet + '</div><div class="l">投資額</div></div>' +
+                        '<div class="sim-kpi"><div class="v">' + totalRet + '</div><div class="l">払戻金</div></div>' +
+                        '</div></div></div>';
+  }
                       
   simHistory.push({ bet: totalBet, ret: totalRet, profit: diff, date: new Date().toISOString() });
   localStorage.setItem('tk-sim-history', JSON.stringify(simHistory));
@@ -1972,49 +1836,36 @@ function renderSimProfitChart() {
   var diff = totalRet - totalBet;
   
   var summary = document.getElementById('simProfitSummary');
-  summary.innerHTML = '<div class="summary-item"><div class="val">' + simHistory.length + '</div><div class="lbl">精算数</div></div>' +
-                      '<div class="summary-item"><div class="val" style="color:' + (diff >= 0 ? 'var(--green)' : 'var(--red)') + '">' + diff.toLocaleString() + '円</div><div class="lbl">累計収支</div></div>' +
-                      '<div class="summary-item"><div class="val">' + (totalBet > 0 ? (totalRet / totalBet * 100).toFixed(1) : '0.0') + '%</div><div class="lbl">回収率</div></div>';
+  if (summary) {
+    summary.innerHTML = '<div class="summary-item"><div class="val">' + simHistory.length + '</div><div class="lbl">精算数</div></div>' +
+                        '<div class="summary-item"><div class="val" style="color:' + (diff >= 0 ? 'var(--green)' : 'var(--red)') + '">' + diff.toLocaleString() + '円</div><div class="lbl">累計収支</div></div>' +
+                        '<div class="summary-item"><div class="val">' + (totalBet > 0 ? (totalRet / totalBet * 100).toFixed(1) : '0.0') + '%</div><div class="lbl">回収率</div></div>';
+  }
                       
   var listEl = document.getElementById('simHistoryList');
-  listEl.innerHTML = simHistory.map(function (h, idx) {
-    return '<div class="sim-hist-row ' + (h.profit >= 0 ? 'win' : 'lose') + '">' +
-           '<span>選択レース検証 #' + (idx + 1) + '</span><span>投資: ' + h.bet + '</span><span>収支: ' + h.profit + '</span></div>';
-  }).reverse().join('');
+  if (listEl) {
+    listEl.innerHTML = simHistory.map(function (h, idx) {
+      return '<div class="sim-hist-row ' + (h.profit >= 0 ? 'win' : 'lose') + '">' +
+             '<span>選択レース検証 #' + (idx + 1) + '</span><span>投資: ' + h.bet + '</span><span>収支: ' + h.profit + '</span></div>';
+    }).reverse().join('');
+  }
 }
 
-// ─── 初期設定・イベントアタッチ(二重登録・Safari固まり完全ガード) ───
-
-// ─── v5.26.0 シミュレーションURL自動入力・本精算復旧 ───
 function getActiveRaceIdSafe() {
   var id = extractRaceIdFromAny(currentRaceId);
   if (id) return id;
 
   var simInput = document.getElementById('simResultUrl');
-  if (simInput) {
+  if (simInput && simInput.value) {
     id = extractRaceIdFromAny(simInput.value);
     if (id) return id;
   }
 
   var ru = document.getElementById('raceUrl');
-  if (ru) {
+  if (ru && ru.value) {
     id = extractRaceIdFromAny(ru.value);
     if (id) return id;
   }
-
-  var rs = document.getElementById('raceSelect');
-  if (rs && rs.selectedIndex >= 0) {
-    var opt = rs.options[rs.selectedIndex];
-    if (opt) {
-      id = extractRaceIdFromAny((opt.dataset && opt.dataset.raceId) || opt.value || opt.textContent || '');
-      if (id) return id;
-    }
-  }
-
-  try {
-    id = extractRaceIdFromAny(localStorage.getItem('tk-last-race-id') || localStorage.getItem('tk-last-shutuba-url') || '');
-    if (id) return id;
-  } catch(e) {}
   return '';
 }
 
@@ -2023,31 +1874,21 @@ function getActiveRaceHostSafe() {
   if (simInput && simInput.value) return detectHostFromAny(simInput.value);
   var ru = document.getElementById('raceUrl');
   if (ru && ru.value) return detectHostFromAny(ru.value);
-  try {
-    var h = localStorage.getItem('tk-last-race-host') || '';
-    if (h.indexOf('nar.netkeiba.com') >= 0) return 'https://nar.netkeiba.com';
-    if (h.indexOf('race.netkeiba.com') >= 0) return 'https://race.netkeiba.com';
-  } catch(e) {}
   return settings.nar ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com';
 }
 
 function buildResultUrlFromRaceId(raceId) {
   raceId = extractRaceIdFromAny(raceId);
   if (!raceId) return '';
-  return getActiveRaceHostSafe() + '/race/result.html?race_id=' + raceId + '&rf=race_submenu';
+  return getActiveRaceHostSafe() + '/race/result.html?race_id=' + raceId;
 }
 
 function fillSimResultUrl() {
-  // Safariでは select change より先にボタンが発火することがあるため、毎回ここで復元する。
-  try { applySelectedRaceUrl(); } catch(e) { console.warn('[RaceDay] applySelectedRaceUrl skip:', e); }
-
   var raceId = getActiveRaceIdSafe();
   var input = document.getElementById('simResultUrl');
   if (!raceId) {
-    var msg = '先に馬データタブでレースを選択、またはレースデータ取得をしてください。';
-    if (input) input.value = '';
+    var msg = 'レースIDを特定できません。馬データタブで取得、または結果URLを直接貼ってください。';
     setSimStatus(msg, 'err');
-    setStatus(msg, 'err');
     return '';
   }
 
@@ -2055,16 +1896,8 @@ function fillSimResultUrl() {
   var url = buildResultUrlFromRaceId(raceId);
   if (input) {
     input.value = url;
-    input.setAttribute('value', url);
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    input.dispatchEvent(new Event('change', { bubbles: true }));
   }
-  try {
-    localStorage.setItem('tk-last-result-url', url);
-    localStorage.setItem('tk-last-race-id', raceId);
-    localStorage.setItem('tk-last-race-host', getActiveRaceHostSafe());
-  } catch(e) {}
-  setSimStatus('結果URLを自動入力しました: race_id=' + raceId, 'ok');
+  setSimStatus('結果URLをセットしました: ' + raceId, 'ok');
   return url;
 }
 
@@ -2081,84 +1914,35 @@ function parseFinishOrderFromResultHtml(html) {
   var doc = parsed.doc;
   var out = [];
 
-  // ── Strategy 1: DOM tr解析（リンクあり行・リンクなし行の両方を試みる） ──
   Array.prototype.slice.call(doc.querySelectorAll('tr')).forEach(function (tr) {
     if (out.length >= 3) return;
     var cells = Array.prototype.slice.call(tr.querySelectorAll('td,th')).map(function (td) {
       return toHalfNumberText(normCellText(td));
     });
     if (cells.length < 2) return;
-    var line = cells.join(' ');
-
-    // 先頭セルが1〜3の着順かチェック
     var rank = Number(cells[0].replace(/[^\d]/g, ''));
     if (rank < 1 || rank > 3) return;
 
-    var link = tr.querySelector('a[href*="/horse/"], a[href*="db.netkeiba.com/horse"]');
     var horseNo = 0;
-
-    // netkeiba result: 着順 / 枠番 / 馬番 / 馬名...
-    // 馬番は2列目か3列目に来ることが多い。最大6列まで探す。
     for (var i = 1; i < Math.min(cells.length, 6); i++) {
       var v = cells[i].replace(/[^\d]/g, '');
       var n = Number(v);
       if (n >= 1 && n <= 18) {
-        // 枠番(1〜8)のみの列をスキップして馬番(1〜18)を優先
         if (i >= 2) { horseNo = n; break; }
-        horseNo = n; // i===1 の場合は仮置き、より後方で上書き可
+        horseNo = n;
       }
     }
-
-    // リンクあり行ならそのまま採用。リンクなし行でも horseNo が確定なら採用。
-    if (horseNo >= 1 && horseNo <= 18) {
-      if (out.indexOf(horseNo) < 0) out.push(horseNo);
-    }
+    if (horseNo >= 1 && horseNo <= 18 && out.indexOf(horseNo) < 0) out.push(horseNo);
   });
 
   if (out.length >= 2) return out.slice(0, 3);
 
-  // ── Strategy 2: .Result_HorseList / .RaceResult 等の専用クラスから取得 ──
-  out = [];
-  var rankSelectors = [
-    '[class*="Result"] tr',
-    '[class*="result"] tr',
-    '.RaceResultTable tr',
-    '.ResultHorse tr'
-  ];
-  rankSelectors.some(function (sel) {
-    if (out.length >= 2) return true;
-    Array.prototype.slice.call(doc.querySelectorAll(sel)).forEach(function (tr) {
-      if (out.length >= 3) return;
-      var cells = Array.prototype.slice.call(tr.querySelectorAll('td,th')).map(function (td) {
-        return toHalfNumberText(normCellText(td));
-      });
-      if (cells.length < 3) return;
-      var rank = Number(cells[0].replace(/[^\d]/g, ''));
-      if (rank < 1 || rank > 3) return;
-      for (var i = 1; i < Math.min(cells.length, 6); i++) {
-        var n = Number(cells[i].replace(/[^\d]/g, ''));
-        if (n >= 1 && n <= 18 && i >= 2) { if (out.indexOf(n) < 0) out.push(n); break; }
-        if (n >= 1 && n <= 18 && i === 1) { if (out.indexOf(n) < 0) out.push(n); }
-      }
-    });
-    return out.length >= 2;
-  });
-
-  if (out.length >= 2) return out.slice(0, 3);
-
-  // ── Strategy 3: テキスト行パース（正規表現を複数パターンで試す） ──
   out = [];
   var lines = text.split(/[\n\r]+/);
-  // パターンA: 「着順 枠番 馬番」の3カラム形式
   var patA = /^([1-3])\s+([1-8])\s+([1-9]|1[0-8])[\s\D]/;
-  // パターンB: 「着順 馬番」（枠番省略）
   var patB = /^([1-3])\s+([1-9]|1[0-8])[\s\D]/;
-  // パターンC: テキスト中どこかに「1着 ○番」等
-  var patC = /([1-3])着.*?([1-9]|1[0-8])番/;
-  // パターンD: 「着 馬番」表記（NAR等）
-  var patD = /^([1-3])着?\s+([1-9]|1[0-8])\b/;
 
-  [patA, patB, patD].forEach(function (pat) {
+  [patA, patB].forEach(function (pat) {
     if (out.length >= 2) return;
     var tmp = [];
     lines.forEach(function (raw) {
@@ -2166,50 +1950,12 @@ function parseFinishOrderFromResultHtml(html) {
       var s = raw.replace(/\s+/g, ' ').trim();
       var m = s.match(pat);
       if (!m) return;
-      var rank = Number(m[1]);
       var horseNo = Number(m[pat === patA ? 3 : 2]);
-      if (rank >= 1 && rank <= 3 && horseNo >= 1 && horseNo <= 18) {
-        if (tmp.indexOf(horseNo) < 0) tmp.push(horseNo);
-      }
+      if (horseNo >= 1 && horseNo <= 18 && tmp.indexOf(horseNo) < 0) tmp.push(horseNo);
     });
     if (tmp.length >= 2) out = tmp;
   });
 
-  if (out.length >= 2) return out.slice(0, 3);
-
-  // パターンC: 「1着」「2着」テキスト検索
-  out = [];
-  [1, 2, 3].forEach(function (rank) {
-    if (out.length >= rank) return;
-    var m = text.match(new RegExp(rank + '着.*?([1-9]|1[0-8])番'));
-    if (m) {
-      var n = Number(m[1]);
-      if (n >= 1 && n <= 18 && out.indexOf(n) < 0) out.push(n);
-    }
-  });
-
-  // ── Strategy 4: 払戻テーブルの単勝から1着馬番を推定 ──
-  if (out.length === 0) {
-    var tanMatch = text.match(/単勝\s*([1-9]|1[0-8])\s+\d{3,}/);
-    if (tanMatch) out.push(Number(tanMatch[1]));
-    // 複勝から2〜3着候補を補完
-    var fukuMatches = [];
-    var fukuRe = /複勝\s*((?:[1-9]|1[0-8])(?:\s+(?:[1-9]|1[0-8])){0,2})/g;
-    var fm;
-    while ((fm = fukuRe.exec(text))) {
-      String(fm[1]).split(/\s+/).forEach(function (s) {
-        var n = Number(s);
-        if (n >= 1 && n <= 18 && fukuMatches.indexOf(n) < 0) fukuMatches.push(n);
-      });
-    }
-    // 複勝に含まれる馬番のうち、単勝1着以外を2〜3着候補として追加
-    fukuMatches.forEach(function (n) {
-      if (out.length >= 3) return;
-      if (out.indexOf(n) < 0) out.push(n);
-    });
-  }
-
-  console.log('[RaceDay] parseFinishOrder result:', out);
   return out.slice(0, 3);
 }
 
@@ -2231,60 +1977,29 @@ function parsePayoutMapFromResultHtml(html) {
     if (!yen || yen < 100) return;
     var ordered = (type === '馬単' || type === '3連単');
     var key = type + ':' + normComboKey(String(combo), ordered);
-    if (!map[key]) map[key] = yen; // 先勝ち
+    if (!map[key]) map[key] = yen;
   }
 
-  // ── DOM解析: 払戻テーブルの tr を直接読む ──
-  // netkeiba result.html の払戻テーブル: <td>券種名</td><td>馬番</td><td>払戻金</td> が多い
   Array.prototype.slice.call(doc.querySelectorAll('tr')).forEach(function (tr) {
     var cells = Array.prototype.slice.call(tr.querySelectorAll('td,th')).map(function (td) {
       return toHalfNumberText(normCellText(td)).replace(/,/g, '').trim();
     });
     if (cells.length < 2) return;
 
-    // 券種がどのセルにあるか探す
     var typeIdx = -1, type = '';
     cells.forEach(function (c, i) {
       types.forEach(function (t) { if (c === t || c.indexOf(t) === 0) { typeIdx = i; type = t; } });
     });
     if (typeIdx < 0) return;
 
-    // 馬番セルと金額セルを残りのセルから探す
     var comboCell = '', yenCell = '';
     cells.forEach(function (c, i) {
       if (i === typeIdx) return;
-      // 馬番: 数字とハイフンのみ
-      if (!comboCell && /^([1-9]|1[0-8])([-ー―]([1-9]|1[0-8])){0,2}$/.test(c.replace(/\s/g,''))) {
-        comboCell = c.replace(/\s/g,'');
-      }
-      // 金額: 3〜7桁の数字＋円
+      if (!comboCell && /^([1-9]|1[0-8])([-ー―]([1-9]|1[0-8])){0,2}$/.test(c.replace(/\s/g,''))) comboCell = c.replace(/\s/g,'');
       if (!yenCell && /^\d{3,7}円?$/.test(c)) yenCell = c;
     });
     if (comboCell && yenCell) add(type, comboCell, yenCell);
   });
-
-  // ── テキスト解析 (既存ロジック + 強化) ──
-  types.forEach(function (type) {
-    // 券種名出現箇所を全て検索（複数箇所に分かれる場合も対応）
-    var searchFrom = 0;
-    while (true) {
-      var idx = text.indexOf(type, searchFrom);
-      if (idx < 0) break;
-      searchFrom = idx + 1;
-      var part = text.slice(idx, idx + 600);
-
-      // パターン1: 「馬番 払戻円」（スペース区切り）
-      var re1 = /((?:[1-9]|1[0-8])(?:[-ー―−ｰ→>＞](?:[1-9]|1[0-8])){0,2})\s+(\d{3,7})円?/g;
-      var m;
-      while ((m = re1.exec(part))) add(type, m[1], m[2]);
-
-      // パターン2: 「馬番\n払戻\n円」など改行混じり
-      var re2 = /((?:[1-9]|1[0-8])(?:[-ー―−ｰ](?:[1-9]|1[0-8])){0,2})\s*[\n\r\s]+(\d{3,7})/g;
-      while ((m = re2.exec(part))) add(type, m[1], m[2]);
-    }
-  });
-
-  console.log('[RaceDay] payoutMap keys:', Object.keys(map));
   return map;
 }
 
@@ -2294,23 +2009,18 @@ function estimateTicketReturn(ticket, finish, payoutMap) {
   var ordered = (type === '馬単' || type === '3連単');
   var combo = nums.join('-');
 
-  // If manually entered ticket lacks enough numbers, judge with existing simple logic.
   var mapKey = type + ':' + normComboKey(combo, ordered);
   var payout100 = payoutMap && payoutMap[mapKey] ? payoutMap[mapKey] : 0;
 
   var hit = false;
   if (type === '単勝') hit = nums[0] === finish[0];
   else if (type === '複勝') hit = finish.slice(0, 3).indexOf(nums[0]) >= 0;
-  else if (type === '馬連' || type === 'ワイド') hit = nums.length >= 2 && finish.slice(0, type === 'ワイド' ? 3 : 2).indexOf(nums[0]) >= 0 && finish.slice(0, type === 'ワイド' ? 3 : 2).indexOf(nums[1]) >= 0;
-  else if (type === '馬単') hit = nums[0] === finish[0] && nums[1] === finish[1];
-  else if (type === '3連複') hit = nums.length >= 3 && nums.every(function (n) { return finish.slice(0, 3).indexOf(n) >= 0; });
-  else if (type === '3連単') hit = nums[0] === finish[0] && nums[1] === finish[1] && nums[2] === finish[2];
+  else if (type === '馬連' || type === 'ワイド') hit = nums.length >= 2 && finish.slice(0, 3).indexOf(nums[0]) >= 0 && finish.slice(0, 3).indexOf(nums[1]) >= 0;
 
   if (!hit) return { hit: false, ret: 0, payout100: payout100 };
   if (payout100) return { hit: true, ret: Math.floor((Number(ticket.amount || 0) / 100) * payout100), payout100: payout100 };
 
-  // fallback to estimated odds if payout table could not be parsed.
-  var odds = Number(ticket.odds || 0);
+  var odds = Number(ticket.odds || 2);
   return { hit: true, ret: odds > 0 ? Math.floor(Number(ticket.amount || 0) * odds) : 0, payout100: 0 };
 }
 
@@ -2331,7 +2041,7 @@ function renderSimulationSettlement(finish, payoutMap, sourceLabel) {
     row.innerHTML =
       '<span class="chip ' + (CHIP_CLASS[t.type] || '') + '">' + escapeHtml(t.type) + '</span>' +
       '<div class="sim-ticket-main"><b>' + escapeHtml((t.nums || []).join('-')) + '</b>' +
-      '<div class="sim-ticket-meta">購入 ' + Number(t.amount || 0).toLocaleString() + '円' + (r.payout100 ? ' / 払戻 ' + r.payout100.toLocaleString() + '円(100円)' : '') + '</div></div>' +
+      '<div class="sim-ticket-meta">購入 ' + Number(t.amount || 0).toLocaleString() + '円' + '</div></div>' +
       '<div class="sim-return ' + (r.hit ? 'hit' : '') + '">' + r.ret.toLocaleString() + '円<div class="sim-ticket-meta">' + (r.hit ? '的中' : '不的中') + '</div></div>';
     container.appendChild(row);
   });
@@ -2347,7 +2057,7 @@ function renderSimulationSettlement(finish, payoutMap, sourceLabel) {
       '<span class="sim-result-badge ' + (roi >= 100 ? '' : 'loss') + '">' + (roi >= 100 ? '勝利' : '精算完了') + '</span>' +
       '<div class="sim-score-big">' + roi.toFixed(1) + '%</div><div class="sim-score-label">RETURN ON BETTING</div>' +
       '<div class="sim-gauge"><i style="width:' + Math.min(100, roi) + '%"></i></div>' +
-      '<div class="sim-note">着順: ' + finish.join('-') + ' / ' + escapeHtml(sourceLabel || 'result.html') + '</div></div>' +
+      '<div class="sim-note">着順: ' + finish.join('-') + '</div></div>' +
       '<div class="sim-panel"><div class="sim-kpi-grid">' +
       '<div class="sim-kpi"><div class="v">' + hitCount + '/' + simTickets.length + '</div><div class="l">的中数</div></div>' +
       '<div class="sim-kpi"><div class="v">' + totalBet.toLocaleString() + '</div><div class="l">投資額</div></div>' +
@@ -2365,18 +2075,12 @@ function autoAddSimCandidates() {
     simTickets = lastTickets.slice(0, Math.max(1, settings.maxTickets || 5)).map(function (t) {
       return Object.assign({}, t, { nums: [].concat(t.nums || []), amount: Number(t.amount || settings.unit || 100) });
     });
-  } else if (lastRecs && lastRecs.length) {
-    simTickets = lastRecs.slice(0, 6).map(function (r) {
-      return { type: r.type || '単勝', nums: [].concat(r.nums || [r.num || 1]), amount: settings.unit || 100, odds: Number(r.odds || 2), ev: Number(r.ev || 1) };
-    });
   } else if (horses && horses.length) {
-    simTickets = horses.slice(0, 6).map(function (h) {
-      return { type: '複勝', nums: [Number(h.num)], amount: settings.unit || 100, odds: Number(h.odds || 2), ev: 1 };
+    simTickets = horses.slice(0, 4).map(function (h) {
+      return { type: '単勝', nums: [Number(h.num)], amount: settings.unit || 100, odds: Number(h.odds || 2), ev: 1 };
     });
   }
-
   renderSimEditRows();
-  setSimStatus(simTickets.length ? '候補をシミュレーション買い目へ追加しました。' : '候補がありません。先に馬データ取得またはEV計算をしてください。', simTickets.length ? 'ok' : 'info');
 }
 
 function runSimulationFromResult() {
@@ -2387,33 +2091,22 @@ function runSimulationFromResult() {
 
   if (!simTickets.length) autoAddSimCandidates();
   if (!simTickets.length) {
-    setSimStatus('買い目がありません。先に候補を自動追加してください。', 'err');
+    setSimStatus('精算対象の買い目が空です。馬番を追加してください。', 'err');
     return;
   }
 
-  setSimStatus('result.html を取得して本精算中...', 'info');
+  setSimStatus('結果データを取得中...', 'info');
   fetchTextViaProxy(url).then(function (html) {
-    // レースが終了しているか確認（払戻テーブルの存在チェック）
-    var hasResult = /単勝|払戻|着順|1着/.test(html);
-    if (!hasResult) {
-      setSimStatus('結果ページにレース結果データが見つかりません。レースがまだ終了していないか、URLが正しくない可能性があります。', 'err');
-      return;
-    }
     var finish = parseFinishOrderFromResultHtml(html);
-    if (finish.length < 2) {
-      // 追加診断: テキスト抜粋をコンソールへ
-      var preview = toHalfNumberText((stripHtmlToText(html).text || '').slice(0, 500));
-      console.warn('[RaceDay] 着順解析失敗。テキスト先頭500字:', preview);
-      setSimStatus('結果ページから着順を解析できませんでした。ページが正しい結果URLか確認してください（race_id=' + (url.match(/race_id=(\w+)/) || [,'不明'])[1] + '）', 'err');
+    if (finish.length < 1) {
+      setSimStatus('払戻確定データが未反映か、URLが正しくありません。手動仮精算が可能です。', 'err');
       return;
     }
     var payoutMap = parsePayoutMapFromResultHtml(html);
-    var payoutCount = Object.keys(payoutMap).length;
     renderSimulationSettlement(finish, payoutMap, 'result.html');
-    setSimStatus('本精算完了: 着順 ' + finish.join('-') + '（払戻' + payoutCount + '件取得）', 'ok');
+    setSimStatus('精算完了: 着順 ' + finish.join('-'), 'ok');
   }).catch(function (e) {
-    console.error(e);
-    setSimStatus('結果取得失敗: ' + (e && e.message ? e.message : e) + '　プロキシ設定を確認してください。', 'err');
+    setSimStatus('通信エラー: 手入力シミュレーションを実行してください。', 'err');
   });
 }
 
@@ -2423,37 +2116,27 @@ function runAutoSimulation() {
   runSimulationFromResult();
 }
 
-
 function setupEvents() {
   var d = document.getElementById('pickDate');
   var k = document.getElementById('pickKind');
   var v = document.getElementById('pickVenue');
   var rs = document.getElementById('raceSelect');
   
-  // フラグによるガード
-  if (!d.dataset.bound) {
-    d.dataset.bound = '1';
-    d.onchange = function () { loadActiveVenues(); };
-  }
+  if (!d.dataset.bound) { d.dataset.bound = '1'; d.onchange = function () { loadActiveVenues(); }; }
   if (!k.dataset.bound) {
     k.dataset.bound = '1';
     k.onchange = function () {
       settings.nar = (this.value === 'NAR');
+      var sn = document.getElementById('setNar');
+      if (sn) sn.value = settings.nar ? '1' : '0';
+      localStorage.setItem('tk-html-settings', JSON.stringify(settings));
       loadActiveVenues();
     };
   }
-  if (!v.dataset.bound) {
-    v.dataset.bound = '1';
-    v.onchange = function () { loadRaceList(); };
-  }
-  if (!rs.dataset.bound) {
-    rs.dataset.bound = '1';
-    rs.onchange = function () { applySelectedRaceUrl(); };
-  }
+  if (!v.dataset.bound) { v.dataset.bound = '1'; v.onchange = function () { loadRaceList(); }; }
+  if (!rs.dataset.bound) { rs.dataset.bound = '1'; rs.onchange = function () { applySelectedRaceUrl(); }; }
   
   bindTap(document.getElementById('loadRaceListBtn'), function () { loadRaceList(); });
-  var applyBtn = document.getElementById('applyUrlBtn');
-  if (applyBtn) bindTap(applyBtn, function () { applySelectedRaceUrl(); });
   bindTap(document.getElementById('fetchBtn'), function () { fetchRace(); });
   bindTap(document.getElementById('addHorseRowBtn'), function () { horses.push({ num: horses.length + 1, name: '', odds: 0, pop: 0, frame: 1 }); renderHorseRows(); });
   bindTap(document.getElementById('clearHorsesBtn'), function () { horses = []; renderHorseRows(); });
@@ -2470,7 +2153,6 @@ function setupEvents() {
   
   bindTap(document.getElementById('fillSimResultUrlBtn'), function () { fillSimResultUrl(); });
   bindTap(document.getElementById('runSimulationFromResultBtn'), function () { runSimulationFromResult(); });
-  bindTap(document.getElementById('runManualSimulationBtn'), function () { var el = document.getElementById('manualFinishNums'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); });
   bindTap(document.getElementById('simAutoAddCandidatesBtn'), function () { autoAddSimCandidates(); });
   bindTap(document.getElementById('runAutoSimulationBtn'), function () { runAutoSimulation(); });
   bindTap(document.getElementById('simLoadFromRecommendBtn'), function () {
@@ -2489,20 +2171,20 @@ function setupEvents() {
   bindTap(document.getElementById('runManualSimExecuteBtn'), function () { runManualSimulation(); });
   bindTap(document.getElementById('simClearHistoryBtn'), function () { simHistory = []; localStorage.removeItem('tk-sim-history'); renderSimProfitChart(); });
   
-  // 設定変更時の自動保存バインド（JRAと同等の扱いでNARも即時反映）
   var sNar = document.getElementById('setNar');
   if (sNar && !sNar.dataset.bound) {
     sNar.dataset.bound = '1';
     sNar.onchange = function () {
       settings.nar = (this.value === '1');
-      document.getElementById('narBadge').style.display = settings.nar ? '' : 'none';
-      // pickKindセレクトと連動
+      var badge = document.getElementById('narBadge');
+      if (badge) badge.style.display = settings.nar ? '' : 'none';
       var pk = document.getElementById('pickKind');
       if (pk) pk.value = settings.nar ? 'NAR' : 'JRA';
       localStorage.setItem('tk-html-settings', JSON.stringify(settings));
       loadActiveVenues();
     };
   }
+
   ['setBudget','setUnit','setMaxTickets'].forEach(function (id) {
     var el = document.getElementById(id);
     if (el && !el.dataset.bound) {
@@ -2515,16 +2197,7 @@ function setupEvents() {
       };
     }
   });
-  var sAnti = document.getElementById('setAntigami');
-  if (sAnti && !sAnti.dataset.bound) {
-    sAnti.dataset.bound = '1';
-    sAnti.onchange = function () {
-      settings.antigami = this.checked;
-      localStorage.setItem('tk-html-settings', JSON.stringify(settings));
-    };
-  }
   
-  // タブ遷移
   document.querySelectorAll('.tab-btn').forEach(function (btn) {
     bindTap(btn, function (e) {
       e.preventDefault();
@@ -2532,31 +2205,26 @@ function setupEvents() {
       this.classList.add('active');
       document.querySelectorAll('[id^="tab-"]').forEach(function (p) { p.style.display = 'none'; });
       document.getElementById('tab-' + this.dataset.tab).style.display = 'block';
-      if (this.dataset.tab === 'sim') {
-        var si = document.getElementById('simResultUrl');
-        if (si && !String(si.value || '').trim()) fillSimResultUrl();
-      }
     });
   });
   
-  // モードボタン生成
   var mg = document.getElementById('modeGrid');
-  mg.innerHTML = '';
-  MODE_OPTIONS.forEach(function (opt) {
-    var btn = document.createElement('button');
-    btn.className = 'mode-btn' + (settings.mode === opt[0] ? ' active' : '');
-    btn.textContent = opt[1];
-    bindTap(btn, function () {
-      settings.mode = opt[0];
-      document.querySelectorAll('.mode-btn').forEach(function (b) { b.classList.remove('active'); });
-      btn.classList.add('active');
-      localStorage.setItem('tk-html-settings', JSON.stringify(settings));
+  if (mg) {
+    mg.innerHTML = '';
+    MODE_OPTIONS.forEach(function (opt) {
+      var btn = document.createElement('button');
+      btn.className = 'mode-btn' + (settings.mode === opt[0] ? ' active' : '');
+      btn.textContent = opt[1];
+      bindTap(btn, function () {
+        settings.mode = opt[0];
+        document.querySelectorAll('.mode-btn').forEach(function (b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+        localStorage.setItem('tk-html-settings', JSON.stringify(settings));
+      });
+      mg.appendChild(btn);
     });
-    mg.appendChild(btn);
-  });
+  }
 }
-
-
 
 function forceBindTabsSafe() {
   Array.prototype.slice.call(document.querySelectorAll('.tab-btn')).forEach(function (btn) {
@@ -2568,10 +2236,6 @@ function forceBindTabsSafe() {
       Array.prototype.slice.call(document.querySelectorAll('[id^="tab-"]')).forEach(function (p) { p.style.display = 'none'; });
       var panel = document.getElementById('tab-' + tab);
       if (panel) panel.style.display = 'block';
-      if (tab === 'sim') {
-        var si = document.getElementById('simResultUrl');
-        if (si && !String(si.value || '').trim()) fillSimResultUrl();
-      }
       return false;
     };
   });
@@ -2585,23 +2249,26 @@ function initUI() {
     simHistory = JSON.parse(localStorage.getItem('tk-sim-history') || '[]');
   } catch (e) { console.warn(e); }
   
-  document.getElementById('pickDate').value = getLocalDateString();
+  var dInput = document.getElementById('pickDate');
+  if (dInput && !dInput.value) dInput.value = getLocalDateString();
+  
   try {
     currentRaceId = localStorage.getItem('tk-last-race-id') || currentRaceId || '';
     currentRaceName = localStorage.getItem('tk-last-race-name') || currentRaceName || '';
-    var savedResultUrl = localStorage.getItem('tk-last-result-url') || '';
-    var simInput = document.getElementById('simResultUrl');
-    if (simInput && savedResultUrl && !simInput.value) simInput.value = savedResultUrl;
   } catch(e) {}
+  
   document.getElementById('proxyUrl').value = settings.proxyUrl;
   document.getElementById('setBudget').value = settings.budget;
   document.getElementById('setUnit').value = settings.unit;
   document.getElementById('setMaxTickets').value = settings.maxTickets;
   document.getElementById('setAntigami').checked = settings.antigami;
   document.getElementById('setNar').value = settings.nar ? '1' : '0';
-  document.getElementById('narBadge').style.display = settings.nar ? '' : 'none';
+  
+  var badge = document.getElementById('narBadge');
+  if (badge) badge.style.display = settings.nar ? '' : 'none';
+  
   var pkInit = document.getElementById('pickKind');
-  if (pkInit && settings.nar) pkInit.value = 'NAR';
+  if (pkInit) pkInit.value = settings.nar ? 'NAR' : 'JRA';
   
   setupEvents();
   forceBindTabsSafe();

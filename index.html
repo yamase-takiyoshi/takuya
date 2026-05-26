@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.20.3 Safari Venue Fixed</title>
+<title>The競馬 EV分析 v5.20.4 Venue Always Visible</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.20.3</span>
+    <span class="ver">v5.20.4</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -4066,8 +4066,11 @@ async function loadActiveVenuesForDate(){
   const seq = ++__activeVenueSeqV5188;
   const date = document.getElementById('pickDate')?.value || todayYmd();
   const kind = document.getElementById('pickKind')?.value || 'JRA';
-  renderVenueOptions([]);
-  __v5211_clearSelectionMessage(`<div class="url-status">📅 ${escapeHtml(date)} ${escapeHtml(kind)} の開催場を自動取得中...</div>`);
+
+  // ★ まず全開催場を即時表示（空欄にしない）
+  const allList = kind === 'NAR' ? NAR_VENUES : JRA_VENUES;
+  renderVenueOptions(allList);
+  __v5211_clearSelectionMessage(`<div class="url-status">📅 ${escapeHtml(date)} ${escapeHtml(kind)} の開催場を確認中...（全場を一時表示）</div>`);
 
   let venues = [];
   try{
@@ -4082,17 +4085,14 @@ async function loadActiveVenuesForDate(){
     try{ venues = await __v5212_probeNarVenues(date); }catch(e){ console.warn('NAR probe failed', e); }
   }
 
-  if(!venues.length){
-    venues = __v5212_knownFallbackVenues(kind, date);
-  }
-
   if(seq !== __activeVenueSeqV5188) return;
   if(venues.length){
     renderVenueOptions(venues);
-    __v5211_clearSelectionMessage(`<div class="url-status ok">✅ ${escapeHtml(date)} ${escapeHtml(kind)} の開催場だけ表示しました：${venues.map(v=>escapeHtml(v[1])).join('、')}</div>`);
+    __v5211_clearSelectionMessage(`<div class="url-status ok">✅ ${escapeHtml(date)} ${escapeHtml(kind)} の開催場：${venues.map(v=>escapeHtml(v[1])).join('、')}</div>`);
   }else{
-    renderVenueOptions([]);
-    __v5211_clearSelectionMessage(`<div class="url-status err">⚠️ ${escapeHtml(date)} ${escapeHtml(kind)} の開催場を取得できませんでした。プロキシ設定後に「レース一覧」または日付変更を試してください。</div>`);
+    // 絞り込み失敗 → 全場表示を維持
+    renderVenueOptions(allList);
+    __v5211_clearSelectionMessage(`<div class="url-status err">⚠️ 開催場の自動絞り込みできず。全場を表示中。開催場を手動選択するかrace_id付きURLを直接入力してください。</div>`);
   }
 }
 async function onRaceDateKindChanged(){
@@ -4107,7 +4107,8 @@ async function onRaceDateKindChanged(){
 // ─── 起動 ────────────────────────────────────────
 initUI();
 initCalendarPicker();
-setTimeout(()=>{ try{ onRaceDateKindChanged(); }catch(e){ console.error(e); } }, 300);
+// 起動時に即時実行（300ms待ちをなくす）
+try{ onRaceDateKindChanged(); }catch(e){ console.error(e); }
 
 // デモデータ
 if(horses.length === 0){
@@ -4127,15 +4128,14 @@ if(horses.length === 0){
 
 <script>
 /* ============================================================
-   v5.20.3 REAL HTML SAFARI FIX
-   - パッチではなく本体HTML内蔵版
-   - iPad Safariで開催場が空欄/自動取得中固定になる問題を防止
-   - 開催場表示は開催場名だけ
-   - race_id/kaisai_id基準で、その日の開催場だけを優先表示
+   v5.20.4 SAFARI VENUE FIX
+   - 起動時に全開催場を即表示（空欄にならない）
+   - バックグラウンドでプロキシ取得 → 成功したら開催日のみに絞り込み
+   - 取得失敗・タイムアウトでも全開催場は残る
    ============================================================ */
 (function(){
   'use strict';
-  const FIX_VER = 'v5.20.3-real-html-safari-venue';
+  const FIX_VER = 'v5.20.4-venue-always-visible';
   let venueSeq = 0;
 
   function el(id){ return document.getElementById(id); }
@@ -4289,6 +4289,13 @@ if(horses.length === 0){
     return uniqueVenues('NAR', (await Promise.all(jobs)).filter(Boolean));
   }
 
+  // 全開催場リストを即時表示するヘルパー
+  function showAllVenues(kind, date){
+    const allVenues = master(kind);
+    window.renderVenueOptions(allVenues);
+    setStatus(`📅 ${htmlEscape(date)} ${htmlEscape(kind)} の開催場を読み込み中...（全場を一時表示）`, '');
+  }
+
   window.loadActiveVenuesForDate = async function(){
     const seq = ++venueSeq;
     const dateInput = el('pickDate');
@@ -4297,9 +4304,11 @@ if(horses.length === 0){
     const kind = el('pickKind')?.value || 'JRA';
 
     clearRaceSelection();
-    window.renderVenueOptions([]);
-    setStatus(`📅 ${htmlEscape(date)} ${htmlEscape(kind)} の開催場を確認中...`, '');
 
+    // ★ まず全開催場を即時表示（空欄にしない）
+    showAllVenues(kind, date);
+
+    // バックグラウンドでプロキシ取得を試みる
     let venues = [];
     try{
       const html = await fetchHtml(raceListUrlSafe(kind, date, ''), 9000);
@@ -4312,21 +4321,22 @@ if(horses.length === 0){
         venues = uniqueVenues(kind, parseActiveVenuesFromList(html, kind, date));
       }
     }catch(e){
-      console.warn('[v5.20.3] top venue fetch failed:', e);
+      console.warn('[v5.20.4] top venue fetch failed:', e);
     }
 
     if(!venues.length && kind === 'NAR'){
-      try{ venues = await probeNarByVenue(date); }catch(e){ console.warn('[v5.20.3] NAR probe failed:', e); }
+      try{ venues = await probeNarByVenue(date); }catch(e){ console.warn('[v5.20.4] NAR probe failed:', e); }
     }
-    if(!venues.length) venues = knownFallback(kind, date);
     if(seq !== venueSeq) return;
 
     if(venues.length){
+      // 取得成功 → 開催日のみに絞り込み表示
       window.renderVenueOptions(venues);
-      setStatus(`✅ ${htmlEscape(date)} ${htmlEscape(kind)} の開催場だけ表示しました：${venues.map(v=>htmlEscape(v[1])).join('、')}`, 'ok');
+      setStatus(`✅ ${htmlEscape(date)} ${htmlEscape(kind)} の開催場：${venues.map(v=>htmlEscape(v[1])).join('、')}`, 'ok');
     }else{
-      window.renderVenueOptions([]);
-      setStatus(`⚠️ ${htmlEscape(date)} ${htmlEscape(kind)} の開催場を取得できませんでした。プロキシ設定を確認するか、race_id付き出馬表URLを直接貼ってください。`, 'err');
+      // 取得失敗 → 全場表示のまま維持、エラーメッセージを出す
+      showAllVenues(kind, date);
+      setStatus(`⚠️ 開催場の自動絞り込みができませんでした。全場を表示中。race_id付きURLを直接貼るか、開催場を手動で選択してください。`, 'err');
     }
   };
 
@@ -4336,24 +4346,16 @@ if(horses.length === 0){
     await window.loadActiveVenuesForDate();
   };
 
-  const oldLoadRaceList = typeof window.loadRaceList === 'function' ? window.loadRaceList : null;
-  window.loadRaceList = async function(){
-    const venue = el('pickVenue')?.value || '';
-    if(!venue){ setStatus('⚠️ 開催場を選択してください。', 'err'); return; }
-    const rs = el('raceSelect');
-    if(rs){ while(rs.options.length) rs.remove(0); rs.options.add(new Option('レース一覧取得中...', '')); }
+  window.onRaceDateKindChanged = async function(){
+    try{ if(typeof __raceListSeqV5188 !== 'undefined') __raceListSeqV5188++; }catch(e){}
+    try{ horses = []; lastRecs = []; lastTickets = []; renderHorseRows(); renderManualFinishPicker(); }catch(e){}
+    // 全開催場を即時表示してから取得
     try{
-      if(oldLoadRaceList){
-        await oldLoadRaceList();
-        const txt = rs && rs.options[0] ? rs.options[0].textContent : '';
-        if(rs && (rs.options.length > 1 || !/取得中/.test(txt || ''))) return;
-      }
-    }catch(e){ console.warn('[v5.20.3] loadRaceList fallback:', e); }
-    if(rs){
-      while(rs.options.length) rs.remove(0);
-      rs.options.add(new Option('取得失敗：race_id付きURLを直接貼ってください', ''));
-    }
-    setStatus('⚠️ レース一覧取得に失敗しました。開催場は取得済みです。URL欄にrace_id付き出馬表URLを貼れば馬データ取得できます。', 'err');
+      const kind = el('pickKind')?.value || 'JRA';
+      const date = el('pickDate')?.value || localToday();
+      window.renderVenueOptions(master(kind));
+    }catch(e){}
+    await window.loadActiveVenuesForDate();
   };
 
   function bind(){
@@ -4373,7 +4375,12 @@ if(horses.length === 0){
       v.dataset.v5203Real = '1';
       v.addEventListener('change', clearRaceSelection, {passive:true});
     }
-    setTimeout(()=>window.loadActiveVenuesForDate().catch(console.error), 80);
+    // 全場即時表示してからバックグラウンド取得
+    try{
+      const kind = el('pickKind')?.value || 'JRA';
+      window.renderVenueOptions(master(kind));
+    }catch(e){}
+    window.loadActiveVenuesForDate().catch(console.error);
   }
 
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind, {once:true});

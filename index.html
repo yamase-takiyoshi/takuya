@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.26.0 RaceDay Complete</title>
+<title>The競馬 EV分析 v5.26.1 RaceDay Complete</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -199,7 +199,7 @@ body {
 .sim-payout-ok { color: var(--green); font-weight: 800; } .sim-payout-est { color: var(--yellow); font-weight: 800; }
 @media(max-width:560px){ .sim-toolbar, .sim-finish-picker { grid-template-columns: 1fr; } }
 
-/* iPad Safari tap stability fix v5.26.0 */
+/* iPad Safari tap stability fix v5.26.1 */
 button, select, input, textarea, .tab-btn, .btn, .btn-sm, .mode-btn, .sim-cand-row, .del-btn {
   -webkit-tap-highlight-color: rgba(0,255,136,.18);
   touch-action: manipulation;
@@ -224,7 +224,7 @@ button, select, input, textarea, .tab-btn, .btn, .btn-sm, .mode-btn, .sim-cand-r
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.26.0</span>
+    <span class="ver">v5.26.1</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -976,25 +976,65 @@ function loadRaceList() {
   });
 }
 
+
+// ─── v5.26.1 race_id 永続化・復元ヘルパー ───
+function extractRaceIdFromAny(value) {
+  var s = String(value || '');
+  var m = s.match(/[?&]race_id=(\d{10,12})/);
+  if (m) return m[1];
+  m = s.match(/(?:^|[^0-9])(\d{10,12})(?:[^0-9]|$)/);
+  return m ? m[1] : '';
+}
+
+function detectHostFromAny(value) {
+  var s = String(value || '');
+  if (s.indexOf('nar.netkeiba.com') >= 0) return 'https://nar.netkeiba.com';
+  if (s.indexOf('race.netkeiba.com') >= 0) return 'https://race.netkeiba.com';
+  try {
+    var savedHost = localStorage.getItem('tk-last-race-host') || '';
+    if (savedHost.indexOf('nar.netkeiba.com') >= 0) return 'https://nar.netkeiba.com';
+    if (savedHost.indexOf('race.netkeiba.com') >= 0) return 'https://race.netkeiba.com';
+  } catch(e) {}
+  return settings.nar ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com';
+}
+
+function persistActiveRace(raceId, host, name, shutubaUrl) {
+  raceId = extractRaceIdFromAny(raceId);
+  if (!raceId) return;
+  currentRaceId = raceId;
+  if (name != null) currentRaceName = String(name || currentRaceName || '');
+  try {
+    localStorage.setItem('tk-last-race-id', raceId);
+    localStorage.setItem('tk-last-race-host', host || detectHostFromAny(shutubaUrl));
+    localStorage.setItem('tk-last-race-name', currentRaceName || '');
+    if (shutubaUrl) localStorage.setItem('tk-last-shutuba-url', shutubaUrl);
+  } catch(e) { console.warn(e); }
+}
+
 function applySelectedRaceUrl() {
   var rs = document.getElementById('raceSelect');
   var ru = document.getElementById('raceUrl');
   var rb = document.getElementById('raceTitleBox');
-  
+
   if (!rs || rs.selectedIndex < 0) return;
   var opt = rs.options[rs.selectedIndex];
   if (!opt || !opt.value) {
-    ru.value = '';
+    if (ru) ru.value = '';
     if (rb) rb.style.display = 'none';
     return;
   }
-  
-  ru.value = opt.value;
-  currentRaceId = opt.dataset.raceId;
-  currentRaceName = opt.dataset.raceName;
-  
+
+  var shutubaUrl = String(opt.value || '');
+  var raceId = extractRaceIdFromAny(opt.dataset && opt.dataset.raceId || shutubaUrl);
+  var raceName = String(opt.dataset && opt.dataset.raceName || '').trim();
+  var raceNo = String(opt.dataset && opt.dataset.raceNo || '').trim();
+  var host = detectHostFromAny(shutubaUrl);
+
+  if (ru) ru.value = shutubaUrl;
+  persistActiveRace(raceId, host, raceName, shutubaUrl);
+
   if (rb) {
-    rb.textContent = '選択中: ' + pad2(opt.dataset.raceNo) + 'R ' + currentRaceName + ' [ID: ' + currentRaceId + ']';
+    rb.textContent = '選択中: ' + (raceNo ? pad2(raceNo) + 'R ' : '') + (currentRaceName || raceName || '') + ' [ID: ' + currentRaceId + ']';
     rb.style.display = 'block';
   }
   console.log('[RaceDay] 最終的に選択された race_id: ' + currentRaceId);
@@ -1747,46 +1787,64 @@ function renderSimProfitChart() {
 
 // ─── v5.26.0 シミュレーションURL自動入力・本精算復旧 ───
 function getActiveRaceIdSafe() {
-  var id = String(currentRaceId || '').replace(/[^\d]/g, '');
-  if (id.length >= 10) return id;
+  var id = extractRaceIdFromAny(currentRaceId);
+  if (id) return id;
+
+  var simInput = document.getElementById('simResultUrl');
+  if (simInput) {
+    id = extractRaceIdFromAny(simInput.value);
+    if (id) return id;
+  }
+
+  var ru = document.getElementById('raceUrl');
+  if (ru) {
+    id = extractRaceIdFromAny(ru.value);
+    if (id) return id;
+  }
 
   var rs = document.getElementById('raceSelect');
   if (rs && rs.selectedIndex >= 0) {
     var opt = rs.options[rs.selectedIndex];
     if (opt) {
-      id = String(opt.dataset && opt.dataset.raceId || opt.value || '').replace(/[^\d]/g, '');
-      if (id.length >= 10) return id;
+      id = extractRaceIdFromAny((opt.dataset && opt.dataset.raceId) || opt.value || opt.textContent || '');
+      if (id) return id;
     }
   }
 
-  var ru = document.getElementById('raceUrl');
-  if (ru) {
-    var m = String(ru.value || '').match(/race_id=(\d{10,12})/);
-    if (m) return m[1];
-    m = String(ru.value || '').match(/(\d{10,12})/);
-    if (m) return m[1];
-  }
+  try {
+    id = extractRaceIdFromAny(localStorage.getItem('tk-last-race-id') || localStorage.getItem('tk-last-shutuba-url') || '');
+    if (id) return id;
+  } catch(e) {}
   return '';
 }
 
 function getActiveRaceHostSafe() {
+  var simInput = document.getElementById('simResultUrl');
+  if (simInput && simInput.value) return detectHostFromAny(simInput.value);
   var ru = document.getElementById('raceUrl');
-  var u = String(ru && ru.value || '');
-  if (u.indexOf('nar.netkeiba.com') >= 0 || settings.nar) return 'https://nar.netkeiba.com';
-  return 'https://race.netkeiba.com';
+  if (ru && ru.value) return detectHostFromAny(ru.value);
+  try {
+    var h = localStorage.getItem('tk-last-race-host') || '';
+    if (h.indexOf('nar.netkeiba.com') >= 0) return 'https://nar.netkeiba.com';
+    if (h.indexOf('race.netkeiba.com') >= 0) return 'https://race.netkeiba.com';
+  } catch(e) {}
+  return settings.nar ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com';
 }
 
 function buildResultUrlFromRaceId(raceId) {
-  raceId = String(raceId || '').replace(/[^\d]/g, '');
+  raceId = extractRaceIdFromAny(raceId);
   if (!raceId) return '';
   return getActiveRaceHostSafe() + '/race/result.html?race_id=' + raceId + '&rf=race_submenu';
 }
 
 function fillSimResultUrl() {
+  // Safariでは select change より先にボタンが発火することがあるため、毎回ここで復元する。
+  try { applySelectedRaceUrl(); } catch(e) { console.warn('[RaceDay] applySelectedRaceUrl skip:', e); }
+
   var raceId = getActiveRaceIdSafe();
   var input = document.getElementById('simResultUrl');
   if (!raceId) {
-    var msg = '先に馬データタブでレースを選択してください。';
+    var msg = '先に馬データタブでレースを選択、またはレースデータ取得をしてください。';
     if (input) input.value = '';
     setSimStatus(msg, 'err');
     setStatus(msg, 'err');
@@ -1797,9 +1855,15 @@ function fillSimResultUrl() {
   var url = buildResultUrlFromRaceId(raceId);
   if (input) {
     input.value = url;
+    input.setAttribute('value', url);
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
   }
+  try {
+    localStorage.setItem('tk-last-result-url', url);
+    localStorage.setItem('tk-last-race-id', raceId);
+    localStorage.setItem('tk-last-race-host', getActiveRaceHostSafe());
+  } catch(e) {}
   setSimStatus('結果URLを自動入力しました: race_id=' + raceId, 'ok');
   return url;
 }
@@ -2075,6 +2139,10 @@ function setupEvents() {
       this.classList.add('active');
       document.querySelectorAll('[id^="tab-"]').forEach(function (p) { p.style.display = 'none'; });
       document.getElementById('tab-' + this.dataset.tab).style.display = 'block';
+      if (this.dataset.tab === 'sim') {
+        var si = document.getElementById('simResultUrl');
+        if (si && !String(si.value || '').trim()) fillSimResultUrl();
+      }
     });
   });
   
@@ -2107,6 +2175,10 @@ function forceBindTabsSafe() {
       Array.prototype.slice.call(document.querySelectorAll('[id^="tab-"]')).forEach(function (p) { p.style.display = 'none'; });
       var panel = document.getElementById('tab-' + tab);
       if (panel) panel.style.display = 'block';
+      if (tab === 'sim') {
+        var si = document.getElementById('simResultUrl');
+        if (si && !String(si.value || '').trim()) fillSimResultUrl();
+      }
       return false;
     };
   });
@@ -2121,6 +2193,13 @@ function initUI() {
   } catch (e) { console.warn(e); }
   
   document.getElementById('pickDate').value = getLocalDateString();
+  try {
+    currentRaceId = localStorage.getItem('tk-last-race-id') || currentRaceId || '';
+    currentRaceName = localStorage.getItem('tk-last-race-name') || currentRaceName || '';
+    var savedResultUrl = localStorage.getItem('tk-last-result-url') || '';
+    var simInput = document.getElementById('simResultUrl');
+    if (simInput && savedResultUrl && !simInput.value) simInput.value = savedResultUrl;
+  } catch(e) {}
   document.getElementById('proxyUrl').value = settings.proxyUrl;
   document.getElementById('setBudget').value = settings.budget;
   document.getElementById('setUnit').value = settings.unit;

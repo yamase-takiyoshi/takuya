@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.19.5 ShutubaOddsFieldFix</title>
+<title>The競馬 EV分析 v5.19.6 AutoFetchOnSelect</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.19.5 ShutubaOddsFieldFix</span>
+    <span class="ver">v5.19.6 AutoFetchOnSelect</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1906,7 +1906,7 @@ async function runSimulationFromResult(){
   const st = document.getElementById('simStatus');
   const raw = document.getElementById('simResultUrl')?.value || '';
   if(!raw){ if(st) st.innerHTML = '<div class="url-status err">⚠️ 結果URLがありません。</div>'; return; }
-  if(!settings.proxyUrl){ if(st) st.innerHTML = '<div class="url-status err">⚠️ プロキシURLを設定してください。</div>'; return; }
+  if(!settings.proxyUrl){ // proxy check if(st) st.innerHTML = '<div class="url-status err">⚠️ プロキシURLを設定してください。</div>'; return; }
   if(st) st.innerHTML = '<div class="url-status ok">⚡ 結果・払戻を取得中... GREEN EDGE 起動</div>';
   try{
     const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(raw);
@@ -2303,7 +2303,7 @@ async function loadActiveVenuesForDate(){
   if(raceSelect) raceSelect.innerHTML = '<option value="">開催場を選んでレース一覧を取得</option>';
 
   // 正確な開催場絞り込みにはnetkeiba一覧取得が必須。プロキシ未設定時に全場を出すと誤操作になるため、空にする。
-  if(!settings.proxyUrl){
+  if(!settings.proxyUrl){ // proxy check
     renderVenueOptions([]);
     if(status) status.innerHTML = '<div class="url-status err">⚠️ プロキシURL未設定のため、開催場を自動取得できません</div>';
     return;
@@ -2906,8 +2906,8 @@ async function loadRaceList(){
   const box = document.getElementById('raceTitleBox');
   if(box){ box.style.display = 'none'; box.textContent = ''; }
 
-  if(!settings.proxyUrl){
-    alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。');
+  if(!settings.proxyUrl){ // proxy check
+    if(!auto) alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。');
     return;
   }
   if(!venueCode){
@@ -2980,6 +2980,8 @@ function applySelectedRaceUrl(){
       box.style.display = currentRaceName ? 'block' : 'none';
       box.textContent = currentRaceName ? `選択中: ${currentRaceName}` : '';
     }
+    // レース選択と同時に自動取得
+    fetchRace(true);
   }else{
     raceUrl.value = '';
     currentRaceName = '';
@@ -3352,10 +3354,10 @@ function mergeOddsPopularityIntoHorses(baseHorses, oddsMap){
 
 
 // ─── netkeibaプロキシ取得 ────────────────────────
-async function fetchRace(){
+async function fetchRace(auto=false){
   const rawUrl = document.getElementById('raceUrl').value.trim();
-  if(!rawUrl){ alert('URLを入力してください。'); return; }
-  if(!settings.proxyUrl){
+  if(!rawUrl){ if(!auto) alert('URLを入力してください。'); return; }
+  if(!settings.proxyUrl){ // proxy check
     alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。');
     return;
   }
@@ -3364,7 +3366,7 @@ async function fetchRace(){
   const validation = validateRaceUrlForCurrentSelection(rawUrl);
   if(!validation.ok){
     status.innerHTML = `<div class="url-status err">❌ ${escapeHtml(validation.message)}</div>`;
-    alert(validation.message);
+    if(!auto) alert(validation.message);
     return;
   }
 

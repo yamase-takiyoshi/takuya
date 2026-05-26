@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.8 OddsFix6</title>
+<title>The競馬 EV分析 v5.18.9 JRARealRaceId</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.8 OddsFix6</span>
+    <span class="ver">v5.18.9 JRARealRaceId</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2722,33 +2722,32 @@ function buildJraRacesFromExactKaisai(html, date, venueCode, kd){
 }
 
 async function getReliableJraRacesFromList(html, date, venueCode){
+  // v5.18.9: JRAもNARと同じく「一覧HTMLに実在するrace_id」だけを採用する。
+  // 旧版の開催回/開催日プローブ生成は、土日連続開催で +100 / -100 ズレや
+  // 別レース混入を起こすため、レース一覧では使用しない。
   const direct = parseRaceIdsFromList(html, 'JRA', venueCode, date)
-    .filter(r => r.shutuba.includes('https://race.netkeiba.com/') && raceIdVenueMatches('JRA', r.raceId, venueCode));
+    .filter(r => r.shutuba.includes('https://race.netkeiba.com/') && raceIdVenueMatches('JRA', r.raceId, venueCode))
+    .map(r => ({ ...r, source:'realRaceIdFromRaceList' }));
 
-  // 最重要：JRA race_idにはMMDDが無い。
-  // 一覧HTMLに出ているrace_idをそのまま信用せず、出馬表本文の日付で
-  // 「選択日に対応する開催回・開催日」を先に確定してから12Rを再生成する。
-  const kdHint = parseJraKaisaiFromListText(html, venueCode) || (direct[0] ? jraRaceIdToKaisai(direct[0].raceId) : null);
-  let kdExact = await findJraKaisaiByFullProbe(date, venueCode, kdHint);
-  if(kdExact){
-    // v5.18.2: 日曜タブで前日(土曜)race_idを掴んだ場合、開催日を+1補正する。
-    // 2026/05/24 東京11R は 202605020911 ではなく 202605021011。
-    kdExact = correctJraKaisaiByCalendarDate(date, venueCode, kdExact);
-    const verifiedBuilt = await buildVerifiedJraRacesByProbe(date, venueCode, kdExact);
-    if(verifiedBuilt.length) return verifiedBuilt;
-    return buildJraRacesFromExactKaisai(html, date, venueCode, kdExact);
-  }
+  if(!direct.length) return [];
 
-  // プローブが全滅した場合だけ、直接リンクを日付検証して採用する。
-  if(direct.length){
-    const verified = await filterJraDirectRacesBySelectedDate(direct, date);
-    if(verified.length) return verified;
-  }
+  // 同一ページにナビや隣接開催日のリンクが混入しても、
+  // YYYY+場+開催回+開催日 の実race_idグループ単位で最大グループだけを採用する。
+  // race_id自体は生成せず、HTML内に存在したものだけを残す。
+  const groups = new Map();
+  direct.forEach(r => {
+    const key = jraRaceDayKey(r.raceId);
+    if(!key) return;
+    if(!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  });
 
-  const kdRaw = parseJraKaisaiFromListText(html, venueCode);
-  let kdFixed = await fixJraKaisaiByProbe(date, venueCode, kdRaw);
-  kdFixed = correctJraKaisaiByCalendarDate(date, venueCode, kdFixed);
-  return buildJraRacesFromFixedKaisai(html, date, venueCode, kdFixed);
+  const best = Array.from(groups.values())
+    .sort((a,b) => b.length - a.length || Number(a[0].raceId) - Number(b[0].raceId))[0] || [];
+
+  return dedupeRacesByRaceIdAndNo(best)
+    .filter(r => r.raceNo >= 1 && r.raceNo <= 12)
+    .sort((a,b) => Number(a.raceNo) - Number(b.raceNo));
 }
 
 // ============================================================
@@ -2791,6 +2790,12 @@ async function finalFilterRacesForSelection(races, kind, date, venueCode){
 
   if(kind === 'NAR'){
     list = list.filter(r => raceIdMatchesSelectedDate(kind, r.raceId, date));
+    return dedupeRacesByRaceIdAndNo(list);
+  }
+
+  // v5.18.9: JRA一覧から直接抽出した実race_idは、ここで再プローブ補正しない。
+  // 再プローブ/再生成が中央の土日ズレの原因だったため、実HTML由来のIDをそのまま通す。
+  if(kind === 'JRA' && list.length && list.every(r => r.source === 'realRaceIdFromRaceList')){
     return dedupeRacesByRaceIdAndNo(list);
   }
 
@@ -2899,7 +2904,7 @@ async function loadRaceList(){
     }).join('');
 
     applySelectedRaceUrl();
-    status.innerHTML = `<div class="url-status ok">✅ ${date} ${venueName(kind, venueCode)} ${races.length}レースを取得しました（race_id日付照合済み）</div>`;
+    status.innerHTML = `<div class="url-status ok">✅ ${date} ${venueName(kind, venueCode)} ${races.length}レースを取得しました（実race_id参照）</div>`;
 
   }catch(e){
     console.error(e);

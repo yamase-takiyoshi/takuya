@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.20.9b Safari ES5 BugFix</title>
+<title>The競馬 EV分析 v5.20.10 JRA RaceList Fix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.20.9</span>
+    <span class="ver">v5.20.10</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -5856,7 +5856,7 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
    ============================================================ */
 (function () {
     'use strict';
-    var VER = 'v5.20.9';
+    var VER = 'v5.20.10';
     var JRA = [
         ['01', '札幌'], ['02', '函館'], ['03', '福島'], ['04', '新潟'], ['05', '東京'],
         ['06', '中山'], ['07', '中京'], ['08', '京都'], ['09', '阪神'], ['10', '小倉']
@@ -5945,7 +5945,7 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
                 url += "&kaisai_id=".concat(p.y).concat(venue).concat(p.md);
             return url;
         }
-        return "https://race.netkeiba.com/top/race_list.html?kaisai_date=".concat(p.ymd);
+        return "https://race.netkeiba.com/top/race_list_sub.html?kaisai_date=".concat(p.ymd);
     }
     function shutubaUrl(kind, id) {
         return "".concat(kind === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com', "/race/shutuba.html?race_id=").concat(id, "&rf=race_submenu");
@@ -5954,10 +5954,16 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
         var p = parts(date);
         var valid = new Set(venuesOf(kind).map(function (v) { return v[0]; }));
         var found = [];
-        var re = /race_id=(\d{10,14})/g;
+        var re = /race_id[=%][\dA-Fa-f]*?(\d{10,14})/g;
+        var re2 = /race_id=(\d{10,14})/g;
+        var allMatches = [];
         var m;
-        while ((m = re.exec(String(html || '')))) {
-            var id = m[1];
+        var htmlStr = String(html || '');
+        /* %3D形式（URLエンコード）にも対応 */
+        var decoded = htmlStr.replace(/race_id%3D(\d{10,14})/gi, 'race_id=$1');
+        while ((m = re2.exec(decoded))) { allMatches.push(m[1]); }
+        for (var i = 0; i < allMatches.length; i++) {
+            var id = allMatches[i];
             if (id.slice(0, 4) !== p.y)
                 continue;
             var code = id.slice(4, 6);
@@ -6240,7 +6246,7 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
    ============================================================ */
 (function(){
   'use strict';
-  var VER='v5.20.9';
+  var VER='v5.20.10';
   var JRA=[['01','札幌'],['02','函館'],['03','福島'],['04','新潟'],['05','東京'],['06','中山'],['07','中京'],['08','京都'],['09','阪神'],['10','小倉']];
   var NAR=[['30','門別'],['35','盛岡'],['36','水沢'],['42','浦和'],['43','船橋'],['44','大井'],['45','川崎'],['46','金沢'],['47','笠松'],['48','名古屋'],['50','園田'],['51','姫路'],['54','高知'],['55','佐賀'],['65','帯広']];
   function $(id){ return document.getElementById(id); }
@@ -6285,7 +6291,7 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
       if(venue) url+='&kaisai_id='+p.y+String(venue)+p.md;
       return url;
     }
-    return 'https://race.netkeiba.com/top/race_list.html?kaisai_date='+p.ymd;
+    return 'https://race.netkeiba.com/top/race_list_sub.html?kaisai_date='+p.ymd;
   }
   function shutubaUrl(kind,id){
     return (kind==='NAR'?'https://nar.netkeiba.com':'https://race.netkeiba.com') + '/race/shutuba.html?race_id=' + id + '&rf=race_submenu';
@@ -6293,7 +6299,8 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
   function parseIds(html,kind,date,venue){
     var p=parts(date), arr=venuesOf(kind), valid={}, re=/race_id=(\d{10,14})/g, m, out=[], seen={}, id, code, rno, key;
     for(var i=0;i<arr.length;i++) valid[arr[i][0]]=1;
-    html=String(html||'');
+    /* URLエンコード(%3D)対応 */
+    html=String(html||'').replace(/race_id%3D(\d{10,14})/gi,'race_id=$1');
     while((m=re.exec(html))){
       id=m[1];
       if(id.slice(0,4)!==p.y) continue;
@@ -6414,7 +6421,13 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
     bindTabs(); clearRace();
     var kind=kindNow(), date=dateNow();
     setStatus('📅 '+esc(date)+' '+esc(kind)+' の開催場を確認中...', '');
-    xhrText(raceListUrl(kind,date,''), function(html){
+    function tryFetch(url, cb){
+      xhrText(url, cb, function(e){
+        renderVenues([],true);
+        setStatus('⚠️ 開催場取得失敗: '+esc(e && e.message ? e.message : e)+'。全開催場候補を表示しました。', 'err');
+      });
+    }
+    function processHtml(html){
       var ids=parseIds(html,kind,date,''), counts={}, list=[], i, r, code;
       for(i=0;i<ids.length;i++){
         r=ids[i]; code=r.venueCode+'-'+r.raceNo;
@@ -6434,13 +6447,44 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
         var names=[]; for(i=0;i<list.length;i++) names.push(esc(list[i][1]+'（'+list[i][2]+'R）'));
         setStatus('✅ '+esc(date)+' '+esc(kind)+' 開催場：'+names.join('、'), 'ok');
       }else{
-        renderVenues([],true);
-        setStatus('⚠️ 自動絞り込みできませんでした。全開催場候補を表示しました。', 'err');
+        /* JRAは race_list_sub.html でも試みる */
+        if(kind==='JRA'){
+          var p2=parts(date);
+          var subUrl='https://race.netkeiba.com/top/race_list_sub.html?kaisai_date='+p2.ymd;
+          xhrText(subUrl, function(html2){
+            var ids2=parseIds(html2,kind,date,''), counts2={}, list2=[], j, r2, c2;
+            for(j=0;j<ids2.length;j++){
+              r2=ids2[j]; c2=r2.venueCode+'-'+r2.raceNo;
+              if(!counts2[r2.venueCode]) counts2[r2.venueCode]={name:venueName(kind,r2.venueCode), nums:{}};
+              counts2[r2.venueCode].nums[r2.raceNo]=1;
+            }
+            for(c2 in counts2){
+              if(counts2.hasOwnProperty(c2)){
+                var n2=0, nums2=counts2[c2].nums, k2;
+                for(k2 in nums2){ if(nums2.hasOwnProperty(k2)) n2++; }
+                list2.push([c2, counts2[c2].name, n2]);
+              }
+            }
+            list2.sort(function(a,b){ return String(a[0]).localeCompare(String(b[0])); });
+            if(list2.length){
+              renderVenues(list2,false);
+              var names2=[]; for(j=0;j<list2.length;j++) names2.push(esc(list2[j][1]+'（'+list2[j][2]+'R）'));
+              setStatus('✅ '+esc(date)+' '+esc(kind)+' 開催場：'+names2.join('、'), 'ok');
+            }else{
+              renderVenues([],true);
+              setStatus('⚠️ 自動絞り込みできませんでした。全開催場候補を表示しています。開催場を選んで「レース一覧」を押してください。', 'err');
+            }
+          }, function(){
+            renderVenues([],true);
+            setStatus('⚠️ 自動絞り込みできませんでした。全開催場候補を表示しています。開催場を選んで「レース一覧」を押してください。', 'err');
+          });
+        }else{
+          renderVenues([],true);
+          setStatus('⚠️ 自動絞り込みできませんでした。全開催場候補を表示しています。開催場を選んで「レース一覧」を押してください。', 'err');
+        }
       }
-    }, function(e){
-      renderVenues([],true);
-      setStatus('⚠️ 開催場取得失敗: '+esc(e && e.message ? e.message : e)+'。全開催場候補を表示しました。', 'err');
-    });
+    }
+    tryFetch(raceListUrl(kind,date,''), processHtml);
   };
   window.onRaceDateKindChanged=function(){
     try{ if(window.horses){ horses=[]; } if(typeof renderHorseRows==='function') renderHorseRows(); if(typeof renderManualFinishPicker==='function') renderManualFinishPicker(); }catch(e){}

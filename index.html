@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.25.8 RaceDay Complete</title>
+<title>The競馬 EV分析 v5.25.9 RaceDay Complete</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -199,7 +199,7 @@ body {
 .sim-payout-ok { color: var(--green); font-weight: 800; } .sim-payout-est { color: var(--yellow); font-weight: 800; }
 @media(max-width:560px){ .sim-toolbar, .sim-finish-picker { grid-template-columns: 1fr; } }
 
-/* iPad Safari tap stability fix v5.25.8 */
+/* iPad Safari tap stability fix v5.25.9 */
 button, select, input, textarea, .tab-btn, .btn, .btn-sm, .mode-btn, .sim-cand-row, .del-btn {
   -webkit-tap-highlight-color: rgba(0,255,136,.18);
   touch-action: manipulation;
@@ -224,7 +224,7 @@ button, select, input, textarea, .tab-btn, .btn, .btn-sm, .mode-btn, .sim-cand-r
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.25.8</span>
+    <span class="ver">v5.25.9</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1182,6 +1182,103 @@ function parseOddsPopularityMapFromDoc(doc) {
   return map;
 }
 
+
+// オッズページ・結果ページ用の緩い補完パーサ。
+// 出馬表では固定列禁止だが、odds/resultページは単勝オッズ・人気が別表に出るため、
+// 馬名リンク行を基準に「小数オッズ」と「人気」を安全に拾う。
+function parseOddsPopularityMapLooseFromDoc(doc) {
+  var map = {};
+  if (!doc || !horses || !horses.length) return map;
+
+  var horseNameToNum = {};
+  horses.forEach(function (h) {
+    horseNameToNum[String(h.name || '').replace(/\s+/g, '')] = Number(h.num);
+  });
+
+  function add(num, odds, pop) {
+    if (num < 1 || num > 18) return;
+    if (!map[num]) map[num] = { odds: 0, pop: 0 };
+    if (odds && odds >= 1.1 && odds <= 999.9) map[num].odds = Number(odds);
+    if (pop && pop >= 1 && pop <= 18) map[num].pop = Number(pop);
+  }
+
+  Array.prototype.slice.call(doc.querySelectorAll('tr')).forEach(function (tr) {
+    var cells = Array.prototype.slice.call(tr.querySelectorAll('td,th'));
+    if (cells.length < 2) return;
+
+    var link = tr.querySelector('a[href*="/horse/"], a[href*="db.netkeiba.com/horse"], a[href*="horse.html?id="], a[href*="horse_id="]');
+    var rowText = toHalfNumberText(normCellText(tr)).replace(/,/g, ' ');
+    var num = getNumFromRow(tr, cells, link);
+
+    if (!num && link) {
+      var ln = normCellText(link).replace(/\s+/g, '');
+      num = horseNameToNum[ln] || 0;
+    }
+    if (!num) {
+      Object.keys(horseNameToNum).some(function (nm) {
+        if (nm && rowText.replace(/\s+/g, '').indexOf(nm) >= 0) {
+          num = horseNameToNum[nm];
+          return true;
+        }
+        return false;
+      });
+    }
+    if (num < 1 || num > 18) return;
+
+    var odds = 0;
+    var pop = 0;
+    var oddsCellIndex = -1;
+
+    for (var i = 0; i < cells.length; i++) {
+      if (isWeightCell(cells[i])) continue;
+      var txt = toHalfNumberText(normCellText(cells[i])).replace(/,/g, '').replace(/\s+/g, '');
+      // 単勝オッズは原則小数表記のみ採用。55/56等の斤量を絶対に拾わない。
+      var om = txt.match(/^(\d{1,4}\.\d+)$/) || txt.match(/(\d{1,4}\.\d+)/);
+      if (om) {
+        var ov = Number(om[1]);
+        if (ov >= 1.1 && ov <= 999.9 && !(ov >= 48 && ov <= 62 && Math.abs(ov - Math.round(ov)) < 0.001)) {
+          odds = ov;
+          oddsCellIndex = i;
+          break;
+        }
+      }
+    }
+
+    // 人気は「人気」文字付き優先。無ければオッズセル近辺の1〜18整数を使う。
+    for (var j = 0; j < cells.length; j++) {
+      var pt = extractPopularityFromText(normCellText(cells[j]));
+      if (pt) { pop = pt; break; }
+    }
+    if (!pop && oddsCellIndex >= 0) {
+      for (var k = oddsCellIndex + 1; k < Math.min(cells.length, oddsCellIndex + 4); k++) {
+        var t = toHalfNumberText(normCellText(cells[k])).replace(/\s+/g, '');
+        var pm = t.match(/^([1-9]|1[0-8])$/);
+        if (pm && Number(pm[1]) !== num) { pop = Number(pm[1]); break; }
+      }
+      for (var k2 = Math.max(0, oddsCellIndex - 3); !pop && k2 < oddsCellIndex; k2++) {
+        var t2 = toHalfNumberText(normCellText(cells[k2])).replace(/\s+/g, '');
+        var pm2 = t2.match(/^([1-9]|1[0-8])$/);
+        if (pm2 && Number(pm2[1]) !== num) { pop = Number(pm2[1]); break; }
+      }
+    }
+
+    if (odds || pop) add(num, odds, pop);
+  });
+
+  return map;
+}
+
+function mergeMaps(primary, secondary) {
+  primary = primary || {};
+  secondary = secondary || {};
+  Object.keys(secondary).forEach(function (k) {
+    if (!primary[k]) primary[k] = { odds: 0, pop: 0 };
+    if (secondary[k].odds && !primary[k].odds) primary[k].odds = secondary[k].odds;
+    if (secondary[k].pop && !primary[k].pop) primary[k].pop = secondary[k].pop;
+  });
+  return primary;
+}
+
 function mergeOddsPopularityIntoHorses(map) {
   horses.forEach(function (h) {
     var m = map && map[h.num];
@@ -1225,9 +1322,11 @@ function buildOddsUrls(raceId, kind) {
   var host = (kind === 'NAR') ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com';
   return [
     host + '/odds/index.html?race_id=' + raceId + '&type=b1',
+    host + '/odds/index.html?type=b1&race_id=' + raceId,
     host + '/odds/index.html?race_id=' + raceId + '&rf=race_submenu',
     host + '/odds/index.html?race_id=' + raceId,
-    host + '/odds/o1.html?race_id=' + raceId
+    host + '/odds/o1.html?race_id=' + raceId,
+    host + '/race/result.html?race_id=' + raceId + '&rf=race_submenu'
   ];
 }
 
@@ -1236,7 +1335,9 @@ function fetchOddsPagesSequential(urls, parser, idx) {
   if (!urls || idx >= urls.length) return Promise.resolve(false);
   return fetchTextViaProxy(urls[idx]).then(function (oHtml) {
     var oDoc = parser.parseFromString(oHtml, 'text/html');
-    mergeOddsPopularityIntoHorses(parseOddsPopularityMapFromDoc(oDoc));
+    var strictMap = parseOddsPopularityMapFromDoc(oDoc);
+    var looseMap = parseOddsPopularityMapLooseFromDoc(oDoc);
+    mergeOddsPopularityIntoHorses(mergeMaps(strictMap, looseMap));
     sanitizeOddsPopularity();
     var oddsCount = horses.filter(function (h) { return Number(h.odds || 0) > 1; }).length;
     var popCount = horses.filter(function (h) { return Number(h.pop || 0) >= 1; }).length;

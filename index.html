@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.20.0 OddsJsonApiFix</title>
+<title>The競馬 EV分析 v5.19.5 ShutubaOddsFieldFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.20.0 OddsJsonApiFix</span>
+    <span class="ver">v5.19.5 ShutubaOddsFieldFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1906,7 +1906,7 @@ async function runSimulationFromResult(){
   const st = document.getElementById('simStatus');
   const raw = document.getElementById('simResultUrl')?.value || '';
   if(!raw){ if(st) st.innerHTML = '<div class="url-status err">⚠️ 結果URLがありません。</div>'; return; }
-  if(!settings.proxyUrl){ // proxy check if(st) st.innerHTML = '<div class="url-status err">⚠️ プロキシURLを設定してください。</div>'; return; }
+  if(!settings.proxyUrl){ if(st) st.innerHTML = '<div class="url-status err">⚠️ プロキシURLを設定してください。</div>'; return; }
   if(st) st.innerHTML = '<div class="url-status ok">⚡ 結果・払戻を取得中... GREEN EDGE 起動</div>';
   try{
     const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(raw);
@@ -2303,7 +2303,7 @@ async function loadActiveVenuesForDate(){
   if(raceSelect) raceSelect.innerHTML = '<option value="">開催場を選んでレース一覧を取得</option>';
 
   // 正確な開催場絞り込みにはnetkeiba一覧取得が必須。プロキシ未設定時に全場を出すと誤操作になるため、空にする。
-  if(!settings.proxyUrl){ // proxy check
+  if(!settings.proxyUrl){
     renderVenueOptions([]);
     if(status) status.innerHTML = '<div class="url-status err">⚠️ プロキシURL未設定のため、開催場を自動取得できません</div>';
     return;
@@ -2490,19 +2490,13 @@ function jraHtmlMatchesSelectedDate(html, date){
   }
 }
 
-async function fetchHtmlViaProxy(url, timeoutMs=8000){
+async function fetchHtmlViaProxy(url){
   const sep = String(url).includes('?') ? '&' : '?';
   const targetUrl = String(url) + sep + '_tk=' + Date.now();
   const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(targetUrl);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try{
-    const res = await fetch(proxyReq, { cache:'no-store', signal: controller.signal });
-    if(!res.ok) throw new Error('HTTP ' + res.status);
-    return await res.text();
-  } finally {
-    clearTimeout(timer);
-  }
+  const res = await fetch(proxyReq, { cache:'no-store' });
+  if(!res.ok) throw new Error('HTTP ' + res.status);
+  return await res.text();
 }
 
 async function verifyJraRaceDateByShutuba(date, raceId){
@@ -2912,8 +2906,8 @@ async function loadRaceList(){
   const box = document.getElementById('raceTitleBox');
   if(box){ box.style.display = 'none'; box.textContent = ''; }
 
-  if(!settings.proxyUrl){ // proxy check
-    if(!auto) alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。');
+  if(!settings.proxyUrl){
+    alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。');
     return;
   }
   if(!venueCode){
@@ -2986,8 +2980,6 @@ function applySelectedRaceUrl(){
       box.style.display = currentRaceName ? 'block' : 'none';
       box.textContent = currentRaceName ? `選択中: ${currentRaceName}` : '';
     }
-    // レース選択と同時に自動取得
-    fetchRace(true);
   }else{
     raceUrl.value = '';
     currentRaceName = '';
@@ -3025,20 +3017,17 @@ function initCalendarPicker(){
 
 function buildNetkeibaOddsUrls(kind, raceId){
   if(!raceId) return [];
-  // v5.20.0 OddsJsonApiFix: JSON APIを先頭に置く。
-  // netkeiba の odds/index.html は JS 動的レンダリングのため静的取得では空になりがち。
-  // 内部 XHR API (api_get_jra_odds / api_get_nar_odds) は JSON で全頭オッズを返す。
-  // 末尾に shutuba / HTML odds を保険として残す。
+  // v5.19.5: 記入欄取り違え防止。
+  // JRA/NARとも、まず race_id の出馬表(shutuba)を正として同じ馬行から
+  // 「馬番・単勝オッズ・人気」を読む。odds/index は取得不能時だけの保険。
   if(kind === 'NAR'){
     return [
-      `https://nar.netkeiba.com/api/api_get_nar_odds.html?race_id=${raceId}&type=1&action=update`,
       `https://nar.netkeiba.com/race/shutuba.html?race_id=${raceId}&rf=race_submenu`,
       `https://nar.netkeiba.com/odds/index.html?race_id=${raceId}`,
       `https://nar.netkeiba.com/odds/index.html?race_id=${raceId}&type=b1`
     ];
   }
   return [
-    `https://race.netkeiba.com/api/api_get_jra_odds.html?race_id=${raceId}&type=1&action=update`,
     `https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}&rf=race_submenu`,
     `https://race.netkeiba.com/odds/index.html?race_id=${raceId}`,
     `https://race.netkeiba.com/odds/index.html?race_id=${raceId}&type=b1`,
@@ -3101,19 +3090,8 @@ function parseWinOddsPopularityFromShutubaDocStrict(doc){
     if(!tr.querySelector('a[href*="/horse/"]')) return;
     const num = readStrictHorseNoFromShutubaRow(tr);
     if(!(num >= 1 && num <= 18)) return;
-
-    let odds = readStrictOddsFromShutubaRow(tr);
-    let pop = readStrictPopularityFromShutubaRow(tr, num);
-
-    // セレクタがヒットしなかった場合は汎用セル解析でフォールバック
-    if(!(odds >= 1) || !(pop >= 1)){
-      const cells = Array.from(tr.querySelectorAll('td,th')).map(td => toHalfNumberText(normCellText(td)));
-      const parsed = parseOddsPopFromCellsStrict(cells, num);
-      if(!(odds >= 1) && parsed.odds >= 1) odds = parsed.odds;
-      if(!(pop >= 1) && parsed.pop >= 1) pop = parsed.pop;
-    }
-
-    // odds/pop どちらか1つでも取れたら登録（もう片方は後でmerge時に補完）
+    const odds = readStrictOddsFromShutubaRow(tr);
+    const pop = readStrictPopularityFromShutubaRow(tr, num);
     if(odds >= 1 || pop >= 1){
       const prev = map.get(num) || {};
       map.set(num, {
@@ -3319,108 +3297,40 @@ function parseWinOddsPopularityFromDoc(doc){
   return map;
 }
 
-// v5.20.0 OddsJsonApiFix: netkeiba 内部 JSON API パーサー
-// api_get_jra_odds / api_get_nar_odds が返す JSON 構造を解析し
-// 馬番 → {odds, pop} の Map を返す。
-function parseWinOddsFromJsonApi(text){
-  const map = new Map();
-  let data;
-  try{ data = JSON.parse(text); }catch(e){ return map; }
-  // 想定構造: { data: { Odds: [ {HorseNum, Odds, Popular}, ... ] } }
-  // または   { Odds: [...] }  など複数バリエーションに対応
-  const arr =
-    (data?.data?.Odds) ||
-    (data?.data?.Win) ||
-    (data?.Odds) ||
-    (data?.Win) ||
-    // フラット配列の場合
-    (Array.isArray(data) ? data : null) ||
-    // { 1: {odds:3.5, popular:2}, ... } 形式
-    null;
-
-  if(arr && Array.isArray(arr)){
-    arr.forEach(item => {
-      // キー名の揺れに対応
-      const num  = Number(item.HorseNum  ?? item.horse_num ?? item.Umaban  ?? item.umaban  ?? 0);
-      const odds = Number(item.Odds      ?? item.odds      ?? item.Win     ?? item.win     ?? 0);
-      const pop  = Number(item.Popular   ?? item.popular   ?? item.Ninki   ?? item.ninki   ?? 0);
-      if(num >= 1 && num <= 18 && odds >= 1){
-        map.set(num, {
-          odds: Math.round(sanitizeWinOddsValue(odds, String(odds)) * 10) / 10,
-          pop:  (pop >= 1 && pop <= 18) ? pop : 0
-        });
-      }
-    });
-    return map;
-  }
-
-  // オブジェクト形式 { "1": {Odds:"3.5", Popular:"2"}, ... }
-  if(data && typeof data === 'object'){
-    Object.entries(data).forEach(([k, v]) => {
-      if(typeof v !== 'object') return;
-      const num  = Number(k);
-      const odds = Number(v.Odds ?? v.odds ?? v.Win ?? v.win ?? 0);
-      const pop  = Number(v.Popular ?? v.popular ?? v.Ninki ?? v.ninki ?? 0);
-      if(num >= 1 && num <= 18 && odds >= 1){
-        map.set(num, {
-          odds: Math.round(sanitizeWinOddsValue(odds, String(odds)) * 10) / 10,
-          pop:  (pop >= 1 && pop <= 18) ? pop : 0
-        });
-      }
-    });
-  }
-  return map;
-}
-
 async function fetchWinOddsPopularity(kind, raceId){
   if(!settings.proxyUrl || !raceId) return new Map();
-  let bestMap = new Map();
-  const countOdds = m => [...m.values()].filter(e => Number(e.odds) >= 1).length;
-
   for(const url of buildNetkeibaOddsUrls(kind, raceId)){
     try{
-      // JSON API は短めのタイムアウトで素早くフォールバック、HTMLページは余裕を持って待つ
-      const isJsonApi = /api_get_(?:jra|nar)_odds/.test(url);
-      const html = await fetchHtmlViaProxy(url, isJsonApi ? 5000 : 10000);
-      if(!html || html.length < 100) continue;
-      if(kind === 'NAR' && /api_get_nar_odds/.test(url) && !html.includes(raceId)) continue;
-      if(kind === 'JRA' && /api_get_jra_odds/.test(url) && !html.includes(raceId)) continue;
-
-      let map = new Map();
-
-      // v5.20.0: JSON API エンドポイントは専用パーサーで処理
-      if(isJsonApi){
-        map = parseWinOddsFromJsonApi(html);
-      } else {
-        if(html.length < 500) continue;
-        const doc = new DOMParser().parseFromString(html, 'text/html');
-
-        // strict parser（shutuba）と汎用parserの両方を実行して良い方を採用
-        map = /shutuba\.html/.test(url)
-          ? parseWinOddsPopularityFromShutubaDocStrict(doc)
-          : parseWinOddsPopularityFromDoc(doc);
-
-        // 常に汎用parserで補完：strict側で取れなかったフィールドを埋める
+      const html = await fetchHtmlViaProxy(url);
+      if(!html || html.length < 500) continue;
+      // NARは race_id がHTMLに直接含まれるので照合する。
+      // JRAは odds/index.html がJS動的レンダリングのため race_id が
+      // HTMLソースに含まれないことがある → 照合をスキップしてパースで判定。
+      if(kind === 'NAR' && !html.includes(raceId)) continue;
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      let map = /shutuba\.html/.test(url)
+        ? parseWinOddsPopularityFromShutubaDocStrict(doc)
+        : parseWinOddsPopularityFromDoc(doc);
+      if(map.size >= 2) return map;
+      // shutubaで人気だけ/オッズだけの行が一部欠けた場合は汎用parserで補完。ただし代入先はmerge側で固定。
+      if(/shutuba\.html/.test(url)){
         const loose = parseWinOddsPopularityFromDoc(doc);
-        loose.forEach((v, k) => {
-          const p = map.get(k) || {};
-          map.set(k, {
-            odds: Number(p.odds || 0) >= 1 ? p.odds : Number(v.odds || 0),
-            pop: Number(p.pop || 0) >= 1 ? p.pop : Number(v.pop || 0)
+        if(loose.size > map.size){
+          loose.forEach((v, k) => {
+            const p = map.get(k) || {};
+            map.set(k, {
+              odds: Number(p.odds || 0) >= 1 ? p.odds : Number(v.odds || 0),
+              pop: Number(p.pop || 0) >= 1 ? p.pop : Number(v.pop || 0)
+            });
           });
-        });
+        }
       }
-
-      // より多くのオッズが取れた方を bestMap として保持
-      if(countOdds(map) > countOdds(bestMap)) bestMap = map;
-
-      // 全頭（2頭以上）のオッズが揃ったら即返す
-      if(countOdds(bestMap) >= 2 && bestMap.size >= horses.length && horses.length >= 2) return bestMap;
+      if(map.size >= 2) return map;
     }catch(e){
       // 次のURLを試す
     }
   }
-  return bestMap;
+  return new Map();
 }
 
 function mergeOddsPopularityIntoHorses(baseHorses, oddsMap){
@@ -3442,10 +3352,10 @@ function mergeOddsPopularityIntoHorses(baseHorses, oddsMap){
 
 
 // ─── netkeibaプロキシ取得 ────────────────────────
-async function fetchRace(auto=false){
+async function fetchRace(){
   const rawUrl = document.getElementById('raceUrl').value.trim();
-  if(!rawUrl){ if(!auto) alert('URLを入力してください。'); return; }
-  if(!settings.proxyUrl){ // proxy check
+  if(!rawUrl){ alert('URLを入力してください。'); return; }
+  if(!settings.proxyUrl){
     alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。');
     return;
   }
@@ -3454,7 +3364,7 @@ async function fetchRace(auto=false){
   const validation = validateRaceUrlForCurrentSelection(rawUrl);
   if(!validation.ok){
     status.innerHTML = `<div class="url-status err">❌ ${escapeHtml(validation.message)}</div>`;
-    if(!auto) alert(validation.message);
+    alert(validation.message);
     return;
   }
 
@@ -3468,14 +3378,9 @@ async function fetchRace(auto=false){
   try {
     const sepFetch = rawUrl.includes('?') ? '&' : '?';
     const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(rawUrl + sepFetch + '_tk=' + Date.now());
-    const _ctrl = new AbortController();
-    const _timer = setTimeout(() => _ctrl.abort(), 15000);
-    let res, html;
-    try{
-      res = await fetch(proxyReq, { cache:'no-store', signal: _ctrl.signal });
-      if(!res.ok) throw new Error('HTTP ' + res.status);
-      html = await res.text();
-    } finally { clearTimeout(_timer); }
+    const res = await fetch(proxyReq, { cache:'no-store' });
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+    const html = await res.text();
     if(validation.raceId && !html.includes(validation.raceId)){
       throw new Error(`取得HTML内に選択race_id ${validation.raceId} がありません。別日・別場への遷移を検出したため中止しました。`);
     }
@@ -3508,16 +3413,8 @@ async function fetchRace(auto=false){
       if(oddsMap.size >= 2){
         horses = mergeOddsPopularityIntoHorses(horses, oddsMap);
       }else{
-        // 保険①：出馬表内の値を試す（strict + 汎用 両方で補完）
-        const shutubaOddsMap = parseWinOddsPopularityFromShutubaDocStrict(doc);
-        const shutubaLoose = parseWinOddsPopularityFromDoc(doc);
-        shutubaLoose.forEach((v, k) => {
-          const p = shutubaOddsMap.get(k) || {};
-          shutubaOddsMap.set(k, {
-            odds: Number(p.odds || 0) >= 1 ? p.odds : Number(v.odds || 0),
-            pop: Number(p.pop || 0) >= 1 ? p.pop : Number(v.pop || 0)
-          });
-        });
+        // 保険①：出馬表内の値を試す。
+        const shutubaOddsMap = parseWinOddsPopularityFromDoc(doc);
         if(shutubaOddsMap.size >= 2){
           horses = mergeOddsPopularityIntoHorses(horses, shutubaOddsMap);
         }

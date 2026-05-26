@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.2 JRA RaceId DayOffset Fix</title>
+<title>The競馬 EV分析 v5.18.3 Odds Popularity Fix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.2 RaceIdDayFix</span>
+    <span class="ver">v5.18.3 OddsFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2960,6 +2960,98 @@ function initCalendarPicker(){
 }
 
 
+
+function buildNetkeibaOddsUrls(kind, raceId){
+  if(!raceId) return [];
+  if(kind === 'NAR'){
+    return [
+      `https://nar.netkeiba.com/odds/index.html?race_id=${raceId}`,
+      `https://nar.netkeiba.com/odds/index.html?race_id=${raceId}&type=b1`
+    ];
+  }
+  return [
+    `https://race.netkeiba.com/odds/index.html?race_id=${raceId}`,
+    `https://race.netkeiba.com/odds/index.html?race_id=${raceId}&type=b1`,
+    `https://race.netkeiba.com/odds/index.html?race_id=${raceId}&rf=shutuba_submenu`
+  ];
+}
+
+function parseWinOddsPopularityFromDoc(doc){
+  const map = new Map();
+  const rows = Array.from(doc.querySelectorAll('tr, li, div'));
+  rows.forEach(row => {
+    const text = toHalfNumberText(normCellText(row));
+    if(!text || text.length > 180) return;
+    if(/払戻|馬連|馬単|ワイド|3連|枠連|オッズ投票|購入|予想/.test(text)) return;
+
+    let horseNo = 0;
+    const horseLink = row.querySelector?.('a[href*="/horse/"]');
+    if(horseLink){
+      const noEl = row.querySelector('.Umaban,[class*="Umaban"],[class*="HorseNum"],[class*="Num"]');
+      horseNo = firstNumberInCell(noEl, false);
+    }
+
+    if(!horseNo){
+      const mNo = text.match(/(?:^|\s)(\d{1,2})(?:\s|$)/);
+      if(mNo) horseNo = Number(mNo[1]);
+    }
+    if(!(horseNo >= 1 && horseNo <= 18)) return;
+
+    let odds = 0;
+    let pop = 0;
+
+    if(row.querySelectorAll){
+      odds = extractOddsFromRow(row, horseNo);
+      pop = extractPopularityFromRow(row, horseNo);
+    }
+
+    if(!odds || !pop){
+      // テキストベース保険: 「馬番 馬名 10.9 1」のような行を読む。
+      const nums = Array.from(text.matchAll(/(\d{1,4}(?:\.\d+)?)/g)).map(m => Number(m[1])).filter(Number.isFinite);
+      const decimals = nums.filter(n => n >= 1 && n <= 9999 && !Number.isInteger(n));
+      const ints = nums.filter(n => Number.isInteger(n) && n >= 1 && n <= 18 && n !== horseNo);
+      if(!odds && decimals.length) odds = decimals[decimals.length - 1];
+      if(!pop && ints.length) pop = ints[ints.length - 1];
+    }
+
+    if(odds >= 1 && odds <= 9999){
+      const prev = map.get(horseNo) || {};
+      map.set(horseNo, { odds, pop: (pop >= 1 && pop <= 18) ? pop : (prev.pop || 0) });
+    }
+  });
+  return map;
+}
+
+async function fetchWinOddsPopularity(kind, raceId){
+  if(!settings.proxyUrl || !raceId) return new Map();
+  for(const url of buildNetkeibaOddsUrls(kind, raceId)){
+    try{
+      const html = await fetchHtmlViaProxy(url);
+      if(!html || (raceId && !html.includes(raceId))) continue;
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const map = parseWinOddsPopularityFromDoc(doc);
+      if(map.size >= 2) return map;
+    }catch(e){
+      // 次のURLを試す
+    }
+  }
+  return new Map();
+}
+
+function mergeOddsPopularityIntoHorses(baseHorses, oddsMap){
+  if(!oddsMap || !oddsMap.size) return baseHorses;
+  return baseHorses.map(h => {
+    const o = oddsMap.get(Number(h.num));
+    if(!o) return h;
+    return {
+      ...h,
+      odds: (Number(o.odds) >= 1) ? Number(o.odds) : Number(h.odds || 0),
+      pop: (Number(o.pop) >= 1) ? Number(o.pop) : Number(h.pop || 0)
+    };
+  });
+}
+
+
 // ─── netkeibaプロキシ取得 ────────────────────────
 async function fetchRace(){
   const rawUrl = document.getElementById('raceUrl').value.trim();
@@ -3007,9 +3099,20 @@ async function fetchRace(){
     if(horses.length < 2){
       throw new Error('出走馬を十分に取得できませんでした。race_idまたは開催情報を確認してください。');
     }
+
+    // 単勝オッズ・人気は出馬表HTMLだけでは空になることがあるため、
+    // odds/index.html も参照して馬番でマージする。
+    const kind = document.getElementById('pickKind')?.value || (rawUrl.includes('nar.netkeiba') ? 'NAR' : 'JRA');
+    if(rid){
+      const oddsMap = await fetchWinOddsPopularity(kind, rid);
+      horses = mergeOddsPopularityIntoHorses(horses, oddsMap);
+    }
+
     renderHorseRows();
 
-    status.innerHTML = `<div class="url-status ok">✅ ${escapeHtml(currentRaceName || '')} ${horses.length}頭 取得しました</div>`;
+    const oddsCount = horses.filter(h => Number(h.odds) >= 1).length;
+    const popCount = horses.filter(h => Number(h.pop) >= 1).length;
+    status.innerHTML = `<div class="url-status ok">✅ ${escapeHtml(currentRaceName || '')} ${horses.length}頭 取得しました / 単勝オッズ ${oddsCount}件 / 人気 ${popCount}件</div>`;
 
     // 取得後すぐにタブを馬データへ
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -3088,7 +3191,64 @@ function firstNumberInCell(el, allowDecimal=false){
   return m ? Number(m[1]) : 0;
 }
 
-function extractOddsFromRow(tr){
+
+function cellTextsOfRow(tr){
+  return Array.from(tr.querySelectorAll('td,th')).map(td => toHalfNumberText(normCellText(td)));
+}
+
+function isPureIntText(t){
+  return /^\d{1,2}$/.test(String(t || '').trim());
+}
+
+function isPureDecimalText(t){
+  return /^\d{1,4}(?:\.\d+)?$/.test(String(t || '').trim());
+}
+
+function findPopularityIndexByRightScan(tr, horseNo){
+  const cells = cellTextsOfRow(tr);
+  // 右端側の「1〜18だけ」のセルを人気として採用。
+  // 馬番や枠番は左側にあるため、右から見ることで誤読を避ける。
+  for(let i=cells.length-1; i>=0; i--){
+    const tx = cells[i];
+    const m = tx.match(/^(\d{1,2})\s*人気$/) || tx.match(/^(\d{1,2})$/);
+    if(!m) continue;
+    const v = Number(m[1]);
+    if(v >= 1 && v <= 18 && v !== Number(horseNo)){
+      return { index:i, value:v };
+    }
+  }
+  return { index:-1, value:0 };
+}
+
+function findOddsNearPopularityByRightScan(tr, horseNo){
+  const cells = cellTextsOfRow(tr);
+  const popInfo = findPopularityIndexByRightScan(tr, horseNo);
+  const start = popInfo.index > 0 ? popInfo.index - 1 : cells.length - 1;
+
+  // 人気セルの左側から一番近い小数/数値を単勝オッズとして採用。
+  // 斤量55.0は通常かなり左側なので、右端優先にして誤読を抑える。
+  for(let i=start; i>=0 && i>=start-5; i--){
+    const tx = cells[i].replace(/,/g,'');
+    if(!tx || /kg|㎏|歳|牡|牝|セ|斤量|馬体重|増減|--/.test(tx)) continue;
+    const m = tx.match(/^(\d{1,4}(?:\.\d+)?)$/) || tx.match(/(\d{1,4}\.\d+)/);
+    if(!m) continue;
+    const v = Number(m[1]);
+    if(v >= 1 && v <= 9999 && v !== Number(horseNo)) return v;
+  }
+
+  // それでも無ければ、右側に現れる小数だけを拾う。
+  for(let i=cells.length-1; i>=Math.max(0, cells.length-8); i--){
+    const tx = cells[i].replace(/,/g,'');
+    const m = tx.match(/^(\d{1,4}\.\d+)$/);
+    if(!m) continue;
+    const v = Number(m[1]);
+    if(v >= 1 && v <= 9999) return v;
+  }
+  return 0;
+}
+
+
+function extractOddsFromRow(tr, horseNo){
   // 最優先: 表ヘッダー「オッズ」「予想オッズ」に対応するセル。
   // これによりJRAの斤量55.0を単勝オッズとして誤読しない。
   const byHead = cellByHeader(tr, /^(予想)?オッズ$|単勝オッズ|人気オッズ/);
@@ -3121,6 +3281,9 @@ function extractOddsFromRow(tr){
       }
     }
   }
+  v = findOddsNearPopularityByRightScan(tr, horseNo);
+  if(v >= 1 && v <= 9999) return v;
+
   return 0;
 }
 
@@ -3140,6 +3303,9 @@ function extractPopularityFromRow(tr, horseNo){
       }
     }
   }
+  const byRight = findPopularityIndexByRightScan(tr, horseNo);
+  if(byRight.value >= 1 && byRight.value <= 18) return byRight.value;
+
   return 0;
 }
 
@@ -3202,7 +3368,7 @@ function parseHorsesFromDoc(doc, url){
     }
     if(frame < 1 || frame > 8) frame = Math.ceil(num / 2);
 
-    const odds = extractOddsFromRow(tr);
+    const odds = extractOddsFromRow(tr, num);
     const pop = extractPopularityFromRow(tr, num);
 
     seen.add(num);

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.25.3 RaceDay Complete</title>
+<title>The競馬 EV分析 v5.25.4 RaceDay Complete</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -207,7 +207,7 @@ body {
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.25.3</span>
+    <span class="ver">v5.25.4</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -972,6 +972,105 @@ function extractOddsValueFromText(txt) {
   return valid.length > 0 ? valid[0] : 0;
 }
 
+function extractPopularityFromText(txt) {
+  var s = toHalfNumberText(String(txt || '')).replace(/\s+/g, ' ');
+  var m = s.match(/([1-9]|1[0-8])\s*人気/);
+  if (m) return Number(m[1]);
+  return 0;
+}
+
+function extractOddsFromCells(cells) {
+  var prefer = [];
+  var fallback = [];
+  for (var i = 0; i < cells.length; i++) {
+    var cell = cells[i];
+    var txt = toHalfNumberText(normCellText(cell));
+    var cls = String(cell.className || '');
+    var ms = txt.match(/(\d{1,4}\.\d+)/g) || [];
+    ms.forEach(function (m) {
+      var v = Number(m);
+      if (v >= 1.1 && v <= 999.9) {
+        if (/Odds|odd|オッズ|Tansho|Tan/i.test(cls)) prefer.push(v);
+        else fallback.push(v);
+      }
+    });
+  }
+  if (prefer.length) return prefer[0];
+  if (fallback.length) return fallback[0];
+  return 0;
+}
+
+function extractPopularityFromCells(cells) {
+  for (var i = 0; i < cells.length; i++) {
+    var cell = cells[i];
+    var txt = toHalfNumberText(normCellText(cell));
+    var cls = String(cell.className || '');
+    var m = txt.match(/([1-9]|1[0-8])\s*人気/);
+    if (m) return Number(m[1]);
+    if (/Popular|Ninki|Popularity|人気/i.test(cls)) {
+      var n = txt.match(/^([1-9]|1[0-8])$/);
+      if (n) return Number(n[1]);
+    }
+  }
+  return 0;
+}
+
+function parseOddsPopularityMapFromDoc(doc) {
+  var map = {};
+  var rows = doc.querySelectorAll('tr');
+  rows.forEach(function (tr) {
+    var cells = tr.querySelectorAll('td,th');
+    if (!cells || cells.length < 2) return;
+
+    var link = tr.querySelector('a[href*="/horse/"], a[href*="db.netkeiba.com/horse"], a[href*="horse.html?id="], a[href*="horse_id="]');
+    var num = 0;
+
+    var numEl = tr.querySelector('.Umaban, [class*="Umaban"], [class*="HorseNum"], [class*="Horse_Number"]');
+    if (numEl) {
+      var nt = toHalfNumberText(normCellText(numEl));
+      var nm = nt.match(/^([1-9]|1[0-8])$/) || nt.match(/\b([1-9]|1[0-8])\b/);
+      if (nm) num = Number(nm[1]);
+    }
+
+    if (!num) {
+      var limit = link ? cells.length : Math.min(cells.length, 4);
+      if (link) {
+        for (var li = 0; li < cells.length; li++) {
+          if (cells[li].contains(link)) { limit = li; break; }
+        }
+      }
+      for (var i = 0; i < limit; i++) {
+        var t = toHalfNumberText(normCellText(cells[i]));
+        var m = t.match(/^([1-9]|1[0-8])$/);
+        if (m) num = Number(m[1]);
+      }
+    }
+
+    if (num < 1 || num > 18) return;
+
+    var odds = extractOddsFromCells(cells);
+    if (!odds) odds = extractOddsValueFromText(toHalfNumberText(normCellText(tr)));
+    var pop = extractPopularityFromCells(cells);
+    if (!pop) pop = extractPopularityFromText(normCellText(tr));
+
+    if (odds || pop) {
+      if (!map[num]) map[num] = { odds: 0, pop: 0 };
+      if (odds && odds > 1) map[num].odds = odds;
+      if (pop && pop >= 1) map[num].pop = pop;
+    }
+  });
+  return map;
+}
+
+function mergeOddsPopularityIntoHorses(map) {
+  horses.forEach(function (h) {
+    var m = map && map[h.num];
+    if (!m) return;
+    if (m.odds && m.odds > 1) h.odds = Number(m.odds);
+    if (m.pop && m.pop >= 1) h.pop = Number(m.pop);
+  });
+}
+
 function parseHorsesFromDoc(doc) {
   var list = [];
   var seen = {};
@@ -1057,24 +1156,23 @@ function fetchRace() {
     horses = parseHorsesFromDoc(doc);
     if (horses.length < 2) throw new Error('出走馬を十分に解析できませんでした。');
     
-    // オッズページからの完全補完
+    // 出馬表内に既にある単勝オッズ・人気を先に反映
+    mergeOddsPopularityIntoHorses(parseOddsPopularityMapFromDoc(doc));
+
+    // オッズページから単勝オッズ・人気を完全補完（iPad Safari対応）
     var oddsUrl = (settings.nar ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com') + '/odds/index.html?race_id=' + currentRaceId;
     return fetchTextViaProxy(oddsUrl).then(function (oHtml) {
       var oDoc = parser.parseFromString(oHtml, 'text/html');
-      var oHorses = parseHorsesFromDoc(oDoc);
-      
-      horses.forEach(function (h) {
-        var match = oHorses.find(function (oh) { return oh.num === h.num; });
-        if (match) {
-          if (!h.odds || h.odds === 0) h.odds = match.odds;
-          if (!h.pop || h.pop === 0) h.pop = match.pop;
-        }
-      });
-      
+      mergeOddsPopularityIntoHorses(parseOddsPopularityMapFromDoc(oDoc));
+
       renderHorseRows();
-      setStatus(currentRaceName + ' ' + horses.length + '頭データ取得完了', 'ok');
-    });
-  }).catch(function (e) {
+      var oddsCount = horses.filter(function (h) { return Number(h.odds || 0) > 1; }).length;
+      var popCount = horses.filter(function (h) { return Number(h.pop || 0) >= 1; }).length;
+      setStatus(currentRaceName + ' ' + horses.length + '頭データ取得完了 / オッズ' + oddsCount + '頭 / 人気' + popCount + '頭', 'ok');
+    }).catch(function () {
+      renderHorseRows();
+      setStatus(currentRaceName + ' ' + horses.length + '頭データ取得完了（オッズページ補完は未取得）', 'ok');
+    });  }).catch(function (e) {
     setStatus('データ取得失敗: ' + e.message, 'err');
   }).finally(function () {
     prog.classList.remove('show');

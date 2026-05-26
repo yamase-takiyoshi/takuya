@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.19.0 JRA_REAL_ONLY</title>
+<title>The競馬 EV分析 v5.19.1 JRAActualDateFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.19.0 JRA_REAL_ONLY</span>
+    <span class="ver">v5.19.1 JRAActualDateFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2409,10 +2409,24 @@ function extractJraRaceNamesFromList(html, venueCode){
 }
 
 function buildJraRacesFromKaisai(html, date, venueCode){
-  // v5.19.0: JRA race_id推測生成は禁止。実race_id一覧から取得する。
-  return [];
+  const kd = parseJraKaisaiFromListText(html, venueCode);
+  if(!kd) return [];
+  const p = ymdParts(date);
+  const names = extractJraRaceNamesFromList(html, venueCode);
+  const races = [];
+  for(let r=1; r<=12; r++){
+    const raceId = `${p.yyyy}${venueCode}${String(kd.kai).padStart(2,'0')}${String(kd.day).padStart(2,'0')}${String(r).padStart(2,'0')}`;
+    races.push({
+      raceId,
+      raceNo:r,
+      venueCode,
+      raceName:names.get(r) || `${r}R`,
+      shutuba:shutubaUrl('JRA', raceId),
+      builtFromKaisai:true
+    });
+  }
+  return races;
 }
-
 
 
 function jraRaceIdToKaisai(raceId){
@@ -2522,22 +2536,56 @@ async function probeJraRaceById(date, raceId){
 }
 
 async function buildVerifiedJraRacesByProbe(date, venueCode, kd){
-  // v5.19.0: JRA race_id推測生成は禁止。
-  return [];
+  if(!kd) return [];
+  const p = ymdParts(date);
+  const out = [];
+  for(let r=1; r<=12; r++){
+    const raceId = `${p.yyyy}${venueCode}${String(kd.kai).padStart(2,'0')}${String(kd.day).padStart(2,'0')}${String(r).padStart(2,'0')}`;
+    try{
+      const item = await probeJraRaceById(date, raceId);
+      if(item) out.push(item);
+    }catch(e){}
+  }
+  return out.sort((a,b) => a.raceNo - b.raceNo);
 }
-
 
 async function fixJraKaisaiByProbe(date, venueCode, kd){
-  // v5.19.0: JRA race_id推測補正は禁止。
-  return null;
-}
+  if(!kd) return null;
+  const p = ymdParts(date);
+  const candidateDays = [];
+  for(const d of [kd.day, kd.day + 1, kd.day - 1, kd.day + 2, kd.day - 2]){
+    if(d >= 1 && d <= 12 && !candidateDays.includes(d)) candidateDays.push(d);
+  }
 
+  for(const day of candidateDays){
+    const raceId = `${p.yyyy}${venueCode}${String(kd.kai).padStart(2,'0')}${String(day).padStart(2,'0')}01`;
+    try{
+      if(await verifyJraRaceDateByShutuba(date, raceId)){
+        return { kai: kd.kai, day };
+      }
+    }catch(e){}
+  }
+  return kd;
+}
 
 function buildJraRacesFromFixedKaisai(html, date, venueCode, kd){
-  // v5.19.0: JRA race_id推測生成は禁止。
-  return [];
+  if(!kd) return [];
+  const p = ymdParts(date);
+  const names = extractJraRaceNamesFromList(html, venueCode);
+  const races = [];
+  for(let r=1; r<=12; r++){
+    const raceId = `${p.yyyy}${venueCode}${String(kd.kai).padStart(2,'0')}${String(kd.day).padStart(2,'0')}${String(r).padStart(2,'0')}`;
+    races.push({
+      raceId,
+      raceNo:r,
+      venueCode,
+      raceName:names.get(r) || `${r}R`,
+      shutuba:shutubaUrl('JRA', raceId),
+      builtFromKaisai:true
+    });
+  }
+  return races;
 }
-
 
 function jraRaceDayKey(raceId){
   const id = String(raceId || '');
@@ -2577,18 +2625,62 @@ async function filterJraDirectRacesBySelectedDate(direct, date){
 
 
 async function findJraKaisaiByFullProbe(date, venueCode, kdHint){
-  // v5.19.0: JRA race_id総当たり生成は禁止。
+  // JRA race_id はMMDDを持たないため、一覧HTML内のリンクだけで日付判定しない。
+  // 選択日と一致する「開催回・開催日」を出馬表本文の日付で確定する。
+  const p = ymdParts(date);
+  const kaiCandidates = [];
+  if(kdHint && kdHint.kai >= 1 && kdHint.kai <= 12) kaiCandidates.push(kdHint.kai);
+  for(let k=1; k<=12; k++) if(!kaiCandidates.includes(k)) kaiCandidates.push(k);
+
+  const dayHint = kdHint && kdHint.day ? Number(kdHint.day) : 0;
+  const dayCandidates = [];
+  if(dayHint >= 1 && dayHint <= 12){
+    for(const d of [dayHint, dayHint+1, dayHint-1, dayHint+2, dayHint-2, dayHint+3, dayHint-3]){
+      if(d >= 1 && d <= 12 && !dayCandidates.includes(d)) dayCandidates.push(d);
+    }
+  }
+  for(let d=1; d<=12; d++) if(!dayCandidates.includes(d)) dayCandidates.push(d);
+
+  for(const kai of kaiCandidates){
+    for(const day of dayCandidates){
+      const raceId = `${p.yyyy}${venueCode}${String(kai).padStart(2,'0')}${String(day).padStart(2,'0')}01`;
+      try{
+        if(await verifyJraRaceDateByShutuba(date, raceId)){
+          return { kai, day };
+        }
+      }catch(e){}
+    }
+  }
   return null;
 }
 
 
 
-
 function correctJraKaisaiByCalendarDate(date, venueCode, kd){
-  // v5.19.0: カレンダー曜日によるrace_id補正は禁止。
-  return kd || null;
-}
+  // v5.18.2: netkeibaのJRA一覧HTMLは、日曜タブでも前日(土曜)のrace_id群を
+  // そのまま含むことがある。JRA race_id は YYYY + 場 + 開催回 + 開催日 + R なので、
+  // 同一開催・同一場の土日連続開催では「日曜 = 土曜 + 100」になる。
+  // 例: 2026/05/23 東京11R = 202605020911、2026/05/24 東京11R = 202605021011。
+  // 出馬表HTMLの日付タブを拾ってしまう誤検証を避けるため、カレンダー曜日で最終補正する。
+  if(!kd) return kd;
+  const d = parseLocalDateYMD(date);
+  const dow = d.getDay(); // 0=日, 6=土
+  const out = { kai: Number(kd.kai), day: Number(kd.day) };
+  if(!(out.kai >= 1 && out.kai <= 12 && out.day >= 1 && out.day <= 12)) return kd;
 
+  // 通常のJRA連続開催は土曜=奇数日、日曜=偶数日。
+  // 日曜なのに奇数開催日を掴んでいる場合は、前日race_idを掴んだと判断して +1。
+  if(dow === 0 && out.day % 2 === 1 && out.day < 12){
+    out.day += 1;
+    out.correctedByCalendar = true;
+  }
+  // 土曜なのに偶数開催日を掴んでいる場合は、翌日race_idを掴んだ可能性が高いため -1。
+  if(dow === 6 && out.day % 2 === 0 && out.day > 1){
+    out.day -= 1;
+    out.correctedByCalendar = true;
+  }
+  return out;
+}
 
 function extractJraRaceNamesFromActualListText(html, venueCode){
   // 選択日の一覧本文から「R番号→レース名」をできるだけ安全に拾う。
@@ -2611,64 +2703,75 @@ function extractJraRaceNamesFromActualListText(html, venueCode){
 }
 
 function buildJraRacesFromExactKaisai(html, date, venueCode, kd){
-  // v5.19.0: JRA race_id推測生成は禁止。
-  return [];
+  if(!kd) return [];
+  const p = ymdParts(date);
+  const names = extractJraRaceNamesFromActualListText(html, venueCode);
+  const races = [];
+  for(let r=1; r<=12; r++){
+    const raceId = `${p.yyyy}${venueCode}${String(kd.kai).padStart(2,'0')}${String(kd.day).padStart(2,'0')}${String(r).padStart(2,'0')}`;
+    races.push({
+      raceId,
+      raceNo:r,
+      venueCode,
+      raceName:names.get(r) || `${r}R`,
+      shutuba:shutubaUrl('JRA', raceId),
+      builtFromVerifiedKaisai:true
+    });
+  }
+  return races;
 }
 
-
 async function getReliableJraRacesFromList(html, date, venueCode){
-  // v5.19.0: JRAもNAR同様、race_list.html内に実在する shutuba race_id のみ採用。
-  // 重要: 開催回・開催日からの race_id 推測生成は絶対に行わない。
-  // race_list に前日/翌日のリンクが混入する場合は、HTML内に存在したrace_id群を
-  // グループ化し、各グループの実出馬表本文の日付で選択日と一致するものだけ採用する。
+  // v5.19.1: JRA race_id は MMDD を含まないため、一覧HTMLだけで日付確定しない。
+  // 一覧に出ている実race_idの「開催回・開催日」を候補にし、出馬表本文の日付で照合する。
+  // 5/24なのに 2026050209xx（5/23相当）が混じる場合は、同じ開催回の隣接開催日を実ページで確認し、
+  // 選択日と一致した race_id 群だけを採用する。レース名も各出馬表の RaceName から取得する。
   const direct = parseRaceIdsFromList(html, 'JRA', venueCode, date)
-    .filter(r => r && r.raceId && raceIdVenueMatches('JRA', r.raceId, venueCode))
-    .filter(r => Number(r.raceNo) >= 1 && Number(r.raceNo) <= 12)
-    .map(r => ({ ...r, source:'realRaceIdFromRaceList' }));
+    .filter(r => r.shutuba.includes('https://race.netkeiba.com/') && raceIdVenueMatches('JRA', r.raceId, venueCode));
 
-  if(!direct.length) return [];
+  const kdCandidates = [];
+  const pushKd = (kai, day) => {
+    kai = Number(kai); day = Number(day);
+    if(!(kai >= 1 && kai <= 12 && day >= 1 && day <= 12)) return;
+    const key = `${kai}-${day}`;
+    if(!kdCandidates.some(x => x.key === key)) kdCandidates.push({kai, day, key});
+  };
 
-  const groups = new Map();
   direct.forEach(r => {
-    const key = jraRaceDayKey(r.raceId);
-    if(!key) return;
-    if(!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(r);
+    const kd = jraRaceIdToKaisai(r.raceId);
+    if(!kd) return;
+    // まずHTMLに出た実race_idの開催日、その前後を候補にする。
+    [kd.day, kd.day + 1, kd.day - 1, kd.day + 2, kd.day - 2].forEach(d => pushKd(kd.kai, d));
   });
 
-  const grouped = Array.from(groups.values())
-    .map(g => dedupeRacesByRaceIdAndNo(g).sort((a,b) => Number(a.raceNo) - Number(b.raceNo)))
-    .filter(g => g.length);
-
-  // 実ページの日付で確定。ここでも新規race_id生成はしない。
-  for(const group of grouped){
-    const probe = group.find(r => Number(r.raceNo) === 1) || group[0];
-    try{
-      if(await verifyJraRaceDateByShutuba(date, probe.raceId)){
-        return group.map(r => ({...r, source:'realRaceIdFromRaceListVerified'}));
-      }
-    }catch(e){}
+  const kdText = parseJraKaisaiFromListText(html, venueCode);
+  if(kdText){
+    [kdText.day, kdText.day + 1, kdText.day - 1, kdText.day + 2, kdText.day - 2].forEach(d => pushKd(kdText.kai, d));
   }
 
-  // 検証に失敗しても推測生成はしない。
-  // HTMLに存在したrace_idのうち、選択日の曜日に近いグループだけを安全側で採用する。
-  // 土曜=開催日奇数、日曜=開催日偶数の一般パターンを使うが、race_id自体はHTML由来のみ。
-  const dow = parseLocalDateYMD(date).getDay();
-  const preferredParity = dow === 0 ? 0 : (dow === 6 ? 1 : null);
-  const parityGroups = preferredParity === null ? [] : grouped.filter(g => {
-    const kd = jraRaceIdToKaisai(g[0].raceId);
-    return kd && (Number(kd.day) % 2) === preferredParity;
-  });
-  const candidates = parityGroups.length ? parityGroups : grouped;
+  // 候補が空なら開催回だけ総当たり。存在確認は出馬表本文の日付で行うので誤採用しない。
+  if(!kdCandidates.length){
+    for(let kai=1; kai<=12; kai++) for(let day=1; day<=12; day++) pushKd(kai, day);
+  }
 
-  // 最大件数、同数なら選択日が日曜なら開催日が大きい方、土曜なら小さい方を優先。
-  candidates.sort((a,b) => {
-    if(b.length !== a.length) return b.length - a.length;
-    const ka = jraRaceIdToKaisai(a[0].raceId) || {day:0};
-    const kb = jraRaceIdToKaisai(b[0].raceId) || {day:0};
-    return dow === 0 ? Number(kb.day) - Number(ka.day) : Number(ka.day) - Number(kb.day);
+  // 選択日の曜日で候補順を補正。通常は土曜=奇数日、日曜=偶数日。
+  const dow = parseLocalDateYMD(date).getDay();
+  kdCandidates.sort((a,b) => {
+    const aw = (dow === 0 && a.day % 2 === 0) || (dow === 6 && a.day % 2 === 1) ? 0 : 1;
+    const bw = (dow === 0 && b.day % 2 === 0) || (dow === 6 && b.day % 2 === 1) ? 0 : 1;
+    return aw - bw || Math.abs(a.day - (kdText?.day || a.day)) - Math.abs(b.day - (kdText?.day || b.day));
   });
-  return (candidates[0] || []).map(r => ({...r, source:'realRaceIdFromRaceListUnverified'}));
+
+  for(const kd of kdCandidates){
+    const races = await buildVerifiedJraRacesByProbe(date, venueCode, kd);
+    if(races.length >= 2){
+      return dedupeRacesByRaceIdAndNo(races)
+        .filter(r => r.raceNo >= 1 && r.raceNo <= 12)
+        .sort((a,b) => Number(a.raceNo) - Number(b.raceNo));
+    }
+  }
+
+  return [];
 }
 
 // ============================================================
@@ -2714,11 +2817,7 @@ async function finalFilterRacesForSelection(races, kind, date, venueCode){
     return dedupeRacesByRaceIdAndNo(list);
   }
 
-  // v5.18.9: JRA一覧から直接抽出した実race_idは、ここで再プローブ補正しない。
-  // 再プローブ/再生成が中央の土日ズレの原因だったため、実HTML由来のIDをそのまま通す。
-  if(kind === 'JRA' && list.length && list.every(r => String(r.source || '').startsWith('realRaceIdFromRaceList'))){
-    return dedupeRacesByRaceIdAndNo(list);
-  }
+  // v5.19.1: JRAは必ず本文日付照合済みのリストだけを通す。
 
   // JRA: race_idだけではMMDDが分からないため、開催日グループ単位で実ページ照合。
   const groups = new Map();
@@ -3210,6 +3309,9 @@ async function fetchRace(){
   const progress = document.getElementById('fetchProgress');
   progress.classList.add('show');
   status.innerHTML = '';
+  // 前回データやデモデータを残したまま失敗表示しない。実取得できた馬だけ表示する。
+  horses = [];
+  renderHorseRows();
 
   try {
     const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(rawUrl);
@@ -3655,20 +3757,7 @@ function corsHeaders(contentType) {
 initUI();
 initCalendarPicker();
 
-// デモデータ
-if(horses.length === 0){
-  horses = [
-    {num:1,name:'サンプルA',odds:3.2,pop:1,frame:1},
-    {num:2,name:'サンプルB',odds:5.8,pop:2,frame:1},
-    {num:3,name:'サンプルC',odds:8.4,pop:3,frame:2},
-    {num:4,name:'サンプルD',odds:12.0,pop:4,frame:2},
-    {num:5,name:'サンプルE',odds:15.5,pop:5,frame:3},
-    {num:6,name:'サンプルF',odds:22.0,pop:6,frame:3},
-    {num:7,name:'サンプルG',odds:35.0,pop:7,frame:4},
-    {num:8,name:'サンプルH',odds:48.0,pop:8,frame:4},
-  ];
-  renderHorseRows();
-}
+// デモデータは廃止。実取得に失敗した場合は空欄のままにし、サンプル馬を表示しない。
 </script>
 </body>
 </html>

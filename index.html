@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.20.9 Safari ES5 Ultimate</title>
+<title>The競馬 EV分析 v5.20.9b Safari ES5 BugFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -6159,10 +6159,15 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
                             rs.innerHTML = '';
                             dlabel_1 = String(date).replace(/-/g, '/');
                             races.forEach(function (r) {
+                                var rn = r.raceNo + 'R' + (r.synthetic ? '（推定）' : '');
                                 var label = "".concat(dlabel_1, " ").concat(venueName(kind, venue), " ").concat(r.raceNo, "R ").concat(r.synthetic ? '（推定URL）' : '', " / ").concat(r.raceId);
                                 var opt = new Option(label, shutubaUrl(kind, r.raceId));
                                 opt.dataset.raceId = r.raceId;
-                                opt.dataset.raceName = "".concat(r.raceNo, "R");
+                                opt.dataset.raceName = rn;
+                                opt.dataset.date = date;
+                                opt.dataset.kind = kind;
+                                opt.dataset.venue = venue;
+                                opt.dataset.raceNo = String(r.raceNo);
                                 rs.add(opt);
                             });
                         }
@@ -6370,8 +6375,40 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
     var rs=$('raceSelect'), ru=$('raceUrl'), rb=$('raceTitleBox'), opt;
     if(!rs || !ru) return;
     opt=rs.options[rs.selectedIndex];
-    ru.value=rs.value || '';
-    if(rb && opt && rs.value){ rb.textContent=opt.text || opt.textContent || ''; rb.style.display=''; }
+    if(!opt || !rs.value){
+      if(ru) ru.value='';
+      if(rb){ rb.style.display='none'; rb.textContent=''; }
+      return;
+    }
+    var raceId=opt.getAttribute('data-race-id')||'';
+    var optDate=opt.getAttribute('data-date')||'';
+    var optKind=opt.getAttribute('data-kind')||'';
+    var optVenue=opt.getAttribute('data-venue')||'';
+    var curDate=dateNow(), curKind=kindNow(), curVenue=($('pickVenue')||{}).value||'';
+    var hasAttrs=raceId&&optDate&&optKind&&optVenue;
+    if(hasAttrs && (optDate!==curDate || optKind!==curKind || optVenue!==curVenue)){
+      ru.value='';
+      if(rb){ rb.style.display='none'; rb.textContent=''; }
+      setStatus('\u274C \u73fe\u5728\u9078\u629e\u4e2d\u306e\u65e5\u4ed8\u30fb\u958b\u50ac\u5834\u30fb\u30ec\u30fc\u30b9\u3068URL\u306erace_id\u304c\u4e00\u81f4\u3057\u307e\u305b\u3093\u3002\u30ec\u30fc\u30b9\u4e00\u89a7\u3092\u518d\u53d6\u5f97\u3057\u3066\u9078\u3073\u76f4\u3057\u3066\u304f\u3060\u3055\u3044\u3002','err');
+      return;
+    }
+    ru.value=rs.value;
+    var raceName=opt.getAttribute('data-race-name')||'';
+    var raceNo=opt.getAttribute('data-race-no')||'';
+    var venue=optVenue||curVenue;
+    var titleText=raceName ? (curDate.replace(/-/g,'/')+' '+venueName(curKind,venue)+' '+raceName) : (opt.text||opt.textContent||'');
+    if(rb){ rb.textContent='\u9078\u629e\u4e2d: '+titleText; rb.style.display=''; }
+    try{
+      if(raceId){
+        window.__selectedRaceMetaV5188={
+          raceId:raceId, raceName:raceName, kind:curKind, date:curDate,
+          venueCode:venue, raceNo:Number(raceNo||raceId.slice(-2))||0, url:rs.value
+        };
+        window.currentRaceId=raceId;
+        window.currentRaceName=raceName;
+      }
+    }catch(e){}
+    setStatus('\u2705 \u30ec\u30fc\u30b9\u3092\u9078\u629e\u3057\u307e\u3057\u305f: '+esc(titleText),'ok');
   };
   window.loadActiveVenuesForDate=function(){
     bindTabs(); clearRace();
@@ -6429,11 +6466,17 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
       if(rs){
         while(rs.options.length) rs.remove(0);
         for(i=0;i<races.length;i++){
+          var rn=races[i].raceNo+'R'+(races[i].synthetic?'（推定）':'');
           label=dlabel+' '+venueName(kind,venue)+' '+races[i].raceNo+'R '+(races[i].synthetic?'（推定URL）':'')+' / '+races[i].raceId;
           opt=document.createElement('option');
           opt.value=shutubaUrl(kind,races[i].raceId);
           opt.text=label;
           opt.setAttribute('data-race-id', races[i].raceId);
+          opt.setAttribute('data-race-name', rn);
+          opt.setAttribute('data-date', date);
+          opt.setAttribute('data-kind', kind);
+          opt.setAttribute('data-venue', venue);
+          opt.setAttribute('data-race-no', String(races[i].raceNo));
           rs.add(opt);
         }
       }

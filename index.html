@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.6 OddsFix4</title>
+<title>The競馬 EV分析 v5.18.7 JRAOddsFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.6 OddsFix4</span>
+    <span class="ver">v5.18.7 JRAOddsFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -3113,66 +3113,87 @@ function parseWinOddsPopularityFromDoc(doc){
 // 例: "724.412" のようにオッズ724.4＋人気12が結合した値も分割補正する。
 // ============================================================
 function parseOddsPopFromCellsStrict(cells, horseNo){
-  const clean = cells.map(x => toHalfNumberText(String(x || '')).replace(/,/g,'').trim());
+  const clean = cells.map(function(x){
+    return toHalfNumberText(String(x || '')).replace(/,/g,'').trim();
+  });
   let odds = 0;
   let pop = 0;
+  let popIndex = -1;
 
-  // 人気は右側にあることが多い。馬番・枠番を避けて右から拾う。
+  // 人気は右端側の「n人気」または独立した 1〜18 のセルだけ採用する。
+  // 左側の馬番・枠番を人気として拾わないため、右から走査する。
   for(let i=clean.length-1; i>=0; i--){
     const t = clean[i];
     const m = t.match(/^([1-9]|1[0-8])\s*人気$/) || t.match(/^([1-9]|1[0-8])$/);
     if(!m) continue;
     const v = Number(m[1]);
-    if(v !== Number(horseNo)){ pop = v; break; }
-  }
-
-  // まず完全な小数セルを優先。斤量・馬体重系の近辺は除外。
-  for(let i=0; i<clean.length; i++){
-    const t = clean[i];
-    if(!t || /kg|㎏|斤量|馬体重|増減|歳|牡|牝|セ|--/.test(t)) continue;
-    const m = t.match(/^(\d{1,4}\.\d+)$/);
-    if(!m) continue;
-    const v = Number(m[1]);
-    v = sanitizeWinOddsValue(v, t);
-    if(v >= 1 && v !== Number(horseNo)){
-      odds = v;
+    if(v >= 1 && v <= 18 && v !== Number(horseNo)){
+      pop = v;
+      popIndex = i;
       break;
     }
   }
 
-  // netkeiba/iPad経由でセル間スペースが潰れた "724.412" = 724.4 + 12人気 を補正。
+  function acceptOddsText(t){
+    if(!t) return 0;
+    if(/kg|㎏|斤量|負担重量|馬体重|増減|歳|牡|牝|セ|騎手|調教師|所属|--/.test(t)) return 0;
+    const m = String(t).match(/^(\d{1,3}\.\d)$/) || String(t).match(/^(\d{1,3}\.\d+)$/);
+    if(!m) return 0;
+    const v = sanitizeWinOddsValue(Number(m[1]), t);
+    if(v >= 1 && v <= 999.9 && v !== Number(horseNo)) return v;
+    return 0;
+  }
+
+  // 最優先：人気セルの直前〜数セル左。JRA出馬表では「単勝オッズ→人気」が右側に並ぶ。
+  if(popIndex > 0){
+    for(let i=popIndex-1; i>=0 && i>=popIndex-5; i--){
+      const v = acceptOddsText(clean[i]);
+      if(v >= 1){ odds = v; break; }
+    }
+  }
+
+  // 結合補正: "724.412" = 724.4 + 12人気 のようにオッズと人気が連結したセルを分割。
   if(!(odds >= 1)){
-    for(const t of clean){
-      if(!/^\d{2,5}\.\d{2,3}$/.test(t)) continue;
-      const m = t.match(/^(\d{1,4}\.\d)(\d{1,2})$/);
+    for(let i=clean.length-1; i>=0; i--){
+      const t = clean[i];
+      const m = t.match(/^(\d{1,3}\.\d)([1-9]|1[0-8])$/);
       if(!m) continue;
-      const od = Number(m[1]);
+      const od = sanitizeWinOddsValue(Number(m[1]), t);
       const pp = Number(m[2]);
-      const safeOd = sanitizeWinOddsValue(od, t);
-      if(safeOd >= 1 && pp >= 1 && pp <= 18){
-        odds = safeOd;
-        if(!pop) pop = pp;
+      if(od >= 1 && od <= 999.9 && pp >= 1 && pp <= 18){
+        odds = od;
+        if(!pop){ pop = pp; popIndex = i; }
         break;
       }
     }
   }
 
-  // 最後に「オッズ 35.6 人気 5」形式のテキストから拾う。
+  // ヘッダーやクラスが取れない場合の最後の保険。
+  // 右側8セル内の小数だけに限定し、斤量列など左側の 55.0 を拾わない。
+  if(!(odds >= 1)){
+    const from = Math.max(0, clean.length - 8);
+    for(let i=clean.length-1; i>=from; i--){
+      if(i === popIndex) continue;
+      const v = acceptOddsText(clean[i]);
+      if(v >= 1){ odds = v; break; }
+    }
+  }
+
+  // 「単勝 35.6 人気 5」「オッズ 35.6 5人気」のような明示テキストだけ拾う。
   if(!(odds >= 1)){
     const joined = clean.join(' ');
-    const m = joined.match(/(?:単勝|オッズ|Odds)?\s*(\d{1,4}\.\d+)\s*(?:倍)?\s*(?:人気)?\s*([1-9]|1[0-8])?/i);
+    const m = joined.match(/(?:単勝|単勝オッズ|オッズ|Odds)\s*(\d{1,3}\.\d+)\s*(?:倍)?\s*(?:([1-9]|1[0-8])\s*人気)?/i);
     if(m){
-      const od = Number(m[1]);
+      const od = sanitizeWinOddsValue(Number(m[1]), m[1]);
       const pp = m[2] ? Number(m[2]) : 0;
-      const safeOd = sanitizeWinOddsValue(od, m[1]);
-      if(safeOd >= 1){
-        odds = safeOd;
+      if(od >= 1 && od <= 999.9){
+        odds = od;
         if(!pop && pp >= 1 && pp <= 18 && pp !== Number(horseNo)) pop = pp;
       }
     }
   }
 
-  return { odds, pop };
+  return { odds: odds || 0, pop: pop || 0 };
 }
 
 function parseWinOddsPopularityFromDoc(doc){
@@ -3182,7 +3203,7 @@ function parseWinOddsPopularityFromDoc(doc){
     num = Number(num); odds = Number(odds); pop = Number(pop || 0);
     if(!(num >= 1 && num <= 18)) return;
     odds = sanitizeWinOddsValue(odds, String(odds));
-    if(!(odds >= 1 && odds <= 9999)) return;
+    if(!(odds >= 1 && odds <= 999.9)) return;
     const prev = map.get(num) || {};
     map.set(num, {
       odds: Math.round(odds * 10) / 10,
@@ -3314,14 +3335,30 @@ async function fetchRace(){
     const kind = document.getElementById('pickKind')?.value || (rawUrl.includes('nar.netkeiba') ? 'NAR' : 'JRA');
 
     if(rid){
-      const oddsMap = await fetchWinOddsPopularity(kind, rid);
-      if(oddsMap.size >= 2){
-        horses = mergeOddsPopularityIntoHorses(horses, oddsMap);
-      }else{
-        // 保険：oddsページが空/未発売の場合のみ出馬表内の値を使う。
+      if(kind === 'JRA'){
+        // JRAは選択された race_id の出馬表HTMLを正として、馬リンク付き行から単勝オッズ・人気を補正する。
+        // 不足した場合だけ race_id のオッズページを保険に使い、NAR側の既存挙動には触れない。
         const shutubaOddsMap = parseWinOddsPopularityFromDoc(doc);
         if(shutubaOddsMap.size >= 2){
           horses = mergeOddsPopularityIntoHorses(horses, shutubaOddsMap);
+        }
+        const missingOdds = horses.filter(h => !(Number(h.odds) >= 1)).length;
+        const missingPop = horses.filter(h => !(Number(h.pop) >= 1)).length;
+        if(missingOdds > 0 || missingPop > 0){
+          const oddsMap = await fetchWinOddsPopularity(kind, rid);
+          if(oddsMap.size >= 2){
+            horses = mergeOddsPopularityIntoHorses(horses, oddsMap);
+          }
+        }
+      }else{
+        const oddsMap = await fetchWinOddsPopularity(kind, rid);
+        if(oddsMap.size >= 2){
+          horses = mergeOddsPopularityIntoHorses(horses, oddsMap);
+        }else{
+          const shutubaOddsMap = parseWinOddsPopularityFromDoc(doc);
+          if(shutubaOddsMap.size >= 2){
+            horses = mergeOddsPopularityIntoHorses(horses, shutubaOddsMap);
+          }
         }
       }
     }

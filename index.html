@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.1 JRA RaceId Strict Fix</title>
+<title>The競馬 EV分析 v5.18.2 JRA RaceId DayOffset Fix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.1 RaceIdStrict</span>
+    <span class="ver">v5.18.2 RaceIdDayFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2654,6 +2654,34 @@ async function findJraKaisaiByFullProbe(date, venueCode, kdHint){
   return null;
 }
 
+
+
+function correctJraKaisaiByCalendarDate(date, venueCode, kd){
+  // v5.18.2: netkeibaのJRA一覧HTMLは、日曜タブでも前日(土曜)のrace_id群を
+  // そのまま含むことがある。JRA race_id は YYYY + 場 + 開催回 + 開催日 + R なので、
+  // 同一開催・同一場の土日連続開催では「日曜 = 土曜 + 100」になる。
+  // 例: 2026/05/23 東京11R = 202605020911、2026/05/24 東京11R = 202605021011。
+  // 出馬表HTMLの日付タブを拾ってしまう誤検証を避けるため、カレンダー曜日で最終補正する。
+  if(!kd) return kd;
+  const d = parseLocalDateYMD(date);
+  const dow = d.getDay(); // 0=日, 6=土
+  const out = { kai: Number(kd.kai), day: Number(kd.day) };
+  if(!(out.kai >= 1 && out.kai <= 12 && out.day >= 1 && out.day <= 12)) return kd;
+
+  // 通常のJRA連続開催は土曜=奇数日、日曜=偶数日。
+  // 日曜なのに奇数開催日を掴んでいる場合は、前日race_idを掴んだと判断して +1。
+  if(dow === 0 && out.day % 2 === 1 && out.day < 12){
+    out.day += 1;
+    out.correctedByCalendar = true;
+  }
+  // 土曜なのに偶数開催日を掴んでいる場合は、翌日race_idを掴んだ可能性が高いため -1。
+  if(dow === 6 && out.day % 2 === 0 && out.day > 1){
+    out.day -= 1;
+    out.correctedByCalendar = true;
+  }
+  return out;
+}
+
 function extractJraRaceNamesFromActualListText(html, venueCode){
   // 選択日の一覧本文から「R番号→レース名」をできるだけ安全に拾う。
   // race_idが前日へズレていても、本文の見出し名を優先して使う。
@@ -2701,11 +2729,11 @@ async function getReliableJraRacesFromList(html, date, venueCode){
   // 一覧HTMLに出ているrace_idをそのまま信用せず、出馬表本文の日付で
   // 「選択日に対応する開催回・開催日」を先に確定してから12Rを再生成する。
   const kdHint = parseJraKaisaiFromListText(html, venueCode) || (direct[0] ? jraRaceIdToKaisai(direct[0].raceId) : null);
-  const kdExact = await findJraKaisaiByFullProbe(date, venueCode, kdHint);
+  let kdExact = await findJraKaisaiByFullProbe(date, venueCode, kdHint);
   if(kdExact){
-    // v5.18.1: race_idを生成するだけでなく、12R分の出馬表を実取得して
-    // 本文日付・実在馬・レース名を確認する。これで 5/24東京11R=オークス(202605021011)
-    // を、前日の欅S(202605020911)へ誤接続しない。
+    // v5.18.2: 日曜タブで前日(土曜)race_idを掴んだ場合、開催日を+1補正する。
+    // 2026/05/24 東京11R は 202605020911 ではなく 202605021011。
+    kdExact = correctJraKaisaiByCalendarDate(date, venueCode, kdExact);
     const verifiedBuilt = await buildVerifiedJraRacesByProbe(date, venueCode, kdExact);
     if(verifiedBuilt.length) return verifiedBuilt;
     return buildJraRacesFromExactKaisai(html, date, venueCode, kdExact);
@@ -2718,7 +2746,8 @@ async function getReliableJraRacesFromList(html, date, venueCode){
   }
 
   const kdRaw = parseJraKaisaiFromListText(html, venueCode);
-  const kdFixed = await fixJraKaisaiByProbe(date, venueCode, kdRaw);
+  let kdFixed = await fixJraKaisaiByProbe(date, venueCode, kdRaw);
+  kdFixed = correctJraKaisaiByCalendarDate(date, venueCode, kdFixed);
   return buildJraRacesFromFixedKaisai(html, date, venueCode, kdFixed);
 }
 

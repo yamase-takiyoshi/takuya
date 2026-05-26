@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.28.0</title>
+<title>The競馬 EV分析 v5.29.0</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -224,7 +224,7 @@ button, select, input, textarea, .tab-btn, .btn, .btn-sm, .mode-btn, .sim-cand-r
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.28.0</span>
+    <span class="ver">v5.29.0</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -826,34 +826,15 @@ function probeNarRaceById(date, venueCode, venueName, raceNo) {
 }
 
 function probeActiveNarRaces(date, filterVenue) {
-  // v5.28.0: race_list.html + top.html の2URL試行。両方失敗時のみ直接検証フォールバック。
-  var ymd = parseYmd(date).ymd;
-  var urls = [
-    'https://nar.netkeiba.com/top/race_list.html?kaisai_date=' + ymd,
-    'https://nar.netkeiba.com/top/top_race_list.html?kaisai_date=' + ymd,
-    'https://nar.netkeiba.com/top/race_list.html?kaisai_date=' + ymd + '&rf=top'
-  ];
-  console.log('[RaceDay] NAR 開催場取得試行 (複数URL): ' + urls[0]);
-
-  function tryNext(idx) {
-    if (idx >= urls.length) {
-      console.warn('[RaceDay] NAR 全URL失敗。race_id直接検証にフォールバック');
-      return probeNarRacesFallback(date, filterVenue);
-    }
-    return fetchTextViaProxy(urls[idx]).then(function (html) {
-      var parsed = parseRaceIdsFromHtml(html, 'NAR', date, filterVenue);
-      if (parsed.length > 0) {
-        console.log('[RaceDay] NAR URL[' + idx + '] 成功: ' + parsed.length + '件');
-        return parsed;
-      }
-      console.warn('[RaceDay] NAR URL[' + idx + '] 空。次URLを試行');
-      return tryNext(idx + 1);
-    }).catch(function (e) {
-      console.warn('[RaceDay] NAR URL[' + idx + '] 取得失敗 (' + e.message + ')。次URLを試行');
-      return tryNext(idx + 1);
-    });
-  }
-  return tryNext(0);
+  // v5.29.0: NARは開催一覧DOMを信用しない。
+  // race_id = YYYY + 場コード + MMDD + RR を直接生成し、実在する出馬表だけを採用する。
+  // これで「門別だけ残る」「前日/翌日混入」「race_id空欄」「Safariキャッシュ由来のズレ」を潰す。
+  console.log('[RaceDay] NAR race_id直接サーチ開始: date=' + date + ', venue=' + (filterVenue || 'ALL'));
+  return probeNarRacesFallback(date, filterVenue).then(function (races) {
+    races = (races || []).filter(Boolean);
+    console.log('[RaceDay] NAR race_id直接サーチ完了: ' + races.length + '件');
+    return races;
+  });
 }
 
 function probeNarRacesFallback(date, filterVenue) {
@@ -1011,11 +992,11 @@ function loadActiveVenues() {
   settings.nar = (kind === 'NAR');
   setJraVisibility(true);
   updateControlsState(true);
-  setStatus('実開催地を race_id から検証中...', 'info');
+  setStatus(kind === 'NAR' ? 'NAR race_idを直接サーチ中...' : '実開催地を race_id から検証中...', 'info');
 
   var racePromise;
   if (kind === 'NAR') {
-    // v5.28.0: race_list.html優先。失敗時のみrace_id直接検証にフォールバック。
+    // v5.29.0: NARはrace_id直接サーチのみ。開催一覧DOMには依存しない。
     racePromise = probeActiveNarRaces(date, '');
   } else {
     racePromise = fetchTextViaProxy(getNetkeibaUrl(kind, date)).then(function (html) {
@@ -1109,11 +1090,11 @@ function loadRaceList() {
   updateControlsState(true);
   rs.disabled = true;
   rs.innerHTML = '<option value="">正式レース名取得中...</option>';
-  setStatus('正式レース名を取得中...', 'info');
+  setStatus(kind === 'NAR' ? 'race_idから正式レース名を取得中...' : '正式レース名を取得中...', 'info');
 
   var racePromise;
   if (kind === 'NAR') {
-    // v5.28.0: race_list.htmlを優先。空ならrace_id直接検証にフォールバック。
+    // v5.29.0: NARはrace_id直接サーチのみ。選択開催場の実在レースだけを採用する。
     racePromise = probeActiveNarRaces(date, venue);
   } else {
     racePromise = fetchTextViaProxy(getNetkeibaUrl(kind, date)).then(function (html) {

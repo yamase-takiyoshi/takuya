@@ -2490,13 +2490,19 @@ function jraHtmlMatchesSelectedDate(html, date){
   }
 }
 
-async function fetchHtmlViaProxy(url){
+async function fetchHtmlViaProxy(url, timeoutMs=8000){
   const sep = String(url).includes('?') ? '&' : '?';
   const targetUrl = String(url) + sep + '_tk=' + Date.now();
   const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(targetUrl);
-  const res = await fetch(proxyReq, { cache:'no-store' });
-  if(!res.ok) throw new Error('HTTP ' + res.status);
-  return await res.text();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try{
+    const res = await fetch(proxyReq, { cache:'no-store', signal: controller.signal });
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+    return await res.text();
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function verifyJraRaceDateByShutuba(date, raceId){
@@ -3373,7 +3379,9 @@ async function fetchWinOddsPopularity(kind, raceId){
 
   for(const url of buildNetkeibaOddsUrls(kind, raceId)){
     try{
-      const html = await fetchHtmlViaProxy(url);
+      // JSON API は短めのタイムアウトで素早くフォールバック、HTMLページは余裕を持って待つ
+      const isJsonApi = /api_get_(?:jra|nar)_odds/.test(url);
+      const html = await fetchHtmlViaProxy(url, isJsonApi ? 5000 : 10000);
       if(!html || html.length < 100) continue;
       if(kind === 'NAR' && /api_get_nar_odds/.test(url) && !html.includes(raceId)) continue;
       if(kind === 'JRA' && /api_get_jra_odds/.test(url) && !html.includes(raceId)) continue;
@@ -3381,7 +3389,7 @@ async function fetchWinOddsPopularity(kind, raceId){
       let map = new Map();
 
       // v5.20.0: JSON API エンドポイントは専用パーサーで処理
-      if(/api_get_(?:jra|nar)_odds/.test(url)){
+      if(isJsonApi){
         map = parseWinOddsFromJsonApi(html);
       } else {
         if(html.length < 500) continue;
@@ -3460,9 +3468,14 @@ async function fetchRace(auto=false){
   try {
     const sepFetch = rawUrl.includes('?') ? '&' : '?';
     const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(rawUrl + sepFetch + '_tk=' + Date.now());
-    const res = await fetch(proxyReq, { cache:'no-store' });
-    if(!res.ok) throw new Error('HTTP ' + res.status);
-    const html = await res.text();
+    const _ctrl = new AbortController();
+    const _timer = setTimeout(() => _ctrl.abort(), 15000);
+    let res, html;
+    try{
+      res = await fetch(proxyReq, { cache:'no-store', signal: _ctrl.signal });
+      if(!res.ok) throw new Error('HTTP ' + res.status);
+      html = await res.text();
+    } finally { clearTimeout(_timer); }
     if(validation.raceId && !html.includes(validation.raceId)){
       throw new Error(`取得HTML内に選択race_id ${validation.raceId} がありません。別日・別場への遷移を検出したため中止しました。`);
     }

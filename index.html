@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.16.1 Product Simulation</title>
+<title>The競馬 EV分析 v5.18.6 OddsFix4</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -112,7 +112,7 @@ select option { background: #1e293b; }
 
 
 /* ============================================================
-   v5.16.1 Product Simulation Theme / 緑の旧アイコン復活
+   v5.16.2 Product Simulation Theme / 緑の旧アイコン復活
    ============================================================ */
 :root{
   --accent:#00e676;
@@ -181,8 +181,32 @@ body{
 .sim-ticket-card.miss{border-color:rgba(248,113,113,.20);background:rgba(40,20,30,.34)}
 .sim-ticket-card.hit:after{content:"HIT";position:absolute;right:-22px;top:9px;transform:rotate(28deg);font-size:11px;font-weight:950;color:#03130b;background:#00e676;padding:4px 28px;box-shadow:var(--glow)}
 .sim-ticket-main b{font-size:16px}.sim-ticket-meta{font-size:11px;color:var(--muted);margin-top:4px}.sim-return{font-size:17px;font-weight:950;text-align:right}.sim-return.hit{color:#a7f3d0;text-shadow:0 0 10px rgba(0,255,136,.35)}
-.sim-finish-strip{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.sim-finish-horse{min-width:56px;text-align:center;padding:8px 10px;border-radius:12px;background:rgba(0,255,136,.10);border:1px solid rgba(0,255,136,.22);font-weight:900}.sim-finish-horse span{display:block;font-size:10px;color:#8bd9ae;font-weight:700}
+.sim-hist-row{display:grid;grid-template-columns:1fr auto auto auto;gap:6px;align-items:center;padding:6px 8px;border-bottom:1px solid rgba(51,65,85,0.4);font-size:12px}
+.sim-hist-row:last-child{border-bottom:none}
+.sim-hist-row.win{color:var(--green)}.sim-hist-row.lose{color:var(--red)}.sim-finish-horse{min-width:56px;text-align:center;padding:8px 10px;border-radius:12px;background:rgba(0,255,136,.10);border:1px solid rgba(0,255,136,.22);font-weight:900}.sim-finish-horse span{display:block;font-size:10px;color:#8bd9ae;font-weight:700}
 @media(max-width:560px){.sim-dashboard{grid-template-columns:1fr}.sim-action-grid{grid-template-columns:1fr}.sim-kpi-grid{grid-template-columns:1fr 1fr}.sim-ticket-card{grid-template-columns:1fr}.sim-return{text-align:left}}
+
+/* 買い目編集行 */
+.sim-edit-row{display:grid;grid-template-columns:auto 1fr 1fr auto auto;gap:6px;align-items:center;padding:7px 8px;border:1px solid var(--border);border-radius:8px;margin-bottom:5px;background:rgba(15,23,42,0.3)}
+.sim-edit-row.tg-warn{border-color:rgba(248,113,113,0.45);background:rgba(248,113,113,0.06)}
+.sim-edit-row select{background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 4px;font-size:12px;font-family:inherit}
+.sim-edit-row .del-btn{width:28px;height:28px;background:none;border:1px solid var(--border);color:var(--muted);border-radius:6px;cursor:pointer;font-size:14px;flex:none}
+.sim-edit-row .tg-icon{font-size:14px;width:18px;text-align:center}
+.sim-cand-row{display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid rgba(51,65,85,0.4);cursor:pointer;font-size:12px}
+.sim-cand-row:last-child{border-bottom:none}
+.sim-cand-row:active{background:rgba(0,255,136,0.08)}
+.sim-cand-row .ev-badge{font-size:11px;font-weight:700;margin-left:auto}
+.nums-sel-wrap{display:flex;gap:3px;flex-wrap:wrap}
+
+
+/* v5.17 シミュレーション強化 */
+.sim-toolbar{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:10px}
+.sim-toolbar .btn-sm{height:38px;background:rgba(0,255,136,.12);border-color:rgba(0,255,136,.28);color:#d9ffe8;font-weight:850}
+.sim-auto-box{margin-top:10px;padding:10px;border:1px solid rgba(0,255,136,.22);background:rgba(0,255,136,.07);border-radius:12px;font-size:12px;color:#c8ffe0;line-height:1.65}
+.sim-finish-picker{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:8px 0 10px}
+.sim-finish-picker .field{margin-bottom:0}
+.sim-payout-ok{color:var(--green);font-weight:800}.sim-payout-est{color:var(--yellow);font-weight:800}
+@media(max-width:560px){.sim-toolbar,.sim-finish-picker{grid-template-columns:1fr}}
 
 </style>
 </head>
@@ -193,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.16.1 Product</span>
+    <span class="ver">v5.18.6 OddsFix4</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -344,7 +368,53 @@ body{
         <button class="btn-sm" onclick="runSimulationFromResult()">⚡ 結果取得・本精算</button>
         <button class="btn-sm" onclick="runManualSimulation()">✍️ 手入力で仮精算</button>
       </div>
+      <div class="sim-toolbar">
+        <button class="btn-sm" onclick="simAutoAddCandidates()">🤖 候補を自動追加</button>
+        <button class="btn-sm" onclick="runAutoSimulation()">🚀 自動追加＋結果取得＋精算</button>
+      </div>
+      <div class="sim-auto-box">
+        自動モードは、現在の推奨買い目が空ならEV候補から買い目を作成し、結果URLを自動生成して、払戻表から100円払戻を読み取り、投資額に応じて精算・履歴グラフへ記録します。
+      </div>
       <div id="simStatus" style="margin-top:10px"></div>
+    </div>
+
+    <!-- 買い目編集カード -->
+    <div class="card" style="margin-top:12px" id="simEditCard">
+      <div class="section-header">
+        <h2>🎫 シミュレーション買い目</h2>
+        <div style="display:flex;gap:6px;align-items:center">
+          <button class="btn-sm" onclick="simLoadFromRecommend()">📥 推奨から読込</button>
+          <button class="btn-sm" onclick="simAddBlankRow()">＋ 追加</button>
+        </div>
+      </div>
+      <!-- 一括金額変更 -->
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+        <span style="font-size:12px;color:var(--muted)">一括変更:</span>
+        <select id="simBulkAmount" style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:4px 8px;font-size:12px">
+          <option value="100">100円</option>
+          <option value="200">200円</option>
+          <option value="300">300円</option>
+          <option value="500" selected>500円</option>
+          <option value="1000">1,000円</option>
+          <option value="2000">2,000円</option>
+          <option value="3000">3,000円</option>
+          <option value="5000">5,000円</option>
+          <option value="10000">10,000円</option>
+        </select>
+        <button class="btn-sm" onclick="simApplyBulkAmount()">全行適用</button>
+        <span id="simTotalBetLabel" style="font-size:12px;color:var(--muted);margin-left:auto">合計: 0円</span>
+      </div>
+      <!-- トリガミ警告エリア -->
+      <div id="simTrigamiWarn" style="display:none" class="antigami-warn"></div>
+      <!-- 買い目行リスト -->
+      <div id="simEditRows"></div>
+      <!-- 候補から追加 -->
+      <div style="margin-top:10px">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:4px">📋 候補から追加（全候補EV順）</div>
+        <div id="simCandList" style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:4px;background:rgba(15,23,42,0.4)">
+          <div class="empty" style="padding:12px">先にEV計算を実行してください</div>
+        </div>
+      </div>
     </div>
 
     <div class="card" style="margin-top:12px">
@@ -359,17 +429,34 @@ body{
           <input type="text" id="manualFinishFrames" placeholder="1着枠-2着枠-3着枠">
         </div>
       </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:4px">または着順をドロップダウンで選択</div>
+      <div class="sim-finish-picker" id="manualFinishPicker"></div>
       <button class="btn btn-primary" onclick="runManualSimulation()">♞ シミュレーション実行</button>
     </div>
 
     <div class="card" id="simSummaryCard" style="display:none">
       <h2>📊 シミュレーション結果</h2>
       <div id="simSummary"></div>
+      <div id="simAutoRecordRow" style="display:none;margin-top:10px;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="btn-sm" style="background:rgba(0,255,136,.15);border-color:rgba(0,255,136,.35);color:#a7f3d0;font-weight:800" onclick="simRecordProfit()">📌 収支に記録</button>
+        <span id="simAutoRecordStatus" style="font-size:11px;color:var(--muted)"></span>
+      </div>
     </div>
 
     <div class="card">
       <h2>🧾 買い目別結果</h2>
       <div id="simTicketList"><div class="empty">推奨買い目作成後にシミュレーションできます。</div></div>
+    </div>
+
+    <!-- シミュレーション専用収支グラフ -->
+    <div class="card" id="simChartCard">
+      <div class="section-header">
+        <h2>📉 シミュレーション収支グラフ</h2>
+        <button class="btn-sm" onclick="simClearHistory()">履歴クリア</button>
+      </div>
+      <div id="simProfitSummary" class="summary-grid" style="margin-bottom:10px"></div>
+      <div class="chart-box"><canvas id="simProfitChart" width="560" height="220"></canvas></div>
+      <div id="simHistoryList" style="margin-top:10px;max-height:200px;overflow-y:auto"></div>
     </div>
   </div>
 
@@ -673,6 +760,11 @@ function initUI(){
   // 馬データ初期表示
   renderHorseRows();
   renderProfitChart();
+  renderSimEditRows();
+  renderSimCandList();
+  loadSimHistory();
+  renderSimProfitChart();
+  renderManualFinishPicker();
 }
 
 // ─── 馬データUI ─────────────────────────────────
@@ -699,6 +791,7 @@ function renderHorseRows(){
 function addHorseRow(){
   horses.push({ num: horses.length + 1, name: '', odds: 0, pop: 0, frame: 0 });
   renderHorseRows();
+  renderManualFinishPicker();
 }
 function removeHorse(i){ horses.splice(i, 1); renderHorseRows(); }
 function clearHorses(){ horses = []; renderHorseRows(); }
@@ -986,6 +1079,11 @@ function runPredict(){
 
   renderResult(valid, rated);
 
+  // シミュレーション買い目を自動更新
+  simTickets = lastTickets.map(t => ({...t, nums:[...t.nums]}));
+  renderSimEditRows();
+  renderSimCandList();
+
   // タブ切替
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.querySelector('[data-tab="result"]').classList.add('active');
@@ -1151,7 +1249,408 @@ function renderProfitChart(){
 }
 
 
-// ─── シミュレーション復活 v5.15.3 ─────────────────────────────
+// ─── シミュレーション買い目編集 ───────────────────────────────
+// simTickets: 編集中の買い目リスト [{type, nums:[], amount, odds, ev, p}]
+let simTickets = [];
+
+const AMOUNT_OPTIONS = [100,200,300,500,1000,2000,3000,5000,10000];
+
+function simAmountOptionsHtml(selected){
+  return AMOUNT_OPTIONS.map(v =>
+    `<option value="${v}" ${v === selected ? 'selected' : ''}>${v.toLocaleString()}円</option>`
+  ).join('');
+}
+
+function simTypeOptionsHtml(selected){
+  return TICKET_TYPES.map(t =>
+    `<option value="${t}" ${t === selected ? 'selected' : ''}>${t}</option>`
+  ).join('');
+}
+
+function simNumsOptionsHtml(type, selectedNums){
+  // 出走馬プルダウン
+  // 枠連は枠番(1-8)、それ以外は馬番
+  const isFrame = (type === '枠連');
+  const needCount = {'単勝':1,'複勝':1,'枠連':2,'ワイド':2,'馬連':2,'馬単':2,'3連複':3,'3連単':3}[type] || 2;
+  const options = isFrame
+    ? Array.from({length:8},(_,i)=>i+1).map(n=>`<option value="${n}">${n}枠</option>`).join('')
+    : (horses.length
+        ? horses.map(h=>`<option value="${h.num}">${h.num}${h.name?'.'+h.name.slice(0,4):''}</option>`).join('')
+        : Array.from({length:18},(_,i)=>i+1).map(n=>`<option value="${n}">${n}</option>`).join(''));
+  const selects = [];
+  for(let i=0;i<needCount;i++){
+    const val = selectedNums[i] || (i+1);
+    selects.push(`<select class="sim-num-sel" data-idx="${i}" style="width:${isFrame?56:64}px">${options}</select>`);
+  }
+  return selects.join('');
+}
+
+function renderSimEditRows(){
+  const container = document.getElementById('simEditRows');
+  if(!container) return;
+  const totalBet = simTickets.reduce((s,t)=>s+Number(t.amount||0),0);
+  // トリガミ判定
+  const tgList = simTickets.filter(t => {
+    const retPer100 = Number(t.odds||0) * 100;
+    const ret = Math.floor(Number(t.amount||0)/100)*retPer100;
+    return ret > 0 && ret < totalBet;
+  });
+  const warnEl = document.getElementById('simTrigamiWarn');
+  if(warnEl){
+    if(tgList.length && settings.antigami){
+      warnEl.style.display='';
+      warnEl.innerHTML = `⚠️ トリガミ注意: ${tgList.map(t=>t.type+' '+t.nums.join('-')).join('、')} は的中してもトリガミになる可能性があります`;
+    } else {
+      warnEl.style.display='none';
+    }
+  }
+  const totalEl = document.getElementById('simTotalBetLabel');
+  if(totalEl) totalEl.textContent = `合計: ${totalBet.toLocaleString()}円`;
+
+  if(!simTickets.length){
+    container.innerHTML = '<div class="empty" style="padding:14px">買い目がありません。「推奨から読込」または「＋ 追加」で追加してください。</div>';
+    return;
+  }
+
+  container.innerHTML = simTickets.map((t,i) => {
+    const isTg = tgList.includes(t) && settings.antigami;
+    const needCount = {'単勝':1,'複勝':1,'枠連':2,'ワイド':2,'馬連':2,'馬単':2,'3連複':3,'3連単':3}[t.type]||2;
+    const isFrame = t.type === '枠連';
+    const options = isFrame
+      ? Array.from({length:8},(_,k)=>k+1).map(n=>`<option value="${n}" ${t.nums[0]===n||t.nums[1]===n?'selected':''} >${n}枠</option>`).join('')
+      : (horses.length
+          ? horses.map(h=>`<option value="${h.num}">${h.num}${h.name?'.'+h.name.slice(0,4):''}</option>`).join('')
+          : Array.from({length:18},(_,k)=>k+1).map(n=>`<option value="${n}">${n}</option>`).join(''));
+    const numSelects = Array.from({length:needCount},(_,k) => {
+      const v = t.nums[k] || (k+1);
+      return `<select class="sim-num-sel" data-row="${i}" data-idx="${k}" onchange="simUpdateNum(${i},${k},this.value)" style="width:${isFrame?56:68}px;font-size:12px;padding:4px 2px">${options.replace(`value="${v}"`,`value="${v}" selected`)}</select>`;
+    }).join('');
+    return `<div class="sim-edit-row${isTg?' tg-warn':''}">
+      <span class="tg-icon">${isTg?'⚠️':''}</span>
+      <select onchange="simUpdateType(${i},this.value)" style="font-size:12px;padding:4px 4px">${simTypeOptionsHtml(t.type)}</select>
+      <div class="nums-sel-wrap">${numSelects}</div>
+      <select onchange="simUpdateAmount(${i},this.value)" style="font-size:12px;padding:4px 4px">${simAmountOptionsHtml(Number(t.amount)||100)}</select>
+      <button class="del-btn" onclick="simRemoveRow(${i})">✕</button>
+    </div>`;
+  }).join('');
+}
+
+function simUpdateType(i, type){
+  if(!simTickets[i]) return;
+  simTickets[i].type = type;
+  // 馬番数を合わせる
+  const needCount = {'単勝':1,'複勝':1,'枠連':2,'ワイド':2,'馬連':2,'馬単':2,'3連複':3,'3連単':3}[type]||2;
+  while(simTickets[i].nums.length < needCount) simTickets[i].nums.push(1);
+  simTickets[i].nums = simTickets[i].nums.slice(0,needCount);
+  renderSimEditRows();
+}
+
+function simUpdateNum(i, idx, val){
+  if(!simTickets[i]) return;
+  simTickets[i].nums[idx] = Number(val);
+  renderSimEditRows();
+}
+
+function simUpdateAmount(i, val){
+  if(!simTickets[i]) return;
+  simTickets[i].amount = Number(val);
+  renderSimEditRows();
+}
+
+function simRemoveRow(i){
+  simTickets.splice(i,1);
+  renderSimEditRows();
+}
+
+function simApplyBulkAmount(){
+  const v = Number(document.getElementById('simBulkAmount')?.value||100);
+  simTickets.forEach(t=>t.amount=v);
+  renderSimEditRows();
+}
+
+function simAddBlankRow(){
+  const defaultNum = horses.length ? horses[0].num : 1;
+  simTickets.push({type:'単勝', nums:[defaultNum], amount:settings.unit||100, odds:0, ev:0, p:0});
+  renderSimEditRows();
+  renderSimCandList();
+}
+
+function simLoadFromRecommend(){
+  if(!lastTickets.length){
+    alert('先に「EV計算・買い目推奨」を実行してください。');
+    return;
+  }
+  simTickets = lastTickets.map(t => ({...t, nums:[...t.nums]}));
+  renderSimEditRows();
+  renderSimCandList();
+}
+
+function renderSimCandList(){
+  const box = document.getElementById('simCandList');
+  if(!box) return;
+  if(!lastRecs.length){
+    box.innerHTML = '<div class="empty" style="padding:12px">先にEV計算を実行してください</div>';
+    return;
+  }
+  box.innerHTML = lastRecs.slice(0,40).map((r,i) => {
+    const evColor = r.ev>=1.2?'var(--green)':r.ev>=1.0?'var(--yellow)':'var(--red)';
+    return `<div class="sim-cand-row" onclick="simAddFromCand(${i})">
+      <span class="chip ${CHIP_CLASS[r.type]||''}">${r.type}</span>
+      <span>${r.nums.join('-')}</span>
+      <span style="color:var(--muted);font-size:11px">${r.odds.toFixed(1)}倍</span>
+      <span class="ev-badge" style="color:${evColor}">EV ${r.ev.toFixed(2)}</span>
+      <span style="font-size:18px;color:var(--muted);padding-left:4px">＋</span>
+    </div>`;
+  }).join('');
+}
+
+function simAddFromCand(i){
+  const r = lastRecs[i];
+  if(!r) return;
+  simTickets.push({type:r.type, nums:[...r.nums], amount:settings.unit||100, odds:r.odds, ev:r.ev, p:r.p});
+  renderSimEditRows();
+}
+
+function simAutoAddCandidates(){
+  if(!lastRecs.length){
+    const valid = horses.filter(h => Number(h.num) > 0 && h.name);
+    if(valid.length >= 2){
+      const made = generateCandidates(valid);
+      lastRecs = made.recs.sort((a,b)=>b.ev-a.ev);
+      lastTickets = buildTickets(made.recs);
+      renderResult(valid, made.rated);
+    }
+  }
+  if(lastTickets.length){
+    simTickets = lastTickets.map(t => ({...t, nums:[...t.nums], amount:Number(t.amount||settings.unit||100)}));
+  }else if(lastRecs.length){
+    simTickets = lastRecs
+      .filter(r => Number(r.ev||0) >= 1.0)
+      .slice(0, settings.maxTickets || 5)
+      .map(r => ({type:r.type, nums:[...r.nums], amount:settings.unit||100, odds:r.odds, ev:r.ev, p:r.p}));
+  }
+  renderSimEditRows();
+  renderSimCandList();
+  const st = document.getElementById('simStatus');
+  const total = simTickets.reduce((s,t)=>s+Number(t.amount||0),0);
+  if(st) st.innerHTML = simTickets.length
+    ? `<div class="url-status ok">✅ 候補を${simTickets.length}点追加しました。合計 ${total.toLocaleString()}円</div>`
+    : '<div class="url-status err">⚠️ 追加できる候補がありません。先に馬データ取得またはEV計算を実行してください。</div>';
+}
+
+async function runAutoSimulation(){
+  if(!simTickets.length) simAutoAddCandidates();
+  fillSimResultUrl();
+  await runSimulationFromResult();
+}
+
+function renderManualFinishPicker(){
+  const box = document.getElementById('manualFinishPicker');
+  if(!box) return;
+  const opts = (horses.length ? horses : Array.from({length:18},(_,i)=>({num:i+1,name:''})))
+    .map(h => `<option value="${Number(h.num)}">${Number(h.num)}${h.name ? '.' + escapeHtml(String(h.name).slice(0,6)) : ''}</option>`).join('');
+  box.innerHTML = [1,2,3].map(i => `<div class="field"><label>${i}着</label><select id="manualFinish${i}" onchange="syncManualFinishInputs()"><option value="">未選択</option>${opts}</select></div>`).join('');
+}
+
+function syncManualFinishInputs(){
+  const vals = [1,2,3].map(i => Number(document.getElementById('manualFinish'+i)?.value || 0)).filter(n=>n>0);
+  if(vals.length) document.getElementById('manualFinishNums').value = vals.join('-');
+  const frames = vals.map(n => Number((horses.find(h=>Number(h.num)===n)||{}).frame||0)).filter(n=>n>0);
+  if(frames.length === vals.length) document.getElementById('manualFinishFrames').value = frames.join('-');
+}
+
+// simTicketsからlastTicketsを同期してシミュレーションを実行
+function simGetTicketsFromEdit(){
+  // simTicketsが空なら従来のlastTicketsを使用
+  return simTickets.length ? simTickets : lastTickets;
+}
+
+// ─── シミュレーション専用収支履歴 ───────────────────────────
+let simHistory = [];  // [{raceId, raceName, bet, ret, profit, roi, hitCount, total, date}]
+
+function loadSimHistory(){
+  try {
+    simHistory = JSON.parse(localStorage.getItem('tk-sim-history') || '[]');
+    if(!Array.isArray(simHistory)) simHistory = [];
+  } catch(e){ simHistory = []; }
+}
+
+function saveSimHistory(){
+  localStorage.setItem('tk-sim-history', JSON.stringify(simHistory.slice(-300)));
+}
+
+// 精算結果を simHistory に記録（race_id が同じなら上書き）
+function simRecordProfit(autoRecord, bet, ret, hitCount, total, sourceLabel){
+  const raceId  = currentRaceId || '';
+  const raceName = currentRaceName || sourceLabel || raceId || new Date().toLocaleTimeString('ja-JP');
+  const profit  = ret - bet;
+  const roi     = bet ? ret / bet * 100 : 0;
+  const entry   = { raceId, raceName, bet, ret, profit, roi, hitCount, total,
+                    date: new Date().toISOString(), source: sourceLabel || '手入力' };
+
+  const statusEl = document.getElementById('simAutoRecordStatus');
+  if(raceId){
+    const idx = simHistory.findIndex(x => x.raceId === raceId);
+    if(idx >= 0){
+      simHistory[idx] = entry;
+      if(statusEl) statusEl.textContent = '✅ 上書き記録しました';
+    } else {
+      simHistory.push(entry);
+      if(statusEl) statusEl.textContent = '✅ 記録しました';
+    }
+  } else {
+    simHistory.push(entry);
+    if(statusEl) statusEl.textContent = '✅ 記録しました';
+  }
+  saveSimHistory();
+  renderSimProfitChart();
+  if(statusEl) setTimeout(()=>{ statusEl.textContent=''; }, 3000);
+}
+
+function simClearHistory(){
+  if(!confirm('シミュレーション収支履歴をクリアしますか？')) return;
+  simHistory = [];
+  saveSimHistory();
+  renderSimProfitChart();
+  renderManualFinishPicker();
+}
+
+function renderSimProfitChart(){
+  const sumEl  = document.getElementById('simProfitSummary');
+  const canvas = document.getElementById('simProfitChart');
+  const listEl = document.getElementById('simHistoryList');
+  if(!sumEl || !canvas) return;
+
+  const totalBet    = simHistory.reduce((s,x)=>s+Number(x.bet||0),0);
+  const totalRet    = simHistory.reduce((s,x)=>s+Number(x.ret||0),0);
+  const totalProfit = totalRet - totalBet;
+  const roi         = totalBet ? totalRet / totalBet * 100 : 0;
+  const wins        = simHistory.filter(x=>x.profit>=0).length;
+
+  // 最大ドローダウン計算
+  let peak = 0, cum = 0, maxDD = 0;
+  simHistory.forEach(x => {
+    cum += Number(x.profit||0);
+    if(cum > peak) peak = cum;
+    const dd = peak - cum;
+    if(dd > maxDD) maxDD = dd;
+  });
+
+  sumEl.innerHTML = `
+    <div class="summary-item"><div class="val">${simHistory.length}</div><div class="lbl">精算回数</div></div>
+    <div class="summary-item"><div class="val" style="color:${totalProfit>=0?'var(--green)':'var(--red)'}">${totalProfit>=0?'+':''}${totalProfit.toLocaleString()}円</div><div class="lbl">累計収支</div></div>
+    <div class="summary-item"><div class="val" style="color:${roi>=100?'var(--green)':'var(--yellow)'}">${roi.toFixed(1)}%</div><div class="lbl">回収率</div></div>
+    <div class="summary-item"><div class="val">${wins}/${simHistory.length}</div><div class="lbl">プラス回数</div></div>
+    <div class="summary-item"><div class="val" style="color:var(--red)">-${maxDD.toLocaleString()}円</div><div class="lbl">最大DD</div></div>
+    <div class="summary-item"><div class="val">${totalBet.toLocaleString()}</div><div class="lbl">総投資円</div></div>
+  `;
+
+  // グラフ描画
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0,0,w,h);
+  ctx.fillStyle = '#0d1b2a';
+  ctx.fillRect(0,0,w,h);
+
+  if(!simHistory.length){
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '13px -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('精算を記録するとグラフが表示されます', w/2, h/2);
+    ctx.textAlign = 'left';
+    if(listEl) listEl.innerHTML = '<div class="empty">記録なし</div>';
+    return;
+  }
+
+  // 累計収支ポイント列（index 0 = 開始点 0）
+  let c = 0;
+  const pts = [0, ...simHistory.map(x=>{ c+=Number(x.profit||0); return c; })];
+  const ys  = pts;
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const pad  = Math.max(200, (maxY-minY)*0.15);
+  const lo   = minY - pad, hi = maxY + pad;
+  const N    = pts.length;
+  const xOf  = i => 36 + (N<=1 ? 0 : i*(w-50)/(N-1));
+  const yOf  = v => 16 + (hi-v)*(h-38)/(hi-lo||1);
+
+  // グリッド線（横5本）
+  ctx.strokeStyle = 'rgba(51,65,85,0.5)';
+  ctx.lineWidth = 1;
+  for(let i=0;i<=4;i++){
+    const gy = 16 + i*(h-38)/4;
+    ctx.beginPath(); ctx.moveTo(36,gy); ctx.lineTo(w-8,gy); ctx.stroke();
+  }
+  // ゼロライン
+  const zeroY = yOf(0);
+  ctx.strokeStyle = 'rgba(100,116,139,0.8)';
+  ctx.setLineDash([4,3]);
+  ctx.beginPath(); ctx.moveTo(36,zeroY); ctx.lineTo(w-8,zeroY); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // エリア塗り（最終点が+/-でグラデーション切替）
+  const finalProfit = pts[pts.length-1];
+  const areaColor1 = finalProfit>=0 ? 'rgba(0,230,118,0.22)' : 'rgba(248,113,113,0.18)';
+  const areaColor2 = 'rgba(0,0,0,0)';
+  const grad = ctx.createLinearGradient(0,16,0,h-22);
+  grad.addColorStop(0, areaColor1);
+  grad.addColorStop(1, areaColor2);
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.moveTo(xOf(0), yOf(0));
+  pts.forEach((v,i)=>ctx.lineTo(xOf(i),yOf(v)));
+  ctx.lineTo(xOf(N-1), yOf(0));
+  ctx.closePath();
+  ctx.fill();
+
+  // 折れ線
+  ctx.strokeStyle = finalProfit>=0 ? '#00e676' : '#f87171';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  pts.forEach((v,i)=>{ const x=xOf(i),y=yOf(v); i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
+  ctx.stroke();
+
+  // ドット（最後のみ大きく）
+  pts.forEach((v,i)=>{
+    const x=xOf(i),y=yOf(v);
+    const isLast=(i===N-1);
+    ctx.beginPath();
+    ctx.arc(x,y,isLast?5:2.5,0,Math.PI*2);
+    ctx.fillStyle = isLast ? (finalProfit>=0?'#00e676':'#f87171') : 'rgba(148,163,184,0.6)';
+    ctx.fill();
+    if(isLast){
+      ctx.strokeStyle='rgba(0,0,0,0.3)'; ctx.lineWidth=1;
+      ctx.stroke();
+    }
+  });
+
+  // Y軸ラベル
+  ctx.fillStyle = '#64748b';
+  ctx.font = '10px -apple-system,sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText((hi-pad).toLocaleString(), 34, 22);
+  ctx.fillText((lo+pad).toLocaleString(), 34, h-6);
+  ctx.fillText('0', 34, zeroY-3);
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#475569';
+  ctx.fillText('累計収支(円)', 40, 14);
+
+  // 履歴リスト（新しい順）
+  if(listEl){
+    listEl.innerHTML = [...simHistory].reverse().map((x,i) => {
+      const cls = x.profit >= 0 ? 'win' : 'lose';
+      const sign = x.profit >= 0 ? '+' : '';
+      const dt = x.date ? new Date(x.date).toLocaleDateString('ja-JP',{month:'numeric',day:'numeric'}) : '';
+      return `<div class="sim-hist-row ${cls}">
+        <span>${dt} ${escapeHtml(x.raceName||x.raceId||'-')}</span>
+        <span>${Number(x.bet||0).toLocaleString()}円</span>
+        <span>${sign}${Number(x.profit||0).toLocaleString()}円</span>
+        <span>${Number(x.roi||0).toFixed(0)}%</span>
+      </div>`;
+    }).join('') || '<div class="empty">記録なし</div>';
+  }
+}
+
+
 function resultUrl(kind, raceId){
   const host = kind === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com';
   return `${host}/race/result.html?race_id=${raceId}&rf=race_submenu`;
@@ -1247,6 +1746,30 @@ function parsePayoutsFromResultDoc(doc){
       if(amount) payouts[`${type}:${comboKey(type, nums)}`] = amount;
     });
   });
+  // テーブル構造が崩れている場合の本文フォールバック（払戻エリア全体のテキストから券種別に抽出）
+  const allText = normSimDigits(doc.body?.innerText || doc.body?.textContent || '');
+  const blocks = allText.split(/(?=単勝|複勝|枠連|馬連|ワイド|馬単|3連複|3連単)/);
+  blocks.forEach(block => {
+    const type = types.find(t => block.startsWith(t));
+    if(!type) return;
+    const amounts = [...block.matchAll(/([0-9,]+)\s*円/g)].map(m=>Number(m[1].replace(/,/g,''))).filter(n=>n>0 && n%10===0);
+    if(!amounts.length) return;
+    let combos = [];
+    if(type === '単勝' || type === '複勝'){
+      const nums = [...block.matchAll(/(?:^|[^0-9])([1-9]|1[0-8])(?:[^0-9]|$)/g)].map(m=>Number(m[1]));
+      combos = [...new Set(nums)].slice(0, amounts.length).map(n=>[n]);
+    }else{
+      [...block.matchAll(/([1-9]|1[0-8])\s*-\s*([1-9]|1[0-8])(?:\s*-\s*([1-9]|1[0-8]))?/g)].forEach(m=>{
+        const a=[Number(m[1]),Number(m[2])];
+        if(m[3]) a.push(Number(m[3]));
+        combos.push(a);
+      });
+    }
+    combos.forEach((nums,i)=>{
+      const k = `${type}:${comboKey(type, nums)}`;
+      if(!payouts[k] && amounts[i]) payouts[k] = amounts[i];
+    });
+  });
   return payouts;
 }
 
@@ -1271,16 +1794,17 @@ function judgeTicketHit(ticket, finish){
 
 function payoutForTicket(ticket, payouts){
   const key = `${ticket.type}:${comboKey(ticket.type, ticket.nums)}`;
-  if(payouts && payouts[key]) return payouts[key];
-  return Math.max(0, Math.round((Number(ticket.odds || 0) * 100) / 10) * 10);
+  if(payouts && payouts[key]) return {amount:payouts[key], source:'real'};
+  return {amount:Math.max(0, Math.round((Number(ticket.odds || 0) * 100) / 10) * 10), source:'estimate'};
 }
 
 function renderSimulation(finish, payouts, sourceLabel){
   const box = document.getElementById('simTicketList');
   const sum = document.getElementById('simSummary');
   const card = document.getElementById('simSummaryCard');
-  if(!lastTickets.length){
-    if(box) box.innerHTML = '<div class="empty">先に「EV計算・買い目推奨」で買い目を作ってください。</div>';
+  const activeTickets = simGetTicketsFromEdit();
+  if(!activeTickets.length){
+    if(box) box.innerHTML = '<div class="empty">先に「EV計算・買い目推奨」で買い目を作るか、シミュレーション買い目を追加してください。</div>';
     return;
   }
   if(!finish || finish.length < 2){
@@ -1288,15 +1812,16 @@ function renderSimulation(finish, payouts, sourceLabel){
     return;
   }
 
-  const totalBet = lastTickets.reduce((s,t)=>s+Number(t.amount||0),0);
+  const totalBet = activeTickets.reduce((s,t)=>s+Number(t.amount||0),0);
   let totalReturn = 0;
   let hitCount = 0;
   const typeMap = {};
   let html = '';
 
-  lastTickets.forEach(t => {
+  activeTickets.forEach(t => {
     const hit = judgeTicketHit(t, finish);
-    const per100 = hit ? payoutForTicket(t, payouts) : 0;
+    const payInfo = hit ? payoutForTicket(t, payouts) : {amount:0, source:'none'};
+    const per100 = Number(payInfo.amount||0);
     const ret = hit ? Math.floor(Number(t.amount||0) / 100) * per100 : 0;
     if(hit) hitCount++;
     totalReturn += ret;
@@ -1311,7 +1836,7 @@ function renderSimulation(finish, payouts, sourceLabel){
       <span class="chip ${CHIP_CLASS[t.type]||''}">${t.type}</span>
       <div class="sim-ticket-main">
         <b>${t.nums.join('-')}</b>
-        <div class="sim-ticket-meta">購入 ${Number(t.amount||0).toLocaleString()}円 / 100円払戻 ${per100 ? per100.toLocaleString() + '円' : '-'} / EV ${Number(t.ev||0).toFixed(2)}</div>
+        <div class="sim-ticket-meta">購入 ${Number(t.amount||0).toLocaleString()}円 / 100円払戻 ${per100 ? per100.toLocaleString() + '円' : '-'} <span class="${payInfo.source==='real'?'sim-payout-ok':'sim-payout-est'}">${hit ? (payInfo.source==='real'?'実払戻':'推定') : ''}</span> / EV ${Number(t.ev||0).toFixed(2)}</div>
       </div>
       <div class="sim-return ${hit?'hit':''}">${hit ? '＋' : ''}${ret.toLocaleString()}円<div class="sim-ticket-meta">${hit ? '的中' : '不的中'} / ROI ${roiOne.toFixed(0)}%</div></div>
     </div>`;
@@ -1342,7 +1867,7 @@ function renderSimulation(finish, payouts, sourceLabel){
       </div>
       <div class="sim-panel">
         <div class="sim-kpi-grid" style="margin-top:0">
-          <div class="sim-kpi"><div class="v">${hitCount}/${lastTickets.length}</div><div class="l">的中数</div></div>
+          <div class="sim-kpi"><div class="v">${hitCount}/${activeTickets.length}</div><div class="l">的中数</div></div>
           <div class="sim-kpi"><div class="v">${totalBet.toLocaleString()}</div><div class="l">投資円</div></div>
           <div class="sim-kpi"><div class="v">${totalReturn.toLocaleString()}</div><div class="l">払戻円</div></div>
           <div class="sim-kpi"><div class="v" style="color:${profit>=0?'var(--green)':'var(--red)'}">${profit.toLocaleString()}</div><div class="l">収支円</div></div>
@@ -1356,10 +1881,24 @@ function renderSimulation(finish, payouts, sourceLabel){
   `;
   if(box) box.innerHTML = html;
 
+  // 収支記録フィールド（推奨タブ側）も更新
   const betEl = document.getElementById('profitBet');
   const retEl = document.getElementById('profitReturn');
   if(betEl) betEl.value = totalBet;
   if(retEl) retEl.value = totalReturn;
+
+  // 自動精算ボタンを表示し、クロージャで最終値を保持
+  const recRow = document.getElementById('simAutoRecordRow');
+  if(recRow){
+    recRow.style.display = 'flex';
+    // ボタンのonclickを最新値に差し替え
+    const recBtn = recRow.querySelector('button');
+    if(recBtn){
+      recBtn.onclick = () => simRecordProfit(false, totalBet, totalReturn, hitCount, activeTickets.length, sourceLabel);
+    }
+  }
+  // 自動で収支記録（race_id がある場合は上書き、なければ毎回）
+  simRecordProfit(true, totalBet, totalReturn, hitCount, activeTickets.length, sourceLabel);
 }
 
 async function runSimulationFromResult(){
@@ -1903,22 +2442,52 @@ function jraRaceIdToKaisai(raceId){
 }
 
 function jraHtmlMatchesSelectedDate(html, date){
+  // JRA race_id にはMMDDが無い。
+  // 旧実装はページ全体の本文を見ていたため、日付タブ/カレンダーの「5月24日」を拾い、
+  // 5/23(9日目)のrace_idを5/24として誤採用していた。
+  // ここでは title / og:title / レース見出し / RaceData 周辺だけを照合対象にする。
   const p = ymdParts(date);
   const mm = Number(p.mmdd.slice(0,2));
   const dd = Number(p.mmdd.slice(2,4));
-  const text = normalizeJapaneseSpaces(
-    String(html || '')
-      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-      .replace(/<[^>]+>/g, ' ')
-  );
   const patterns = [
     `${mm}月${dd}日`,
     `${String(mm).padStart(2,'0')}月${String(dd).padStart(2,'0')}日`,
     `${mm}/${dd}`,
-    `${String(mm).padStart(2,'0')}/${String(dd).padStart(2,'0')}`
+    `${String(mm).padStart(2,'0')}/${String(dd).padStart(2,'0')}`,
+    `${p.yyyy}年${mm}月${dd}日`,
+    `${p.yyyy}/${String(mm).padStart(2,'0')}/${String(dd).padStart(2,'0')}`
   ];
-  return patterns.some(x => text.includes(x));
+
+  try{
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(String(html || ''), 'text/html');
+    const parts = [];
+    const title = doc.querySelector('title')?.textContent || '';
+    const ogTitle = doc.querySelector('meta[property="og:title"], meta[name="twitter:title"]')?.getAttribute('content') || '';
+    const desc = doc.querySelector('meta[name="description"], meta[property="og:description"]')?.getAttribute('content') || '';
+    parts.push(title, ogTitle, desc);
+
+    const selectors = [
+      '.RaceName', '[class*="RaceName"]',
+      '.RaceData01', '.RaceData02', '[class*="RaceData"]',
+      '.RaceList_Item02', '.RaceList_Item01',
+      'h1'
+    ];
+    selectors.forEach(sel => {
+      doc.querySelectorAll(sel).forEach(el => parts.push(el.textContent || ''));
+    });
+
+    const strictText = normalizeJapaneseSpaces(parts.join(' '));
+    if(patterns.some(x => strictText.includes(x))) return true;
+
+    // 予備：本文を見る場合も、日付タブ/ナビ/広告を落としてから見る。
+    doc.querySelectorAll('script,style,nav,header,footer,.Race_DateList,.DateList,[class*="Calendar"],[class*="Tab"],.Ad,iframe').forEach(el => el.remove());
+    const bodyText = normalizeJapaneseSpaces(doc.body ? doc.body.textContent : '');
+    return patterns.some(x => bodyText.includes(x));
+  }catch(e){
+    const text = normalizeJapaneseSpaces(String(html || '').replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' '));
+    return patterns.some(x => text.includes(x));
+  }
 }
 
 async function fetchHtmlViaProxy(url){
@@ -1931,8 +2500,53 @@ async function fetchHtmlViaProxy(url){
 async function verifyJraRaceDateByShutuba(date, raceId){
   const url = shutubaUrl('JRA', raceId);
   const html = await fetchHtmlViaProxy(url);
-  if(!html.includes(String(raceId))) return false;
+  const id = String(raceId);
+
+  // netkeibaが別race_idへ内部遷移/差し替えした場合を検出する。
+  // canonical/og:urlに別IDが出ていれば、そのIDを正とみなして不一致を除外。
+  try{
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const canonical = doc.querySelector('link[rel="canonical"]')?.getAttribute('href') || '';
+    const ogUrl = doc.querySelector('meta[property="og:url"]')?.getAttribute('content') || '';
+    const cm = String(canonical || ogUrl || '').match(/race_id=(\d{10,14})/);
+    if(cm && cm[1] !== id) return false;
+  }catch(e){}
+
+  if(!html.includes(id)) return false;
   return jraHtmlMatchesSelectedDate(html, date);
+}
+
+async function probeJraRaceById(date, raceId){
+  const url = shutubaUrl('JRA', raceId);
+  const html = await fetchHtmlViaProxy(url);
+  if(!html.includes(String(raceId))) return null;
+  if(!jraHtmlMatchesSelectedDate(html, date)) return null;
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const horsesFound = parseHorsesFromDoc(doc, url).length;
+  if(horsesFound < 2) return null;
+  const kd = jraRaceIdToKaisai(raceId);
+  return {
+    raceId: String(raceId),
+    raceNo: kd ? kd.raceNo : Number(String(raceId).slice(-2)),
+    venueCode: kd ? kd.venueCode : extractVenueCodeFromRaceId(raceId, 'JRA'),
+    raceName: parseRaceTitleFromDoc(doc) || `${Number(String(raceId).slice(-2))}R`,
+    shutuba: url,
+    horsesFound
+  };
+}
+
+async function buildVerifiedJraRacesByProbe(date, venueCode, kd){
+  if(!kd) return [];
+  const p = ymdParts(date);
+  const out = [];
+  for(let r=1; r<=12; r++){
+    const raceId = `${p.yyyy}${venueCode}${String(kd.kai).padStart(2,'0')}${String(kd.day).padStart(2,'0')}${String(r).padStart(2,'0')}`;
+    try{
+      const item = await probeJraRaceById(date, raceId);
+      if(item) out.push(item);
+    }catch(e){}
+  }
+  return out.sort((a,b) => a.raceNo - b.raceNo);
 }
 
 async function fixJraKaisaiByProbe(date, venueCode, kd){
@@ -1976,9 +2590,12 @@ function buildJraRacesFromFixedKaisai(html, date, venueCode, kd){
 function jraRaceDayKey(raceId){
   const id = String(raceId || '');
   // JRA race_id = YYYY + 場コード2桁 + 開催回2桁 + 開催日2桁 + R2桁
-  // 例: 202605020701 = 2026 / 東京(05) / 2回 / 7日目 / 1R
+  // 例: 202605021011 = 2026 / 東京(05) / 2回 / 10日目 / 11R
+  // 年+場+開催回+開催日までの10桁でグループ化する。
+  // 8桁だと「2回東京9日目」と「2回東京10日目」が同じグループになり、
+  // 5/24のオークスが5/23の欅S race_idへズレる原因になる。
   if(id.length < 10) return '';
-  return id.slice(0, 8); // 年+場+回+日で同一開催日のグループ化
+  return id.slice(0, 10);
 }
 
 async function filterJraDirectRacesBySelectedDate(direct, date){
@@ -2006,22 +2623,214 @@ async function filterJraDirectRacesBySelectedDate(direct, date){
   return [];
 }
 
+
+async function findJraKaisaiByFullProbe(date, venueCode, kdHint){
+  // JRA race_id はMMDDを持たないため、一覧HTML内のリンクだけで日付判定しない。
+  // 選択日と一致する「開催回・開催日」を出馬表本文の日付で確定する。
+  const p = ymdParts(date);
+  const kaiCandidates = [];
+  if(kdHint && kdHint.kai >= 1 && kdHint.kai <= 12) kaiCandidates.push(kdHint.kai);
+  for(let k=1; k<=12; k++) if(!kaiCandidates.includes(k)) kaiCandidates.push(k);
+
+  const dayHint = kdHint && kdHint.day ? Number(kdHint.day) : 0;
+  const dayCandidates = [];
+  if(dayHint >= 1 && dayHint <= 12){
+    for(const d of [dayHint, dayHint+1, dayHint-1, dayHint+2, dayHint-2, dayHint+3, dayHint-3]){
+      if(d >= 1 && d <= 12 && !dayCandidates.includes(d)) dayCandidates.push(d);
+    }
+  }
+  for(let d=1; d<=12; d++) if(!dayCandidates.includes(d)) dayCandidates.push(d);
+
+  for(const kai of kaiCandidates){
+    for(const day of dayCandidates){
+      const raceId = `${p.yyyy}${venueCode}${String(kai).padStart(2,'0')}${String(day).padStart(2,'0')}01`;
+      try{
+        if(await verifyJraRaceDateByShutuba(date, raceId)){
+          return { kai, day };
+        }
+      }catch(e){}
+    }
+  }
+  return null;
+}
+
+
+
+function correctJraKaisaiByCalendarDate(date, venueCode, kd){
+  // v5.18.2: netkeibaのJRA一覧HTMLは、日曜タブでも前日(土曜)のrace_id群を
+  // そのまま含むことがある。JRA race_id は YYYY + 場 + 開催回 + 開催日 + R なので、
+  // 同一開催・同一場の土日連続開催では「日曜 = 土曜 + 100」になる。
+  // 例: 2026/05/23 東京11R = 202605020911、2026/05/24 東京11R = 202605021011。
+  // 出馬表HTMLの日付タブを拾ってしまう誤検証を避けるため、カレンダー曜日で最終補正する。
+  if(!kd) return kd;
+  const d = parseLocalDateYMD(date);
+  const dow = d.getDay(); // 0=日, 6=土
+  const out = { kai: Number(kd.kai), day: Number(kd.day) };
+  if(!(out.kai >= 1 && out.kai <= 12 && out.day >= 1 && out.day <= 12)) return kd;
+
+  // 通常のJRA連続開催は土曜=奇数日、日曜=偶数日。
+  // 日曜なのに奇数開催日を掴んでいる場合は、前日race_idを掴んだと判断して +1。
+  if(dow === 0 && out.day % 2 === 1 && out.day < 12){
+    out.day += 1;
+    out.correctedByCalendar = true;
+  }
+  // 土曜なのに偶数開催日を掴んでいる場合は、翌日race_idを掴んだ可能性が高いため -1。
+  if(dow === 6 && out.day % 2 === 0 && out.day > 1){
+    out.day -= 1;
+    out.correctedByCalendar = true;
+  }
+  return out;
+}
+
+function extractJraRaceNamesFromActualListText(html, venueCode){
+  // 選択日の一覧本文から「R番号→レース名」をできるだけ安全に拾う。
+  // race_idが前日へズレていても、本文の見出し名を優先して使う。
+  const base = extractJraRaceNamesFromList(html, venueCode);
+  const text = normalizeJapaneseSpaces(String(html || '').replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' '));
+  const ng = /オッズ|予想|結果|払戻|映像|掲示板|俺プロ|お気に入り|ログイン|広告|PR|データ分析/;
+  for(let r=1; r<=12; r++){
+    if(base.has(r) && !/^\d{1,2}R$/.test(base.get(r))) continue;
+    const re = new RegExp(`${r}R\\s*([^0-9０-９]{2,40}?)(?:\\s*(?:芝|ダ|障|発走|[0-9０-９]{3,4}m|G[123]|L|OP|オープン|未勝利|新馬|勝|特別))`);
+    const m = text.match(re);
+    if(m){
+      let name = cleanRaceName(`${r}R ${m[1]}`, r)
+        .replace(/[\s　]+$/,'')
+        .trim();
+      if(name && !ng.test(name) && !/^\d{1,2}R$/.test(name)) base.set(r, name);
+    }
+  }
+  return base;
+}
+
+function buildJraRacesFromExactKaisai(html, date, venueCode, kd){
+  if(!kd) return [];
+  const p = ymdParts(date);
+  const names = extractJraRaceNamesFromActualListText(html, venueCode);
+  const races = [];
+  for(let r=1; r<=12; r++){
+    const raceId = `${p.yyyy}${venueCode}${String(kd.kai).padStart(2,'0')}${String(kd.day).padStart(2,'0')}${String(r).padStart(2,'0')}`;
+    races.push({
+      raceId,
+      raceNo:r,
+      venueCode,
+      raceName:names.get(r) || `${r}R`,
+      shutuba:shutubaUrl('JRA', raceId),
+      builtFromVerifiedKaisai:true
+    });
+  }
+  return races;
+}
+
 async function getReliableJraRacesFromList(html, date, venueCode){
   const direct = parseRaceIdsFromList(html, 'JRA', venueCode, date)
     .filter(r => r.shutuba.includes('https://race.netkeiba.com/') && raceIdVenueMatches('JRA', r.raceId, venueCode));
 
-  // JRAの一覧HTMLには同一場の「前日/翌日」リンクが混入することがある。
-  // race_idの開催日グループ単位で出馬表本文の日付を照合し、選択日と一致したグループだけを採用する。
+  // 最重要：JRA race_idにはMMDDが無い。
+  // 一覧HTMLに出ているrace_idをそのまま信用せず、出馬表本文の日付で
+  // 「選択日に対応する開催回・開催日」を先に確定してから12Rを再生成する。
+  const kdHint = parseJraKaisaiFromListText(html, venueCode) || (direct[0] ? jraRaceIdToKaisai(direct[0].raceId) : null);
+  let kdExact = await findJraKaisaiByFullProbe(date, venueCode, kdHint);
+  if(kdExact){
+    // v5.18.2: 日曜タブで前日(土曜)race_idを掴んだ場合、開催日を+1補正する。
+    // 2026/05/24 東京11R は 202605020911 ではなく 202605021011。
+    kdExact = correctJraKaisaiByCalendarDate(date, venueCode, kdExact);
+    const verifiedBuilt = await buildVerifiedJraRacesByProbe(date, venueCode, kdExact);
+    if(verifiedBuilt.length) return verifiedBuilt;
+    return buildJraRacesFromExactKaisai(html, date, venueCode, kdExact);
+  }
+
+  // プローブが全滅した場合だけ、直接リンクを日付検証して採用する。
   if(direct.length){
     const verified = await filterJraDirectRacesBySelectedDate(direct, date);
     if(verified.length) return verified;
   }
 
-  // 直接リンクが前日・別日だった場合は、「○回東京○日目」から仮生成した上で
-  // day±2を実ページ照合して正しい開催日へ補正する。
   const kdRaw = parseJraKaisaiFromListText(html, venueCode);
-  const kdFixed = await fixJraKaisaiByProbe(date, venueCode, kdRaw);
+  let kdFixed = await fixJraKaisaiByProbe(date, venueCode, kdRaw);
+  kdFixed = correctJraKaisaiByCalendarDate(date, venueCode, kdFixed);
   return buildJraRacesFromFixedKaisai(html, date, venueCode, kdFixed);
+}
+
+// ============================================================
+// v5.16.2: 土曜・日曜 race_id 混在の最終防壁
+// JRA race_id は YYYY+場+開催回+開催日+R で、MMDDを直接持たない。
+// そのため race_id先頭8桁で日付判定してはいけない。
+// グループ（YYYY+場+開催回+開催日）ごとに出馬表本文の日付を検証し、
+// 選択日と一致したグループだけをプルダウンへ渡す。
+// ============================================================
+function raceListDateLabel(date){
+  const d = ymdParts(date).yyyymmdd;
+  return `${d.slice(0,4)}/${d.slice(4,6)}/${d.slice(6,8)}`;
+}
+
+function dedupeRacesByRaceIdAndNo(races){
+  const seenId = new Set();
+  const seenNo = new Set();
+  const out = [];
+  (races || [])
+    .filter(r => r && r.raceId && Number(r.raceNo) >= 1 && Number(r.raceNo) <= 12)
+    .sort((a,b) => Number(a.raceNo) - Number(b.raceNo))
+    .forEach(r => {
+      const id = String(r.raceId);
+      const no = Number(r.raceNo);
+      if(seenId.has(id)) return;
+      // 同じ1Rが2本ある状態は、土日混在の典型。最初の有効グループだけ残す。
+      if(seenNo.has(no)) return;
+      seenId.add(id);
+      seenNo.add(no);
+      out.push(r);
+    });
+  return out;
+}
+
+async function finalFilterRacesForSelection(races, kind, date, venueCode){
+  let list = Array.isArray(races) ? races.slice() : [];
+
+  // 場コード不一致を除外
+  list = list.filter(r => raceIdVenueMatches(kind, r.raceId, venueCode));
+
+  if(kind === 'NAR'){
+    list = list.filter(r => raceIdMatchesSelectedDate(kind, r.raceId, date));
+    return dedupeRacesByRaceIdAndNo(list);
+  }
+
+  // JRA: race_idだけではMMDDが分からないため、開催日グループ単位で実ページ照合。
+  const groups = new Map();
+  list.forEach(r => {
+    const key = jraRaceDayKey(r.raceId);
+    if(!key) return;
+    if(!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  });
+
+  if(groups.size <= 1){
+    const only = Array.from(groups.values())[0] || [];
+    if(!only.length) return [];
+    const sorted = only.slice().sort((a,b) => Number(a.raceNo) - Number(b.raceNo));
+    const probe = sorted.find(r => Number(r.raceNo) === 1) || sorted[0];
+    try{
+      if(await verifyJraRaceDateByShutuba(date, probe.raceId)){
+        return dedupeRacesByRaceIdAndNo(sorted);
+      }
+    }catch(e){}
+    // 単一グループでも日付照合できない場合は、別日race_idの可能性が高いので返さない。
+    return [];
+  }
+
+  for(const group of groups.values()){
+    const sorted = group.slice().sort((a,b) => Number(a.raceNo) - Number(b.raceNo));
+    const probe = sorted.find(r => Number(r.raceNo) === 1) || sorted[0];
+    try{
+      if(await verifyJraRaceDateByShutuba(date, probe.raceId)){
+        return dedupeRacesByRaceIdAndNo(sorted);
+      }
+    }catch(e){}
+  }
+
+  // 照合に失敗した場合でも混在表示は絶対に避ける。
+  // 最大件数のグループだけ残し、同一R重複を消す。
+  const biggest = Array.from(groups.values()).sort((a,b) => b.length - a.length)[0] || [];
+  return dedupeRacesByRaceIdAndNo(biggest);
 }
 
 
@@ -2070,19 +2879,27 @@ async function loadRaceList(){
       races = await getReliableJraRacesFromList(html, date, venueCode);
     }
 
+    // v5.16.2 最終filter：選択日・開催場と一致するレースだけを残す。
+    // ここを通すことで、5/16の 202605020701 と 5/17の 202605020801 が
+    // 同じプルダウンへ同時に入る事故を防止する。
+    races = await finalFilterRacesForSelection(races, kind, date, venueCode);
+
     if(!races.length){
       raceSelect.innerHTML = '<option value="">レースが見つかりません</option>';
       status.innerHTML = `<div class="url-status err">⚠️ ${date} の ${venueName(kind, venueCode)} はレースが見つかりません。別日・別場のrace_idは除外しました。</div>`;
       return;
     }
 
+    const dateLabel = raceListDateLabel(date);
     raceSelect.innerHTML = races.map(r => {
       const url = shutubaUrl(kind, r.raceId); // 前回URLを絶対に再利用しない
-      return `<option value="${url}" data-race-id="${r.raceId}" data-race-name="${escapeHtml(r.raceName)}">${r.raceNo}R ${escapeHtml(r.raceName)} / ${r.raceId}</option>`;
+      const raceName = escapeHtml(r.raceName || `${r.raceNo}R`);
+      const label = `${dateLabel} ${venueName(kind, venueCode)} ${r.raceNo}R ${raceName} / ${r.raceId}`;
+      return `<option value="${url}" data-race-id="${r.raceId}" data-race-name="${raceName}">${label}</option>`;
     }).join('');
 
     applySelectedRaceUrl();
-    status.innerHTML = `<div class="url-status ok">✅ ${date} ${venueName(kind, venueCode)} ${races.length}レースを取得しました</div>`;
+    status.innerHTML = `<div class="url-status ok">✅ ${date} ${venueName(kind, venueCode)} ${races.length}レースを取得しました（race_id日付照合済み）</div>`;
 
   }catch(e){
     console.error(e);
@@ -2143,6 +2960,306 @@ function initCalendarPicker(){
 }
 
 
+
+function buildNetkeibaOddsUrls(kind, raceId){
+  if(!raceId) return [];
+  if(kind === 'NAR'){
+    return [
+      `https://nar.netkeiba.com/odds/index.html?race_id=${raceId}`,
+      `https://nar.netkeiba.com/odds/index.html?race_id=${raceId}&type=b1`
+    ];
+  }
+  return [
+    `https://race.netkeiba.com/odds/index.html?race_id=${raceId}`,
+    `https://race.netkeiba.com/odds/index.html?race_id=${raceId}&type=b1`,
+    `https://race.netkeiba.com/odds/index.html?race_id=${raceId}&rf=shutuba_submenu`
+  ];
+}
+
+function parseWinOddsPopularityFromDoc(doc){
+  const map = new Map();
+
+  // ── Strategy 1: OddsTableWrap（単勝オッズページの標準テーブル） ──────────
+  // netkeibaオッズページ構造:
+  //   .OddsTableWrap または #odds_tan_tableWrap の tbody tr に
+  //   .Umaban(馬番), td.Odds または span.OddsVal(オッズ), td.Popular(人気) が入る
+  const oddsTableSels = [
+    '#odds_tan_tableWrap tbody tr',
+    '.OddsTableWrap tbody tr',
+    '.Odds_Table tbody tr',
+    'table[id*="odds"] tbody tr',
+    'table[class*="Odds"] tbody tr',
+    'table[class*="odds"] tbody tr',
+  ];
+
+  for(const sel of oddsTableSels){
+    const rows = Array.from(doc.querySelectorAll(sel));
+    if(!rows.length) continue;
+
+    rows.forEach(tr => {
+      // 馬番取得
+      let num = 0;
+      const numEl = tr.querySelector('.Umaban, [class*="Umaban"], [class*="HorseNum"], td:first-child');
+      if(numEl) num = firstNumberInCell(numEl, false);
+      if(!(num >= 1 && num <= 18)) return;
+
+      // オッズ取得: spanのOddsVal優先、なければtd.Odds
+      let odds = 0;
+      const oddsSpan = tr.querySelector('span.OddsVal, span[class*="Odds"], td.Odds span, td[class*="Odds"] span');
+      if(oddsSpan){
+        const t = toHalfNumberText(normCellText(oddsSpan));
+        const m = t.match(/(\d{1,4}(?:\.\d+)?)/);
+        if(m) odds = Number(m[1]);
+      }
+      if(!(odds >= 1)){
+        const oddsTd = tr.querySelector('td.Odds, td[class*="Odds"], td[class*="odds"]');
+        if(oddsTd){
+          const t = toHalfNumberText(normCellText(oddsTd));
+          const m = t.match(/(\d{1,4}(?:\.\d+)?)/);
+          if(m) odds = Number(m[1]);
+        }
+      }
+
+      // 人気取得
+      let pop = 0;
+      const popEl = tr.querySelector('td.Popular, td[class*="Popular"], td[class*="Ninki"], span[class*="Popular"]');
+      if(popEl){
+        const t = toHalfNumberText(normCellText(popEl));
+        const m = t.match(/(\d{1,2})/);
+        if(m) pop = Number(m[1]);
+      }
+
+      if(odds >= 1 && odds <= 9999){
+        const prev = map.get(num) || {};
+        map.set(num, {
+          odds,
+          pop: (pop >= 1 && pop <= 18) ? pop : (prev.pop || 0)
+        });
+      }
+    });
+
+    if(map.size >= 2) return map;
+    map.clear(); // このセレクタでは不十分→次を試す
+  }
+
+  // ── Strategy 2: 馬リンクを持つ行をテーブル問わず全走査 ─────────────────
+  // 出馬表HTMLにオッズが埋め込まれているケース（JRA出馬表の予想オッズ列など）
+  const horseRows = Array.from(doc.querySelectorAll('tr')).filter(tr => tr.querySelector('a[href*="/horse/"]'));
+  horseRows.forEach(tr => {
+    const numEl = tr.querySelector('.Umaban, [class*="Umaban"]');
+    let num = firstNumberInCell(numEl, false);
+    if(!(num >= 1 && num <= 18)){
+      // 左端セルから馬番を推定
+      const cells = Array.from(tr.querySelectorAll('td,th'));
+      for(const c of cells.slice(0, 4)){
+        const v = firstNumberInCell(c, false);
+        if(v >= 1 && v <= 18){ num = v; break; }
+      }
+    }
+    if(!(num >= 1 && num <= 18)) return;
+    if(map.has(num)) return; // Strategy1で取得済みなら上書きしない
+
+    const odds = extractOddsFromRow(tr, num);
+    const pop  = extractPopularityFromRow(tr, num);
+
+    if(odds >= 1 && odds <= 9999){
+      const prev = map.get(num) || {};
+      map.set(num, {
+        odds,
+        pop: (pop >= 1 && pop <= 18) ? pop : (prev.pop || 0)
+      });
+    }
+  });
+
+  if(map.size >= 2) return map;
+
+  // ── Strategy 3: テキストベース全行スキャン（最終保険） ─────────────────
+  // 「1 ミツカネベネラ 2.3 1」のように1行にまとまっているケース
+  const allRows = Array.from(doc.querySelectorAll('tr, li'));
+  allRows.forEach(row => {
+    if(row.querySelector('a[href*="horse"]') === null) return; // 馬リンクがない行は無視
+    const text = toHalfNumberText(normCellText(row));
+    if(!text || text.length > 300) return;
+    if(/払戻|馬連|馬単|ワイド|3連|枠連/.test(text)) return;
+
+    // 既にStrategy1/2で取得済みなら skip
+    const numEl = row.querySelector?.('.Umaban, [class*="Umaban"]');
+    let num = numEl ? firstNumberInCell(numEl, false) : 0;
+    if(!num){
+      const m = text.match(/(?:^|\s)(\d{1,2})(?:\s|$)/);
+      if(m) num = Number(m[1]);
+    }
+    if(!(num >= 1 && num <= 18) || map.has(num)) return;
+
+    const nums = Array.from(text.matchAll(/(\d{1,4}(?:\.\d+)?)/g))
+      .map(m => Number(m[1])).filter(Number.isFinite);
+    const decimals = nums.filter(n => n >= 1 && n <= 9999 && !Number.isInteger(n));
+    const ints     = nums.filter(n => Number.isInteger(n) && n >= 1 && n <= 18 && n !== num);
+    const odds = decimals.length ? decimals[decimals.length - 1] : 0;
+    const pop  = ints.length    ? ints[ints.length - 1]          : 0;
+
+    if(odds >= 1 && odds <= 9999){
+      map.set(num, { odds, pop: (pop >= 1 && pop <= 18) ? pop : 0 });
+    }
+  });
+
+  return map;
+}
+
+// ============================================================
+// v5.18.6 OddsFix4: race_id → odds/index.html を正とする単勝オッズ・人気取得
+// 出馬表の表セルは斤量/馬体重/人気列の連結で誤読しやすいため、
+// race_idで単勝オッズページを取得し、行セル単位で「馬番・単勝・人気」を再構成する。
+// 例: "724.412" のようにオッズ724.4＋人気12が結合した値も分割補正する。
+// ============================================================
+function parseOddsPopFromCellsStrict(cells, horseNo){
+  const clean = cells.map(x => toHalfNumberText(String(x || '')).replace(/,/g,'').trim());
+  let odds = 0;
+  let pop = 0;
+
+  // 人気は右側にあることが多い。馬番・枠番を避けて右から拾う。
+  for(let i=clean.length-1; i>=0; i--){
+    const t = clean[i];
+    const m = t.match(/^([1-9]|1[0-8])\s*人気$/) || t.match(/^([1-9]|1[0-8])$/);
+    if(!m) continue;
+    const v = Number(m[1]);
+    if(v !== Number(horseNo)){ pop = v; break; }
+  }
+
+  // まず完全な小数セルを優先。斤量・馬体重系の近辺は除外。
+  for(let i=0; i<clean.length; i++){
+    const t = clean[i];
+    if(!t || /kg|㎏|斤量|馬体重|増減|歳|牡|牝|セ|--/.test(t)) continue;
+    const m = t.match(/^(\d{1,4}\.\d+)$/);
+    if(!m) continue;
+    const v = Number(m[1]);
+    v = sanitizeWinOddsValue(v, t);
+    if(v >= 1 && v !== Number(horseNo)){
+      odds = v;
+      break;
+    }
+  }
+
+  // netkeiba/iPad経由でセル間スペースが潰れた "724.412" = 724.4 + 12人気 を補正。
+  if(!(odds >= 1)){
+    for(const t of clean){
+      if(!/^\d{2,5}\.\d{2,3}$/.test(t)) continue;
+      const m = t.match(/^(\d{1,4}\.\d)(\d{1,2})$/);
+      if(!m) continue;
+      const od = Number(m[1]);
+      const pp = Number(m[2]);
+      const safeOd = sanitizeWinOddsValue(od, t);
+      if(safeOd >= 1 && pp >= 1 && pp <= 18){
+        odds = safeOd;
+        if(!pop) pop = pp;
+        break;
+      }
+    }
+  }
+
+  // 最後に「オッズ 35.6 人気 5」形式のテキストから拾う。
+  if(!(odds >= 1)){
+    const joined = clean.join(' ');
+    const m = joined.match(/(?:単勝|オッズ|Odds)?\s*(\d{1,4}\.\d+)\s*(?:倍)?\s*(?:人気)?\s*([1-9]|1[0-8])?/i);
+    if(m){
+      const od = Number(m[1]);
+      const pp = m[2] ? Number(m[2]) : 0;
+      const safeOd = sanitizeWinOddsValue(od, m[1]);
+      if(safeOd >= 1){
+        odds = safeOd;
+        if(!pop && pp >= 1 && pp <= 18 && pp !== Number(horseNo)) pop = pp;
+      }
+    }
+  }
+
+  return { odds, pop };
+}
+
+function parseWinOddsPopularityFromDoc(doc){
+  const map = new Map();
+
+  const put = (num, odds, pop) => {
+    num = Number(num); odds = Number(odds); pop = Number(pop || 0);
+    if(!(num >= 1 && num <= 18)) return;
+    odds = sanitizeWinOddsValue(odds, String(odds));
+    if(!(odds >= 1 && odds <= 9999)) return;
+    const prev = map.get(num) || {};
+    map.set(num, {
+      odds: Math.round(odds * 10) / 10,
+      pop: (pop >= 1 && pop <= 18) ? pop : (prev.pop || 0)
+    });
+  };
+
+  // Strategy A: 単勝オッズ表・出馬表の行をセル単位で解析。
+  const rows = Array.from(doc.querySelectorAll('tr'));
+  rows.forEach(tr => {
+    const cells = Array.from(tr.querySelectorAll('td,th')).map(td => toHalfNumberText(normCellText(td)));
+    if(cells.length < 3) return;
+    const rowText = cells.join(' ');
+    if(/払戻|馬連|馬単|ワイド|3連|枠連|馬体重\(増減\)|ラップ/.test(rowText)) return;
+
+    let num = 0;
+    const umaban = tr.querySelector('.Umaban, [class*="Umaban"], [class*="HorseNum"], [class*="horse_num"]');
+    if(umaban) num = firstNumberInCell(umaban, false);
+    if(!(num >= 1 && num <= 18)){
+      // 左側4セルから馬番を取得。オッズページは先頭セルが馬番であることが多い。
+      for(const c of cells.slice(0,4)){
+        const m = String(c).trim().match(/^([1-9]|1[0-8])$/) || String(c).trim().match(/^([1-9]|1[0-8])\s*番$/);
+        if(m){ num = Number(m[1]); break; }
+      }
+    }
+    if(!(num >= 1 && num <= 18)) return;
+
+    const parsed = parseOddsPopFromCellsStrict(cells, num);
+    put(num, parsed.odds, parsed.pop);
+  });
+
+  // Strategy B: script内の断片データを保険で拾う。
+  // 厳密JSONでなくても、同一オブジェクト断片内の horse_num / odds / popularity を抽出する。
+  const scripts = Array.from(doc.querySelectorAll('script')).map(s => s.textContent || '').join('\n');
+  if(scripts){
+    const blocks = scripts.match(/\{[^{}]{0,900}(?:horse_num|umaban|馬番)[^{}]{0,900}\}/gi) || [];
+    blocks.forEach(b => {
+      const n = b.match(/(?:horse_num|umaban|馬番|horseNo|number)["'\s:＝=]+"?([1-9]|1[0-8])"?/i);
+      const o = b.match(/(?:odds|win_odds|tansho|単勝)["'\s:＝=]+"?(\d{1,4}\.\d+)"?/i);
+      const pp = b.match(/(?:popular|popularity|ninki|人気)["'\s:＝=]+"?([1-9]|1[0-8])"?/i);
+      if(n && o) put(Number(n[1]), Number(o[1]), pp ? Number(pp[1]) : 0);
+    });
+  }
+
+  return map;
+}
+
+async function fetchWinOddsPopularity(kind, raceId){
+  if(!settings.proxyUrl || !raceId) return new Map();
+  for(const url of buildNetkeibaOddsUrls(kind, raceId)){
+    try{
+      const html = await fetchHtmlViaProxy(url);
+      if(!html || (raceId && !html.includes(raceId))) continue;
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const map = parseWinOddsPopularityFromDoc(doc);
+      if(map.size >= 2) return map;
+    }catch(e){
+      // 次のURLを試す
+    }
+  }
+  return new Map();
+}
+
+function mergeOddsPopularityIntoHorses(baseHorses, oddsMap){
+  if(!oddsMap || !oddsMap.size) return baseHorses;
+  return baseHorses.map(h => {
+    const o = oddsMap.get(Number(h.num));
+    if(!o) return h;
+    return {
+      ...h,
+      odds: (Number(o.odds) >= 1) ? Number(o.odds) : Number(h.odds || 0),
+      pop: (Number(o.pop) >= 1) ? Number(o.pop) : Number(h.pop || 0)
+    };
+  });
+}
+
+
 // ─── netkeibaプロキシ取得 ────────────────────────
 async function fetchRace(){
   const rawUrl = document.getElementById('raceUrl').value.trim();
@@ -2190,9 +3307,31 @@ async function fetchRace(){
     if(horses.length < 2){
       throw new Error('出走馬を十分に取得できませんでした。race_idまたは開催情報を確認してください。');
     }
+
+    // 単勝オッズ・人気: race_id → odds/index.html を正とする。
+    // 出馬表DOMは斤量・馬体重・人気列が連結して誤読しやすいため、
+    // race_id確定後は必ず単勝オッズページを取りに行き、取得できた値で上書きする。
+    const kind = document.getElementById('pickKind')?.value || (rawUrl.includes('nar.netkeiba') ? 'NAR' : 'JRA');
+
+    if(rid){
+      const oddsMap = await fetchWinOddsPopularity(kind, rid);
+      if(oddsMap.size >= 2){
+        horses = mergeOddsPopularityIntoHorses(horses, oddsMap);
+      }else{
+        // 保険：oddsページが空/未発売の場合のみ出馬表内の値を使う。
+        const shutubaOddsMap = parseWinOddsPopularityFromDoc(doc);
+        if(shutubaOddsMap.size >= 2){
+          horses = mergeOddsPopularityIntoHorses(horses, shutubaOddsMap);
+        }
+      }
+    }
+
     renderHorseRows();
 
-    status.innerHTML = `<div class="url-status ok">✅ ${escapeHtml(currentRaceName || '')} ${horses.length}頭 取得しました</div>`;
+    const oddsCount = horses.filter(h => Number(h.odds) >= 1).length;
+    const popCount = horses.filter(h => Number(h.pop) >= 1).length;
+    const oddsNote = oddsCount < horses.length ? ' / ※斤量誤読防止で未確定オッズは空欄' : '';
+    status.innerHTML = `<div class="url-status ok">✅ ${escapeHtml(currentRaceName || '')} ${horses.length}頭 取得しました / 単勝オッズ ${oddsCount}件 / 人気 ${popCount}件${oddsNote}</div>`;
 
     // 取得後すぐにタブを馬データへ
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -2271,23 +3410,103 @@ function firstNumberInCell(el, allowDecimal=false){
   return m ? Number(m[1]) : 0;
 }
 
-function extractOddsFromRow(tr){
+
+// v5.18.6 OddsFix4: 斤量(50〜60kg)を単勝オッズとして表示しないための共通ガード。
+// 出馬表HTMLでは「斤量」列が td index / ヘッダーずれでオッズ列として拾われやすい。
+function isLikelyWeightOdds(value, rawText=''){
+  const n = Number(value);
+  if(!Number.isFinite(n)) return true;
+  const t = toHalfNumberText(String(rawText || '')).trim();
+  if(/kg|㎏|斤量|負担重量|futan|weight|kinryo/i.test(t)) return true;
+  // 54,55,56 などの整数はNAR出馬表ではほぼ斤量。単勝オッズは odds/index.html 側で小数として再取得する。
+  if(Number.isInteger(n) && n >= 50 && n <= 60) return true;
+  return false;
+}
+function sanitizeWinOddsValue(value, rawText=''){
+  const n = Number(value);
+  if(!(n >= 1 && n <= 9999)) return 0;
+  if(isLikelyWeightOdds(n, rawText)) return 0;
+  return Math.round(n * 10) / 10;
+}
+
+
+function cellTextsOfRow(tr){
+  return Array.from(tr.querySelectorAll('td,th')).map(td => toHalfNumberText(normCellText(td)));
+}
+
+function isPureIntText(t){
+  return /^\d{1,2}$/.test(String(t || '').trim());
+}
+
+function isPureDecimalText(t){
+  return /^\d{1,4}(?:\.\d+)?$/.test(String(t || '').trim());
+}
+
+function findPopularityIndexByRightScan(tr, horseNo){
+  const cells = cellTextsOfRow(tr);
+  // 右端側の「1〜18だけ」のセルを人気として採用。
+  // 馬番や枠番は左側にあるため、右から見ることで誤読を避ける。
+  for(let i=cells.length-1; i>=0; i--){
+    const tx = cells[i];
+    const m = tx.match(/^(\d{1,2})\s*人気$/) || tx.match(/^(\d{1,2})$/);
+    if(!m) continue;
+    const v = Number(m[1]);
+    if(v >= 1 && v <= 18 && v !== Number(horseNo)){
+      return { index:i, value:v };
+    }
+  }
+  return { index:-1, value:0 };
+}
+
+function findOddsNearPopularityByRightScan(tr, horseNo){
+  const cells = cellTextsOfRow(tr);
+  const popInfo = findPopularityIndexByRightScan(tr, horseNo);
+  const start = popInfo.index > 0 ? popInfo.index - 1 : cells.length - 1;
+
+  // 人気セルの左側から一番近い小数/数値を単勝オッズとして採用。
+  // 斤量55.0は通常かなり左側なので、右端優先にして誤読を抑える。
+  for(let i=start; i>=0 && i>=start-5; i--){
+    const tx = cells[i].replace(/,/g,'');
+    if(!tx || /kg|㎏|歳|牡|牝|セ|斤量|馬体重|増減|--/.test(tx)) continue;
+    // ここでは小数だけ採用。54/55/56 の整数は斤量誤検出の典型なので採用しない。
+    const m = tx.match(/^(\d{1,4}\.\d+)$/) || tx.match(/(\d{1,4}\.\d+)/);
+    if(!m) continue;
+    const v = sanitizeWinOddsValue(Number(m[1]), tx);
+    if(v >= 1 && v !== Number(horseNo)) return v;
+  }
+
+  // それでも無ければ、右側に現れる小数だけを拾う。
+  for(let i=cells.length-1; i>=Math.max(0, cells.length-8); i--){
+    const tx = cells[i].replace(/,/g,'');
+    const m = tx.match(/^(\d{1,4}\.\d+)$/);
+    if(!m) continue;
+    const v = Number(m[1]);
+    if(v >= 1 && v <= 9999) return v;
+  }
+  return 0;
+}
+
+
+function extractOddsFromRow(tr, horseNo){
   // 最優先: 表ヘッダー「オッズ」「予想オッズ」に対応するセル。
   // これによりJRAの斤量55.0を単勝オッズとして誤読しない。
   const byHead = cellByHeader(tr, /^(予想)?オッズ$|単勝オッズ|人気オッズ/);
   let v = firstNumberInCell(byHead, true);
-  if(v >= 1 && v <= 9999) return v;
+  v = sanitizeWinOddsValue(v, normCellText(byHead));
+  if(v >= 1) return v;
 
   const selectors = [
-    'td.Odds', 'td[class~="Odds"]', '[class*="Tansho"]', '[class*="Odds"]',
+    'td.Odds span', 'td.Odds', 'td[class~="Odds"]',
+    'span.OddsVal', 'span[class*="OddsVal"]',
+    '[class*="Tansho"]', '[class*="Odds"]',
     '[class*="odds"]', '.RaceOdds', '.Popular_Odds'
   ];
   for(const sel of selectors){
     for(const el of tr.querySelectorAll(sel)){
       const cls = String(el.className || '').toLowerCase();
       if(/kinryo|weight|futan|sex|age|jockey|trainer|stable|time|margin/.test(cls)) continue;
-      v = firstNumberInCell(el, true);
-      if(v >= 1 && v <= 9999) return v;
+      v = sanitizeWinOddsValue(firstNumberInCell(el, true), normCellText(el));
+      if(v >= 1) return v;
     }
   }
 
@@ -2299,11 +3518,14 @@ function extractOddsFromRow(tr){
       const txt = toHalfNumberText(normCellText(cells[i]));
       const m = txt.match(/^(\d{1,4}\.\d+)$/) || txt.match(/(\d{1,4}\.\d+)/);
       if(m){
-        v = Number(m[1]);
-        if(v >= 1 && v <= 9999) return v;
+        v = sanitizeWinOddsValue(Number(m[1]), txt);
+        if(v >= 1) return v;
       }
     }
   }
+  v = findOddsNearPopularityByRightScan(tr, horseNo);
+  if(v >= 1 && v <= 9999) return v;
+
   return 0;
 }
 
@@ -2312,7 +3534,8 @@ function extractPopularityFromRow(tr, horseNo){
   let v = firstNumberInCell(byHead, false);
   if(v >= 1 && v <= 18) return v;
 
-  const selectors = ['td.Popular', '[class*="Popular"]', '[class*="Ninki"]', '.Rank'];
+  const selectors = ['td.Popular', 'td[class*="Popular"]', 'td[class*="Ninki"]', '.Rank',
+    'span[class*="Popular"]', 'span[class*="Ninki"]', 'td[class*="rank"]'];
   for(const sel of selectors){
     for(const el of tr.querySelectorAll(sel)){
       const tx = toHalfNumberText(normCellText(el));
@@ -2323,6 +3546,9 @@ function extractPopularityFromRow(tr, horseNo){
       }
     }
   }
+  const byRight = findPopularityIndexByRightScan(tr, horseNo);
+  if(byRight.value >= 1 && byRight.value <= 18) return byRight.value;
+
   return 0;
 }
 
@@ -2385,7 +3611,7 @@ function parseHorsesFromDoc(doc, url){
     }
     if(frame < 1 || frame > 8) frame = Math.ceil(num / 2);
 
-    const odds = extractOddsFromRow(tr);
+    const odds = extractOddsFromRow(tr, num);
     const pop = extractPopularityFromRow(tr, num);
 
     seen.add(num);

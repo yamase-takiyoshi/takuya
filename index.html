@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.3 OddsFix</span>
+    <span class="ver">v5.18.4 OddsFix2</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2978,47 +2978,131 @@ function buildNetkeibaOddsUrls(kind, raceId){
 
 function parseWinOddsPopularityFromDoc(doc){
   const map = new Map();
-  const rows = Array.from(doc.querySelectorAll('tr, li, div'));
-  rows.forEach(row => {
-    const text = toHalfNumberText(normCellText(row));
-    if(!text || text.length > 180) return;
-    if(/払戻|馬連|馬単|ワイド|3連|枠連|オッズ投票|購入|予想/.test(text)) return;
 
-    let horseNo = 0;
-    const horseLink = row.querySelector?.('a[href*="/horse/"]');
-    if(horseLink){
-      const noEl = row.querySelector('.Umaban,[class*="Umaban"],[class*="HorseNum"],[class*="Num"]');
-      horseNo = firstNumberInCell(noEl, false);
+  // ── Strategy 1: OddsTableWrap（単勝オッズページの標準テーブル） ──────────
+  // netkeibaオッズページ構造:
+  //   .OddsTableWrap または #odds_tan_tableWrap の tbody tr に
+  //   .Umaban(馬番), td.Odds または span.OddsVal(オッズ), td.Popular(人気) が入る
+  const oddsTableSels = [
+    '#odds_tan_tableWrap tbody tr',
+    '.OddsTableWrap tbody tr',
+    '.Odds_Table tbody tr',
+    'table[id*="odds"] tbody tr',
+    'table[class*="Odds"] tbody tr',
+    'table[class*="odds"] tbody tr',
+  ];
+
+  for(const sel of oddsTableSels){
+    const rows = Array.from(doc.querySelectorAll(sel));
+    if(!rows.length) continue;
+
+    rows.forEach(tr => {
+      // 馬番取得
+      let num = 0;
+      const numEl = tr.querySelector('.Umaban, [class*="Umaban"], [class*="HorseNum"], td:first-child');
+      if(numEl) num = firstNumberInCell(numEl, false);
+      if(!(num >= 1 && num <= 18)) return;
+
+      // オッズ取得: spanのOddsVal優先、なければtd.Odds
+      let odds = 0;
+      const oddsSpan = tr.querySelector('span.OddsVal, span[class*="Odds"], td.Odds span, td[class*="Odds"] span');
+      if(oddsSpan){
+        const t = toHalfNumberText(normCellText(oddsSpan));
+        const m = t.match(/(\d{1,4}(?:\.\d+)?)/);
+        if(m) odds = Number(m[1]);
+      }
+      if(!(odds >= 1)){
+        const oddsTd = tr.querySelector('td.Odds, td[class*="Odds"], td[class*="odds"]');
+        if(oddsTd){
+          const t = toHalfNumberText(normCellText(oddsTd));
+          const m = t.match(/(\d{1,4}(?:\.\d+)?)/);
+          if(m) odds = Number(m[1]);
+        }
+      }
+
+      // 人気取得
+      let pop = 0;
+      const popEl = tr.querySelector('td.Popular, td[class*="Popular"], td[class*="Ninki"], span[class*="Popular"]');
+      if(popEl){
+        const t = toHalfNumberText(normCellText(popEl));
+        const m = t.match(/(\d{1,2})/);
+        if(m) pop = Number(m[1]);
+      }
+
+      if(odds >= 1 && odds <= 9999){
+        const prev = map.get(num) || {};
+        map.set(num, {
+          odds,
+          pop: (pop >= 1 && pop <= 18) ? pop : (prev.pop || 0)
+        });
+      }
+    });
+
+    if(map.size >= 2) return map;
+    map.clear(); // このセレクタでは不十分→次を試す
+  }
+
+  // ── Strategy 2: 馬リンクを持つ行をテーブル問わず全走査 ─────────────────
+  // 出馬表HTMLにオッズが埋め込まれているケース（JRA出馬表の予想オッズ列など）
+  const horseRows = Array.from(doc.querySelectorAll('tr')).filter(tr => tr.querySelector('a[href*="/horse/"]'));
+  horseRows.forEach(tr => {
+    const numEl = tr.querySelector('.Umaban, [class*="Umaban"]');
+    let num = firstNumberInCell(numEl, false);
+    if(!(num >= 1 && num <= 18)){
+      // 左端セルから馬番を推定
+      const cells = Array.from(tr.querySelectorAll('td,th'));
+      for(const c of cells.slice(0, 4)){
+        const v = firstNumberInCell(c, false);
+        if(v >= 1 && v <= 18){ num = v; break; }
+      }
     }
+    if(!(num >= 1 && num <= 18)) return;
+    if(map.has(num)) return; // Strategy1で取得済みなら上書きしない
 
-    if(!horseNo){
-      const mNo = text.match(/(?:^|\s)(\d{1,2})(?:\s|$)/);
-      if(mNo) horseNo = Number(mNo[1]);
-    }
-    if(!(horseNo >= 1 && horseNo <= 18)) return;
-
-    let odds = 0;
-    let pop = 0;
-
-    if(row.querySelectorAll){
-      odds = extractOddsFromRow(row, horseNo);
-      pop = extractPopularityFromRow(row, horseNo);
-    }
-
-    if(!odds || !pop){
-      // テキストベース保険: 「馬番 馬名 10.9 1」のような行を読む。
-      const nums = Array.from(text.matchAll(/(\d{1,4}(?:\.\d+)?)/g)).map(m => Number(m[1])).filter(Number.isFinite);
-      const decimals = nums.filter(n => n >= 1 && n <= 9999 && !Number.isInteger(n));
-      const ints = nums.filter(n => Number.isInteger(n) && n >= 1 && n <= 18 && n !== horseNo);
-      if(!odds && decimals.length) odds = decimals[decimals.length - 1];
-      if(!pop && ints.length) pop = ints[ints.length - 1];
-    }
+    const odds = extractOddsFromRow(tr, num);
+    const pop  = extractPopularityFromRow(tr, num);
 
     if(odds >= 1 && odds <= 9999){
-      const prev = map.get(horseNo) || {};
-      map.set(horseNo, { odds, pop: (pop >= 1 && pop <= 18) ? pop : (prev.pop || 0) });
+      const prev = map.get(num) || {};
+      map.set(num, {
+        odds,
+        pop: (pop >= 1 && pop <= 18) ? pop : (prev.pop || 0)
+      });
     }
   });
+
+  if(map.size >= 2) return map;
+
+  // ── Strategy 3: テキストベース全行スキャン（最終保険） ─────────────────
+  // 「1 ミツカネベネラ 2.3 1」のように1行にまとまっているケース
+  const allRows = Array.from(doc.querySelectorAll('tr, li'));
+  allRows.forEach(row => {
+    if(row.querySelector('a[href*="horse"]') === null) return; // 馬リンクがない行は無視
+    const text = toHalfNumberText(normCellText(row));
+    if(!text || text.length > 300) return;
+    if(/払戻|馬連|馬単|ワイド|3連|枠連/.test(text)) return;
+
+    // 既にStrategy1/2で取得済みなら skip
+    const numEl = row.querySelector?.('.Umaban, [class*="Umaban"]');
+    let num = numEl ? firstNumberInCell(numEl, false) : 0;
+    if(!num){
+      const m = text.match(/(?:^|\s)(\d{1,2})(?:\s|$)/);
+      if(m) num = Number(m[1]);
+    }
+    if(!(num >= 1 && num <= 18) || map.has(num)) return;
+
+    const nums = Array.from(text.matchAll(/(\d{1,4}(?:\.\d+)?)/g))
+      .map(m => Number(m[1])).filter(Number.isFinite);
+    const decimals = nums.filter(n => n >= 1 && n <= 9999 && !Number.isInteger(n));
+    const ints     = nums.filter(n => Number.isInteger(n) && n >= 1 && n <= 18 && n !== num);
+    const odds = decimals.length ? decimals[decimals.length - 1] : 0;
+    const pop  = ints.length    ? ints[ints.length - 1]          : 0;
+
+    if(odds >= 1 && odds <= 9999){
+      map.set(num, { odds, pop: (pop >= 1 && pop <= 18) ? pop : 0 });
+    }
+  });
+
   return map;
 }
 
@@ -3100,12 +3184,20 @@ async function fetchRace(){
       throw new Error('出走馬を十分に取得できませんでした。race_idまたは開催情報を確認してください。');
     }
 
-    // 単勝オッズ・人気は出馬表HTMLだけでは空になることがあるため、
-    // odds/index.html も参照して馬番でマージする。
+    // 単勝オッズ・人気: 出馬表HTMLから直接試み、不足分をoddsページで補完する。
     const kind = document.getElementById('pickKind')?.value || (rawUrl.includes('nar.netkeiba') ? 'NAR' : 'JRA');
-    if(rid){
+
+    // Step1: 出馬表docに既にオッズが埋め込まれているか試みる
+    const shutubaOddsMap = parseWinOddsPopularityFromDoc(doc);
+    if(shutubaOddsMap.size >= 2){
+      horses = mergeOddsPopularityIntoHorses(horses, shutubaOddsMap);
+    }
+
+    // Step2: まだオッズ0の馬が多い場合はodds/index.htmlを別途取得してマージ
+    const missingOdds = horses.filter(h => !(Number(h.odds) >= 1)).length;
+    if(rid && missingOdds > horses.length / 2){
       const oddsMap = await fetchWinOddsPopularity(kind, rid);
-      horses = mergeOddsPopularityIntoHorses(horses, oddsMap);
+      if(oddsMap.size >= 2) horses = mergeOddsPopularityIntoHorses(horses, oddsMap);
     }
 
     renderHorseRows();
@@ -3256,7 +3348,9 @@ function extractOddsFromRow(tr, horseNo){
   if(v >= 1 && v <= 9999) return v;
 
   const selectors = [
-    'td.Odds', 'td[class~="Odds"]', '[class*="Tansho"]', '[class*="Odds"]',
+    'td.Odds span', 'td.Odds', 'td[class~="Odds"]',
+    'span.OddsVal', 'span[class*="OddsVal"]',
+    '[class*="Tansho"]', '[class*="Odds"]',
     '[class*="odds"]', '.RaceOdds', '.Popular_Odds'
   ];
   for(const sel of selectors){
@@ -3292,7 +3386,8 @@ function extractPopularityFromRow(tr, horseNo){
   let v = firstNumberInCell(byHead, false);
   if(v >= 1 && v <= 18) return v;
 
-  const selectors = ['td.Popular', '[class*="Popular"]', '[class*="Ninki"]', '.Rank'];
+  const selectors = ['td.Popular', 'td[class*="Popular"]', 'td[class*="Ninki"]', '.Rank',
+    'span[class*="Popular"]', 'span[class*="Ninki"]', 'td[class*="rank"]'];
   for(const sel of selectors){
     for(const el of tr.querySelectorAll(sel)){
       const tx = toHalfNumberText(normCellText(el));

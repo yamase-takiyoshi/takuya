@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.0 JRA RaceId Fix</title>
+<title>The競馬 EV分析 v5.18.1 JRA RaceId Strict Fix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.0 RaceIdFix</span>
+    <span class="ver">v5.18.1 RaceIdStrict</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2442,22 +2442,52 @@ function jraRaceIdToKaisai(raceId){
 }
 
 function jraHtmlMatchesSelectedDate(html, date){
+  // JRA race_id にはMMDDが無い。
+  // 旧実装はページ全体の本文を見ていたため、日付タブ/カレンダーの「5月24日」を拾い、
+  // 5/23(9日目)のrace_idを5/24として誤採用していた。
+  // ここでは title / og:title / レース見出し / RaceData 周辺だけを照合対象にする。
   const p = ymdParts(date);
   const mm = Number(p.mmdd.slice(0,2));
   const dd = Number(p.mmdd.slice(2,4));
-  const text = normalizeJapaneseSpaces(
-    String(html || '')
-      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-      .replace(/<[^>]+>/g, ' ')
-  );
   const patterns = [
     `${mm}月${dd}日`,
     `${String(mm).padStart(2,'0')}月${String(dd).padStart(2,'0')}日`,
     `${mm}/${dd}`,
-    `${String(mm).padStart(2,'0')}/${String(dd).padStart(2,'0')}`
+    `${String(mm).padStart(2,'0')}/${String(dd).padStart(2,'0')}`,
+    `${p.yyyy}年${mm}月${dd}日`,
+    `${p.yyyy}/${String(mm).padStart(2,'0')}/${String(dd).padStart(2,'0')}`
   ];
-  return patterns.some(x => text.includes(x));
+
+  try{
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(String(html || ''), 'text/html');
+    const parts = [];
+    const title = doc.querySelector('title')?.textContent || '';
+    const ogTitle = doc.querySelector('meta[property="og:title"], meta[name="twitter:title"]')?.getAttribute('content') || '';
+    const desc = doc.querySelector('meta[name="description"], meta[property="og:description"]')?.getAttribute('content') || '';
+    parts.push(title, ogTitle, desc);
+
+    const selectors = [
+      '.RaceName', '[class*="RaceName"]',
+      '.RaceData01', '.RaceData02', '[class*="RaceData"]',
+      '.RaceList_Item02', '.RaceList_Item01',
+      'h1'
+    ];
+    selectors.forEach(sel => {
+      doc.querySelectorAll(sel).forEach(el => parts.push(el.textContent || ''));
+    });
+
+    const strictText = normalizeJapaneseSpaces(parts.join(' '));
+    if(patterns.some(x => strictText.includes(x))) return true;
+
+    // 予備：本文を見る場合も、日付タブ/ナビ/広告を落としてから見る。
+    doc.querySelectorAll('script,style,nav,header,footer,.Race_DateList,.DateList,[class*="Calendar"],[class*="Tab"],.Ad,iframe').forEach(el => el.remove());
+    const bodyText = normalizeJapaneseSpaces(doc.body ? doc.body.textContent : '');
+    return patterns.some(x => bodyText.includes(x));
+  }catch(e){
+    const text = normalizeJapaneseSpaces(String(html || '').replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' '));
+    return patterns.some(x => text.includes(x));
+  }
 }
 
 async function fetchHtmlViaProxy(url){
@@ -2470,8 +2500,53 @@ async function fetchHtmlViaProxy(url){
 async function verifyJraRaceDateByShutuba(date, raceId){
   const url = shutubaUrl('JRA', raceId);
   const html = await fetchHtmlViaProxy(url);
-  if(!html.includes(String(raceId))) return false;
+  const id = String(raceId);
+
+  // netkeibaが別race_idへ内部遷移/差し替えした場合を検出する。
+  // canonical/og:urlに別IDが出ていれば、そのIDを正とみなして不一致を除外。
+  try{
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const canonical = doc.querySelector('link[rel="canonical"]')?.getAttribute('href') || '';
+    const ogUrl = doc.querySelector('meta[property="og:url"]')?.getAttribute('content') || '';
+    const cm = String(canonical || ogUrl || '').match(/race_id=(\d{10,14})/);
+    if(cm && cm[1] !== id) return false;
+  }catch(e){}
+
+  if(!html.includes(id)) return false;
   return jraHtmlMatchesSelectedDate(html, date);
+}
+
+async function probeJraRaceById(date, raceId){
+  const url = shutubaUrl('JRA', raceId);
+  const html = await fetchHtmlViaProxy(url);
+  if(!html.includes(String(raceId))) return null;
+  if(!jraHtmlMatchesSelectedDate(html, date)) return null;
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const horsesFound = parseHorsesFromDoc(doc, url).length;
+  if(horsesFound < 2) return null;
+  const kd = jraRaceIdToKaisai(raceId);
+  return {
+    raceId: String(raceId),
+    raceNo: kd ? kd.raceNo : Number(String(raceId).slice(-2)),
+    venueCode: kd ? kd.venueCode : extractVenueCodeFromRaceId(raceId, 'JRA'),
+    raceName: parseRaceTitleFromDoc(doc) || `${Number(String(raceId).slice(-2))}R`,
+    shutuba: url,
+    horsesFound
+  };
+}
+
+async function buildVerifiedJraRacesByProbe(date, venueCode, kd){
+  if(!kd) return [];
+  const p = ymdParts(date);
+  const out = [];
+  for(let r=1; r<=12; r++){
+    const raceId = `${p.yyyy}${venueCode}${String(kd.kai).padStart(2,'0')}${String(kd.day).padStart(2,'0')}${String(r).padStart(2,'0')}`;
+    try{
+      const item = await probeJraRaceById(date, raceId);
+      if(item) out.push(item);
+    }catch(e){}
+  }
+  return out.sort((a,b) => a.raceNo - b.raceNo);
 }
 
 async function fixJraKaisaiByProbe(date, venueCode, kd){
@@ -2628,6 +2703,11 @@ async function getReliableJraRacesFromList(html, date, venueCode){
   const kdHint = parseJraKaisaiFromListText(html, venueCode) || (direct[0] ? jraRaceIdToKaisai(direct[0].raceId) : null);
   const kdExact = await findJraKaisaiByFullProbe(date, venueCode, kdHint);
   if(kdExact){
+    // v5.18.1: race_idを生成するだけでなく、12R分の出馬表を実取得して
+    // 本文日付・実在馬・レース名を確認する。これで 5/24東京11R=オークス(202605021011)
+    // を、前日の欅S(202605020911)へ誤接続しない。
+    const verifiedBuilt = await buildVerifiedJraRacesByProbe(date, venueCode, kdExact);
+    if(verifiedBuilt.length) return verifiedBuilt;
     return buildJraRacesFromExactKaisai(html, date, venueCode, kdExact);
   }
 

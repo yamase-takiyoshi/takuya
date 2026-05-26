@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.20.9 Safari ES5 Ultimate</title>
+<title>The競馬 EV分析 v5.21.6 RaceDay Final</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.20.9</span>
+    <span class="ver">v5.21.6</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -592,56 +592,6 @@ function corsHeaders(contentType) {<br>
 
 </div>
 
-
-<script>
-/* v5.20.9 Safari ES5 polyfills - must run before app script */
-(function(){
-  if (!String.prototype.padStart) {
-    String.prototype.padStart = function padStart(targetLength, padString) {
-      targetLength = targetLength >> 0;
-      padString = String(typeof padString !== 'undefined' ? padString : ' ');
-      if (this.length >= targetLength) return String(this);
-      targetLength = targetLength - this.length;
-      if (targetLength > padString.length) {
-        padString += padString.repeat(Math.ceil(targetLength / padString.length));
-      }
-      return padString.slice(0, targetLength) + String(this);
-    };
-  }
-  if (!Object.assign) {
-    Object.assign = function(target) {
-      if (target == null) throw new TypeError('Cannot convert undefined or null to object');
-      var to = Object(target);
-      for (var index = 1; index < arguments.length; index++) {
-        var nextSource = arguments[index];
-        if (nextSource != null) {
-          for (var nextKey in nextSource) {
-            if (Object.prototype.hasOwnProperty.call(nextSource, nextKey)) to[nextKey] = nextSource[nextKey];
-          }
-        }
-      }
-      return to;
-    };
-  }
-  if (!Array.from) {
-    Array.from = function(arrayLike, mapFn, thisArg) {
-      var arr = [];
-      if (!arrayLike) return arr;
-      var len = Number(arrayLike.length) || 0;
-      for (var i = 0; i < len; i++) {
-        arr.push(mapFn ? mapFn.call(thisArg, arrayLike[i], i) : arrayLike[i]);
-      }
-      return arr;
-    };
-  }
-  if (window.NodeList && !NodeList.prototype.forEach) {
-    NodeList.prototype.forEach = Array.prototype.forEach;
-  }
-  if (window.HTMLCollection && !HTMLCollection.prototype.forEach) {
-    HTMLCollection.prototype.forEach = Array.prototype.forEach;
-  }
-})();
-</script>
 <script>
 // ============================================================
 // The競馬 EV分析 HTML版 v5.15.3
@@ -5856,7 +5806,7 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
    ============================================================ */
 (function () {
     'use strict';
-    var VER = 'v5.20.9';
+    var VER = 'v5.21.3';
     var JRA = [
         ['01', '札幌'], ['02', '函館'], ['03', '福島'], ['04', '新潟'], ['05', '東京'],
         ['06', '中山'], ['07', '中京'], ['08', '京都'], ['09', '阪神'], ['10', '小倉']
@@ -6223,241 +6173,399 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
     console.log('[The競馬]', VER, 'final guard loaded');
 })();
 
+
+/* ============================================================
+   v5.21.3 Race-Day Only / All Races + Race Names Final Override
+   - fetch/AbortController を使わず XHR 統一（iPad Safari HTTP0/AbortError対策）
+   - 日付に実在する開催場だけ表示。候補フォールバックを廃止
+   - 開催場選択後、その日の全レースを race_id 主キーで表示
+   - レース名は race_list 本文 + 出馬表HTML h1/title で補完
+   ============================================================ */
+(function(){
+  'use strict';
+  var VER='v5.21.3';
+  var JRA=[['01','札幌'],['02','函館'],['03','福島'],['04','新潟'],['05','東京'],['06','中山'],['07','中京'],['08','京都'],['09','阪神'],['10','小倉']];
+  var NAR=[['30','門別'],['35','盛岡'],['36','水沢'],['42','浦和'],['43','船橋'],['44','大井'],['45','川崎'],['46','金沢'],['47','笠松'],['48','名古屋'],['50','園田'],['51','姫路'],['54','高知'],['55','佐賀'],['65','帯広']];
+  var $=function(id){return document.getElementById(id);};
+  var esc=function(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});};
+  function dec(s){var t=document.createElement('textarea');t.innerHTML=String(s||'');return t.value;}
+  function kindNow(){var e=$('pickKind');return (e&&e.value)||'JRA';}
+  function localDate(){var d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+  function dateNow(){var e=$('pickDate');return (e&&e.value)||localDate();}
+  function compact(d){return String(d||'').replace(/[^0-9]/g,'').slice(0,8);}
+  function parts(d){var ymd=compact(d||localDate());return {ymd:ymd,y:ymd.slice(0,4),md:ymd.slice(4,8)};}
+  function venuesOf(kind){return kind==='NAR'?NAR:JRA;}
+  function venueName(kind,code){var a=venuesOf(kind).filter(function(v){return v[0]===String(code);})[0];return a?a[1]:String(code||'');}
+  function status(msg,cls){var s=$('urlStatus'); if(s)s.innerHTML='<div class="url-status '+(cls||'')+'">'+msg+'</div>';}
+  function proxyUrl(){var p='';try{p=(window.settings&&settings.proxyUrl)||(($('proxyUrl')||{}).value)||'';}catch(e){} if(!p)p='https://takuya.nitta-katsuhiko.workers.dev/'; return p.replace(/\/$/,'');}
+  function xhrText(url,ms){
+    return new Promise(function(resolve,reject){
+      var sep=String(url).indexOf('?')>=0?'&':'?';
+      var target=url+sep+'_tk='+Date.now();
+      var proxied=proxyUrl()+'?url='+encodeURIComponent(target);
+      var x=new XMLHttpRequest();
+      x.open('GET',proxied,true);
+      x.timeout=ms||12000;
+      x.onreadystatechange=function(){
+        if(x.readyState!==4)return;
+        if((x.status>=200&&x.status<300)||x.status===304){resolve(x.responseText||'');}
+        else{reject(new Error('HTTP '+x.status));}
+      };
+      x.ontimeout=function(){reject(new Error('timeout'));};
+      x.onerror=function(){reject(new Error('network error / HTTP '+x.status));};
+      try{x.send(null);}catch(e){reject(e);}
+    });
+  }
+  function raceListUrl(kind,date,venue){var p=parts(date); if(kind==='NAR'){var u='https://nar.netkeiba.com/top/race_list.html?kaisai_date='+p.ymd; if(venue)u+='&kaisai_id='+p.y+venue+p.md; return u;} return 'https://race.netkeiba.com/top/race_list.html?kaisai_date='+p.ymd;}
+  function shutubaUrl(kind,id){return (kind==='NAR'?'https://nar.netkeiba.com':'https://race.netkeiba.com')+'/race/shutuba.html?race_id='+id+'&rf=race_submenu';}
+  function cleanName(s){
+    s=dec(String(s||'').replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' '));
+    s=s.replace(/\s+/g,' ').trim();
+    s=s.replace(/^\d{1,2}\s*R\s*/i,'').replace(/^出馬表\s*/,'').replace(/\s*出馬表.*$/,'').replace(/\s*\|.*$/,'').trim();
+    if(/^(オッズ|結果|出走表|レース一覧|映像|予想|データ|先に|)$/ .test(s))return '';
+    return s;
+  }
+  function nameNear(html,idx){
+    var h=String(html||'');
+    var a0=h.lastIndexOf('<a',idx), a1=h.indexOf('</a>',idx);
+    if(a0>=0&&a1>idx){
+      var a=h.slice(a0,a1+4);
+      var title=(a.match(/title=["']([^"']+)["']/i)||[])[1]||'';
+      var n=cleanName(title)||cleanName(a);
+      if(n)return n;
+    }
+    var row0=Math.max(h.lastIndexOf('<li',idx),h.lastIndexOf('<tr',idx),h.lastIndexOf('<dl',idx),h.lastIndexOf('<div',idx));
+    var row1=h.indexOf('</li>',idx); if(row1<0)row1=h.indexOf('</tr>',idx); if(row1<0)row1=h.indexOf('</dl>',idx); if(row1<0)row1=Math.min(h.length,idx+900);
+    var row=h.slice(Math.max(0,row0),Math.min(h.length,row1+5));
+    var cls=row.match(/(?:RaceName|RaceList_DataTitle|ItemTitle|RaceNameTxt)[^>]*>([\s\S]{0,180}?)</i);
+    if(cls){var cn=cleanName(cls[1]); if(cn)return cn;}
+    return '';
+  }
+  function parseRaceIds(html,kind,date,venue){
+    var p=parts(date), valid={}; venuesOf(kind).forEach(function(v){valid[v[0]]=1;});
+    var out=[], seen={}; var re=/race_id=(\d{10,14})/g,m,h=String(html||'');
+    while((m=re.exec(h))){
+      var id=m[1]; if(id.slice(0,4)!==p.y)continue;
+      var code=id.slice(4,6); if(!valid[code])continue; if(venue&&code!==String(venue))continue;
+      if(kind==='NAR'&&id.slice(6,10)!==p.md)continue;
+      var no=Number(id.slice(-2)); if(!(no>=1&&no<=12))continue;
+      if(seen[id])continue; seen[id]=1;
+      out.push({raceId:id,venueCode:code,raceNo:no,raceName:nameNear(h,m.index)});
+    }
+    return out.sort(function(a,b){return a.venueCode.localeCompare(b.venueCode)||a.raceNo-b.raceNo;});
+  }
+  function extractRaceNameFromShutuba(html,raceNo){
+    var h=String(html||''), m;
+    m=h.match(/<h1[^>]*class=["'][^"']*RaceName[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i)||h.match(/<div[^>]*class=["'][^"']*RaceName[^"']*["'][^>]*>([\s\S]*?)<\/div>/i)||h.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    var n=m?cleanName(m[1]):'';
+    if(!n||/^\d+R$/.test(n))n=String(raceNo)+'R';
+    return n;
+  }
+  async function enrichNames(kind,date,races){
+    for(var i=0;i<races.length;i++){
+      if(races[i].raceName&&races[i].raceName.length>1)continue;
+      try{var html=await xhrText(shutubaUrl(kind,races[i].raceId),7000); races[i].raceName=extractRaceNameFromShutuba(html,races[i].raceNo);}catch(e){races[i].raceName=String(races[i].raceNo)+'R';}
+    }
+    return races;
+  }
+  function renderVenues(list){
+    var v=$('pickVenue'), kind=kindNow(); if(!v)return;
+    if(!list||!list.length){v.innerHTML='<option value="">この日付の開催場なし</option>';return;}
+    v.innerHTML=list.map(function(x){return '<option value="'+esc(x[0])+'">'+esc(x[1]+'（'+x[2]+'R）')+'</option>';}).join('');
+  }
+  function clearRace(){var rs=$('raceSelect'); if(rs)rs.innerHTML='<option value="">先にレース一覧を取得</option>'; var ru=$('raceUrl'); if(ru)ru.value=''; var rb=$('raceTitleBox'); if(rb){rb.style.display='none';rb.textContent='';} window.currentRaceId=''; window.currentRaceName='';}
+  async function collectVenues(kind,date){
+    var html=await xhrText(raceListUrl(kind,date,''),12000);
+    var ids=parseRaceIds(html,kind,date,'');
+    if(!ids.length&&kind==='NAR'){
+      var all=[];
+      for(var i=0;i<NAR.length;i++){
+        try{var h=await xhrText(raceListUrl('NAR',date,NAR[i][0]),6000); all=all.concat(parseRaceIds(h,'NAR',date,NAR[i][0]));}catch(e){}
+      }
+      ids=all;
+    }
+    var counts={}; ids.forEach(function(r){counts[r.venueCode]=(counts[r.venueCode]||0)+1;});
+    return Object.keys(counts).sort(function(a,b){return venuesOf(kind).findIndex(function(v){return v[0]===a;})-venuesOf(kind).findIndex(function(v){return v[0]===b;});}).map(function(code){return [code,venueName(kind,code),counts[code]];});
+  }
+  window.loadActiveVenuesForDate=async function(){
+    clearRace();
+    var kind=kindNow(), date=dateNow();
+    var nb=$('narBadge'); if(nb)nb.style.display=kind==='NAR'?'':'none';
+    try{if(window.settings){settings.nar=kind==='NAR'; localStorage.setItem('tk-html-settings',JSON.stringify(settings));}}catch(e){}
+    renderVenues([]);
+    status('📅 '+esc(date)+' '+esc(kind)+' の開催場を確認中...', '');
+    try{
+      var list=await collectVenues(kind,date);
+      if(!list.length){renderVenues([]); status('⚠️ '+esc(date)+' '+esc(kind)+' は開催レースを確認できませんでした。別日を選ぶか、race_id付きURLを直接貼ってください。','err'); return;}
+      renderVenues(list);
+      status('✅ '+esc(date)+' '+esc(kind)+' 開催場：'+list.map(function(v){return esc(v[1]+'（'+v[2]+'R）');}).join('、'),'ok');
+      var v=$('pickVenue'); if(v&&v.value) setTimeout(function(){ window.loadRaceList(); },60);
+    }catch(e){renderVenues([]); status('❌ 開催場取得失敗: '+esc(e.message||e)+'。候補表示は行わず、実開催場だけを表示します。','err');}
+  };
+  window.loadRaceList=async function(){
+    var kind=kindNow(), date=dateNow(), venue=(($('pickVenue')||{}).value)||'', rs=$('raceSelect');
+    if(!venue){status('⚠️ 開催場を選択してください。','err');return;}
+    if(rs)rs.innerHTML='<option value="">レース一覧取得中...</option>';
+    status('📅 '+esc(date)+' '+esc(venueName(kind,venue))+' の全レースを取得中...','');
+    try{
+      var html=await xhrText(raceListUrl(kind,date,venue),12000);
+      var races=parseRaceIds(html,kind,date,venue);
+      if(!races.length&&kind==='JRA'){
+        html=await xhrText(raceListUrl(kind,date,''),12000);
+        races=parseRaceIds(html,kind,date,venue);
+      }
+      var by={}; races.forEach(function(r){by[r.raceId]=r;}); races=Object.keys(by).map(function(k){return by[k];}).sort(function(a,b){return a.raceNo-b.raceNo;});
+      if(!races.length){if(rs)rs.innerHTML='<option value="">この開催場のレースなし</option>'; status('⚠️ '+esc(venueName(kind,venue))+' の実レースを取得できませんでした。','err');return;}
+      await enrichNames(kind,date,races);
+      if(rs){
+        var dl=date.replace(/-/g,'/'); rs.innerHTML='';
+        races.forEach(function(r){
+          var name=r.raceName||String(r.raceNo)+'R';
+          var label=dl+' '+venueName(kind,venue)+' '+String(r.raceNo).padStart(2,'0')+'R '+name+' / '+r.raceId;
+          var opt=new Option(label,shutubaUrl(kind,r.raceId));
+          opt.dataset.raceId=r.raceId; opt.dataset.raceName=name; opt.dataset.raceNo=String(r.raceNo); opt.dataset.venueCode=venue; opt.dataset.kind=kind; opt.dataset.date=date;
+          rs.add(opt);
+        });
+      }
+      window.applySelectedRaceUrl();
+      status('✅ '+esc(venueName(kind,venue))+' の全'+races.length+'レースを表示しました。','ok');
+    }catch(e){if(rs)rs.innerHTML='<option value="">取得失敗</option>'; status('❌ レース一覧取得失敗: '+esc(e.message||e),'err');}
+  };
+  window.applySelectedRaceUrl=function(){
+    var rs=$('raceSelect'), ru=$('raceUrl'), rb=$('raceTitleBox'); if(!rs||!ru)return;
+    var opt=rs.options[rs.selectedIndex]; ru.value=rs.value||'';
+    if(opt&&rs.value){
+      window.currentRaceId=opt.dataset.raceId||''; window.currentRaceName=opt.dataset.raceName||'';
+      window.__selectedRaceMetaV5188={raceId:opt.dataset.raceId||'',raceName:opt.dataset.raceName||'',raceNo:Number(opt.dataset.raceNo||0),date:opt.dataset.date||dateNow(),kind:opt.dataset.kind||kindNow(),venueCode:opt.dataset.venueCode||(($('pickVenue')||{}).value)||''};
+      try{__selectedRaceMetaV5188=window.__selectedRaceMetaV5188;}catch(e){}
+      if(rb){rb.textContent=opt.textContent||''; rb.style.display='';}
+    }else if(rb){rb.style.display='none'; rb.textContent='';}
+  };
+  function bind(){
+    var ver=document.querySelector('.ver'); if(ver)ver.textContent=VER;
+    var d=$('pickDate'), k=$('pickKind'), v=$('pickVenue');
+    if(d&&!d.value)d.value=localDate();
+    if(d&&!d.dataset.v5213){d.dataset.v5213='1'; d.addEventListener('change',window.loadActiveVenuesForDate); d.addEventListener('input',function(){clearTimeout(window.__v5213t); window.__v5213t=setTimeout(window.loadActiveVenuesForDate,250);});}
+    if(k&&!k.dataset.v5213){k.dataset.v5213='1'; k.addEventListener('change',window.loadActiveVenuesForDate);}
+    if(v&&!v.dataset.v5213){v.dataset.v5213='1'; v.addEventListener('change',function(){clearRace(); setTimeout(window.loadRaceList,20);});}
+    var rs=$('raceSelect'); if(rs&&!rs.dataset.v5213){rs.dataset.v5213='1'; rs.addEventListener('change',window.applySelectedRaceUrl);}
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){bind(); setTimeout(window.loadActiveVenuesForDate,120);},{once:true});
+  else{bind(); setTimeout(window.loadActiveVenuesForDate,120);}
+  window.addEventListener('pageshow',function(){setTimeout(bind,80);},{passive:true});
+  console.log('[The競馬]',VER,'race-day only override loaded');
+})();
+
+
+
+/* ============================================================
+   v5.21.6 RaceDay Final Override
+   目的: レースのある日だけ、実開催場だけ、当日の全レース＋レース名を表示
+   - 候補表示を完全停止
+   - JRAはrace_idに月日が無いので race_list.html から取得した race_id だけを正とする
+   - NARは必要時に各開催場をプローブ
+   - Safari/iPad対策: XHR + Worker proxy のみに統一
+   ============================================================ */
+(function(){
+  var VER='v5.21.5';
+  function $(id){return document.getElementById(id);}
+  function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+  function dec(s){var t=document.createElement('textarea');t.innerHTML=String(s||'');return t.value;}
+  function pad2(n){return String(n).padStart(2,'0');}
+  function todayLocal(){var d=new Date();return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate());}
+  function dateNow(){var d=$('pickDate');return (d&&d.value)||todayLocal();}
+  function kindNow(){var k=$('pickKind');return (k&&k.value)||'JRA';}
+  function parts(date){var m=String(date||todayLocal()).match(/^(\d{4})-(\d{2})-(\d{2})$/)||[];return {y:m[1]||'',m:m[2]||'',d:m[3]||'',md:(m[2]||'')+(m[3]||''),ymd:(m[1]||'')+(m[2]||'')+(m[3]||'')};}
+  var JRA=[['01','札幌'],['02','函館'],['03','福島'],['04','新潟'],['05','東京'],['06','中山'],['07','中京'],['08','京都'],['09','阪神'],['10','小倉']];
+  var NAR=[['30','門別'],['35','盛岡'],['36','水沢'],['42','浦和'],['43','船橋'],['44','大井'],['45','川崎'],['46','金沢'],['47','笠松'],['48','名古屋'],['50','園田'],['51','姫路'],['54','高知'],['55','佐賀'],['65','帯広']];
+  function venuesOf(kind){return kind==='NAR'?NAR:JRA;}
+  function venueName(kind,code){var a=venuesOf(kind);for(var i=0;i<a.length;i++)if(a[i][0]===String(code))return a[i][1];return String(code||'');}
+  function status(msg,cls){var u=$('urlStatus');if(u)u.innerHTML='<div class="url-status '+(cls||'')+'">'+msg+'</div>';}
+  function setVersion(){var v=document.querySelector('.ver');if(v)v.textContent=VER;}
+  function proxyBase(){var p='';try{p=(window.settings&&settings.proxyUrl)||(($('proxyUrl')||{}).value)||'';}catch(e){} if(!p)p='https://takuya.nitta-katsuhiko.workers.dev/';return String(p).replace(/\/$/,'');}
+  function xhrText(url,ms){
+    return new Promise(function(resolve,reject){
+      var sep=String(url).indexOf('?')>=0?'&':'?';
+      var target=url+sep+'_tk='+Date.now();
+      var req=proxyBase()+'?url='+encodeURIComponent(target);
+      var x=new XMLHttpRequest();
+      x.open('GET',req,true); x.timeout=ms||13000;
+      x.onreadystatechange=function(){if(x.readyState!==4)return; if((x.status>=200&&x.status<300)||x.status===304)resolve(x.responseText||''); else reject(new Error('HTTP '+x.status));};
+      x.onerror=function(){reject(new Error('通信エラー HTTP '+x.status));};
+      x.ontimeout=function(){reject(new Error('タイムアウト'));};
+      try{x.send(null);}catch(e){reject(e);}
+    });
+  }
+  function raceListUrl(kind,date,venue){var p=parts(date); if(kind==='NAR'){var u='https://nar.netkeiba.com/top/race_list.html?kaisai_date='+p.ymd; if(venue)u+='&kaisai_id='+p.y+venue+p.md; return u;} return 'https://race.netkeiba.com/top/race_list.html?kaisai_date='+p.ymd;}
+  function shutubaUrl(kind,id){return (kind==='NAR'?'https://nar.netkeiba.com':'https://race.netkeiba.com')+'/race/shutuba.html?race_id='+id+'&rf=race_submenu';}
+  function cleanName(s){
+    s=dec(String(s||'').replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' '));
+    s=s.replace(/\s+/g,' ').trim();
+    s=s.replace(/^\d{1,2}\s*R\s*/i,'').replace(/^出馬表\s*/,'').replace(/\s*出馬表.*$/,'').replace(/\s*\|.*$/,'').replace(/ - netkeiba.*$/i,'').trim();
+    if(!s||/^(オッズ|結果|出走表|レース一覧|映像|予想|データ|先に|トップ|地方競馬)$/i.test(s))return '';
+    return s;
+  }
+  function nameNear(html,idx,raceNo){
+    var h=String(html||''), start=Math.max(0,idx-1800), end=Math.min(h.length,idx+1800), chunk=h.slice(start,end), m, n='';
+    var pats=[/class=["'][^"']*RaceName[^"']*["'][^>]*>([\s\S]{0,260}?)</i,/class=["'][^"']*RaceList_DataTitle[^"']*["'][^>]*>([\s\S]{0,260}?)</i,/class=["'][^"']*ItemTitle[^"']*["'][^>]*>([\s\S]{0,260}?)</i,/title=["']([^"']{1,120})["']/i];
+    for(var i=0;i<pats.length;i++){m=chunk.match(pats[i]); if(m){n=cleanName(m[1]); if(n)return n;}}
+    m=chunk.match(new RegExp('(?:'+raceNo+'\\s*R|'+String(raceNo).padStart(2,'0')+'\\s*R)([\\s\\S]{0,220}?)(?:race_id=|</a>|</li>|</tr>)','i'));
+    if(m){n=cleanName(m[1]); if(n)return n;}
+    return '';
+  }
+  function parseRaceIds(html,kind,date,venue){
+    var p=parts(date), valid={}, out=[], seen={}, h=String(html||''), re=/race_id=(\d{10,14})/g,m;
+    venuesOf(kind).forEach(function(v){valid[v[0]]=1;});
+    while((m=re.exec(h))){
+      var id=m[1]; if(id.slice(0,4)!==p.y)continue;
+      var code=id.slice(4,6); if(!valid[code])continue; if(venue&&code!==String(venue))continue;
+      if(kind==='NAR' && id.slice(6,10)!==p.md)continue;
+      var rno=Number(id.slice(-2)); if(!(rno>=1&&rno<=12))continue;
+      if(seen[id])continue; seen[id]=1;
+      out.push({raceId:id,venueCode:code,raceNo:rno,raceName:nameNear(h,m.index,rno)});
+    }
+    out.sort(function(a,b){return a.venueCode.localeCompare(b.venueCode)||a.raceNo-b.raceNo;});
+    return out;
+  }
+  function extractRaceNameFromShutuba(html,raceNo){var h=String(html||''), m=h.match(/<h1[^>]*class=["'][^"']*RaceName[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i)||h.match(/<div[^>]*class=["'][^"']*RaceName[^"']*["'][^>]*>([\s\S]*?)<\/div>/i)||h.match(/<title[^>]*>([\s\S]*?)<\/title>/i); var n=m?cleanName(m[1]):''; return n||String(raceNo)+'R';}
+  function enrichNames(kind,races){
+    var seq=Promise.resolve();
+    races.forEach(function(r){seq=seq.then(function(){ if(r.raceName&&r.raceName.length>1)return null; return xhrText(shutubaUrl(kind,r.raceId),7000).then(function(h){r.raceName=extractRaceNameFromShutuba(h,r.raceNo);},function(){r.raceName=String(r.raceNo)+'R';});});});
+    return seq.then(function(){return races;});
+  }
+  function clearRace(){var rs=$('raceSelect'); if(rs)rs.innerHTML='<option value="">先にレース一覧を取得</option>'; var ru=$('raceUrl'); if(ru)ru.value=''; var rb=$('raceTitleBox'); if(rb){rb.style.display='none';rb.textContent='';} window.currentRaceId='';window.currentRaceName=''; window.__selectedRaceMetaV5188=null; try{__selectedRaceMetaV5188=null;}catch(e){}}
+  function renderVenues(list){var v=$('pickVenue'); if(!v)return; if(!list||!list.length){v.innerHTML='<option value="">この日は開催なし</option>'; return;} v.innerHTML=list.map(function(x){return '<option value="'+esc(x[0])+'">'+esc(x[1]+'（'+x[2]+'R）')+'</option>';}).join('');}
+  function collectVenues(kind,date){
+    return xhrText(raceListUrl(kind,date,''),13000).then(function(html){
+      var ids=parseRaceIds(html,kind,date,'');
+      if(ids.length||kind!=='NAR')return ids;
+      var all=[], seq=Promise.resolve();
+      NAR.forEach(function(v){seq=seq.then(function(){return xhrText(raceListUrl('NAR',date,v[0]),6500).then(function(h){all=all.concat(parseRaceIds(h,'NAR',date,v[0]));},function(){});});});
+      return seq.then(function(){return all;});
+    }).then(function(ids){
+      var counts={}; ids.forEach(function(r){counts[r.venueCode]=(counts[r.venueCode]||0)+1;});
+      return venuesOf(kind).filter(function(v){return counts[v[0]];}).map(function(v){return [v[0],v[1],counts[v[0]]];});
+    });
+  }
+  window.loadActiveVenuesForDate=function(){
+    setVersion(); clearRace();
+    var kind=kindNow(), date=dateNow(), nb=$('narBadge'); if(nb)nb.style.display=kind==='NAR'?'':'none';
+    try{if(window.settings){settings.nar=kind==='NAR'; localStorage.setItem('tk-html-settings',JSON.stringify(settings));}}catch(e){}
+    renderVenues([]); status('📅 '+esc(date)+' '+esc(kind)+' の実開催を確認中...','');
+    return collectVenues(kind,date).then(function(list){
+      if(!list.length){renderVenues([]); status('⚠️ '+esc(date)+' '+esc(kind)+' は開催レースなし。開催のある日だけ表示します。','err'); return;}
+      renderVenues(list); status('✅ '+esc(date)+' '+esc(kind)+' 開催場：'+list.map(function(v){return esc(v[1]+'（'+v[2]+'R）');}).join('、'),'ok');
+      setTimeout(function(){window.loadRaceList();},30);
+    },function(e){renderVenues([]); status('❌ 開催確認失敗: '+esc(e.message||e)+'。候補は表示しません。','err');});
+  };
+  window.loadRaceList=function(){
+    setVersion();
+    var kind=kindNow(), date=dateNow(), venue=(($('pickVenue')||{}).value)||'', rs=$('raceSelect');
+    clearRace(); if(!venue){status('⚠️ この日付の開催場がありません。','err');return Promise.resolve();}
+    if(rs)rs.innerHTML='<option value="">レース一覧取得中...</option>';
+    status('📅 '+esc(date)+' '+esc(venueName(kind,venue))+' の全レースを取得中...','');
+    return xhrText(raceListUrl(kind,date,venue),13000).then(function(html){
+      var races=parseRaceIds(html,kind,date,venue);
+      if(!races.length&&kind==='JRA')return xhrText(raceListUrl(kind,date,''),13000).then(function(h){return parseRaceIds(h,kind,date,venue);});
+      return races;
+    }).then(function(races){
+      var by={}; races.forEach(function(r){by[r.raceId]=r;}); races=Object.keys(by).map(function(k){return by[k];}).sort(function(a,b){return a.raceNo-b.raceNo;});
+      if(!races.length){if(rs)rs.innerHTML='<option value="">この開催場のレースなし</option>'; status('⚠️ '+esc(venueName(kind,venue))+' のレースはありません。','err'); return;}
+      return enrichNames(kind,races).then(function(){
+        var dl=date.replace(/-/g,'/'); if(rs){rs.innerHTML=''; races.forEach(function(r){
+          var name=r.raceName||String(r.raceNo)+'R';
+          var label=dl+' '+venueName(kind,venue)+' '+String(r.raceNo).padStart(2,'0')+'R '+name+' / '+r.raceId;
+          var opt=new Option(label,shutubaUrl(kind,r.raceId));
+          opt.dataset.raceId=r.raceId; opt.dataset.raceName=name; opt.dataset.raceNo=String(r.raceNo); opt.dataset.venue=venue; opt.dataset.venueCode=venue; opt.dataset.kind=kind; opt.dataset.date=date;
+          rs.add(opt);
+        });}
+        window.applySelectedRaceUrl();
+        status('✅ '+esc(venueName(kind,venue))+' の全'+races.length+'レースを表示しました。レース名も表示済みです。','ok');
+      });
+    },function(e){if(rs)rs.innerHTML='<option value="">取得失敗</option>'; status('❌ レース一覧取得失敗: '+esc(e.message||e),'err');});
+  };
+  window.applySelectedRaceUrl=function(){
+    var rs=$('raceSelect'), ru=$('raceUrl'), rb=$('raceTitleBox'); if(!rs||!ru)return;
+    var opt=rs.options[rs.selectedIndex]; ru.value=rs.value||'';
+    if(opt&&rs.value){
+      var meta={raceId:opt.dataset.raceId||'',raceName:opt.dataset.raceName||'',raceNo:Number(opt.dataset.raceNo||0),date:opt.dataset.date||dateNow(),kind:opt.dataset.kind||kindNow(),venueCode:opt.dataset.venueCode||opt.dataset.venue||(($('pickVenue')||{}).value)||'',url:rs.value};
+      window.currentRaceId=meta.raceId; window.currentRaceName=meta.raceName; window.__selectedRaceMetaV5188=meta; try{__selectedRaceMetaV5188=meta;}catch(e){}
+      if(rb){rb.textContent='選択中: '+(opt.textContent||''); rb.style.display='block';}
+    }else{window.currentRaceId='';window.currentRaceName='';window.__selectedRaceMetaV5188=null;try{__selectedRaceMetaV5188=null;}catch(e){} if(rb){rb.style.display='none';rb.textContent='';}}
+  };
+  window.validateRaceUrlForCurrentSelection=function(rawUrl){
+    try{var u=new URL(rawUrl); var raceId=u.searchParams.get('race_id')||''; var kind=kindNow(); var venue=(($('pickVenue')||{}).value)||''; if(!/^\d{10,14}$/.test(raceId))return {ok:false,message:'race_id が取得できません'}; if(kind==='JRA'&&u.hostname!=='race.netkeiba.com')return {ok:false,message:'JRAは race.netkeiba.com のURLを選んでください'}; if(kind==='NAR'&&u.hostname!=='nar.netkeiba.com')return {ok:false,message:'NARは nar.netkeiba.com のURLを選んでください'}; if(venue&&raceId.slice(4,6)!==venue)return {ok:false,message:'開催場が一致しません。選択='+venueName(kind,venue)+' / race_id='+raceId}; var meta=window.__selectedRaceMetaV5188; if(meta&&meta.raceId&&meta.raceId!==raceId)return {ok:false,message:'選択中のレースとURLのrace_idが違います。レース一覧から選び直してください。'}; return {ok:true,raceId:raceId,kind:kind,date:dateNow(),venueCode:venue};}catch(e){return {ok:false,message:'URL形式が不正です'};}
+  };
+  function bind(){
+    setVersion();
+    var d=$('pickDate'), k=$('pickKind'), v=$('pickVenue'), rs=$('raceSelect');
+    if(d&&!d.value)d.value=todayLocal();
+    function stopLoad(ev){if(ev){ev.stopImmediatePropagation();} window.loadActiveVenuesForDate();}
+    function stopRace(ev){if(ev){ev.stopImmediatePropagation();} window.loadRaceList();}
+    function stopApply(ev){if(ev){ev.stopImmediatePropagation();} window.applySelectedRaceUrl();}
+    if(d&&!d.dataset.v5215){d.dataset.v5215='1'; d.addEventListener('change',stopLoad,true); d.addEventListener('input',function(ev){ev.stopImmediatePropagation(); clearTimeout(window.__v5215t); window.__v5215t=setTimeout(window.loadActiveVenuesForDate,250);},true); d.onchange=window.loadActiveVenuesForDate;}
+    if(k&&!k.dataset.v5215){k.dataset.v5215='1'; k.addEventListener('change',stopLoad,true); k.onchange=window.loadActiveVenuesForDate;}
+    if(v&&!v.dataset.v5215){v.dataset.v5215='1'; v.addEventListener('change',stopRace,true); v.onchange=window.loadRaceList;}
+    if(rs&&!rs.dataset.v5215){rs.dataset.v5215='1'; rs.addEventListener('change',stopApply,true); rs.onchange=window.applySelectedRaceUrl;}
+  }
+  window.__TK_RACEDAY_ONLY_V5215__=true;
+  function start(){bind(); setTimeout(window.loadActiveVenuesForDate,100); setTimeout(bind,400); setTimeout(function(){setVersion();},1000);}
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true}); else start();
+  window.addEventListener('pageshow',function(){setTimeout(bind,50);},{passive:true});
+  console.log('[The競馬]',VER,'race-day only final override loaded');
+})();
 </script>
 
 
 <script>
 /* ============================================================
-   v5.20.9 Safari ES5 Ultimate Guard
-   - NodeList.forEach / Array.from / optional系に依存しない最終上書き
-   - タブ、開催場、レース一覧、URL反映を最後に再接続
-   - XHR + race_id直接抽出で iPad Safari / GitHub Pages 向けに固定
+   v5.21.6 JRA race_id Final Guard
+   修正点: JRAのrace_idを開催回日次の推定で作らない。
+   race_list.html内に存在するrace_idをグループ化し、出馬表本文の日付で選択日と照合する。
+   これにより 202605020911 → 202605021011 のような1日分ズレを防ぐ。
    ============================================================ */
 (function(){
-  'use strict';
-  var VER='v5.20.9';
+  var VER='v5.21.6';
   var JRA=[['01','札幌'],['02','函館'],['03','福島'],['04','新潟'],['05','東京'],['06','中山'],['07','中京'],['08','京都'],['09','阪神'],['10','小倉']];
   var NAR=[['30','門別'],['35','盛岡'],['36','水沢'],['42','浦和'],['43','船橋'],['44','大井'],['45','川崎'],['46','金沢'],['47','笠松'],['48','名古屋'],['50','園田'],['51','姫路'],['54','高知'],['55','佐賀'],['65','帯広']];
-  function $(id){ return document.getElementById(id); }
-  function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
-  function getVal(id,def){ var e=$(id); return e ? e.value : def; }
-  function kindNow(){ return getVal('pickKind','JRA') || 'JRA'; }
-  function localDate(){ var d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
-  function dateNow(){ return getVal('pickDate',localDate()) || localDate(); }
-  function compact(d){ return String(d||'').replace(/[^\d]/g,'').slice(0,8); }
-  function parts(d){ var ymd=compact(d||localDate()); return {ymd:ymd,y:ymd.slice(0,4),md:ymd.slice(4,8)}; }
-  function venuesOf(kind){ return kind==='NAR'?NAR:JRA; }
-  function venueName(kind,code){ var arr=venuesOf(kind), i; code=String(code||''); for(i=0;i<arr.length;i++){ if(arr[i][0]===code) return arr[i][1]; } return code; }
-  function setStatus(msg, cls){ var s=$('urlStatus'); if(s) s.innerHTML='<div class="url-status '+(cls||'')+'">'+msg+'</div>'; }
-  function proxyBase(){
-    var p='';
-    try{ if(window.settings && settings.proxyUrl) p=settings.proxyUrl; }catch(e){}
-    if(!p){ var pe=$('proxyUrl'); if(pe) p=pe.value; }
-    if(!p) p='https://takuya.nitta-katsuhiko.workers.dev/';
-    return String(p).replace(/\/$/,'');
-  }
-  function xhrText(url, ok, ng){
-    var x, timer;
-    try{
-      x=new XMLHttpRequest();
-      x.open('GET', proxyBase()+'?url='+encodeURIComponent(url), true);
-      x.onreadystatechange=function(){
-        if(x.readyState===4){
-          clearTimeout(timer);
-          if(x.status>=200 && x.status<300) ok(x.responseText||'');
-          else ng(new Error('HTTP '+x.status));
-        }
-      };
-      x.onerror=function(){ clearTimeout(timer); ng(new Error('通信エラー')); };
-      timer=setTimeout(function(){ try{x.abort();}catch(e){} ng(new Error('タイムアウト')); }, 12000);
-      x.send(null);
-    }catch(e){ ng(e); }
-  }
-  function raceListUrl(kind,date,venue){
-    var p=parts(date), url;
-    if(kind==='NAR'){
-      url='https://nar.netkeiba.com/top/race_list.html?kaisai_date='+p.ymd;
-      if(venue) url+='&kaisai_id='+p.y+String(venue)+p.md;
-      return url;
-    }
-    return 'https://race.netkeiba.com/top/race_list.html?kaisai_date='+p.ymd;
-  }
-  function shutubaUrl(kind,id){
-    return (kind==='NAR'?'https://nar.netkeiba.com':'https://race.netkeiba.com') + '/race/shutuba.html?race_id=' + id + '&rf=race_submenu';
-  }
-  function parseIds(html,kind,date,venue){
-    var p=parts(date), arr=venuesOf(kind), valid={}, re=/race_id=(\d{10,14})/g, m, out=[], seen={}, id, code, rno, key;
-    for(var i=0;i<arr.length;i++) valid[arr[i][0]]=1;
-    html=String(html||'');
-    while((m=re.exec(html))){
-      id=m[1];
-      if(id.slice(0,4)!==p.y) continue;
-      code=id.slice(4,6);
-      if(!valid[code]) continue;
-      if(venue && code!==String(venue)) continue;
-      rno=Number(id.slice(-2));
-      if(!(rno>=1 && rno<=12)) continue;
-      if(kind==='NAR' && id.slice(6,10)!==p.md) continue;
-      key=id;
-      if(seen[key]) continue;
-      seen[key]=1;
-      out.push({raceId:id, venueCode:code, raceNo:rno});
-    }
-    out.sort(function(a,b){
-      if(a.venueCode<b.venueCode) return -1;
-      if(a.venueCode>b.venueCode) return 1;
-      return a.raceNo-b.raceNo;
-    });
-    return out;
-  }
-  function uniqueRaceNo(list){
-    var seen={}, out=[], i, r;
-    for(i=0;i<list.length;i++){
-      r=list[i];
-      if(!seen[r.venueCode+'-'+r.raceNo]){
-        seen[r.venueCode+'-'+r.raceNo]=1;
-        out.push(r);
-      }
-    }
-    return out;
-  }
-  function clearRace(){
-    var rs=$('raceSelect'), ru=$('raceUrl'), rb=$('raceTitleBox');
-    if(rs) rs.innerHTML='<option value="">先にレース一覧を取得</option>';
-    if(ru) ru.value='';
-    if(rb){ rb.textContent=''; rb.style.display='none'; }
-  }
-  function renderVenues(list,fallback){
-    var kind=kindNow(), v=$('pickVenue'), rows=[], i, item, code, name, count, opt;
-    if(!v) return;
-    while(v.options.length) v.remove(0);
-    if(!list || !list.length){
-      list=venuesOf(kind);
-      fallback=true;
-    }
-    for(i=0;i<list.length;i++){
-      item=list[i]; code=String(item[0]); name=item[1]||venueName(kind,code); count=item[2]?('（'+item[2]+'R）'):(fallback?'（候補）':'');
-      opt=document.createElement('option');
-      opt.value=code; opt.text=name+count;
-      v.add(opt);
-    }
-    try{
-      var setNar=$('setNar'); if(setNar) setNar.value=(kind==='NAR'?'1':'0');
-      if(window.settings) settings.nar=(kind==='NAR');
-      var badge=$('narBadge'); if(badge) badge.style.display=(kind==='NAR'?'':'none');
-    }catch(e){}
-  }
-  function bindTabs(){
-    var btns=document.querySelectorAll ? document.querySelectorAll('.tab-btn[data-tab]') : [];
-    for(var i=0;i<btns.length;i++){
-      (function(btn){
-        btn.onclick=function(ev){
-          if(ev && ev.preventDefault) ev.preventDefault();
-          var all=document.querySelectorAll('.tab-btn'), panes=document.querySelectorAll('[id^="tab-"]'), j;
-          for(j=0;j<all.length;j++) all[j].classList.remove('active');
-          btn.classList.add('active');
-          for(j=0;j<panes.length;j++) panes[j].style.display='none';
-          var tab=btn.getAttribute('data-tab'), pane=$('tab-'+tab);
-          if(pane) pane.style.display='';
-          return false;
-        };
-        btn.style.pointerEvents='auto';
-        btn.style.touchAction='manipulation';
-      })(btns[i]);
-    }
-  }
-  window.applySelectedRaceUrl=function(){
-    var rs=$('raceSelect'), ru=$('raceUrl'), rb=$('raceTitleBox'), opt;
-    if(!rs || !ru) return;
-    opt=rs.options[rs.selectedIndex];
-    ru.value=rs.value || '';
-    if(rb && opt && rs.value){ rb.textContent=opt.text || opt.textContent || ''; rb.style.display=''; }
-  };
-  window.loadActiveVenuesForDate=function(){
-    bindTabs(); clearRace();
-    var kind=kindNow(), date=dateNow();
-    setStatus('📅 '+esc(date)+' '+esc(kind)+' の開催場を確認中...', '');
-    xhrText(raceListUrl(kind,date,''), function(html){
-      var ids=parseIds(html,kind,date,''), counts={}, list=[], i, r, code;
-      for(i=0;i<ids.length;i++){
-        r=ids[i]; code=r.venueCode+'-'+r.raceNo;
-        if(!counts[r.venueCode]) counts[r.venueCode]={name:venueName(kind,r.venueCode), nums:{}};
-        counts[r.venueCode].nums[r.raceNo]=1;
-      }
-      for(code in counts){
-        if(counts.hasOwnProperty(code)){
-          var n=0, nums=counts[code].nums, k;
-          for(k in nums){ if(nums.hasOwnProperty(k)) n++; }
-          list.push([code, counts[code].name, n]);
-        }
-      }
-      list.sort(function(a,b){ return String(a[0]).localeCompare(String(b[0])); });
-      if(list.length){
-        renderVenues(list,false);
-        var names=[]; for(i=0;i<list.length;i++) names.push(esc(list[i][1]+'（'+list[i][2]+'R）'));
-        setStatus('✅ '+esc(date)+' '+esc(kind)+' 開催場：'+names.join('、'), 'ok');
-      }else{
-        renderVenues([],true);
-        setStatus('⚠️ 自動絞り込みできませんでした。全開催場候補を表示しました。', 'err');
-      }
-    }, function(e){
-      renderVenues([],true);
-      setStatus('⚠️ 開催場取得失敗: '+esc(e && e.message ? e.message : e)+'。全開催場候補を表示しました。', 'err');
-    });
-  };
-  window.onRaceDateKindChanged=function(){
-    try{ if(window.horses){ horses=[]; } if(typeof renderHorseRows==='function') renderHorseRows(); if(typeof renderManualFinishPicker==='function') renderManualFinishPicker(); }catch(e){}
-    window.loadActiveVenuesForDate();
-  };
-  window.loadRaceList=function(){
-    bindTabs();
-    var kind=kindNow(), date=dateNow(), v=$('pickVenue'), venue=v?v.value:'', rs=$('raceSelect');
-    if(!venue){ setStatus('⚠️ 開催場を選択してください。','err'); return; }
-    if(rs) rs.innerHTML='<option value="">レース一覧取得中...</option>';
-    setStatus('📅 '+esc(venueName(kind,venue))+' のレース一覧を取得中...', '');
-    xhrText(raceListUrl(kind,date,venue), function(html){
-      var races=uniqueRaceNo(parseIds(html,kind,date,venue)), i, opt, label, dlabel=String(date).replace(/-/g,'/');
-      if(!races.length && kind==='NAR'){
-        var p=parts(date);
-        for(i=1;i<=12;i++) races.push({raceNo:i, venueCode:venue, raceId:p.y+String(venue)+p.md+String(i).padStart(2,'0'), synthetic:true});
-      }
-      if(!races.length){
-        if(rs) rs.innerHTML='<option value="">取得失敗</option>';
-        setStatus('⚠️ レース一覧を取得できません。race_id付き出馬表URLを直接貼ってください。','err');
-        return;
-      }
-      if(rs){
-        while(rs.options.length) rs.remove(0);
-        for(i=0;i<races.length;i++){
-          label=dlabel+' '+venueName(kind,venue)+' '+races[i].raceNo+'R '+(races[i].synthetic?'（推定URL）':'')+' / '+races[i].raceId;
-          opt=document.createElement('option');
-          opt.value=shutubaUrl(kind,races[i].raceId);
-          opt.text=label;
-          opt.setAttribute('data-race-id', races[i].raceId);
-          rs.add(opt);
-        }
-      }
-      window.applySelectedRaceUrl();
-      setStatus('✅ '+esc(venueName(kind,venue))+' '+races.length+'レースを表示しました。','ok');
-    }, function(e){
-      if(rs) rs.innerHTML='<option value="">取得失敗</option>';
-      setStatus('❌ レース一覧取得失敗: '+esc(e && e.message ? e.message : e),'err');
-    });
-  };
-  function boot5209(){
-    bindTabs();
-    var ver=document.querySelector('.ver'); if(ver) ver.textContent=VER;
-    var d=$('pickDate'), k=$('pickKind'), v=$('pickVenue');
-    if(d && !d.value) d.value=localDate();
-    if(d && !d.getAttribute('data-v5209')){ d.setAttribute('data-v5209','1'); d.onchange=window.onRaceDateKindChanged; d.oninput=window.onRaceDateKindChanged; d.onblur=window.onRaceDateKindChanged; }
-    if(k && !k.getAttribute('data-v5209')){ k.setAttribute('data-v5209','1'); k.onchange=window.onRaceDateKindChanged; k.oninput=window.onRaceDateKindChanged; k.onblur=window.onRaceDateKindChanged; }
-    if(v && !v.getAttribute('data-v5209')){ v.setAttribute('data-v5209','1'); v.onchange=clearRace; }
-    if(v && !v.options.length) renderVenues([],true);
-  }
-  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot5209, false);
-  else boot5209();
-  window.addEventListener('pageshow', function(){ setTimeout(boot5209,80); }, false);
-  console.log('[The競馬] '+VER+' ultimate guard loaded');
+  function $(id){return document.getElementById(id);}
+  function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+  function dec(s){var t=document.createElement('textarea');t.innerHTML=String(s||'');return t.value;}
+  function pad2(n){return String(n).padStart(2,'0');}
+  function today(){var d=new Date();return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate());}
+  function dateNow(){var d=$('pickDate');return (d&&d.value)||today();}
+  function kindNow(){var k=$('pickKind');return (k&&k.value)||'JRA';}
+  function parts(date){var m=String(date||today()).match(/^(\d{4})-(\d{2})-(\d{2})$/)||[];return {y:m[1]||'',mo:m[2]||'',da:m[3]||'',md:(m[2]||'')+(m[3]||''),ymd:(m[1]||'')+(m[2]||'')+(m[3]||'')};}
+  function venues(kind){return kind==='NAR'?NAR:JRA;}
+  function vname(kind,code){var a=venues(kind);for(var i=0;i<a.length;i++)if(a[i][0]===String(code))return a[i][1];return String(code||'');}
+  function status(msg,cls){var u=$('urlStatus');if(u)u.innerHTML='<div class="url-status '+(cls||'')+'">'+msg+'</div>';}
+  function version(){var v=document.querySelector('.ver');if(v)v.textContent=VER; document.title='The競馬 EV分析 '+VER+' RaceDay Final';}
+  function proxyBase(){var p='';try{p=(window.settings&&settings.proxyUrl)||(($('proxyUrl')||{}).value)||'';}catch(e){} if(!p)p='https://takuya.nitta-katsuhiko.workers.dev/';return String(p).replace(/\/$/,'');}
+  function xhrText(url,ms){return new Promise(function(resolve,reject){var sep=String(url).indexOf('?')>=0?'&':'?';var target=url+sep+'_tk='+Date.now();var req=proxyBase()+'?url='+encodeURIComponent(target);var x=new XMLHttpRequest();x.open('GET',req,true);x.timeout=ms||13000;x.onreadystatechange=function(){if(x.readyState!==4)return;if((x.status>=200&&x.status<300)||x.status===304)resolve(x.responseText||'');else reject(new Error('HTTP '+x.status));};x.onerror=function(){reject(new Error('通信エラー HTTP '+x.status));};x.ontimeout=function(){reject(new Error('タイムアウト'));};try{x.send(null);}catch(e){reject(e);}});}
+  function raceListUrl(kind,date,venue){var p=parts(date); if(kind==='NAR'){var u='https://nar.netkeiba.com/top/race_list.html?kaisai_date='+p.ymd;if(venue)u+='&kaisai_id='+p.y+venue+p.md;return u;} return 'https://race.netkeiba.com/top/race_list.html?kaisai_date='+p.ymd;}
+  function shutubaUrl(kind,id){return (kind==='NAR'?'https://nar.netkeiba.com':'https://race.netkeiba.com')+'/race/shutuba.html?race_id='+id+'&rf=race_submenu';}
+  function cleanName(s){s=dec(String(s||'').replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' '));s=s.replace(/\s+/g,' ').trim();s=s.replace(/^\d{1,2}\s*R\s*/i,'').replace(/^出馬表\s*/,'').replace(/\s*出馬表.*$/,'').replace(/\s*\|.*$/,'').replace(/ - netkeiba.*$/i,'').trim();if(!s||/^(オッズ|結果|出走表|レース一覧|映像|予想|データ|先に|トップ|地方競馬)$/i.test(s))return '';return s;}
+  function nameNear(html,idx,raceNo){var h=String(html||''),chunk=h.slice(Math.max(0,idx-2400),Math.min(h.length,idx+2400)),m,n='';var pats=[/class=["'][^"']*RaceName[^"']*["'][^>]*>([\s\S]{0,300}?)</i,/class=["'][^"']*RaceList_DataTitle[^"']*["'][^>]*>([\s\S]{0,300}?)</i,/class=["'][^"']*RaceNameArea[^"']*["'][^>]*>([\s\S]{0,360}?)</i,/title=["']([^"']{1,140})["']/i];for(var i=0;i<pats.length;i++){m=chunk.match(pats[i]);if(m){n=cleanName(m[1]);if(n)return n;}}m=chunk.match(new RegExp('(?:'+raceNo+'\\s*R|'+String(raceNo).padStart(2,'0')+'\\s*R)([\\s\\S]{0,260}?)(?:race_id=|</a>|</li>|</tr>)','i'));if(m){n=cleanName(m[1]);if(n)return n;}return '';}
+  function parseIds(html,kind,date,venue){var p=parts(date),valid={},out=[],seen={},h=String(html||''),re=/race_id=(\d{10,14})/g,m;venues(kind).forEach(function(v){valid[v[0]]=1;});while((m=re.exec(h))){var id=m[1];if(id.slice(0,4)!==p.y)continue;var code=id.slice(4,6);if(!valid[code])continue;if(venue&&code!==String(venue))continue;if(kind==='NAR'&&id.slice(6,10)!==p.md)continue;var rno=Number(id.slice(-2));if(!(rno>=1&&rno<=12))continue;if(seen[id])continue;seen[id]=1;out.push({raceId:id,venueCode:code,raceNo:rno,raceName:nameNear(h,m.index,rno)});}out.sort(function(a,b){return a.venueCode.localeCompare(b.venueCode)||a.raceNo-b.raceNo;});return out;}
+  function jraKey(r){var id=String(r.raceId||'');return id.slice(0,10);}
+  function pageHasDate(html,date){var p=parts(date),mo=String(Number(p.mo)),da=String(Number(p.da));var text=dec(String(html||'').replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ')).replace(/\s+/g,' ');var needles=[p.y+'年'+mo+'月'+da+'日',mo+'月'+da+'日',p.mo+'月'+p.da+'日',mo+'/'+da,p.mo+'/'+p.da,p.ymd];for(var i=0;i<needles.length;i++){if(text.indexOf(needles[i])>=0)return true;}return false;}
+  function chooseJraGroupByHeuristic(groups,date){var arr=Object.keys(groups).sort();if(!arr.length)return[];var wd=new Date(date+'T12:00:00').getDay();var key=arr[arr.length-1];if(wd===6&&arr.length>=2)key=arr[arr.length-2];return groups[key].slice().sort(function(a,b){return a.raceNo-b.raceNo;});}
+  function selectJraRaces(races,date){var groups={};races.forEach(function(r){var k=jraKey(r);if(!groups[k])groups[k]=[];groups[k].push(r);});var keys=Object.keys(groups).sort();if(keys.length<=1)return Promise.resolve((groups[keys[0]]||[]).sort(function(a,b){return a.raceNo-b.raceNo;}));var seq=Promise.resolve(null);keys.forEach(function(k){seq=seq.then(function(found){if(found)return found;var g=groups[k].slice().sort(function(a,b){return a.raceNo-b.raceNo;});var probe=g.filter(function(r){return r.raceNo===11;})[0]||g[0];return xhrText(shutubaUrl('JRA',probe.raceId),9000).then(function(h){return pageHasDate(h,date)?g:null;},function(){return null;});});});return seq.then(function(found){return found||chooseJraGroupByHeuristic(groups,date);});}
+  function extractNameFromPage(html,raceNo){var m=String(html||'').match(/<h1[^>]*class=["'][^"']*RaceName[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i)||String(html||'').match(/<div[^>]*class=["'][^"']*RaceName[^"']*["'][^>]*>([\s\S]*?)<\/div>/i)||String(html||'').match(/<title[^>]*>([\s\S]*?)<\/title>/i);var n=m?cleanName(m[1]):'';return n||String(raceNo)+'R';}
+  function enrich(kind,races){var seq=Promise.resolve();races.forEach(function(r){seq=seq.then(function(){if(r.raceName&&r.raceName!==String(r.raceNo)+'R'&&r.raceName.length>1)return null;return xhrText(shutubaUrl(kind,r.raceId),8000).then(function(h){r.raceName=extractNameFromPage(h,r.raceNo);},function(){r.raceName=String(r.raceNo)+'R';});});});return seq.then(function(){return races;});}
+  function clearRace(){var rs=$('raceSelect');if(rs)rs.innerHTML='<option value="">先にレース一覧を取得</option>';var ru=$('raceUrl');if(ru)ru.value='';var rb=$('raceTitleBox');if(rb){rb.style.display='none';rb.textContent='';}window.currentRaceId='';window.currentRaceName='';window.__selectedRaceMetaV5188=null;try{__selectedRaceMetaV5188=null;}catch(e){}}
+  function renderVenues(list){var v=$('pickVenue');if(!v)return;if(!list||!list.length){v.innerHTML='<option value="">この日は開催なし</option>';return;}v.innerHTML=list.map(function(x){return '<option value="'+esc(x[0])+'">'+esc(x[1]+'（'+x[2]+'R）')+'</option>';}).join('');}
+  function countsForJra(ids,date){var byVenue={};ids.forEach(function(r){if(!byVenue[r.venueCode])byVenue[r.venueCode]=[];byVenue[r.venueCode].push(r);});var counts={};Object.keys(byVenue).forEach(function(code){var groups={};byVenue[code].forEach(function(r){var k=jraKey(r);if(!groups[k])groups[k]=[];groups[k].push(r);});var g=chooseJraGroupByHeuristic(groups,date);if(g.length)counts[code]=g.length;});return counts;}
+  function collectVenues(kind,date){return xhrText(raceListUrl(kind,date,''),13000).then(function(html){var ids=parseIds(html,kind,date,'');if(kind==='JRA'){var counts=countsForJra(ids,date);return JRA.filter(function(v){return counts[v[0]];}).map(function(v){return [v[0],v[1],counts[v[0]]];});} if(ids.length){var c={};ids.forEach(function(r){c[r.venueCode]=(c[r.venueCode]||0)+1;});return NAR.filter(function(v){return c[v[0]];}).map(function(v){return [v[0],v[1],c[v[0]]];});}var all=[],seq=Promise.resolve();NAR.forEach(function(v){seq=seq.then(function(){return xhrText(raceListUrl('NAR',date,v[0]),6500).then(function(h){all=all.concat(parseIds(h,'NAR',date,v[0]));},function(){});});});return seq.then(function(){var c={};all.forEach(function(r){c[r.venueCode]=(c[r.venueCode]||0)+1;});return NAR.filter(function(v){return c[v[0]];}).map(function(v){return [v[0],v[1],c[v[0]]];});});});}
+  window.loadActiveVenuesForDate=function(){version();clearRace();var kind=kindNow(),date=dateNow(),nb=$('narBadge');if(nb)nb.style.display=kind==='NAR'?'':'none';try{if(window.settings){settings.nar=kind==='NAR';localStorage.setItem('tk-html-settings',JSON.stringify(settings));}}catch(e){}renderVenues([]);status('📅 '+esc(date)+' '+esc(kind)+' の実開催を確認中...','');return collectVenues(kind,date).then(function(list){if(!list.length){renderVenues([]);status('⚠️ '+esc(date)+' '+esc(kind)+' は開催レースなし。開催のある日だけ表示します。','err');return;}renderVenues(list);status('✅ '+esc(date)+' '+esc(kind)+' 開催場：'+list.map(function(v){return esc(v[1]+'（'+v[2]+'R）');}).join('、'),'ok');setTimeout(function(){window.loadRaceList();},30);},function(e){renderVenues([]);status('❌ 開催確認失敗: '+esc(e.message||e)+'。候補は表示しません。','err');});};
+  window.loadRaceList=function(){version();var kind=kindNow(),date=dateNow(),venue=(($('pickVenue')||{}).value)||'',rs=$('raceSelect');clearRace();if(!venue){status('⚠️ この日付の開催場がありません。','err');return Promise.resolve();}if(rs)rs.innerHTML='<option value="">レース一覧取得中...</option>';status('📅 '+esc(date)+' '+esc(vname(kind,venue))+' の全レースを取得中...','');return xhrText(raceListUrl(kind,date,venue),13000).then(function(html){var races=parseIds(html,kind,date,venue);if(!races.length&&kind==='JRA')return xhrText(raceListUrl(kind,date,''),13000).then(function(h){return parseIds(h,kind,date,venue);});return races;}).then(function(races){var by={};races.forEach(function(r){by[r.raceId]=r;});races=Object.keys(by).map(function(k){return by[k];});if(kind==='JRA')return selectJraRaces(races,date);return races.sort(function(a,b){return a.raceNo-b.raceNo;});}).then(function(races){races=(races||[]).filter(function(r){return r&&r.raceNo>=1&&r.raceNo<=12;}).sort(function(a,b){return a.raceNo-b.raceNo;});if(!races.length){if(rs)rs.innerHTML='<option value="">この開催場のレースなし</option>';status('⚠️ '+esc(vname(kind,venue))+' のレースはありません。','err');return;}return enrich(kind,races).then(function(){var dl=date.replace(/-/g,'/');if(rs){rs.innerHTML='';races.forEach(function(r){var name=r.raceName||String(r.raceNo)+'R';var label=dl+' '+vname(kind,venue)+' '+String(r.raceNo).padStart(2,'0')+'R '+name+' / '+r.raceId;var opt=new Option(label,shutubaUrl(kind,r.raceId));opt.dataset.raceId=r.raceId;opt.dataset.raceName=name;opt.dataset.raceNo=String(r.raceNo);opt.dataset.venue=venue;opt.dataset.venueCode=venue;opt.dataset.kind=kind;opt.dataset.date=date;rs.add(opt);});}window.applySelectedRaceUrl();status('✅ '+esc(vname(kind,venue))+' の全'+races.length+'レースを表示しました。race_id日次ズレを照合済みです。','ok');});},function(e){if(rs)rs.innerHTML='<option value="">取得失敗</option>';status('❌ レース一覧取得失敗: '+esc(e.message||e),'err');});};
+  window.applySelectedRaceUrl=function(){var rs=$('raceSelect'),ru=$('raceUrl'),rb=$('raceTitleBox');if(!rs||!ru)return;var opt=rs.options[rs.selectedIndex];ru.value=rs.value||'';if(opt&&rs.value){var meta={raceId:opt.dataset.raceId||'',raceName:opt.dataset.raceName||'',raceNo:Number(opt.dataset.raceNo||0),date:opt.dataset.date||dateNow(),kind:opt.dataset.kind||kindNow(),venueCode:opt.dataset.venueCode||opt.dataset.venue||(($('pickVenue')||{}).value)||'',url:rs.value};window.currentRaceId=meta.raceId;window.currentRaceName=meta.raceName;window.__selectedRaceMetaV5188=meta;try{__selectedRaceMetaV5188=meta;}catch(e){}if(rb){rb.textContent='選択中: '+(opt.textContent||'');rb.style.display='block';}}else{window.currentRaceId='';window.currentRaceName='';window.__selectedRaceMetaV5188=null;try{__selectedRaceMetaV5188=null;}catch(e){}if(rb){rb.style.display='none';rb.textContent='';}}};
+  function bind(){version();var d=$('pickDate'),k=$('pickKind'),v=$('pickVenue'),rs=$('raceSelect');if(d&&!d.value)d.value=today();function stopLoad(ev){if(ev)ev.stopImmediatePropagation();window.loadActiveVenuesForDate();}function stopRace(ev){if(ev)ev.stopImmediatePropagation();window.loadRaceList();}function stopApply(ev){if(ev)ev.stopImmediatePropagation();window.applySelectedRaceUrl();}if(d){d.onchange=window.loadActiveVenuesForDate; if(!d.dataset.v5216){d.dataset.v5216='1';d.addEventListener('change',stopLoad,true);d.addEventListener('input',function(ev){ev.stopImmediatePropagation();clearTimeout(window.__v5216t);window.__v5216t=setTimeout(window.loadActiveVenuesForDate,250);},true);}}if(k){k.onchange=window.loadActiveVenuesForDate;if(!k.dataset.v5216){k.dataset.v5216='1';k.addEventListener('change',stopLoad,true);}}if(v){v.onchange=window.loadRaceList;if(!v.dataset.v5216){v.dataset.v5216='1';v.addEventListener('change',stopRace,true);}}if(rs){rs.onchange=window.applySelectedRaceUrl;if(!rs.dataset.v5216){rs.dataset.v5216='1';rs.addEventListener('change',stopApply,true);}}}
+  function start(){bind();setTimeout(window.loadActiveVenuesForDate,120);setTimeout(bind,500);}
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true});else start();
+  window.addEventListener('pageshow',function(){setTimeout(bind,50);},{passive:true});
+  window.__TK_RACEDAY_ONLY_V5216__=true;
+  console.log('[The競馬]',VER,'JRA race_id final guard loaded');
 })();
 </script>
 

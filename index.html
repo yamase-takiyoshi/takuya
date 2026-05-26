@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.5 OddsFix3</title>
+<title>The競馬 EV分析 v5.18.6 OddsFix4</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.5 OddsFix3</span>
+    <span class="ver">v5.18.6 OddsFix4</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -3107,7 +3107,7 @@ function parseWinOddsPopularityFromDoc(doc){
 }
 
 // ============================================================
-// v5.18.5 OddsFix3: race_id → odds/index.html を正とする単勝オッズ・人気取得
+// v5.18.6 OddsFix4: race_id → odds/index.html を正とする単勝オッズ・人気取得
 // 出馬表の表セルは斤量/馬体重/人気列の連結で誤読しやすいため、
 // race_idで単勝オッズページを取得し、行セル単位で「馬番・単勝・人気」を再構成する。
 // 例: "724.412" のようにオッズ724.4＋人気12が結合した値も分割補正する。
@@ -3133,7 +3133,8 @@ function parseOddsPopFromCellsStrict(cells, horseNo){
     const m = t.match(/^(\d{1,4}\.\d+)$/);
     if(!m) continue;
     const v = Number(m[1]);
-    if(v >= 1 && v <= 9999 && v !== Number(horseNo)){
+    v = sanitizeWinOddsValue(v, t);
+    if(v >= 1 && v !== Number(horseNo)){
       odds = v;
       break;
     }
@@ -3147,8 +3148,9 @@ function parseOddsPopFromCellsStrict(cells, horseNo){
       if(!m) continue;
       const od = Number(m[1]);
       const pp = Number(m[2]);
-      if(od >= 1 && od <= 9999 && pp >= 1 && pp <= 18){
-        odds = od;
+      const safeOd = sanitizeWinOddsValue(od, t);
+      if(safeOd >= 1 && pp >= 1 && pp <= 18){
+        odds = safeOd;
         if(!pop) pop = pp;
         break;
       }
@@ -3162,8 +3164,9 @@ function parseOddsPopFromCellsStrict(cells, horseNo){
     if(m){
       const od = Number(m[1]);
       const pp = m[2] ? Number(m[2]) : 0;
-      if(od >= 1 && od <= 9999){
-        odds = od;
+      const safeOd = sanitizeWinOddsValue(od, m[1]);
+      if(safeOd >= 1){
+        odds = safeOd;
         if(!pop && pp >= 1 && pp <= 18 && pp !== Number(horseNo)) pop = pp;
       }
     }
@@ -3178,6 +3181,7 @@ function parseWinOddsPopularityFromDoc(doc){
   const put = (num, odds, pop) => {
     num = Number(num); odds = Number(odds); pop = Number(pop || 0);
     if(!(num >= 1 && num <= 18)) return;
+    odds = sanitizeWinOddsValue(odds, String(odds));
     if(!(odds >= 1 && odds <= 9999)) return;
     const prev = map.get(num) || {};
     map.set(num, {
@@ -3326,7 +3330,8 @@ async function fetchRace(){
 
     const oddsCount = horses.filter(h => Number(h.odds) >= 1).length;
     const popCount = horses.filter(h => Number(h.pop) >= 1).length;
-    status.innerHTML = `<div class="url-status ok">✅ ${escapeHtml(currentRaceName || '')} ${horses.length}頭 取得しました / 単勝オッズ ${oddsCount}件 / 人気 ${popCount}件</div>`;
+    const oddsNote = oddsCount < horses.length ? ' / ※斤量誤読防止で未確定オッズは空欄' : '';
+    status.innerHTML = `<div class="url-status ok">✅ ${escapeHtml(currentRaceName || '')} ${horses.length}頭 取得しました / 単勝オッズ ${oddsCount}件 / 人気 ${popCount}件${oddsNote}</div>`;
 
     // 取得後すぐにタブを馬データへ
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -3406,6 +3411,25 @@ function firstNumberInCell(el, allowDecimal=false){
 }
 
 
+// v5.18.6 OddsFix4: 斤量(50〜60kg)を単勝オッズとして表示しないための共通ガード。
+// 出馬表HTMLでは「斤量」列が td index / ヘッダーずれでオッズ列として拾われやすい。
+function isLikelyWeightOdds(value, rawText=''){
+  const n = Number(value);
+  if(!Number.isFinite(n)) return true;
+  const t = toHalfNumberText(String(rawText || '')).trim();
+  if(/kg|㎏|斤量|負担重量|futan|weight|kinryo/i.test(t)) return true;
+  // 54,55,56 などの整数はNAR出馬表ではほぼ斤量。単勝オッズは odds/index.html 側で小数として再取得する。
+  if(Number.isInteger(n) && n >= 50 && n <= 60) return true;
+  return false;
+}
+function sanitizeWinOddsValue(value, rawText=''){
+  const n = Number(value);
+  if(!(n >= 1 && n <= 9999)) return 0;
+  if(isLikelyWeightOdds(n, rawText)) return 0;
+  return Math.round(n * 10) / 10;
+}
+
+
 function cellTextsOfRow(tr){
   return Array.from(tr.querySelectorAll('td,th')).map(td => toHalfNumberText(normCellText(td)));
 }
@@ -3444,10 +3468,11 @@ function findOddsNearPopularityByRightScan(tr, horseNo){
   for(let i=start; i>=0 && i>=start-5; i--){
     const tx = cells[i].replace(/,/g,'');
     if(!tx || /kg|㎏|歳|牡|牝|セ|斤量|馬体重|増減|--/.test(tx)) continue;
-    const m = tx.match(/^(\d{1,4}(?:\.\d+)?)$/) || tx.match(/(\d{1,4}\.\d+)/);
+    // ここでは小数だけ採用。54/55/56 の整数は斤量誤検出の典型なので採用しない。
+    const m = tx.match(/^(\d{1,4}\.\d+)$/) || tx.match(/(\d{1,4}\.\d+)/);
     if(!m) continue;
-    const v = Number(m[1]);
-    if(v >= 1 && v <= 9999 && v !== Number(horseNo)) return v;
+    const v = sanitizeWinOddsValue(Number(m[1]), tx);
+    if(v >= 1 && v !== Number(horseNo)) return v;
   }
 
   // それでも無ければ、右側に現れる小数だけを拾う。
@@ -3467,7 +3492,8 @@ function extractOddsFromRow(tr, horseNo){
   // これによりJRAの斤量55.0を単勝オッズとして誤読しない。
   const byHead = cellByHeader(tr, /^(予想)?オッズ$|単勝オッズ|人気オッズ/);
   let v = firstNumberInCell(byHead, true);
-  if(v >= 1 && v <= 9999) return v;
+  v = sanitizeWinOddsValue(v, normCellText(byHead));
+  if(v >= 1) return v;
 
   const selectors = [
     'td.Odds span', 'td.Odds', 'td[class~="Odds"]',
@@ -3479,8 +3505,8 @@ function extractOddsFromRow(tr, horseNo){
     for(const el of tr.querySelectorAll(sel)){
       const cls = String(el.className || '').toLowerCase();
       if(/kinryo|weight|futan|sex|age|jockey|trainer|stable|time|margin/.test(cls)) continue;
-      v = firstNumberInCell(el, true);
-      if(v >= 1 && v <= 9999) return v;
+      v = sanitizeWinOddsValue(firstNumberInCell(el, true), normCellText(el));
+      if(v >= 1) return v;
     }
   }
 
@@ -3492,8 +3518,8 @@ function extractOddsFromRow(tr, horseNo){
       const txt = toHalfNumberText(normCellText(cells[i]));
       const m = txt.match(/^(\d{1,4}\.\d+)$/) || txt.match(/(\d{1,4}\.\d+)/);
       if(m){
-        v = Number(m[1]);
-        if(v >= 1 && v <= 9999) return v;
+        v = sanitizeWinOddsValue(Number(m[1]), txt);
+        if(v >= 1) return v;
       }
     }
   }

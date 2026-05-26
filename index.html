@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.19.4 PastOddsFix</title>
+<title>The競馬 EV分析 v5.19.5 ShutubaOddsFieldFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.19.4 PastOddsFix</span>
+    <span class="ver">v5.19.5 ShutubaOddsFieldFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -3017,17 +3017,90 @@ function initCalendarPicker(){
 
 function buildNetkeibaOddsUrls(kind, raceId){
   if(!raceId) return [];
+  // v5.19.5: 記入欄取り違え防止。
+  // JRA/NARとも、まず race_id の出馬表(shutuba)を正として同じ馬行から
+  // 「馬番・単勝オッズ・人気」を読む。odds/index は取得不能時だけの保険。
   if(kind === 'NAR'){
     return [
+      `https://nar.netkeiba.com/race/shutuba.html?race_id=${raceId}&rf=race_submenu`,
       `https://nar.netkeiba.com/odds/index.html?race_id=${raceId}`,
       `https://nar.netkeiba.com/odds/index.html?race_id=${raceId}&type=b1`
     ];
   }
   return [
+    `https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}&rf=race_submenu`,
     `https://race.netkeiba.com/odds/index.html?race_id=${raceId}`,
     `https://race.netkeiba.com/odds/index.html?race_id=${raceId}&type=b1`,
     `https://race.netkeiba.com/odds/index.html?race_id=${raceId}&rf=shutuba_submenu`
   ];
+}
+
+function readStrictHorseNoFromShutubaRow(tr){
+  const byHead = firstNumberInCell(cellByHeader(tr, /^馬番$/), false);
+  if(byHead >= 1 && byHead <= 18) return byHead;
+  const el = tr.querySelector('.Umaban, [class*="Umaban"], td[class*="HorseNum"], td[class*="Horse_Num"]');
+  const v = firstNumberInCell(el, false);
+  if(v >= 1 && v <= 18) return v;
+  const cells = Array.from(tr.querySelectorAll('td,th')).slice(0, 5);
+  for(const td of cells){
+    const t = toHalfNumberText(normCellText(td));
+    if(/^([1-9]|1[0-8])$/.test(t)) return Number(t);
+  }
+  return 0;
+}
+
+function readStrictOddsFromShutubaRow(tr){
+  // 単勝オッズ欄だけを見る。斤量・馬体重・人気欄は絶対に採用しない。
+  const targets = [
+    cellByHeader(tr, /^(単勝)?オッズ$|予想オッズ/),
+    ...Array.from(tr.querySelectorAll('td.Odds, td[class~="Odds"], td[class*="Tansho"], span.OddsVal, span[class*="OddsVal"], .RaceOdds, .Popular_Odds'))
+  ].filter(Boolean);
+  for(const el of targets){
+    const cls = String(el.className || '').toLowerCase();
+    const txt = toHalfNumberText(normCellText(el)).replace(/,/g, '');
+    if(/popular|ninki|rank|kinryo|weight|futan|jockey|trainer|stable|time|margin|body|馬体重|斤量|人気/.test(cls + ' ' + txt)) continue;
+    const m = txt.match(/^(\d{1,4}\.\d+)$/) || txt.match(/(\d{1,4}\.\d+)/);
+    if(!m) continue;
+    const v = sanitizeWinOddsValue(Number(m[1]), txt);
+    if(v >= 1) return v;
+  }
+  return 0;
+}
+
+function readStrictPopularityFromShutubaRow(tr, horseNo){
+  // 人気欄だけを見る。単勝オッズ小数や馬番は採用しない。
+  const targets = [
+    cellByHeader(tr, /^人気$|人気順/),
+    ...Array.from(tr.querySelectorAll('td.Popular, td[class*="Popular"], td[class*="Ninki"], span[class*="Popular"], span[class*="Ninki"]'))
+  ].filter(Boolean);
+  for(const el of targets){
+    const txt = toHalfNumberText(normCellText(el));
+    const m = txt.match(/^([1-9]|1[0-8])\s*人気?$/) || txt.match(/^([1-9]|1[0-8])$/);
+    if(!m) continue;
+    const v = Number(m[1]);
+    if(v >= 1 && v <= 18 && v !== Number(horseNo)) return v;
+  }
+  return 0;
+}
+
+function parseWinOddsPopularityFromShutubaDocStrict(doc){
+  const map = new Map();
+  const rows = Array.from(doc.querySelectorAll('tr.HorseList, tr[class*="HorseList"], tbody tr, table tr'));
+  rows.forEach(tr => {
+    if(!tr.querySelector('a[href*="/horse/"]')) return;
+    const num = readStrictHorseNoFromShutubaRow(tr);
+    if(!(num >= 1 && num <= 18)) return;
+    const odds = readStrictOddsFromShutubaRow(tr);
+    const pop = readStrictPopularityFromShutubaRow(tr, num);
+    if(odds >= 1 || pop >= 1){
+      const prev = map.get(num) || {};
+      map.set(num, {
+        odds: odds >= 1 ? Math.round(odds * 10) / 10 : Number(prev.odds || 0),
+        pop: pop >= 1 ? pop : Number(prev.pop || 0)
+      });
+    }
+  });
+  return map;
 }
 
 // ============================================================
@@ -3235,7 +3308,23 @@ async function fetchWinOddsPopularity(kind, raceId){
       // HTMLソースに含まれないことがある → 照合をスキップしてパースで判定。
       if(kind === 'NAR' && !html.includes(raceId)) continue;
       const doc = new DOMParser().parseFromString(html, 'text/html');
-      const map = parseWinOddsPopularityFromDoc(doc);
+      let map = /shutuba\.html/.test(url)
+        ? parseWinOddsPopularityFromShutubaDocStrict(doc)
+        : parseWinOddsPopularityFromDoc(doc);
+      if(map.size >= 2) return map;
+      // shutubaで人気だけ/オッズだけの行が一部欠けた場合は汎用parserで補完。ただし代入先はmerge側で固定。
+      if(/shutuba\.html/.test(url)){
+        const loose = parseWinOddsPopularityFromDoc(doc);
+        if(loose.size > map.size){
+          loose.forEach((v, k) => {
+            const p = map.get(k) || {};
+            map.set(k, {
+              odds: Number(p.odds || 0) >= 1 ? p.odds : Number(v.odds || 0),
+              pop: Number(p.pop || 0) >= 1 ? p.pop : Number(v.pop || 0)
+            });
+          });
+        }
+      }
       if(map.size >= 2) return map;
     }catch(e){
       // 次のURLを試す
@@ -3249,10 +3338,14 @@ function mergeOddsPopularityIntoHorses(baseHorses, oddsMap){
   return baseHorses.map(h => {
     const o = oddsMap.get(Number(h.num));
     if(!o) return h;
+    const safeOdds = sanitizeWinOddsValue(Number(o.odds || 0), String(o.odds || ''));
+    const safePop = Number(o.pop || 0);
     return {
       ...h,
-      odds: (Number(o.odds) >= 1) ? Number(o.odds) : Number(h.odds || 0),
-      pop: (Number(o.pop) >= 1) ? Number(o.pop) : Number(h.pop || 0)
+      // 記入欄固定: odds は単勝オッズ欄へ、pop は人気欄へ。
+      // 斤量っぽい 54/55/56 等は sanitizeWinOddsValue 側で 0 にする。
+      odds: (safeOdds >= 1) ? safeOdds : Number(h.odds || 0),
+      pop: (safePop >= 1 && safePop <= 18) ? safePop : Number(h.pop || 0)
     };
   });
 }
@@ -3310,9 +3403,9 @@ async function fetchRace(){
       throw new Error('出走馬を十分に取得できませんでした。race_idまたは開催情報を確認してください。');
     }
 
-    // 単勝オッズ・人気: race_id → odds/index.html を正とする。
-    // 出馬表DOMは斤量・馬体重・人気列が連結して誤読しやすいため、
-    // race_id確定後は必ず単勝オッズページを取りに行き、取得できた値で上書きする。
+    // 単勝オッズ・人気: race_id → shutuba.html を正とする。
+    // 同じ馬行の「単勝オッズ欄」「人気欄」だけを読む。
+    // 斤量・馬体重・馬番は単勝オッズ/人気へ代入しない。
     const kind = document.getElementById('pickKind')?.value || (rawUrl.includes('nar.netkeiba') ? 'NAR' : 'JRA');
 
     if(rid){

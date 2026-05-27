@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.11 JRAOddsParserFix</title>
+<title>The競馬 EV分析 v5.18.12 JRAOddsNameFallback</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.11 JRAOddsParserFix</span>
+    <span class="ver">v5.18.12 JRAOddsNameFallback</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -3393,17 +3393,141 @@ function parseWinOddsPopularityFromDoc(doc){
   return map;
 }
 
-async function fetchWinOddsPopularity(kind, raceId){
+
+// ============================================================
+// v5.18.12: JRAオッズHTMLのDOM変更対策（名前近傍テキスト保険）
+// odds/index.html 側でテーブルclassが取れない場合でも、出走馬名の近くにある
+// 「小数オッズ」「n人気」を拾って map 化する。shutuba の斤量誤読は避けるため、
+// この保険は odds/index.html 取得HTMLに対してのみ使う。
+// ============================================================
+function normalizeOddsSearchText(v){
+  return toHalfNumberText(String(v || ''))
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\u00a0/g, ' ')
+    .replace(/[ \t\r\n]+/g, ' ')
+    .trim();
+}
+
+function escapeRegExpText(s){
+  return String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function parseWinOddsPopularityByHorseNamesFromHtml(html, expectedHorses){
+  const map = new Map();
+  if(!html || !Array.isArray(expectedHorses) || !expectedHorses.length) return map;
+
+  // script内にJSON風で入っているケースもあるため、タグ除去版だけでなく raw も見る。
+  const raw = normalizeOddsSearchText(String(html)
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<\/(?:td|th|tr|li|div|span|p)>/gi, ' ')
+    .replace(/<[^>]+>/g, ' '));
+
+  function acceptOddsNearName(t){
+    if(!t) return 0;
+    if(/斤量|負担重量|馬体重|増減|kg|㎏|歳|牡|牝|セ|騎手|調教師|所属|払戻|馬連|馬単|ワイド|3連|枠連|ラップ/i.test(t)) return 0;
+
+    // 人気の直前にある小数を最優先。例「... 24.4 12人気」
+    const beforePop = t.match(/(\d{1,4}\.\d+)\s*(?:倍)?\s*(?:[1-9]|1[0-8])\s*人気/);
+    if(beforePop){
+      const v = sanitizeWinOddsValue(Number(beforePop[1]), beforePop[1]);
+      if(v >= 1 && v <= 999.9) return v;
+    }
+
+    const nums = Array.from(String(t).matchAll(/(\d{1,4}\.\d+)/g)).map(m => Number(m[1]));
+    for(const n of nums){
+      const v = sanitizeWinOddsValue(n, String(n));
+      if(v >= 1 && v <= 999.9) return v;
+    }
+
+    // 連結ケース: 724.412 = 724.4 + 12人気
+    const joined = String(t).match(/(\d{1,3}\.\d)([1-9]|1[0-8])(?:\s|$)/);
+    if(joined){
+      const v = sanitizeWinOddsValue(Number(joined[1]), joined[1]);
+      if(v >= 1 && v <= 999.9) return v;
+    }
+    return 0;
+  }
+
+  function acceptPopNearName(t){
+    const m = String(t || '').match(/([1-9]|1[0-8])\s*人気/);
+    if(m) return Number(m[1]);
+
+    // 「オッズ 24.4 12」のような末尾人気
+    const m2 = String(t || '').match(/\d{1,4}\.\d+\s+([1-9]|1[0-8])(?:\s|$)/);
+    if(m2) return Number(m2[1]);
+
+    const joined = String(t || '').match(/\d{1,3}\.\d([1-9]|1[0-8])(?:\s|$)/);
+    if(joined) return Number(joined[1]);
+    return 0;
+  }
+
+  expectedHorses.forEach(h => {
+    const num = Number(h && h.num);
+    const name = String((h && h.name) || '').trim();
+    if(!(num >= 1 && num <= 18) || !name) return;
+
+    const nameRe = new RegExp(escapeRegExpText(name), 'g');
+    let m;
+    while((m = nameRe.exec(raw))){
+      const from = Math.max(0, m.index - 80);
+      const to = Math.min(raw.length, m.index + name.length + 220);
+      const win = raw.slice(from, to);
+
+      // 払戻表などに同名が混じる可能性を下げる。
+      if(/払戻|馬連|馬単|ワイド|3連|枠連|着順|結果/.test(win) && !/人気|オッズ|単勝|Odds/i.test(win)) continue;
+
+      const odds = acceptOddsNearName(win);
+      const pop = acceptPopNearName(win);
+
+      if(odds >= 1){
+        const prev = map.get(num) || {};
+        map.set(num, {
+          odds: Math.round(odds * 10) / 10,
+          pop: (pop >= 1 && pop <= 18) ? pop : (prev.pop || 0)
+        });
+        break;
+      }
+    }
+  });
+
+  return map;
+}
+
+function mergeOddsMaps(primary, secondary){
+  const out = new Map(primary || []);
+  if(!secondary || !secondary.size) return out;
+  secondary.forEach((v, k) => {
+    const prev = out.get(k) || {};
+    out.set(k, {
+      odds: Number(prev.odds) >= 1 ? Number(prev.odds) : Number(v.odds || 0),
+      pop: Number(prev.pop) >= 1 ? Number(prev.pop) : Number(v.pop || 0)
+    });
+  });
+  return out;
+}
+
+
+async function fetchWinOddsPopularity(kind, raceId, expectedHorses){
   if(!settings.proxyUrl || !raceId) return new Map();
   for(const url of buildNetkeibaOddsUrls(kind, raceId)){
     try{
       const html = await fetchHtmlViaProxy(url);
       if(!html) continue;
       const doc = new DOMParser().parseFromString(html, 'text/html');
-      const map = parseWinOddsPopularityFromDoc(doc);
+
+      // まず従来のDOMテーブル解析
+      let map = parseWinOddsPopularityFromDoc(doc);
+
+      // JRAでDOM class が変化して 0件になる場合の保険：
+      // odds/index.html のHTML本文から、出走馬名近傍の単勝オッズ・人気を拾う。
+      if((!map || map.size < 2) && kind === 'JRA' && Array.isArray(expectedHorses) && expectedHorses.length){
+        const byName = parseWinOddsPopularityByHorseNamesFromHtml(html, expectedHorses);
+        map = mergeOddsMaps(map, byName);
+      }
+
       if(map.size >= 2) return map;
     }catch(e){
-      // 次のURLを試す
+      console.warn('odds fetch failed:', e);
     }
   }
   return new Map();
@@ -3486,7 +3610,7 @@ async function fetchRace(){
     if(rid){
       if(kind === 'JRA'){
         // Step1: odds/index.html を必ず最初に取得（主経路）
-        const oddsMap = await fetchWinOddsPopularity('JRA', rid);
+        const oddsMap = await fetchWinOddsPopularity('JRA', rid, horses);
         if(oddsMap.size >= 2){
           horses = mergeOddsPopularityIntoHorses(horses, oddsMap);
         }
@@ -3501,7 +3625,7 @@ async function fetchRace(){
         }
       }else{
         // NAR: 既存ロジックをそのまま維持
-        const oddsMap = await fetchWinOddsPopularity(kind, rid);
+        const oddsMap = await fetchWinOddsPopularity(kind, rid, horses);
         if(oddsMap.size >= 2){
           horses = mergeOddsPopularityIntoHorses(horses, oddsMap);
         }else{

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.7 JRAOddsFix</title>
+<title>The競馬 EV分析 v5.18.8 JRAOddsFix2</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.7 JRAOddsFix</span>
+    <span class="ver">v5.18.8 JRAOddsFix2</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2983,6 +2983,7 @@ function parseWinOddsPopularityFromDoc(doc){
   // netkeibaオッズページ構造:
   //   .OddsTableWrap または #odds_tan_tableWrap の tbody tr に
   //   .Umaban(馬番), td.Odds または span.OddsVal(オッズ), td.Popular(人気) が入る
+  // v5.18.8: td:first-child による馬番誤読を廃止し、.Umaban等のクラス限定に絞る。
   const oddsTableSels = [
     '#odds_tan_tableWrap tbody tr',
     '.OddsTableWrap tbody tr',
@@ -2997,42 +2998,58 @@ function parseWinOddsPopularityFromDoc(doc){
     if(!rows.length) continue;
 
     rows.forEach(tr => {
-      // 馬番取得
+      // 馬番取得: クラス名限定で取得し、先頭セルへのフォールバックは廃止（誤読防止）
       let num = 0;
-      const numEl = tr.querySelector('.Umaban, [class*="Umaban"], [class*="HorseNum"], td:first-child');
-      if(numEl) num = firstNumberInCell(numEl, false);
+      const numEl = tr.querySelector('.Umaban, [class*="Umaban"], [class*="HorseNum"]');
+      if(numEl){
+        num = firstNumberInCell(numEl, false);
+      }else{
+        // クラスが無い場合のみ先頭2セルを候補とする（馬番は必ず1〜18の整数）
+        const cells = Array.from(tr.querySelectorAll('td,th'));
+        for(let ci = 0; ci < Math.min(2, cells.length); ci++){
+          const ct = toHalfNumberText(normCellText(cells[ci]));
+          if(/^([1-9]|1[0-8])$/.test(ct.trim())){
+            num = Number(ct.trim()); break;
+          }
+        }
+      }
       if(!(num >= 1 && num <= 18)) return;
 
       // オッズ取得: spanのOddsVal優先、なければtd.Odds
+      // 取得値が斤量（50〜60）に該当する場合は除外する
       let odds = 0;
-      const oddsSpan = tr.querySelector('span.OddsVal, span[class*="Odds"], td.Odds span, td[class*="Odds"] span');
+      const oddsSpan = tr.querySelector('span.OddsVal, span[class*="OddsVal"], td.Odds span, td[class*="Odds"] span');
       if(oddsSpan){
         const t = toHalfNumberText(normCellText(oddsSpan));
-        const m = t.match(/(\d{1,4}(?:\.\d+)?)/);
-        if(m) odds = Number(m[1]);
+        // 小数を優先し、整数は1〜49または61〜999のみ許可（斤量50〜60除外）
+        const m = t.match(/(\d{1,3}\.\d+)/) || t.match(/^([1-9]|[1-4]\d|6[1-9]|[7-9]\d|\d{3})$/);
+        if(m){ odds = sanitizeWinOddsValue(Number(m[1]), t); }
       }
       if(!(odds >= 1)){
         const oddsTd = tr.querySelector('td.Odds, td[class*="Odds"], td[class*="odds"]');
         if(oddsTd){
           const t = toHalfNumberText(normCellText(oddsTd));
-          const m = t.match(/(\d{1,4}(?:\.\d+)?)/);
-          if(m) odds = Number(m[1]);
+          const m = t.match(/(\d{1,3}\.\d+)/);
+          if(m){ odds = sanitizeWinOddsValue(Number(m[1]), t); }
         }
       }
 
-      // 人気取得
+      // 人気取得: 1〜18の整数のみ許可し、馬番と同値は除外
       let pop = 0;
       const popEl = tr.querySelector('td.Popular, td[class*="Popular"], td[class*="Ninki"], span[class*="Popular"]');
       if(popEl){
         const t = toHalfNumberText(normCellText(popEl));
-        const m = t.match(/(\d{1,2})/);
-        if(m) pop = Number(m[1]);
+        const m = t.match(/^([1-9]|1[0-8])$/) || t.match(/([1-9]|1[0-8])\s*人気/);
+        if(m){
+          const pv = Number(m[1]);
+          if(pv >= 1 && pv <= 18 && pv !== num) pop = pv;
+        }
       }
 
-      if(odds >= 1 && odds <= 9999){
+      if(odds >= 1 && odds <= 999.9){
         const prev = map.get(num) || {};
         map.set(num, {
-          odds,
+          odds: Math.round(odds * 10) / 10,
           pop: (pop >= 1 && pop <= 18) ? pop : (prev.pop || 0)
         });
       }
@@ -3196,6 +3213,85 @@ function parseOddsPopFromCellsStrict(cells, horseNo){
   return { odds: odds || 0, pop: pop || 0 };
 }
 
+// ============================================================
+// v5.18.8: JRA出馬表HTML（shutuba.html）専用オッズ解析。
+// shutuba.html はオッズをJSで動的描画するため、プロキシ経由の静的DOMには
+// td.Odds / span.OddsVal が存在せず、斤量列（55.0等）しか残らない。
+// この関数は「予想オッズ」列が明示的に存在する場合のみ採用し、
+// 斤量らしき値（50〜60の整数・小数）は一切返さない。
+// odds/index.html の取得後に補完用として呼び出す。
+// ============================================================
+function parseWinOddsPopularityFromShutuba(doc){
+  var map = new Map();
+
+  // JRA出馬表で「予想オッズ」ヘッダーが存在する場合だけ使う。
+  // ヘッダー名が存在しない場合は空Mapを返し、斤量誤読を防ぐ。
+  var tables = Array.from(doc.querySelectorAll('table'));
+  for(var ti = 0; ti < tables.length; ti++){
+    var tbl = tables[ti];
+    var hdrs = Array.from(tbl.querySelectorAll('thead th, tr th, tr:first-child td'));
+    var headerTexts = hdrs.map(function(th){ return toHalfNumberText(normCellText(th)); });
+    var hasOddsHeader = headerTexts.some(function(t){
+      return /予想オッズ|単勝オッズ|オッズ/.test(t);
+    });
+    if(!hasOddsHeader) continue;
+
+    // オッズヘッダーが存在するテーブルだけ処理する。
+    var oddsColIdx = -1;
+    for(var hi = 0; hi < headerTexts.length; hi++){
+      if(/予想オッズ|単勝オッズ|オッズ/.test(headerTexts[hi])){ oddsColIdx = hi; break; }
+    }
+    var popColIdx = -1;
+    for(var hi = 0; hi < headerTexts.length; hi++){
+      if(/^人気$|人気順/.test(headerTexts[hi])){ popColIdx = hi; break; }
+    }
+
+    var rows = Array.from(tbl.querySelectorAll('tbody tr, tr'));
+    rows.forEach(function(tr){
+      var horseLink = tr.querySelector('a[href*="/horse/"]');
+      if(!horseLink) return;
+
+      var numEl = tr.querySelector('.Umaban, [class*="Umaban"], [class*="HorseNum"]');
+      var num = firstNumberInCell(numEl, false);
+      if(!(num >= 1 && num <= 18)) return;
+
+      var cells = Array.from(tr.children);
+      var odds = 0;
+      if(oddsColIdx >= 0 && cells[oddsColIdx]){
+        var t = toHalfNumberText(normCellText(cells[oddsColIdx]));
+        var m = t.match(/(\d{1,3}\.\d+)/);
+        if(m){
+          var v = sanitizeWinOddsValue(Number(m[1]), t);
+          if(v >= 1 && v <= 999.9) odds = v;
+        }
+      }
+
+      var pop = 0;
+      if(popColIdx >= 0 && cells[popColIdx]){
+        var pt = toHalfNumberText(normCellText(cells[popColIdx]));
+        var pm = pt.match(/^([1-9]|1[0-8])$/) || pt.match(/([1-9]|1[0-8])\s*人気/);
+        if(pm){
+          var pv = Number(pm[1]);
+          if(pv >= 1 && pv <= 18 && pv !== num) pop = pv;
+        }
+      }
+
+      if(odds >= 1 || pop >= 1){
+        var prev = map.get(num) || {};
+        map.set(num, {
+          odds: odds >= 1 ? odds : (prev.odds || 0),
+          pop:  pop  >= 1 ? pop  : (prev.pop  || 0)
+        });
+      }
+    });
+
+    if(map.size >= 2) return map;
+    map = new Map(); // このテーブルでは不十分→次のテーブルを試す
+  }
+
+  return map; // ヘッダーが見つからない場合は空Map（安全）
+}
+
 function parseWinOddsPopularityFromDoc(doc){
   const map = new Map();
 
@@ -3329,28 +3425,34 @@ async function fetchRace(){
       throw new Error('出走馬を十分に取得できませんでした。race_idまたは開催情報を確認してください。');
     }
 
-    // 単勝オッズ・人気: race_id → odds/index.html を正とする。
-    // 出馬表DOMは斤量・馬体重・人気列が連結して誤読しやすいため、
-    // race_id確定後は必ず単勝オッズページを取りに行き、取得できた値で上書きする。
+    // ── 単勝オッズ・人気取得（v5.18.8 JRAOddsFix2） ──────────────────────────
+    // JRA出馬表HTML（shutuba.html）はオッズをJavaScriptで動的描画するため、
+    // プロキシで取得した静的DOMにはtd.OddsもspanOddsValも存在しない。
+    // 斤量列（55.0等）だけが右側に残り、これをオッズと誤読する根本原因となる。
+    //
+    // 対策：JRAは必ず odds/index.html を先に取得し、確定値で上書きする。
+    // 出馬表HTMLからのオッズ解析は「予想オッズ列が明示されている場合」のみ保険で使う。
+    // NAR側の挙動はそのまま維持し、一切変更しない。
     const kind = document.getElementById('pickKind')?.value || (rawUrl.includes('nar.netkeiba') ? 'NAR' : 'JRA');
 
     if(rid){
       if(kind === 'JRA'){
-        // JRAは選択された race_id の出馬表HTMLを正として、馬リンク付き行から単勝オッズ・人気を補正する。
-        // 不足した場合だけ race_id のオッズページを保険に使い、NAR側の既存挙動には触れない。
-        const shutubaOddsMap = parseWinOddsPopularityFromDoc(doc);
-        if(shutubaOddsMap.size >= 2){
-          horses = mergeOddsPopularityIntoHorses(horses, shutubaOddsMap);
+        // Step1: odds/index.html を必ず最初に取得（主経路）
+        const oddsMap = await fetchWinOddsPopularity('JRA', rid);
+        if(oddsMap.size >= 2){
+          horses = mergeOddsPopularityIntoHorses(horses, oddsMap);
         }
-        const missingOdds = horses.filter(h => !(Number(h.odds) >= 1)).length;
-        const missingPop = horses.filter(h => !(Number(h.pop) >= 1)).length;
-        if(missingOdds > 0 || missingPop > 0){
-          const oddsMap = await fetchWinOddsPopularity(kind, rid);
-          if(oddsMap.size >= 2){
-            horses = mergeOddsPopularityIntoHorses(horses, oddsMap);
+        // Step2: オッズがまだ取れていない馬だけ、出馬表HTMLの予想オッズ列から補完する。
+        // ただし「明示的に小数値が存在する場合」のみ採用し、斤量（55.0等）は拒否する。
+        const stillMissing = horses.filter(function(h){ return !(Number(h.odds) >= 1); }).length;
+        if(stillMissing > 0){
+          const shutubaOddsMap = parseWinOddsPopularityFromShutuba(doc);
+          if(shutubaOddsMap.size >= 1){
+            horses = mergeOddsPopularityIntoHorses(horses, shutubaOddsMap);
           }
         }
       }else{
+        // NAR: 既存ロジックをそのまま維持
         const oddsMap = await fetchWinOddsPopularity(kind, rid);
         if(oddsMap.size >= 2){
           horses = mergeOddsPopularityIntoHorses(horses, oddsMap);
@@ -3594,6 +3696,11 @@ function parseHorsesFromDoc(doc, url){
   const list = [];
   const seen = new Set();
 
+  // JRAの出馬表HTML（shutuba.html）かどうかを判定する。
+  // JRAは odds/index.html で別途オッズを取得するため、ここではオッズ/人気を0に初期化する。
+  // これにより斤量列（55.0等）をオッズとして誤読する問題を根本から排除する。
+  const isJraShutubaUrl = /race\.netkeiba\.com/.test(String(url || '')) && !/nar\.netkeiba/.test(String(url || ''));
+
   // JRA/NARとも「馬リンクが存在する行」だけを採用。広告・払戻・分析タブの混入を遮断する。
   const rows = Array.from(doc.querySelectorAll('tr.HorseList, tr[class*="HorseList"], tbody tr, table tr'));
 
@@ -3648,8 +3755,18 @@ function parseHorsesFromDoc(doc, url){
     }
     if(frame < 1 || frame > 8) frame = Math.ceil(num / 2);
 
-    const odds = extractOddsFromRow(tr, num);
-    const pop = extractPopularityFromRow(tr, num);
+    // JRA出馬表HTML（shutuba.html）ではオッズをJSで動的描画するため、
+    // 静的DOMには td.Odds / span.OddsVal が存在せず、斤量列しか残らない。
+    // isJraShutubaUrl=true のときはオッズ・人気を0で初期化し、
+    // 後続の fetchWinOddsPopularity(odds/index.html) で正確な値を上書きする。
+    let odds, pop;
+    if(isJraShutubaUrl){
+      odds = 0;
+      pop  = 0;
+    }else{
+      odds = extractOddsFromRow(tr, num);
+      pop  = extractPopularityFromRow(tr, num);
+    }
 
     seen.add(num);
 

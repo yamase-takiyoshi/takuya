@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.40 RaceListSubFix</title>
+<title>The競馬 EV分析 v5.18.41 RaceIdOnlyListFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.40 RaceListSubFix</span>
+    <span class="ver">v5.18.41 RaceIdOnlyListFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2170,7 +2170,7 @@ function parseActiveVenuesFromList(html, kind, date){
   const rawHtml = String(html || '');
 
   if(kind !== 'NAR'){
-    // v5.18.40 RaceListSubFix:
+    // v5.18.41 RaceIdOnlyListFix:
     // 5.18.37 はHTML全体から race_id / kaisai_id / 裸IDを広く拾ったため、
     // 選択日以外のリンクやナビ・過去開催・他場リンクまで混入し、
     // 2026/05/24 に福島・中山・阪神・小倉などが出る事故が起きた。
@@ -2476,7 +2476,7 @@ async function loadActiveJraVenuesByLightProbe(date, candidateCodes){
 // MMDDはrace_idに入らないため、各場の 1R をプローブし、出馬表本文の日付が選択日と一致した場だけ採用する。
 let lastJraKaisaiByDateVenue = {};
 async function loadActiveJraVenuesByRaceId(date){
-  // v5.18.40 RaceListSubFix:
+  // v5.18.41 RaceIdOnlyListFix:
   // 固定表・季節表は使わず、全JRA場をネット上の出馬表で同時確認する。
   // 表示は「確認中...」だけにし、札幌から順に探しているようなUIにはしない。
   const status = document.getElementById('urlStatus');
@@ -3126,6 +3126,21 @@ async function loadRaceList(){
           if(kd0){
             lastJraKaisaiByDateVenue = lastJraKaisaiByDateVenue || {};
             lastJraKaisaiByDateVenue[cacheKey0] = kd0;
+            // v5.18.41: race_list_sub は時刻や表示グループにより 6R以降だけ返る場合がある。
+            // 開催回・開催日が分かったら、1R〜12Rを race_id から生成して補完する。
+            if(races.length < 12){
+              const generated = buildJraRacesFromFixedKaisai('', date, venueCode, kd0);
+              const byRaceNo = new Map();
+              generated.forEach(r => byRaceNo.set(Number(r.raceNo), r));
+              races.forEach(r => {
+                const no = Number(r.raceNo);
+                // 一覧由来のレース名は文字化けする場合があるため、表示には使わず race_id 基準に統一する。
+                byRaceNo.set(no, { ...r, raceName: `${no}R` });
+              });
+              races = Array.from(byRaceNo.values()).sort((a,b)=>Number(a.raceNo)-Number(b.raceNo));
+            }else{
+              races = races.map(r => ({ ...r, raceName: `${Number(r.raceNo)}R` }));
+            }
           }
         }
       }catch(e){ races = []; }
@@ -3175,9 +3190,12 @@ async function loadRaceList(){
     const dateLabel = raceListDateLabel(date);
     raceSelect.innerHTML = races.map(r => {
       const url = shutubaUrl(kind, r.raceId); // 前回URLを絶対に再利用しない
-      const raceName = escapeHtml(r.raceName || `${r.raceNo}R`);
-      const label = `${dateLabel} ${venueName(kind, venueCode)} ${r.raceNo}R ${raceName} / ${r.raceId}`;
-      return `<option value="${url}" data-race-id="${r.raceId}" data-race-name="${raceName}">${label}</option>`;
+      // v5.18.41: 一覧HTMLのレース名は文字化け・欠落しやすいため、選択欄はrace_id主体で安定表示。
+      // 正式レース名は「レースデータ取得」時に出馬表ページから取得する。
+      const no = Number(r.raceNo || String(r.raceId).slice(-2));
+      const safeName = `${no}R`;
+      const label = `${dateLabel} ${venueName(kind, venueCode)} ${no}R / ${r.raceId}`;
+      return `<option value="${url}" data-race-id="${r.raceId}" data-race-name="${safeName}">${label}</option>`;
     }).join('');
 
     applySelectedRaceUrl();
@@ -3206,7 +3224,7 @@ function applySelectedRaceUrl(){
     currentRaceId = raceId;
     if(box){
       box.style.display = currentRaceName ? 'block' : 'none';
-      box.textContent = currentRaceName ? `選択中: ${currentRaceName}` : '';
+      box.textContent = raceId ? `選択中: ${currentRaceName} / ${raceId}` : '';
     }
   }else{
     raceUrl.value = '';
@@ -4526,7 +4544,7 @@ function json(obj, status = 200) {
 
 
 // ============================================================
-// v5.18.40 RaceListSubFix
+// v5.18.41 RaceIdOnlyListFix
 // その場凌ぎの固定表を使わず、netkeiba race_list.html の kaisai_id/race_id を信頼して
 // 開催場とレース一覧を作る。JRA race_id は日付を含まないため、出馬表総当たり検証は行わない。
 // ============================================================

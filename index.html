@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.41 RaceIdOnlyListFix</title>
+<title>The競馬 EV分析 v5.18.42 AutoVenueSubFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.41 RaceIdOnlyListFix</span>
+    <span class="ver">v5.18.42 AutoVenueSubFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -765,6 +765,12 @@ function initUI(){
   loadSimHistory();
   renderSimProfitChart();
   renderManualFinishPicker();
+
+  // v5.18.42: iPad/Safariでは初期表示時に開催場が「開催なし」のまま残ることがあるため、
+  // 起動直後に必ず選択日の開催場をネット取得する。
+  setTimeout(() => {
+    try{ onRaceDateKindChanged(); }catch(e){ console.error(e); }
+  }, 120);
 }
 
 // ─── 馬データUI ─────────────────────────────────
@@ -2040,7 +2046,8 @@ async function fetchFirstUsefulJraListHtml(date, venueCode){
     try{
       const html = await fetchHtmlViaProxy(url);
       lastHtml = html || lastHtml;
-      const races = parseRaceIdsFromList(html, 'JRA', venueCode || '', date);
+      let races = parseRaceIdsFromList(html, 'JRA', venueCode || '', date);
+      if(!races || !races.length) races = parseJraRaceIdsRobust(html, date, venueCode || '');
       if(races && races.length) return { html, url, races };
     }catch(e){}
   }
@@ -2170,7 +2177,7 @@ function parseActiveVenuesFromList(html, kind, date){
   const rawHtml = String(html || '');
 
   if(kind !== 'NAR'){
-    // v5.18.41 RaceIdOnlyListFix:
+    // v5.18.42 AutoVenueSubFix:
     // 5.18.37 はHTML全体から race_id / kaisai_id / 裸IDを広く拾ったため、
     // 選択日以外のリンクやナビ・過去開催・他場リンクまで混入し、
     // 2026/05/24 に福島・中山・阪神・小倉などが出る事故が起きた。
@@ -2349,6 +2356,39 @@ async function loadNarRaceListByRaceId(date, venueCode){
 
 let activeVenueLoadSeq = 0;
 
+function canUpdateStatus(){ return true; }
+
+function parseJraRaceIdsRobust(html, date, venueCode){
+  const p = ymdParts(date);
+  const map = new Map();
+  const pushId = (id) => {
+    id = String(id || '');
+    if(!/^\d{12}$/.test(id)) return;
+    if(id.slice(0,4) !== p.yyyy) return;
+    const vc = extractVenueCodeFromRaceId(id, 'JRA');
+    if(!JRA_VENUES.some(v => v[0] === vc)) return;
+    if(venueCode && vc !== venueCode) return;
+    const raceNo = Number(id.slice(-2));
+    if(!(raceNo >= 1 && raceNo <= 12)) return;
+    if(!map.has(id)) map.set(id, { raceId:id, raceNo, venueCode:vc, raceName:`${raceNo}R`, shutuba:shutubaUrl('JRA', id) });
+  };
+
+  // race_id=202605021001 / race_id%3D... / race_id\u003d... / data-race-id="..." を全部拾う。
+  const raw = String(html || '');
+  let m;
+  const patterns = [
+    /race_id[=:%\\u003d\\u003D&;quot'\"\s]+(\d{12})/g,
+    /data-race-id=[\"']?(\d{12})/g,
+    /[?&]id=(\d{12})/g,
+    /\b(20\d{10})\b/g
+  ];
+  for(const re of patterns){
+    while((m = re.exec(raw))) pushId(m[1]);
+  }
+  return Array.from(map.values()).sort((a,b) => a.venueCode.localeCompare(b.venueCode) || a.raceNo - b.raceNo);
+}
+
+
 async function onRaceDateKindChanged(){
   // v5.18.39 iPad対策:
   // JRA/NAR切替時に前回の非同期処理が残ると、JRA画面にNARの表示が混入する。
@@ -2476,41 +2516,47 @@ async function loadActiveJraVenuesByLightProbe(date, candidateCodes){
 // MMDDはrace_idに入らないため、各場の 1R をプローブし、出馬表本文の日付が選択日と一致した場だけ採用する。
 let lastJraKaisaiByDateVenue = {};
 async function loadActiveJraVenuesByRaceId(date){
-  // v5.18.41 RaceIdOnlyListFix:
-  // 固定表・季節表は使わず、全JRA場をネット上の出馬表で同時確認する。
-  // 表示は「確認中...」だけにし、札幌から順に探しているようなUIにはしない。
+  // v5.18.42: まず先生提案の race_list_sub.html を最優先。
+  // ここで拾った race_id から開催場を作る。取れない時だけ出馬表プローブへ回す。
   const status = document.getElementById('urlStatus');
   const found = [];
   const cacheKeyBase = ymdParts(date).yyyymmdd;
   lastJraKaisaiByDateVenue = lastJraKaisaiByDateVenue || {};
 
-  if(status && canUpdateStatus()) status.innerHTML = `<div class="url-status">📡 ${date} のJRA開催をnetkeiba race_list_subで確認中...</div>`;
+  if(status) status.innerHTML = `<div class="url-status">📡 ${date} のJRA開催を race_list_sub から取得中...</div>`;
 
-  // v5.18.40: 先生の提案どおり、まず race_list_sub.html?kaisai_date=YYYYMMDD を参照する。
-  // ここに出馬表 race_id が載っていれば、札幌から総当たりせず開催場を一発で確定できる。
   try{
-    const fromSub = await loadActiveJraVenuesFromRaceListSub(date);
-    if(fromSub && fromSub.length) return fromSub;
-  }catch(e){}
+    const got = await fetchFirstUsefulJraListHtml(date, '');
+    const races = got.races || [];
+    if(races.length){
+      const byVenue = new Map();
+      races.forEach(r => {
+        const code = extractVenueCodeFromRaceId(r.raceId, 'JRA');
+        const raceNo = Number(r.raceNo || String(r.raceId).slice(-2));
+        if(!JRA_VENUES.some(v => v[0] === code)) return;
+        if(!(raceNo >= 1 && raceNo <= 12)) return;
+        if(!byVenue.has(code)) byVenue.set(code, { set:new Set(), firstRaceId:r.raceId });
+        byVenue.get(code).set.add(raceNo);
+      });
+      Array.from(byVenue.entries()).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([code,obj]) => {
+        const kd = jraKaisaiFromRaceId(obj.firstRaceId);
+        if(kd) lastJraKaisaiByDateVenue[cacheKeyBase + '-' + code] = kd;
+        found.push([code, venueName('JRA', code), 12, kd]);
+      });
+      if(found.length) return found;
+    }
+  }catch(e){ console.warn('race_list_sub venue parse failed', e); }
 
-  if(status && canUpdateStatus()) status.innerHTML = `<div class="url-status">📡 race_list_subで見つからないため、出馬表race_idで確認中...</div>`;
+  if(status) status.innerHTML = `<div class="url-status">📡 race_list_subで取得できないため、出馬表race_idで確認中...</div>`;
 
   const tasks = JRA_VENUES.map(async ([code, name]) => {
     let kd = null;
-    try{
-      kd = await findJraKaisaiByFullProbe(date, code, lastJraKaisaiByDateVenue[cacheKeyBase + '-' + code] || null);
-    }catch(e){ kd = null; }
+    try{ kd = await findJraKaisaiByFullProbe(date, code, lastJraKaisaiByDateVenue[cacheKeyBase + '-' + code] || null); }
+    catch(e){ kd = null; }
     if(!kd) return null;
-
     lastJraKaisaiByDateVenue[cacheKeyBase + '-' + code] = kd;
-    let count = 12;
-    try{
-      const races = await buildVerifiedJraRacesByProbe(date, code, kd);
-      if(races && races.length) count = races.length;
-    }catch(e){}
-    return [code, name, count, kd];
+    return [code, name, 12, kd];
   });
-
   const results = await Promise.all(tasks);
   results.forEach(v => { if(v) found.push(v); });
   found.sort((a,b) => a[0].localeCompare(b[0]));
@@ -4544,7 +4590,7 @@ function json(obj, status = 200) {
 
 
 // ============================================================
-// v5.18.41 RaceIdOnlyListFix
+// v5.18.42 AutoVenueSubFix
 // その場凌ぎの固定表を使わず、netkeiba race_list.html の kaisai_id/race_id を信頼して
 // 開催場とレース一覧を作る。JRA race_id は日付を含まないため、出馬表総当たり検証は行わない。
 // ============================================================

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.46 WakurenFrameFix</title>
+<title>The競馬 EV分析 v5.18.47 FinalOddsResultFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.46 WakurenFrameFix</span>
+    <span class="ver">v5.18.47 FinalOddsResultFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -3315,14 +3315,18 @@ function buildNetkeibaOddsUrls(kind, raceId){
   if(!raceId) return [];
   if(kind === 'NAR'){
     return [
+      // v5.18.47: 確定済みレースは結果ページの最終単勝オッズ・人気を最優先。
+      `https://nar.netkeiba.com/race/result.html?race_id=${raceId}&rf=race_submenu`,
       `https://nar.netkeiba.com/odds/index.html?race_id=${raceId}`,
       `https://nar.netkeiba.com/odds/index.html?race_id=${raceId}&type=b1`,
       `https://nar.netkeiba.com/race/shutuba.html?race_id=${raceId}&rf=race_submenu`
     ];
   }
   return [
-    // v5.18.29: 人気・単勝オッズはnetkeibaのオッズページ/APIを正ソースにする。
-    // shutuba.htmlは最後の保険。斤量列の55.0等を単勝オッズとして使わない。
+    // v5.18.47: 確定済みレースは result.html の「最終単勝オッズ・人気」を最優先する。
+    // 未確定レースだけ odds/API → shutuba の順で補完する。
+    `https://race.netkeiba.com/race/result.html?race_id=${raceId}&rf=race_submenu`,
+    `https://race.netkeiba.com/race/result.html?race_id=${raceId}`,
     `https://race.netkeiba.com/odds/index.html?race_id=${raceId}&type=b1`,
     `https://race.netkeiba.com/odds/index.html?race_id=${raceId}`,
     `https://race.netkeiba.com/odds/index.html?race_id=${raceId}&rf=shutuba_submenu`,
@@ -3898,6 +3902,82 @@ function parseWinOddsPopularityFromAnyOddsHtml(html, expectedHorses){
 }
 
 
+function parseFinalOddsPopularityFromResultDoc(doc, expectedHorses){
+  const map = new Map();
+  if(!doc) return map;
+  const expectedByName = new Map();
+  if(Array.isArray(expectedHorses)){
+    expectedHorses.forEach(h => {
+      const name = String(h && h.name || '').replace(/\s+/g,'').trim();
+      const num = Number(h && h.num);
+      if(name && num >= 1 && num <= 18) expectedByName.set(name, num);
+    });
+  }
+
+  function put(num, odds, pop){
+    num = Number(num); odds = sanitizeWinOddsValue(Number(odds), String(odds)); pop = Number(pop || 0);
+    if(!(num >= 1 && num <= 18)) return;
+    if(!(odds >= 1 && odds <= 999.9)) return;
+    const prev = map.get(num) || {};
+    map.set(num, { odds: Math.round(odds * 10) / 10, pop: (pop >= 1 && pop <= 18) ? pop : (prev.pop || 0) });
+  }
+
+  const rows = Array.from(doc.querySelectorAll('tr')).filter(tr => tr.querySelector('a[href*="/horse/"]'));
+  rows.forEach(tr => {
+    const cells = Array.from(tr.querySelectorAll('td,th'));
+    if(cells.length < 5) return;
+    const text = toHalfNumberText(normCellText(tr));
+    if(/取消|除外|中止/.test(text) && !/人気|単勝|オッズ/.test(text)) return;
+
+    let num = 0;
+    const numEl = tr.querySelector('.Umaban, [class*="Umaban"], [class*="HorseNum"]');
+    num = firstNumberInCell(numEl, false);
+    if(!(num >= 1 && num <= 18)){
+      for(const c of cells.slice(0, 6)){
+        const t = toHalfNumberText(normCellText(c)).trim();
+        if(/^([1-9]|1[0-8])$/.test(t)){ num = Number(t); break; }
+      }
+    }
+    if(!(num >= 1 && num <= 18)){
+      const a = tr.querySelector('a[href*="/horse/"]');
+      const nm = normCellText(a).replace(/\s+/g,'').trim();
+      num = expectedByName.get(nm) || 0;
+    }
+    if(!(num >= 1 && num <= 18)) return;
+
+    let odds = extractOddsFromRow(tr, num);
+    let pop = extractPopularityFromRow(tr, num);
+
+    // result.htmlの行は「着順 枠 馬番 馬名 ... 単勝 人気」のように右端に最終値がある。
+    // ヘッダーやclassが取れない場合は、右側5セルから「小数=単勝」「1〜18=人気」を拾う。
+    if(!(odds >= 1) || !(pop >= 1)){
+      const tx = cells.map(c => toHalfNumberText(normCellText(c)).replace(/,/g,'').trim());
+      for(let i=tx.length-1; i>=Math.max(0, tx.length-7); i--){
+        if(!(pop >= 1)){
+          const m = tx[i].match(/^([1-9]|1[0-8])\s*人気?$/);
+          if(m && Number(m[1]) !== num) pop = Number(m[1]);
+        }
+      }
+      const popIdx = tx.findLastIndex ? tx.findLastIndex(t => /^([1-9]|1[0-8])\s*人気?$/.test(t)) : -1;
+      const start = popIdx > 0 ? popIdx - 1 : tx.length - 1;
+      for(let i=start; i>=Math.max(0, start-6); i--){
+        if(odds >= 1) break;
+        if(/斤量|kg|㎏|馬体重|増減|タイム|着差/.test(tx[i])) continue;
+        const m = tx[i].match(/^(\d{1,4}\.\d+)$/) || tx[i].match(/(\d{1,4}\.\d+)\s*(?:倍)?/);
+        if(m){
+          const v = sanitizeWinOddsValue(Number(m[1]), tx[i]);
+          if(v >= 1) odds = v;
+        }
+      }
+    }
+
+    if(odds >= 1) put(num, odds, pop);
+  });
+
+  return map;
+}
+
+
 async function fetchWinOddsPopularity(kind, raceId, expectedHorses){
   if(!settings.proxyUrl || !raceId) return new Map();
   for(const url of buildNetkeibaOddsUrls(kind, raceId)){
@@ -3906,8 +3986,12 @@ async function fetchWinOddsPopularity(kind, raceId, expectedHorses){
       if(!html) continue;
       const doc = new DOMParser().parseFromString(html, 'text/html');
 
-      // まず従来のDOMテーブル解析
-      let map = parseWinOddsPopularityFromDoc(doc);
+      // v5.18.47: result.html は確定済みレースの最終オッズ・人気を持つため最優先。
+      // 取得できた場合は予想オッズ/APIで上書きしない。
+      let map = url.includes('result.html')
+        ? parseFinalOddsPopularityFromResultDoc(doc, expectedHorses)
+        : parseWinOddsPopularityFromDoc(doc);
+      if(url.includes('result.html') && map.size >= 2) return map;
 
       // v5.18.25: race_id由来のodds/API応答をJSON/JS/本文まで総当たり。
       // これによりDOMに描画されない単勝オッズ・人気も拾う。
@@ -4176,7 +4260,7 @@ async function fetchRace(){
     const popCount = horses.filter(h => Number(h.pop) >= 1).length;
     const provisionalCount = horses.filter(h => h.provisionalOdds).length;
     const frameCount = horses.filter(h => Number(h.frame) >= 1 && Number(h.frame) <= 8).length;
-    const oddsNote = provisionalCount > 0 ? ` / ※${provisionalCount}件は予想用の暫定値` : '';
+    const oddsNote = provisionalCount > 0 ? ` / ※${provisionalCount}件は未取得のため予想用暫定値` : '';
     status.innerHTML = `<div class="url-status ok">✅ ${escapeHtml(currentRaceName || '')} ${horses.length}頭 取得しました / 単勝オッズ ${oddsCount}件 / 人気 ${popCount}件 / 枠番 ${frameCount}件${oddsNote}</div>`;
 
     // 取得後すぐにタブを馬データへ

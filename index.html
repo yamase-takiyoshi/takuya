@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.36 LiveScheduleOnly</title>
+<title>The競馬 EV分析 v5.18.37 LiveNetRaceListFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.36 LiveScheduleOnly</span>
+    <span class="ver">v5.18.37 LiveNetRaceListFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2410,7 +2410,7 @@ async function loadActiveJraVenuesByLightProbe(date, candidateCodes){
 // MMDDはrace_idに入らないため、各場の 1R をプローブし、出馬表本文の日付が選択日と一致した場だけ採用する。
 let lastJraKaisaiByDateVenue = {};
 async function loadActiveJraVenuesByRaceId(date){
-  // v5.18.36 LiveScheduleOnly:
+  // v5.18.37 LiveNetRaceListFix:
   // 固定表・季節表は使わず、全JRA場をネット上の出馬表で同時確認する。
   // 表示は「確認中...」だけにし、札幌から順に探しているようなUIにはしない。
   const status = document.getElementById('urlStatus');
@@ -2459,7 +2459,7 @@ async function loadActiveVenuesForDate(){
   try{
     if(status) status.innerHTML = `<div class="url-status">📅 ${date} のnetkeiba開催一覧を確認中...</div>`;
 
-    // v5.18.36 LiveScheduleOnly:
+    // v5.18.37 LiveNetRaceListFix:
     // 日付を選んだら、まずnetkeibaの race_list.html だけを見る。
     // そこに載っている race_id / kaisai_id から「その日開催する開催場だけ」を抽出する。
     // JRAで一覧が取れた場合は、全場×開催回×開催日を総当たりしないので高速。
@@ -4423,6 +4423,206 @@ function json(obj, status = 200) {
     setTimeout(() => btn.textContent = orig, 2000);
   }).catch(() => alert(code));
 }
+
+
+
+// ============================================================
+// v5.18.37 LiveNetRaceListFix
+// その場凌ぎの固定表を使わず、netkeiba race_list.html の kaisai_id/race_id を信頼して
+// 開催場とレース一覧を作る。JRA race_id は日付を含まないため、出馬表総当たり検証は行わない。
+// ============================================================
+function live37_escapeRe(s){ return String(s||'').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+function live37_text(html){
+  try{ const doc = new DOMParser().parseFromString(String(html||''), 'text/html'); return normalizeJapaneseSpaces(doc.body ? doc.body.textContent : html); }
+  catch(e){ return normalizeJapaneseSpaces(html); }
+}
+function live37_extractJraKaisaiIds(html){
+  const s = String(html || '');
+  const map = new Map();
+  let m;
+  const add = (kid) => {
+    kid = String(kid || '');
+    if(!/^\d{10}$/.test(kid)) return;
+    const code = kid.slice(4,6);
+    if(!JRA_VENUES.some(v => v[0] === code)) return;
+    if(!map.has(code)) map.set(code, new Set());
+    map.get(code).add(kid);
+  };
+  const res = [
+    /kaisai_id[="'\s:]+(\d{10})/g,
+    /kaisai_id=(\d{10})/g,
+    /race_id[="'\s:]+(\d{12})/g,
+    /race_id=(\d{12})/g,
+    /(?:^|[^\d])(\d{12})(?:[^\d]|$)/g
+  ];
+  for(const re of res){
+    while((m = re.exec(s))){
+      let v = m[1];
+      if(v.length === 12) v = v.slice(0,10);
+      add(v);
+    }
+  }
+  return map;
+}
+function live37_parseJraVenuesFromRaceList(html){
+  const byVenue = live37_extractJraKaisaiIds(html);
+  const out = [];
+  for(const [code, kids] of byVenue.entries()){
+    let count = 12;
+    // race_idがHTMLにある場合は実際のR番号数を数える。kaisai_idだけなら12R表示。
+    const rset = new Set();
+    const s = String(html || '');
+    const re = new RegExp(`race_id[=\\"'\\s:]+(${Array.from(kids).join('|')})(0[1-9]|1[0-2])`, 'g');
+    let m;
+    while((m = re.exec(s))) rset.add(Number(m[2]));
+    if(rset.size) count = rset.size;
+    out.push([code, venueName('JRA', code), count]);
+  }
+  out.sort((a,b)=>a[0].localeCompare(b[0]));
+  return out;
+}
+function live37_bestKaisaiIdForVenue(html, venueCode){
+  const byVenue = live37_extractJraKaisaiIds(html);
+  const kids = Array.from(byVenue.get(String(venueCode||'')) || []);
+  if(!kids.length) return '';
+  // 同一場で複数候補があれば、race_idリンクが多いものを採用。
+  const s = String(html || '');
+  kids.sort((a,b)=>{
+    const ca = (s.match(new RegExp(`race_id[=\\"'\\s:]+${a}`, 'g')) || []).length;
+    const cb = (s.match(new RegExp(`race_id[=\\"'\\s:]+${b}`, 'g')) || []).length;
+    return cb - ca;
+  });
+  return kids[0];
+}
+function live37_extractRaceNameNearHtml(html, raceId, raceNo){
+  const s = String(html || '');
+  const idx = s.indexOf(String(raceId));
+  if(idx >= 0){
+    const chunk = s.slice(Math.max(0, idx-900), Math.min(s.length, idx+1400));
+    try{
+      const doc = new DOMParser().parseFromString(chunk, 'text/html');
+      const txt = normalizeJapaneseSpaces(doc.body ? doc.body.textContent : chunk);
+      const name = cleanRaceName(txt, raceNo);
+      if(name && name !== `${raceNo}R`) return name;
+    }catch(e){}
+  }
+  return `${raceNo}R`;
+}
+function live37_buildJraRacesFromRaceList(html, date, venueCode){
+  const kid = live37_bestKaisaiIdForVenue(html, venueCode);
+  if(!kid) return [];
+  const races = [];
+  const present = new Set();
+  const s = String(html || '');
+  let m;
+  const re = new RegExp(`race_id[=\\"'\\s:]+(${kid})(0[1-9]|1[0-2])`, 'g');
+  while((m = re.exec(s))) present.add(Number(m[2]));
+  const maxR = present.size ? Math.max(...present) : 12;
+  for(let r=1; r<=maxR; r++){
+    const rr = String(r).padStart(2,'0');
+    const raceId = kid + rr;
+    races.push({
+      raceId,
+      raceNo:r,
+      venueCode,
+      raceName: live37_extractRaceNameNearHtml(html, raceId, r),
+      shutuba: shutubaUrl('JRA', raceId)
+    });
+  }
+  return races;
+}
+
+// 開催場取得：JRAは race_list.html の kaisai_id/race_id のみで判定。
+loadActiveVenuesForDate = async function(){
+  const seq = ++activeVenueLoadSeq;
+  const date = document.getElementById('pickDate')?.value || todayYmd();
+  const kind = document.getElementById('pickKind')?.value || 'JRA';
+  const status = document.getElementById('urlStatus');
+  const raceSelect = document.getElementById('raceSelect');
+  if(raceSelect) raceSelect.innerHTML = '<option value="">開催場を選んでレース一覧を取得</option>';
+  if(!settings.proxyUrl){
+    renderVenueOptions([]);
+    if(status) status.innerHTML = '<div class="url-status err">⚠️ プロキシURL未設定のため、開催場を自動取得できません</div>';
+    return;
+  }
+  try{
+    if(status) status.innerHTML = `<div class="url-status">📡 ${date} の${kind}開催一覧をnetkeibaから取得中...</div>`;
+    const html = await fetchHtmlViaProxy(raceListUrl(kind, date));
+    let venues = [];
+    if(kind === 'JRA'){
+      venues = live37_parseJraVenuesFromRaceList(html);
+    }else{
+      venues = parseActiveVenuesFromList(html, kind, date)
+        .filter(v => v && v[0])
+        .map(v => [v[0], v[1] || venueName(kind, v[0]), Number(v[2] || 12) || 12]);
+      if(!venues.length) venues = await loadActiveNarVenuesByRaceId(date);
+    }
+    if(seq !== activeVenueLoadSeq) return;
+    renderVenueOptions(venues);
+    if(status) status.innerHTML = venues.length
+      ? `<div class="url-status ok">✅ ${date} の${kind}開催場をnetkeibaから取得：${venues.map(v => v[1] + '（' + v[2] + 'R）').join('、')}</div>`
+      : `<div class="url-status">開催なし日</div>`;
+  }catch(e){
+    if(seq !== activeVenueLoadSeq) return;
+    console.error(e);
+    renderVenueOptions([]);
+    if(status) status.innerHTML = `<div class="url-status err">⚠️ 開催場の自動取得に失敗: ${e.message}</div>`;
+  }
+};
+
+// レース一覧取得：JRAは選択日の race_list.html から kaisai_id を取り、race_idを生成。
+loadRaceList = async function(){
+  const date = document.getElementById('pickDate')?.value || todayYmd();
+  const kind = document.getElementById('pickKind')?.value || 'JRA';
+  const venueCode = document.getElementById('pickVenue')?.value || '';
+  const status = document.getElementById('urlStatus');
+  const raceSelect = document.getElementById('raceSelect');
+  currentRaceId = '';
+  currentRaceName = '';
+  const raceUrl = document.getElementById('raceUrl');
+  if(raceUrl) raceUrl.value = '';
+  const box = document.getElementById('raceTitleBox');
+  if(box){ box.style.display = 'none'; box.textContent = ''; }
+  if(!settings.proxyUrl){ alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。'); return; }
+  if(!venueCode){ alert('開催場を選択してください。'); return; }
+  try{
+    if(status) status.innerHTML = `<div class="url-status">📅 ${date} ${venueName(kind, venueCode)} のレース一覧を取得中...</div>`;
+    let races = [];
+    if(kind === 'JRA'){
+      const html = await fetchHtmlViaProxy(raceListUrl(kind, date));
+      races = live37_buildJraRacesFromRaceList(html, date, venueCode);
+      const cacheKey = ymdParts(date).yyyymmdd + '-' + venueCode;
+      const kid = live37_bestKaisaiIdForVenue(html, venueCode);
+      if(kid){
+        lastJraKaisaiByDateVenue[cacheKey] = { kai:Number(kid.slice(6,8)), day:Number(kid.slice(8,10)) };
+      }
+    }else{
+      races = await loadNarRaceListByRaceId(date, venueCode);
+      if(!races.length){
+        const html = await fetchHtmlViaProxy(raceListUrl(kind, date, venueCode));
+        races = parseRaceIdsFromList(html, kind, venueCode, date);
+      }
+    }
+    if(!races.length){
+      raceSelect.innerHTML = '<option value="">レースが見つかりません</option>';
+      if(status) status.innerHTML = `<div class="url-status err">⚠️ ${date} の ${venueName(kind, venueCode)} はnetkeiba一覧からレースを取得できませんでした。</div>`;
+      return;
+    }
+    const dateLabel = raceListDateLabel(date);
+    raceSelect.innerHTML = races.map(r => {
+      const url = shutubaUrl(kind, r.raceId);
+      const raceName = escapeHtml(r.raceName || `${r.raceNo}R`);
+      const label = `${dateLabel} ${venueName(kind, venueCode)} ${r.raceNo}R ${raceName} / ${r.raceId}`;
+      return `<option value="${url}" data-race-id="${r.raceId}" data-race-name="${raceName}">${label}</option>`;
+    }).join('');
+    applySelectedRaceUrl();
+    if(status) status.innerHTML = `<div class="url-status ok">✅ ${date} ${venueName(kind, venueCode)} ${races.length}レースをnetkeibaから取得しました</div>`;
+  }catch(e){
+    console.error(e);
+    if(status) status.innerHTML = `<div class="url-status err">❌ レース一覧取得失敗: ${e.message}</div>`;
+  }
+};
+
 
 // ─── 起動 ────────────────────────────────────────
 initUI();

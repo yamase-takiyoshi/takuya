@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.12 JRAOddsNameFallback</title>
+<title>The競馬 EV分析 v5.18.16 LightweightVenueProbe</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.12 JRAOddsNameFallback</span>
+    <span class="ver">v5.18.16 LightweightVenueProbe</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2269,23 +2269,58 @@ async function onRaceDateKindChanged(){
 }
 
 async function confirmActiveJraVenuesFromHtml(html, date, candidates){
-  // JRAの一覧HTMLには、同一開催場の前日/翌日race_idが混入することがある。
-  // ここでは候補場ごとに getReliableJraRacesFromList() を通し、
-  // 出馬表本文の日付照合まで済んだレースだけを数える。
+  // v5.18.16: 軽量版。各場のrace_idを一覧HTMLから拾い、1Rの出馬表を1回だけ取って
+  // 日付照合する。全滅時はkdHintなしで kai/day の組合せを試みる（最大40回）。
+  // 旧版の findJraKaisaiByFullProbe（144回×候補場数）は廃止。
   const confirmed = [];
   const status = document.getElementById('urlStatus');
+  const p = ymdParts(date);
 
   for(const [code, name] of candidates){
     try{
       if(status) status.innerHTML = `<div class="url-status">📅 JRA開催確認中... ${name}</div>`;
-      const races = await getReliableJraRacesFromList(html, date, code);
-      const nums = new Set((races || [])
-        .map(r => Number(r.raceNo))
-        .filter(n => n >= 1 && n <= 12));
-      if(nums.size > 0) confirmed.push([code, name, nums.size]);
-    }catch(e){
-      // 1場の確認失敗で全体を止めない
-    }
+
+      // ① 一覧HTMLに出ているこの場のrace_idをグループ化して日付照合（1Rだけ）
+      const direct = parseRaceIdsFromList(html, 'JRA', code, date)
+        .filter(r => raceIdVenueMatches('JRA', r.raceId, code));
+
+      const groups = new Map();
+      direct.forEach(r => {
+        const key = jraRaceDayKey(r.raceId);
+        if(!key) return;
+        if(!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(r);
+      });
+
+      let found = false;
+      for(const group of groups.values()){
+        const sorted = group.slice().sort((a,b) => Number(a.raceNo) - Number(b.raceNo));
+        const probe = sorted.find(r => Number(r.raceNo) === 1) || sorted[0];
+        try{
+          if(await verifyJraRaceDateByShutuba(date, probe.raceId)){
+            confirmed.push([code, name, sorted.length]);
+            found = true;
+            break;
+          }
+        }catch(e){}
+      }
+
+      // ② 一覧HTMLにrace_idが無い場合: 開催回1-5×開催日1-8の1Rだけプローブ（最大40回）
+      if(!found && !groups.size){
+        outer:
+        for(let kai=1; kai<=5; kai++){
+          for(let day=1; day<=8; day++){
+            const raceId = `${p.yyyy}${code}${String(kai).padStart(2,'0')}${String(day).padStart(2,'0')}01`;
+            try{
+              if(await verifyJraRaceDateByShutuba(date, raceId)){
+                confirmed.push([code, name, 12]);
+                break outer;
+              }
+            }catch(e){}
+          }
+        }
+      }
+    }catch(e){}
   }
 
   return confirmed;
@@ -2490,8 +2525,33 @@ function jraHtmlMatchesSelectedDate(html, date){
   }
 }
 
+function buildWorkerRequestUrl(targetUrl){
+  const base = String(settings.proxyUrl || '').replace(/\/$/, '');
+  const u = String(targetUrl || '');
+  const rid = (u.match(/race_id=(\d{10,14})/) || [])[1] || '';
+
+  // v5.18.14: race_idで直接取れるページはWorkersのtype/race_id APIを使う。
+  // これによりHTML本体は出馬表・オッズ・結果を明確に分離し、
+  // shutuba.htmlの斤量セルを単勝オッズとして拾う事故を防ぐ。
+  if(rid){
+    let type = '';
+    if(/\/odds\//.test(u)) type = 'odds';
+    else if(/result\.html/.test(u)) type = 'result';
+    else if(/shutuba\.html/.test(u)) type = 'shutuba';
+
+    if(type){
+      const kind = /nar\.netkeiba/.test(u) ? 'NAR' : 'JRA';
+      return `${base}?type=${encodeURIComponent(type)}&kind=${encodeURIComponent(kind)}&race_id=${encodeURIComponent(rid)}`;
+    }
+  }
+
+  // レース一覧などrace_idが無いページは従来のurl転送を使う。
+  // 下の新Workersコードは url= と type/race_id の両方に対応。
+  return base + '?url=' + encodeURIComponent(u);
+}
+
 async function fetchHtmlViaProxy(url){
-  const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(url);
+  const proxyReq = buildWorkerRequestUrl(url);
   const res = await fetch(proxyReq, { cache:'no-store' });
   if(!res.ok) throw new Error('HTTP ' + res.status);
   return await res.text();
@@ -2657,29 +2717,11 @@ async function findJraKaisaiByFullProbe(date, venueCode, kdHint){
 
 
 function correctJraKaisaiByCalendarDate(date, venueCode, kd){
-  // v5.18.2: netkeibaのJRA一覧HTMLは、日曜タブでも前日(土曜)のrace_id群を
-  // そのまま含むことがある。JRA race_id は YYYY + 場 + 開催回 + 開催日 + R なので、
-  // 同一開催・同一場の土日連続開催では「日曜 = 土曜 + 100」になる。
-  // 例: 2026/05/23 東京11R = 202605020911、2026/05/24 東京11R = 202605021011。
-  // 出馬表HTMLの日付タブを拾ってしまう誤検証を避けるため、カレンダー曜日で最終補正する。
+  // v5.18.15: 土曜=奇数日・日曜=偶数日という前提が崩れる開催（1日目から始まる週末、
+  // 祝日振替、函館・福島など短期開催）で開催場が見つからなくなるバグを修正。
+  // 曜日ベースの強制補正を廃止し、findJraKaisaiByFullProbe のフルスキャンに委ねる。
   if(!kd) return kd;
-  const d = parseLocalDateYMD(date);
-  const dow = d.getDay(); // 0=日, 6=土
-  const out = { kai: Number(kd.kai), day: Number(kd.day) };
-  if(!(out.kai >= 1 && out.kai <= 12 && out.day >= 1 && out.day <= 12)) return kd;
-
-  // 通常のJRA連続開催は土曜=奇数日、日曜=偶数日。
-  // 日曜なのに奇数開催日を掴んでいる場合は、前日race_idを掴んだと判断して +1。
-  if(dow === 0 && out.day % 2 === 1 && out.day < 12){
-    out.day += 1;
-    out.correctedByCalendar = true;
-  }
-  // 土曜なのに偶数開催日を掴んでいる場合は、翌日race_idを掴んだ可能性が高いため -1。
-  if(dow === 6 && out.day % 2 === 0 && out.day > 1){
-    out.day -= 1;
-    out.correctedByCalendar = true;
-  }
-  return out;
+  return { kai: Number(kd.kai), day: Number(kd.day) };
 }
 
 function extractJraRaceNamesFromActualListText(html, venueCode){
@@ -3546,6 +3588,24 @@ function mergeOddsPopularityIntoHorses(baseHorses, oddsMap){
   });
 }
 
+// v5.18.14: JRAはodds/index.htmlを単勝オッズの唯一の正ソースにする。
+// oddsMapに無い馬は、shutuba側で拾った55.0等を残さず空欄にする。
+function applyAuthoritativeJraOdds(baseHorses, oddsMap, safeFallbackMap){
+  const primary = oddsMap || new Map();
+  const fallback = safeFallbackMap || new Map();
+  return (baseHorses || []).map(h => {
+    const num = Number(h.num);
+    const o = primary.get(num) || fallback.get(num) || {};
+    const odds = Number(o.odds || 0);
+    const pop = Number(o.pop || 0);
+    return {
+      ...h,
+      odds: (odds >= 1 && odds <= 999.9) ? Math.round(odds * 10) / 10 : 0,
+      pop: (pop >= 1 && pop <= 18) ? pop : 0
+    };
+  });
+}
+
 
 // ─── netkeibaプロキシ取得 ────────────────────────
 async function fetchRace(){
@@ -3569,10 +3629,7 @@ async function fetchRace(){
   status.innerHTML = '';
 
   try {
-    const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(rawUrl);
-    const res = await fetch(proxyReq, { cache:'no-store' });
-    if(!res.ok) throw new Error('HTTP ' + res.status);
-    const html = await res.text();
+    const html = await fetchHtmlViaProxy(rawUrl);
     // v5.18.10: JRAはリダイレクト・圧縮等でrace_idがHTMLに残らない場合があるため
     // throwではなくconsole.warnに留め、後続のオッズ取得・パースを続行する。
     if(validation.raceId && !html.includes(validation.raceId)){
@@ -3611,18 +3668,14 @@ async function fetchRace(){
       if(kind === 'JRA'){
         // Step1: odds/index.html を必ず最初に取得（主経路）
         const oddsMap = await fetchWinOddsPopularity('JRA', rid, horses);
-        if(oddsMap.size >= 2){
-          horses = mergeOddsPopularityIntoHorses(horses, oddsMap);
-        }
-        // Step2: オッズがまだ取れていない馬だけ、出馬表HTMLの予想オッズ列から補完する。
-        // ただし「明示的に小数値が存在する場合」のみ採用し、斤量（55.0等）は拒否する。
-        const stillMissing = horses.filter(function(h){ return !(Number(h.odds) >= 1); }).length;
-        if(stillMissing > 0){
-          const shutubaOddsMap = parseWinOddsPopularityFromShutuba(doc);
-          if(shutubaOddsMap.size >= 1){
-            horses = mergeOddsPopularityIntoHorses(horses, shutubaOddsMap);
-          }
-        }
+
+        // Step2: oddsページで取れない場合だけ、出馬表HTMLの「明示的な予想オッズ列」を保険にする。
+        // ただし最終JOINはapplyAuthoritativeJraOddsで行い、mapに無い馬は必ず空欄化する。
+        const shutubaOddsMap = (!oddsMap || oddsMap.size < horses.length) ? parseWinOddsPopularityFromShutuba(doc) : new Map();
+
+        // Step3: JRAはここで旧オッズを全消去して、race_id由来のodds/index.html値だけを馬番JOINする。
+        // これが斤量55.0等を残さない抜本対策。
+        horses = applyAuthoritativeJraOdds(horses, oddsMap, shutubaOddsMap);
       }else{
         // NAR: 既存ロジックをそのまま維持
         const oddsMap = await fetchWinOddsPopularity(kind, rid, horses);
@@ -3961,8 +4014,8 @@ async function testProxy(){
   const status = document.getElementById('proxyStatus');
   status.innerHTML = '<div class="url-status">🔄 テスト中...</div>';
   try {
-    const testUrl = url.replace(/\/$/, '') + '?url=' + encodeURIComponent('https://race.netkeiba.com/');
-    const res = await fetch(testUrl);
+    const testUrl = url.replace(/\/$/, '') + '?type=shutuba&kind=JRA&race_id=202605020911';
+    const res = await fetch(testUrl, { cache:'no-store' });
     if(res.ok){
       status.innerHTML = '<div class="url-status ok">✅ 接続成功！</div>';
     } else {
@@ -3976,56 +4029,59 @@ async function testProxy(){
 function copyWorkerCode(){
   const code = `export default {
   async fetch(request) {
-
     const url = new URL(request.url);
-    const target = url.searchParams.get('url');
-
-    if (!target) {
-      return new Response('url param required', {
-        status: 400,
-        headers: corsHeaders('text/plain; charset=UTF-8')
-      });
-    }
 
     if (request.method === 'OPTIONS') {
-      return new Response(null, {
-        status: 204,
-        headers: corsHeaders('text/plain; charset=UTF-8')
-      });
+      return new Response(null, { status: 204, headers: corsHeaders('text/plain; charset=UTF-8') });
     }
 
-    const res = await fetch(target, {
-      method: 'GET',
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile Safari/605.1',
+    const raceId = String(url.searchParams.get('race_id') || '').replace(/[^\d]/g, '');
+    const type = String(url.searchParams.get('type') || '').toLowerCase();
+    const kind = String(url.searchParams.get('kind') || 'JRA').toUpperCase();
+    const directUrl = url.searchParams.get('url');
 
-        'Accept':
-          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    let target = '';
 
-        'Accept-Language':
-          'ja,en-US;q=0.9,en;q=0.8',
-
-        'Accept-Encoding':
-          'gzip, deflate, br',
-
-        'Referer':
-          'https://race.netkeiba.com/',
-
-        'Cache-Control':
-          'no-cache',
-
-        'Pragma':
-          'no-cache'
+    if (raceId && /^(shutuba|odds|result)$/.test(type)) {
+      const host = kind === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com';
+      if (type === 'odds') {
+        target = `${host}/odds/index.html?race_id=${raceId}&type=b1`;
+      } else if (type === 'result') {
+        target = `${host}/race/result.html?race_id=${raceId}&rf=race_submenu`;
+      } else {
+        target = `${host}/race/shutuba.html?race_id=${raceId}&rf=race_submenu`;
       }
-    });
+    } else if (directUrl) {
+      target = directUrl;
+    } else {
+      return json({ ok:false, error:'race_id/type or url required' }, 400);
+    }
 
-    const html = await res.text();
+    if (!/^https:\/\/(race|nar)\.netkeiba\.com\//.test(target)) {
+      return json({ ok:false, error:'netkeiba only' }, 400);
+    }
 
-    return new Response(html, {
-      status: res.status,
-      headers: corsHeaders('text/html; charset=UTF-8')
-    });
+    try {
+      const res = await fetch(target, {
+        method: 'GET',
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7',
+          'Referer': kind === 'NAR' ? 'https://nar.netkeiba.com/' : 'https://race.netkeiba.com/',
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache'
+        }
+      });
+
+      const html = await res.text();
+      return new Response(html, {
+        status: res.status,
+        headers: corsHeaders('text/html; charset=UTF-8')
+      });
+    } catch (e) {
+      return json({ ok:false, error:String(e && e.message ? e.message : e) }, 500);
+    }
   }
 };
 
@@ -4037,6 +4093,13 @@ function corsHeaders(contentType) {
     'Access-Control-Allow-Headers': '*',
     'Cache-Control': 'no-store'
   };
+}
+
+function json(obj, status = 200) {
+  return new Response(JSON.stringify(obj, null, 2), {
+    status,
+    headers: corsHeaders('application/json; charset=UTF-8')
+  });
 }
 `;
   navigator.clipboard.writeText(code).then(() => {

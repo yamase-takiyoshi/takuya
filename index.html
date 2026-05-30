@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.38 StrictDateListFix</title>
+<title>The競馬 EV分析 v5.18.39 iPadJraNarSeparateFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.38 StrictDateListFix</span>
+    <span class="ver">v5.18.39 iPadJraNarSeparateFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2101,7 +2101,7 @@ function parseActiveVenuesFromList(html, kind, date){
   const rawHtml = String(html || '');
 
   if(kind !== 'NAR'){
-    // v5.18.38 StrictDateListFix:
+    // v5.18.39 iPadJraNarSeparateFix:
     // 5.18.37 はHTML全体から race_id / kaisai_id / 裸IDを広く拾ったため、
     // 選択日以外のリンクやナビ・過去開催・他場リンクまで混入し、
     // 2026/05/24 に福島・中山・阪神・小倉などが出る事故が起きた。
@@ -2281,7 +2281,25 @@ async function loadNarRaceListByRaceId(date, venueCode){
 let activeVenueLoadSeq = 0;
 
 async function onRaceDateKindChanged(){
-  resetRaceState('条件変更のためレース選択を初期化しました');
+  // v5.18.39 iPad対策:
+  // JRA/NAR切替時に前回の非同期処理が残ると、JRA画面にNARの表示が混入する。
+  // 先にシーケンスを進め、URL/レース選択/ステータスを完全初期化してから再取得する。
+  activeVenueLoadSeq++;
+  currentRaceId = '';
+  currentRaceName = '';
+
+  const raceSelect = document.getElementById('raceSelect');
+  if(raceSelect) raceSelect.innerHTML = '<option value="">開催場を選んでレース一覧を取得</option>';
+
+  const raceUrl = document.getElementById('raceUrl');
+  if(raceUrl) raceUrl.value = '';
+
+  const box = document.getElementById('raceTitleBox');
+  if(box){ box.style.display = 'none'; box.textContent = ''; }
+
+  const status = document.getElementById('urlStatus');
+  if(status) status.innerHTML = '<div class="url-status">条件変更のためレース選択を初期化しました</div>';
+
   renderVenueOptions([]);
   await loadActiveVenuesForDate();
 }
@@ -2389,7 +2407,7 @@ async function loadActiveJraVenuesByLightProbe(date, candidateCodes){
 // MMDDはrace_idに入らないため、各場の 1R をプローブし、出馬表本文の日付が選択日と一致した場だけ採用する。
 let lastJraKaisaiByDateVenue = {};
 async function loadActiveJraVenuesByRaceId(date){
-  // v5.18.38 StrictDateListFix:
+  // v5.18.39 iPadJraNarSeparateFix:
   // 固定表・季節表は使わず、全JRA場をネット上の出馬表で同時確認する。
   // 表示は「確認中...」だけにし、札幌から順に探しているようなUIにはしない。
   const status = document.getElementById('urlStatus');
@@ -2397,7 +2415,7 @@ async function loadActiveJraVenuesByRaceId(date){
   const cacheKeyBase = ymdParts(date).yyyymmdd;
   lastJraKaisaiByDateVenue = lastJraKaisaiByDateVenue || {};
 
-  if(status) status.innerHTML = `<div class="url-status">📡 ${date} のJRA開催をネットで確認中...</div>`;
+  if(status && canUpdateStatus()) status.innerHTML = `<div class="url-status">📡 ${date} のJRA開催をネットで確認中...</div>`;
 
   const tasks = JRA_VENUES.map(async ([code, name]) => {
     let kd = null;
@@ -2429,65 +2447,70 @@ async function loadActiveVenuesForDate(){
   const raceSelect = document.getElementById('raceSelect');
   if(raceSelect) raceSelect.innerHTML = '<option value="">開催場を選んでレース一覧を取得</option>';
 
+  const stillCurrent = () => {
+    const d = document.getElementById('pickDate')?.value || todayYmd();
+    const k = document.getElementById('pickKind')?.value || 'JRA';
+    return seq === activeVenueLoadSeq && d === date && k === kind;
+  };
+  const setStatus = (html) => { if(stillCurrent() && status) status.innerHTML = html; };
+
   if(!settings.proxyUrl){
     renderVenueOptions([]);
-    if(status) status.innerHTML = '<div class="url-status err">⚠️ プロキシURL未設定のため、開催場を自動取得できません</div>';
+    setStatus('<div class="url-status err">⚠️ プロキシURL未設定のため、開催場を自動取得できません</div>');
     return;
   }
 
   try{
-    if(status) status.innerHTML = `<div class="url-status">📅 ${date} のnetkeiba開催一覧を確認中...</div>`;
+    let venues = [];
 
-    // v5.18.38 StrictDateListFix:
-    // 日付を選んだら、まずnetkeibaの race_list.html だけを見る。
-    // そこに載っている race_id / kaisai_id から「その日開催する開催場だけ」を抽出する。
-    // JRAで一覧が取れた場合は、全場×開催回×開催日を総当たりしないので高速。
-    const html = await fetchHtmlViaProxy(raceListUrl(kind, date));
-    let venues = parseActiveVenuesFromList(html, kind, date)
-      .filter(v => v && v[0])
-      .map(v => [v[0], v[1] || venueName(kind, v[0]), Number(v[2] || 12) || 12]);
+    if(kind === 'JRA'){
+      // v5.18.39: JRAはNAR処理・前回状態と完全分離。
+      // race_list.htmlのタブ表示に依存せず、netkeibaの実出馬表 race_id を直接確認して
+      // 「選択日に本当に開催している場」だけを確定する。
+      setStatus(`<div class="url-status">📡 ${date} のJRA開催をrace_idで確認中...</div>`);
+      venues = await loadActiveJraVenuesByRaceId(date);
+      if(!stillCurrent()) return;
+    }else{
+      setStatus(`<div class="url-status">📅 ${date} のNAR開催一覧を確認中...</div>`);
+      const html = await fetchHtmlViaProxy(raceListUrl(kind, date));
+      if(!stillCurrent()) return;
 
-    if(seq !== activeVenueLoadSeq) return;
+      venues = parseActiveVenuesFromList(html, kind, date)
+        .filter(v => v && v[0])
+        .map(v => [v[0], v[1] || venueName(kind, v[0]), Number(v[2] || 12) || 12]);
 
-    // NARはrace_listの件数が0表示になりやすいので、一覧に出た場だけ軽く実在確認する。
-    // 一覧に場が出ていない時だけ旧来のrace_id確認へフォールバック。
-    if(kind === 'NAR'){
       if(venues.length){
         const confirmed = [];
         for(const [code, name] of venues){
-          if(seq !== activeVenueLoadSeq) return;
-          if(status) status.innerHTML = `<div class="url-status">📅 NAR開催確認中... ${name}</div>`;
+          if(!stillCurrent()) return;
+          setStatus(`<div class="url-status">📅 NAR開催確認中... ${name}</div>`);
           const count = await countActiveNarRaces(date, code);
+          if(!stillCurrent()) return;
           if(count > 0) confirmed.push([code, name, count]);
         }
         venues = confirmed;
       }else{
-        if(status) status.innerHTML = `<div class="url-status">📅 NAR race_id確認中...</div>`;
+        setStatus(`<div class="url-status">📅 NAR race_id確認中...</div>`);
         venues = await loadActiveNarVenuesByRaceId(date);
+        if(!stillCurrent()) return;
       }
     }
 
-    // v5.18.36: 一覧HTMLから開催場を拾えない場合も、固定表には逃げず、
-    // ネット上の実出馬表を race_id 直接確認して開催場を確定する。
-    if(kind === 'JRA' && !venues.length){
-      if(status) status.innerHTML = `<div class="url-status">📡 一覧から取得できないため、実出馬表でJRA開催場を確認中...</div>`;
-      venues = await loadActiveJraVenuesByRaceId(date);
-    }
-
-    if(seq !== activeVenueLoadSeq) return;
-
+    if(!stillCurrent()) return;
     renderVenueOptions(venues);
-    if(status) status.innerHTML = venues.length
-      ? `<div class="url-status ok">✅ ${date} の${kind}開催場だけを表示しました：${venues.map(v => v[1] + '（' + v[2] + 'R）').join('、')}</div>`
-      : `<div class="url-status">開催なし日</div>`;
+    if(venues.length){
+      setStatus(`<div class="url-status ok">✅ ${date} の${kind}開催場だけを表示しました：${venues.map(v => v[1] + '（' + v[2] + 'R）').join('、')}</div>`);
+    }else{
+      console.log('開催なし日');
+      setStatus('<div class="url-status">開催なし日</div>');
+    }
   }catch(e){
-    if(seq !== activeVenueLoadSeq) return;
+    if(!stillCurrent()) return;
     console.error(e);
     renderVenueOptions([]);
-    if(status) status.innerHTML = `<div class="url-status err">⚠️ 開催場の自動取得に失敗: ${e.message}</div>`;
+    setStatus(`<div class="url-status err">⚠️ 開催場の自動取得に失敗: ${e.message}</div>`);
   }
 }
-
 
 function normalizeJapaneseSpaces(s){
   return String(s || '').replace(/\u00a0/g, ' ').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim();
@@ -4406,7 +4429,7 @@ function json(obj, status = 200) {
 
 
 // ============================================================
-// v5.18.38 StrictDateListFix
+// v5.18.39 iPadJraNarSeparateFix
 // その場凌ぎの固定表を使わず、netkeiba race_list.html の kaisai_id/race_id を信頼して
 // 開催場とレース一覧を作る。JRA race_id は日付を含まないため、出馬表総当たり検証は行わない。
 // ============================================================

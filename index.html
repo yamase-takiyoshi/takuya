@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.21 VenueFix</title>
+<title>The競馬 EV分析 v5.18.23 FastVenue</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.21 VenueFix</span>
+    <span class="ver">v5.18.23 FastVenue</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2440,22 +2440,12 @@ async function loadActiveVenuesForDate(){
         venues = await loadActiveNarVenuesByRaceId(date);
       }
     }else{
+      // v5.18.23: JRAはkaisai_date=YYYYMMDDで取得した一覧HTMLのrace_idがその日付分のみ。
+      // shutuba.html確認（プロキシ1往復/場）を廃止し、race_idから場コードを直接確定する。
       const url = raceListUrl(kind, date);
       const html = await fetchHtmlViaProxy(url);
-      const fromHtml = parseActiveVenuesFromList(html, kind, date);
-      if(status) status.innerHTML = `<div class="url-status">🔍 候補場: ${fromHtml.map(v=>v[1]).join('、') || 'なし（0件）'} | HTML長: ${html.length}文字</div>`;
-      await new Promise(r=>setTimeout(r,1500));
-      venues = await confirmActiveJraVenuesFromHtml(html, date, fromHtml);
-      if(!venues.length && fromHtml.length){
-        // 日付照合がHTML構造変更で全滅した場合でも、候補場は一覧HTMLから取れているので候補場だけ軽く再確認。
-        venues = await loadActiveJraVenuesByLightProbe(date, fromHtml.map(v => v[0]));
-      }
-      if(!venues.length && !fromHtml.length){
-        // 一覧HTMLから候補すら取れない場合の最終保険。
-        venues = await loadActiveJraVenuesByLightProbe(date, []);
-      }
-      if(status) status.innerHTML += `<div class="url-status">🔍 確認済み場: ${venues.map(v=>v[1]).join('、') || 'なし（0件）'}</div>`;
-      await new Promise(r=>setTimeout(r,800));
+      venues = parseActiveVenuesFromList(html, kind, date);
+      if(status) status.innerHTML = `<div class="url-status">🔍 race_idから開催場確定: ${venues.map(v=>v[1]).join('、') || 'なし（0件）'}</div>`;
     }
 
     if(seq !== activeVenueLoadSeq) return;
@@ -3245,6 +3235,28 @@ function parseWinOddsPopularityFromDoc(doc){
     }
   });
 
+  // ── Strategy 4: script内の断片データを保険で拾う ─────────────────────────
+  if(map.size < 2){
+    const scripts = Array.from(doc.querySelectorAll('script')).map(s => s.textContent || '').join('\n');
+    if(scripts){
+      const blocks = scripts.match(/\{[^{}]{0,900}(?:horse_num|umaban|馬番|horseNo|number)[^{}]{0,900}\}/gi) || [];
+      blocks.forEach(b => {
+        const n  = b.match(/(?:horse_num|umaban|馬番|horseNo|number)["'\s:＝=]+"?([1-9]|1[0-8])"?/i);
+        const o  = b.match(/(?:odds|win_odds|tansho|単勝)["'\s:＝=]+"?(\d{1,4}\.\d+)"?/i);
+        const pp = b.match(/(?:popular|popularity|ninki|人気)["'\s:＝=]+"?([1-9]|1[0-8])"?/i);
+        if(n && o){
+          const num  = Number(n[1]);
+          const odds = sanitizeWinOddsValue(Number(o[1]), o[1]);
+          const pop  = pp ? Number(pp[1]) : 0;
+          if(odds >= 1 && odds <= 999.9 && num >= 1 && num <= 18){
+            const prev = map.get(num) || {};
+            map.set(num, { odds: Math.round(odds * 10) / 10, pop: (pop >= 1 && pop <= 18) ? pop : (prev.pop || 0) });
+          }
+        }
+      });
+    }
+  }
+
   return map;
 }
 
@@ -3416,108 +3428,6 @@ function parseWinOddsPopularityFromShutuba(doc){
 
   return map; // ヘッダーが見つからない場合は空Map（安全）
 }
-
-function parseWinOddsPopularityFromDoc(doc){
-  const map = new Map();
-
-  const cleanText = (el) => toHalfNumberText(normCellText(el)).replace(/,/g,'').trim();
-  const getNum = (tr, cells) => {
-    const numEl = tr.querySelector('.Umaban, [class*="Umaban"], [class*="HorseNum"], [class*="horse_num"], [class*="UmabanTxt"]');
-    if(numEl){
-      const n = firstNumberInCell(numEl, false);
-      if(n >= 1 && n <= 18) return n;
-    }
-    for(const c of cells.slice(0,4)){
-      const t = String(c || '').trim();
-      const m = t.match(/^([1-9]|1[0-8])$/) || t.match(/^([1-9]|1[0-8])\s*番$/);
-      if(m) return Number(m[1]);
-    }
-    return 0;
-  };
-  const acceptOdds = (txt) => {
-    const t = String(txt || '').replace(/,/g,'').trim();
-    if(!t) return 0;
-    if(/kg|㎏|斤量|負担重量|馬体重|増減|歳|牡|牝|セ|騎手|調教師|所属|払戻|馬連|馬単|ワイド|3連|枠連|ラップ|--/.test(t)) return 0;
-    const m = t.match(/^(\d{1,4}\.\d+)$/) || t.match(/(\d{1,4}\.\d+)/);
-    if(!m) return 0;
-    const v = sanitizeWinOddsValue(Number(m[1]), t);
-    return (v >= 1 && v <= 999.9) ? v : 0;
-  };
-  const acceptPop = (txt) => {
-    const t = String(txt || '').trim();
-    const m = t.match(/^([1-9]|1[0-8])\s*人気$/) || t.match(/^([1-9]|1[0-8])$/);
-    if(!m) return 0;
-    const v = Number(m[1]);
-    return (v >= 1 && v <= 18) ? v : 0;
-  };
-  const put = (num, odds, pop) => {
-    num = Number(num); odds = Number(odds); pop = Number(pop || 0);
-    if(!(num >= 1 && num <= 18)) return;
-    odds = sanitizeWinOddsValue(odds, String(odds));
-    if(!(odds >= 1 && odds <= 999.9)) return;
-    const prev = map.get(num) || {};
-    map.set(num, {
-      odds: Math.round(odds * 10) / 10,
-      pop: (pop >= 1 && pop <= 18) ? pop : (prev.pop || 0)
-    });
-  };
-
-  // Strategy 1: netkeiba単勝オッズ表のクラスを優先。JRA/NAR双方に対応。
-  Array.from(doc.querySelectorAll('tr')).forEach(tr => {
-    const cells = Array.from(tr.querySelectorAll('td,th')).map(td => cleanText(td));
-    if(cells.length < 2) return;
-    const rowText = cells.join(' ');
-    if(/払戻|馬連|馬単|ワイド|3連|枠連|馬体重\(増減\)|ラップ/.test(rowText)) return;
-
-    const num = getNum(tr, cells);
-    if(!(num >= 1 && num <= 18)) return;
-
-    let odds = 0;
-    let pop = 0;
-
-    const oddsEl = tr.querySelector('span.OddsVal, [class*="OddsVal"], td.Odds, td[class*="Odds"], td[class*="odds"]');
-    if(oddsEl) odds = acceptOdds(cleanText(oddsEl));
-
-    const popEl = tr.querySelector('td.Popular, td[class*="Popular"], td[class*="popular"], td[class*="Ninki"], td[class*="ninki"]');
-    if(popEl) pop = acceptPop(cleanText(popEl));
-
-    // クラスが取れない場合は、既存の右端走査ロジックで補完。
-    if(!(odds >= 1) || !(pop >= 1)){
-      const parsed = parseOddsPopFromCellsStrict(cells, num);
-      if(!(odds >= 1)) odds = parsed.odds;
-      if(!(pop >= 1)) pop = parsed.pop;
-    }
-
-    // オッズと人気が同一セルで連結されるケース: 724.412 = 724.4 + 12人気
-    if(!(odds >= 1)){
-      for(const c of cells){
-        const m = String(c).match(/^(\d{1,3}\.\d)([1-9]|1[0-8])$/);
-        if(m){
-          odds = acceptOdds(m[1]);
-          if(!(pop >= 1)) pop = Number(m[2]);
-          break;
-        }
-      }
-    }
-
-    put(num, odds, pop);
-  });
-
-  // Strategy 2: script内の断片データを保険で拾う。
-  const scripts = Array.from(doc.querySelectorAll('script')).map(s => s.textContent || '').join('\n');
-  if(scripts){
-    const blocks = scripts.match(/\{[^{}]{0,900}(?:horse_num|umaban|馬番|horseNo|number)[^{}]{0,900}\}/gi) || [];
-    blocks.forEach(b => {
-      const n = b.match(/(?:horse_num|umaban|馬番|horseNo|number)["'\s:＝=]+"?([1-9]|1[0-8])"?/i);
-      const o = b.match(/(?:odds|win_odds|tansho|単勝)["'\s:＝=]+"?(\d{1,4}\.\d+)"?/i);
-      const pp = b.match(/(?:popular|popularity|ninki|人気)["'\s:＝=]+"?([1-9]|1[0-8])"?/i);
-      if(n && o) put(Number(n[1]), Number(o[1]), pp ? Number(pp[1]) : 0);
-    });
-  }
-
-  return map;
-}
-
 
 // ============================================================
 // v5.18.12: JRAオッズHTMLのDOM変更対策（名前近傍テキスト保険）

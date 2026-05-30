@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.47 FinalOddsResultFix</title>
+<title>The競馬 EV分析 v5.18.48 ResultOddsHorseNoFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.47 FinalOddsResultFix</span>
+    <span class="ver">v5.18.48 ResultOddsHorseNoFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -3930,19 +3930,37 @@ function parseFinalOddsPopularityFromResultDoc(doc, expectedHorses){
     if(/取消|除外|中止/.test(text) && !/人気|単勝|オッズ/.test(text)) return;
 
     let num = 0;
-    const numEl = tr.querySelector('.Umaban, [class*="Umaban"], [class*="HorseNum"]');
-    num = firstNumberInCell(numEl, false);
-    if(!(num >= 1 && num <= 18)){
-      for(const c of cells.slice(0, 6)){
-        const t = toHalfNumberText(normCellText(c)).trim();
-        if(/^([1-9]|1[0-8])$/.test(t)){ num = Number(t); break; }
-      }
-    }
-    if(!(num >= 1 && num <= 18)){
-      const a = tr.querySelector('a[href*="/horse/"]');
+
+    // v5.18.48: result.html は行の先頭が「着順」になるため、
+    // 先頭セルから馬番を拾うと 1着→馬番1、2着→馬番2 のように全馬ずれる。
+    // 最優先は馬名リンクと出馬表で取得済みの馬名照合。これなら着順順の結果表でも馬番JOINが崩れない。
+    const a = tr.querySelector('a[href*="/horse/"]');
+    if(a){
       const nm = normCellText(a).replace(/\s+/g,'').trim();
       num = expectedByName.get(nm) || 0;
     }
+
+    // 次に class が明示された馬番セルだけを見る。着順セルへのフォールバックは禁止。
+    if(!(num >= 1 && num <= 18)){
+      const numEl = tr.querySelector('.Umaban, [class*="Umaban"], [class*="HorseNum"]');
+      num = firstNumberInCell(numEl, false);
+    }
+
+    // class がない result.html 保険：馬名セルの左側にある最も近い独立数字を馬番とする。
+    // 「着順」「枠」より馬名に近い「馬番」を拾うため、左からではなく馬名セルから逆走する。
+    if(!(num >= 1 && num <= 18) && a){
+      const horseCellIndex = cells.findIndex(c => c.contains(a));
+      if(horseCellIndex > 0){
+        for(let i=horseCellIndex-1; i>=0; i--){
+          const t = toHalfNumberText(normCellText(cells[i])).trim();
+          if(/^([1-9]|1[0-8])$/.test(t)){
+            num = Number(t);
+            break;
+          }
+        }
+      }
+    }
+
     if(!(num >= 1 && num <= 18)) return;
 
     let odds = extractOddsFromRow(tr, num);

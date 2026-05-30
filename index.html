@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.49 RaceName11RFix</title>
+<title>The競馬 EV分析 v5.18.50 RaceNameFromShutubaFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.49 RaceName11RFix</span>
+    <span class="ver">v5.18.50 RaceNameFromShutubaFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -3125,6 +3125,32 @@ async function finalFilterRacesForSelection(races, kind, date, venueCode){
 }
 
 
+
+async function enrichRaceNamesFromShutuba(races, kind){
+  // v5.18.50: レース選択欄の正式レース名は race_id → 出馬表ページから直接補完する。
+  // race_list_sub.html だけだとG1・特別・12Rで「11R」「12R」だけになることがあるため、
+  // shutuba.html の RaceName / title を最終ソースにする。
+  if(!Array.isArray(races) || !races.length) return races || [];
+  const out = [];
+  for(const r of races){
+    const raceNo = Number(r.raceNo || String(r.raceId || '').slice(-2));
+    let name = String(r.raceName || '').trim();
+    const generic = !name || /^\d{1,2}R$/.test(name) || name === `${raceNo}R`;
+    if(generic && r.raceId){
+      try{
+        const html = await fetchHtmlViaProxy(shutubaUrl(kind, r.raceId));
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const got = parseRaceTitleFromDoc(doc);
+        if(got && !/^\d{1,2}R$/.test(got)) name = got;
+      }catch(e){
+        console.warn('race name from shutuba failed', r.raceId, e);
+      }
+    }
+    out.push({ ...r, raceName: name || `${raceNo}R` });
+  }
+  return out;
+}
+
 async function loadRaceList(){
   const selectedDateYmd = document.getElementById('pickDate')?.value || formatLocalDate(new Date());
   const selectedDateCompact = ymdCompactLocal(selectedDateYmd);
@@ -3231,6 +3257,11 @@ async function loadRaceList(){
     // 同じプルダウンへ同時に入る事故を防止する。
     races = await finalFilterRacesForSelection(races, kind, date, venueCode);
 
+    // v5.18.50: race_id確定後、出馬表ページのタイトルから正式レース名を補完。
+    // これで「東京11R 11R」「東京12R 12R」のままになる問題を防ぐ。
+    status.innerHTML = `<div class="url-status">🏷️ レース名を出馬表から補完中...</div>`;
+    races = await enrichRaceNamesFromShutuba(races, kind);
+
     if(!races.length){
       raceSelect.innerHTML = '<option value="">レースが見つかりません</option>';
       status.innerHTML = `<div class="url-status err">⚠️ ${date} の ${venueName(kind, venueCode)} はレースが見つかりません。別日・別場のrace_idは除外しました。</div>`;
@@ -3240,12 +3271,12 @@ async function loadRaceList(){
     const dateLabel = raceListDateLabel(date);
     raceSelect.innerHTML = races.map(r => {
       const url = shutubaUrl(kind, r.raceId); // 前回URLを絶対に再利用しない
-      // v5.18.41: 一覧HTMLのレース名は文字化け・欠落しやすいため、選択欄はrace_id主体で安定表示。
-      // 正式レース名は「レースデータ取得」時に出馬表ページから取得する。
       const no = Number(r.raceNo || String(r.raceId).slice(-2));
-      const safeName = `${no}R`;
-      const label = `${dateLabel} ${venueName(kind, venueCode)} ${no}R / ${r.raceId}`;
-      return `<option value="${url}" data-race-id="${r.raceId}" data-race-name="${safeName}">${label}</option>`;
+      const raceName = String(r.raceName || '').trim();
+      const safeName = raceName && !/^\d{1,2}R$/.test(raceName) ? raceName : `${no}R`;
+      const labelName = safeName === `${no}R` ? `${no}R` : `${no}R ${safeName}`;
+      const label = `${dateLabel} ${venueName(kind, venueCode)} ${labelName} / ${r.raceId}`;
+      return `<option value="${url}" data-race-id="${r.raceId}" data-race-name="${escapeHtml(safeName)}">${escapeHtml(label)}</option>`;
     }).join('');
 
     applySelectedRaceUrl();

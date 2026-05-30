@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.42 AutoVenueSubFix</title>
+<title>The競馬 EV分析 v5.18.43 NetkeibaScheduleDirectFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.42 AutoVenueSubFix</span>
+    <span class="ver">v5.18.43 NetkeibaScheduleDirectFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2177,7 +2177,7 @@ function parseActiveVenuesFromList(html, kind, date){
   const rawHtml = String(html || '');
 
   if(kind !== 'NAR'){
-    // v5.18.42 AutoVenueSubFix:
+    // v5.18.43 NetkeibaScheduleDirectFix:
     // 5.18.37 はHTML全体から race_id / kaisai_id / 裸IDを広く拾ったため、
     // 選択日以外のリンクやナビ・過去開催・他場リンクまで混入し、
     // 2026/05/24 に福島・中山・阪神・小倉などが出る事故が起きた。
@@ -4590,7 +4590,7 @@ function json(obj, status = 200) {
 
 
 // ============================================================
-// v5.18.42 AutoVenueSubFix
+// v5.18.43 NetkeibaScheduleDirectFix
 // その場凌ぎの固定表を使わず、netkeiba race_list.html の kaisai_id/race_id を信頼して
 // 開催場とレース一覧を作る。JRA race_id は日付を含まないため、出馬表総当たり検証は行わない。
 // ============================================================
@@ -4786,6 +4786,145 @@ loadRaceList = async function(){
   }
 };
 
+
+
+
+/* ============================================================
+   v5.18.43 Netkeiba Schedule Direct Fix
+   JRA開催場は「開催場推測」ではなく netkeiba の日程ページ
+   race_list_sub.html?kaisai_date=YYYYMMDD&current_group=10YYYYMMDD 系を
+   直接複数候補で参照して、HTML内の race_id / kaisai_id から一発抽出する。
+   土日グループ(current_groupが前日になる場合)も必ず試す。
+   ============================================================ */
+function live43_jraScheduleUrls(date){
+  const p = ymdParts(date);
+  const prev = ymdParts(addLocalDaysYmd(date, -1)).yyyymmdd;
+  const next = ymdParts(addLocalDaysYmd(date, 1)).yyyymmdd;
+  return [
+    `https://race.netkeiba.com/top/race_list_sub.html?kaisai_date=${p.yyyymmdd}&current_group=10${p.yyyymmdd}#racelist_top_a`,
+    `https://race.netkeiba.com/top/race_list_sub.html?kaisai_date=${p.yyyymmdd}&current_group=10${prev}#racelist_top_a`,
+    `https://race.netkeiba.com/top/race_list_sub.html?kaisai_date=${p.yyyymmdd}&current_group=10${next}#racelist_top_a`,
+    `https://race.netkeiba.com/top/race_list_sub.html?kaisai_date=${p.yyyymmdd}#racelist_top_a`,
+    `https://race.netkeiba.com/top/race_list.html?kaisai_date=${p.yyyymmdd}`
+  ];
+}
+async function live43_fetchJraSchedule(date, needVenueCode){
+  let lastErr = null;
+  let lastHtml = '';
+  for(const url of live43_jraScheduleUrls(date)){
+    try{
+      const html = await fetchHtmlViaProxy(url);
+      lastHtml = html || lastHtml;
+      const venues = live37_parseJraVenuesFromRaceList(html);
+      if(needVenueCode){
+        const kid = live37_bestKaisaiIdForVenue(html, needVenueCode);
+        if(kid) return { html, url, venues, kid };
+      }else if(venues && venues.length){
+        return { html, url, venues, kid:'' };
+      }
+    }catch(e){ lastErr = e; }
+  }
+  return { html:lastHtml, url:'', venues:[], kid:'', error:lastErr };
+}
+
+// 開催場取得：JRAはnetkeiba日程ページを複数URLで直接参照する。
+loadActiveVenuesForDate = async function(){
+  const seq = ++activeVenueLoadSeq;
+  const date = document.getElementById('pickDate')?.value || todayYmd();
+  const kind = document.getElementById('pickKind')?.value || 'JRA';
+  const status = document.getElementById('urlStatus');
+  const raceSelect = document.getElementById('raceSelect');
+  if(raceSelect) raceSelect.innerHTML = '<option value="">開催場を選んでレース一覧を取得</option>';
+  if(!settings.proxyUrl){
+    renderVenueOptions([]);
+    if(status) status.innerHTML = '<div class="url-status err">⚠️ プロキシURL未設定のため、開催場を自動取得できません</div>';
+    return;
+  }
+  try{
+    let venues = [];
+    if(kind === 'JRA'){
+      if(status) status.innerHTML = `<div class="url-status">📡 ${date} のJRA日程をnetkeibaから直接取得中...</div>`;
+      const got = await live43_fetchJraSchedule(date, '');
+      venues = got.venues || [];
+      if(got.html){
+        const p = ymdParts(date).yyyymmdd;
+        venues.forEach(v => {
+          const kid = live37_bestKaisaiIdForVenue(got.html, v[0]);
+          if(kid) lastJraKaisaiByDateVenue[p + '-' + v[0]] = { kai:Number(kid.slice(6,8)), day:Number(kid.slice(8,10)) };
+        });
+      }
+    }else{
+      if(status) status.innerHTML = `<div class="url-status">📡 ${date} のNAR開催一覧をnetkeibaから取得中...</div>`;
+      const html = await fetchHtmlViaProxy(raceListUrl(kind, date));
+      venues = parseActiveVenuesFromList(html, kind, date)
+        .filter(v => v && v[0])
+        .map(v => [v[0], v[1] || venueName(kind, v[0]), Number(v[2] || 12) || 12]);
+      if(!venues.length) venues = await loadActiveNarVenuesByRaceId(date);
+    }
+    if(seq !== activeVenueLoadSeq) return;
+    renderVenueOptions(venues);
+    if(status) status.innerHTML = venues.length
+      ? `<div class="url-status ok">✅ ${date} の${kind}開催場をnetkeiba日程から取得：${venues.map(v => v[1] + '（' + v[2] + 'R）').join('、')}</div>`
+      : `<div class="url-status">開催なし日</div>`;
+  }catch(e){
+    if(seq !== activeVenueLoadSeq) return;
+    console.error(e);
+    renderVenueOptions([]);
+    if(status) status.innerHTML = `<div class="url-status err">⚠️ 開催場の自動取得に失敗: ${e.message}</div>`;
+  }
+};
+
+// レース一覧取得も同じ日程HTMLを使い、選択場のkaisai_idからrace_idを組む。
+loadRaceList = async function(){
+  const date = document.getElementById('pickDate')?.value || todayYmd();
+  const kind = document.getElementById('pickKind')?.value || 'JRA';
+  const venueCode = document.getElementById('pickVenue')?.value || '';
+  const status = document.getElementById('urlStatus');
+  const raceSelect = document.getElementById('raceSelect');
+  currentRaceId = '';
+  currentRaceName = '';
+  const raceUrl = document.getElementById('raceUrl');
+  if(raceUrl) raceUrl.value = '';
+  const box = document.getElementById('raceTitleBox');
+  if(box){ box.style.display = 'none'; box.textContent = ''; }
+  if(!settings.proxyUrl){ alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。'); return; }
+  if(!venueCode){ alert('開催場を選択してください。'); return; }
+  try{
+    if(status) status.innerHTML = `<div class="url-status">📅 ${date} ${venueName(kind, venueCode)} のnetkeiba日程を取得中...</div>`;
+    let races = [];
+    if(kind === 'JRA'){
+      const got = await live43_fetchJraSchedule(date, venueCode);
+      if(got.kid){
+        const cacheKey = ymdParts(date).yyyymmdd + '-' + venueCode;
+        lastJraKaisaiByDateVenue[cacheKey] = { kai:Number(got.kid.slice(6,8)), day:Number(got.kid.slice(8,10)) };
+      }
+      races = live37_buildJraRacesFromRaceList(got.html, date, venueCode);
+    }else{
+      races = await loadNarRaceListByRaceId(date, venueCode);
+      if(!races.length){
+        const html = await fetchHtmlViaProxy(raceListUrl(kind, date, venueCode));
+        races = parseRaceIdsFromList(html, kind, venueCode, date);
+      }
+    }
+    if(!races.length){
+      raceSelect.innerHTML = '<option value="">レースが見つかりません</option>';
+      if(status) status.innerHTML = `<div class="url-status err">⚠️ ${date} の ${venueName(kind, venueCode)} はnetkeiba日程からレースを取得できませんでした。</div>`;
+      return;
+    }
+    const dateLabel = raceListDateLabel(date);
+    raceSelect.innerHTML = races.map(r => {
+      const url = shutubaUrl(kind, r.raceId);
+      const raceName = escapeHtml(r.raceName || `${r.raceNo}R`);
+      const label = `${dateLabel} ${venueName(kind, venueCode)} ${r.raceNo}R ${raceName} / ${r.raceId}`;
+      return `<option value="${url}" data-race-id="${r.raceId}" data-race-name="${raceName}">${label}</option>`;
+    }).join('');
+    applySelectedRaceUrl();
+    if(status) status.innerHTML = `<div class="url-status ok">✅ ${date} ${venueName(kind, venueCode)} ${races.length}レースをnetkeiba日程から取得しました</div>`;
+  }catch(e){
+    console.error(e);
+    if(status) status.innerHTML = `<div class="url-status err">❌ レース一覧取得失敗: ${e.message}</div>`;
+  }
+};
 
 // ─── 起動 ────────────────────────────────────────
 initUI();

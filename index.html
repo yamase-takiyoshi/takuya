@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.25 OddsPopRaceId</title>
+<title>The競馬 EV分析 v5.18.28 ShutubaFirst</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.25 OddsPopRaceId</span>
+    <span class="ver">v5.18.28 ShutubaFirst</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -3134,8 +3134,10 @@ function buildNetkeibaOddsUrls(kind, raceId){
     ];
   }
   return [
-    // v5.18.25: race_idから単勝オッズ・人気を直接取りに行く候補を増やす。
-    // odds/index.html がJS描画でDOMに出ない場合でも、API/JS断片/本文から拾う。
+    // v5.18.28: shutuba.htmlを最初に試す。出馬表取得と同じHTMLなので追加通信ゼロのケースが多い。
+    `https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}&rf=race_submenu`,
+    `https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}`,
+    // 以降はshutuba.htmlでオッズが取れなかった場合の保険
     `https://race.netkeiba.com/odds/index.html?race_id=${raceId}&type=b1`,
     `https://race.netkeiba.com/odds/index.html?race_id=${raceId}`,
     `https://race.netkeiba.com/odds/index.html?race_id=${raceId}&rf=shutuba_submenu`,
@@ -3707,6 +3709,12 @@ async function fetchWinOddsPopularity(kind, raceId, expectedHorses){
         map = mergeOddsMaps(map, byName);
       }
 
+      // v5.18.27: 候補URLが shutuba.html の場合、予想オッズ列専用パーサも試す
+      if((!map || map.size < 2) && url.includes('shutuba.html')){
+        const sMap = parseWinOddsPopularityFromShutuba(doc);
+        map = mergeOddsMaps(map, sMap);
+      }
+
       if(map.size >= 2) return map;
     }catch(e){
       console.warn('odds fetch failed:', e);
@@ -3726,6 +3734,37 @@ function mergeOddsPopularityIntoHorses(baseHorses, oddsMap){
       pop: (Number(o.pop) >= 1) ? Number(o.pop) : Number(h.pop || 0)
     };
   });
+}
+
+// NAR補完: 人気が全馬未取得、または人気順とオッズ順が著しく矛盾する場合、
+// オッズ昇順で人気を再割り当てする。オッズ未取得馬は末尾に置く。
+function fillNarPopularityFromOdds(hs){
+  if(!hs || !hs.length) return hs;
+  const withOdds = hs.filter(h => Number(h.odds) >= 1);
+  if(withOdds.length < 2) return hs; // オッズが揃っていなければ何もしない
+
+  // 既存人気の信頼性チェック: 人気付き馬の人気順がオッズ順と一致しているか
+  const popOk = hs.filter(h => Number(h.pop) >= 1);
+  if(popOk.length >= 2){
+    // オッズ昇順ランクと人気番号のスピアマン順位相関を簡易計算
+    const sorted = withOdds.slice().sort((a,b) => Number(a.odds) - Number(b.odds));
+    const oddsRank = new Map(sorted.map((h,i) => [h.num, i+1]));
+    let diff = 0;
+    popOk.forEach(h => {
+      const or = oddsRank.get(h.num);
+      if(or) diff += Math.abs(or - Number(h.pop));
+    });
+    const avgDiff = diff / popOk.length;
+    if(avgDiff <= 1.5) return hs; // 平均乖離1.5以内なら信頼できる→そのまま返す
+  }
+
+  // 人気を再計算: オッズ昇順で1,2,3...を割り当て
+  const sorted = withOdds.slice().sort((a,b) => Number(a.odds) - Number(b.odds));
+  const rankMap = new Map(sorted.map((h,i) => [h.num, i+1]));
+  return hs.map(h => ({
+    ...h,
+    pop: rankMap.has(h.num) ? rankMap.get(h.num) : Number(h.pop || 0)
+  }));
 }
 
 // v5.18.14: JRAはodds/index.htmlを単勝オッズの唯一の正ソースにする。
@@ -3806,15 +3845,17 @@ async function fetchRace(){
 
     if(rid){
       if(kind === 'JRA'){
-        // Step1: odds/index.html を必ず最初に取得（主経路）
+        // Step1: shutuba.htmlを最初に試みる（出馬表取得と同じHTMLのためキャッシュ効果あり）。
+        // shutuba.htmlでオッズが取れない場合はodds/index.html等にフォールバック。
         const oddsMap = await fetchWinOddsPopularity('JRA', rid, horses);
 
-        // Step2: oddsページで取れない場合だけ、出馬表HTMLの「明示的な予想オッズ列」を保険にする。
-        // ただし最終JOINはapplyAuthoritativeJraOddsで行い、mapに無い馬は必ず空欄化する。
-        const shutubaOddsMap = (!oddsMap || oddsMap.size < horses.length) ? parseWinOddsPopularityFromShutuba(doc) : new Map();
+        // Step2: Step1で不足がある場合、既取得の出馬表HTML（追加通信ゼロ）を保険で解析。
+        // parseWinOddsPopularityFromShutuba は「予想オッズ列が明示されている場合のみ」返すので斤量誤読なし。
+        const shutubaOddsMap = (!oddsMap || oddsMap.size < horses.length)
+          ? parseWinOddsPopularityFromShutuba(doc)
+          : new Map();
 
-        // Step3: JRAはここで旧オッズを全消去して、race_id由来のodds/index.html値だけを馬番JOINする。
-        // これが斤量55.0等を残さない抜本対策。
+        // Step3: JRAはここで旧オッズを全消去して、odds由来の値だけを馬番JOINする。
         horses = applyAuthoritativeJraOdds(horses, oddsMap, shutubaOddsMap);
       }else{
         // NAR: 既存ロジックをそのまま維持
@@ -3827,6 +3868,8 @@ async function fetchRace(){
             horses = mergeOddsPopularityIntoHorses(horses, shutubaOddsMap);
           }
         }
+        // NAR補完: 人気が全馬未取得 or オッズと順番が矛盾する場合、オッズ昇順で人気を再計算
+        horses = fillNarPopularityFromOdds(horses);
       }
     }
 

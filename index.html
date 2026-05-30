@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.50 RaceNameFromShutubaFix</title>
+<title>The競馬 EV分析 v5.18.51 RaceNameSafeFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.50 RaceNameFromShutubaFix</span>
+    <span class="ver">v5.18.51 RaceNameSafeFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -3127,26 +3127,26 @@ async function finalFilterRacesForSelection(races, kind, date, venueCode){
 
 
 async function enrichRaceNamesFromShutuba(races, kind){
-  // v5.18.50: レース選択欄の正式レース名は race_id → 出馬表ページから直接補完する。
-  // race_list_sub.html だけだとG1・特別・12Rで「11R」「12R」だけになることがあるため、
-  // shutuba.html の RaceName / title を最終ソースにする。
+  // v5.18.51: レース名は日程ページ由来を優先し、汎用名だけ出馬表で補完する。
+  // 出馬表HTML内の script / messageEvent / 文字化けをレース名として採用しない。
   if(!Array.isArray(races) || !races.length) return races || [];
   const out = [];
   for(const r of races){
     const raceNo = Number(r.raceNo || String(r.raceId || '').slice(-2));
-    let name = String(r.raceName || '').trim();
-    const generic = !name || /^\d{1,2}R$/.test(name) || name === `${raceNo}R`;
+    let name = cleanRaceNameSafe51(r.raceName || '', raceNo) || String(r.raceName || '').trim();
+    const generic = !cleanRaceNameSafe51(name, raceNo);
     if(generic && r.raceId){
       try{
         const html = await fetchHtmlViaProxy(shutubaUrl(kind, r.raceId));
         const doc = new DOMParser().parseFromString(html, 'text/html');
-        const got = parseRaceTitleFromDoc(doc);
-        if(got && !/^\d{1,2}R$/.test(got)) name = got;
+        const got = parseRaceTitleFromDoc(doc, raceNo);
+        if(got) name = got;
       }catch(e){
         console.warn('race name from shutuba failed', r.raceId, e);
       }
     }
-    out.push({ ...r, raceName: name || `${raceNo}R` });
+    name = cleanRaceNameSafe51(name, raceNo) || `${raceNo}R`;
+    out.push({ ...r, raceName: name });
   }
   return out;
 }
@@ -4326,25 +4326,60 @@ async function fetchRace(){
   }
 }
 
-function parseRaceTitleFromDoc(doc){
-  // netkeibaのタブ名（データ分析・オッズ等）をレース名として拾わないように厳格化。
-  const bad = /データ分析|オッズ|購入|予想|結果|払戻|レース映像|掲示板|お気に入り|netkeiba|競馬データベース/i;
-  const candidates = [
-    ...doc.querySelectorAll('.RaceName, [class*="RaceName"], h1')
-  ];
-  for(const el of candidates){
-    if(!el) continue;
-    let t = (el.textContent || '')
-      .replace(/出馬表|オッズ|競馬データベース|netkeiba\.com|｜.*$/g,'')
-      .replace(/\s+/g,' ')
-      .trim();
-    if(t && t.length >= 2 && !bad.test(t)) return t;
-  }
-  const title = (doc.querySelector('title')?.textContent || '')
-    .replace(/出馬表|オッズ|競馬データベース|netkeiba\.com|｜.*$/g,'')
-    .replace(/\s+/g,' ')
+function cleanRaceNameSafe51(raw, raceNo){
+  let t = String(raw || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&#039;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/出馬表|オッズ|競馬データベース|netkeiba\.com|ネット競馬|JRA|地方競馬/gi, ' ')
+    .replace(/[｜|].*$/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim();
-  return title && !bad.test(title) ? title : '';
+
+  // 「2026/05/31 東京 11R 東京優駿（日本ダービー）」のような場合はレース名部分だけ残す。
+  t = t.replace(/^\d{4}[\/年-]\d{1,2}[\/月-]\d{1,2}日?\s*/,'')
+       .replace(/^(札幌|函館|福島|新潟|東京|中山|中京|京都|阪神|小倉|門別|盛岡|水沢|浦和|船橋|大井|川崎|金沢|笠松|名古屋|園田|姫路|高知|佐賀)\s*/,'')
+       .replace(new RegExp('^' + (raceNo || '\d{1,2}') + 'R\s*'), '')
+       .trim();
+
+  const bad = /attachEvent|addEventListener|onmessage|messageEvent|downloadPDFComplete|function|script|window\.|document\.|return |var |let |const |=>|\{|\}|;|callback/i;
+  const generic = new RegExp('^(第)?' + (raceNo || '\d{1,2}') + 'R$');
+  const mojibake = /�|���|\uFFFD/;
+  if(!t || t.length < 2) return '';
+  if(t.length > 40) return '';
+  if(bad.test(t)) return '';
+  if(mojibake.test(t)) return '';
+  if(generic.test(t) || /^\d{1,2}R$/.test(t)) return '';
+  // 日本語レース名として最低限、漢字・かな・カナのどれかを含むものだけ採用
+  if(!/[一-龥ぁ-んァ-ヶ]/.test(t)) return '';
+  return t;
+}
+
+function parseRaceTitleFromDoc(doc, raceNo){
+  // v5.18.51: script文字列・文字化け・タブ名をレース名として拾わない安全版。
+  // textContentをbody全体から取らず、レース名専用要素とtitleだけを見る。
+  const selectors = [
+    '.RaceName',
+    '.RaceName h1',
+    '.RaceName span',
+    '[class="RaceName"]',
+    '[class*="RaceName"]',
+    '.race_name',
+    '.RaceList_ItemTitle',
+    'h1'
+  ];
+  for(const sel of selectors){
+    for(const el of doc.querySelectorAll(sel)){
+      const got = cleanRaceNameSafe51(el.textContent || '', raceNo);
+      if(got) return got;
+    }
+  }
+  const titleRaw = doc.querySelector('title')?.textContent || '';
+  const titleParts = titleRaw.split(/[｜|]/).map(x => cleanRaceNameSafe51(x, raceNo)).filter(Boolean);
+  return titleParts[0] || '';
 }
 
 function normCellText(el){

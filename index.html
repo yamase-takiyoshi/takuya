@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.33 KnownScheduleFix</title>
+<title>The競馬 EV分析 v5.18.34 WeekendFallbackFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.33 KnownScheduleFix</span>
+    <span class="ver">v5.18.34 WeekendFallbackFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1995,14 +1995,32 @@ function ymdParts(date){
 const JRA_KNOWN_SCHEDULE = {
   // netkeiba一覧HTML/プロキシが空を返す場合の安全フォールバック。
   // 全場総当たりは禁止し、確認済みの日付だけを明示する。
+  // 2026年5月の東京・京都開催を明示。土日に「開催なし」へ落ちる事故を防ぐ。
+  '20260516': [ ['05','東京',12,{kai:2,day:7}],  ['08','京都',12,{kai:4,day:7}] ],
+  '20260517': [ ['05','東京',12,{kai:2,day:8}],  ['08','京都',12,{kai:4,day:8}] ],
   '20260523': [ ['05','東京',12,{kai:2,day:9}],  ['08','京都',12,{kai:4,day:9}] ],
   '20260524': [ ['05','東京',12,{kai:2,day:10}], ['08','京都',12,{kai:4,day:10}] ],
-  '20260530': [ ['05','東京',12,{kai:2,day:11}], ['08','京都',12,{kai:4,day:11}] ]
+  '20260530': [ ['05','東京',12,{kai:2,day:11}], ['08','京都',12,{kai:4,day:11}] ],
+  '20260531': [ ['05','東京',12,{kai:2,day:12}], ['08','京都',12,{kai:4,day:12}] ]
 };
+
+function isWeekendYmd(date){
+  const d = parseLocalDateYMD(date);
+  const w = d.getDay();
+  return w === 0 || w === 6;
+}
 
 function knownJraVenuesForDate(date){
   const key = ymdParts(date).yyyymmdd;
-  return (JRA_KNOWN_SCHEDULE[key] || []).map(v => [v[0], v[1], v[2], v[3]]);
+  const known = JRA_KNOWN_SCHEDULE[key] || [];
+  if(known.length) return known.map(v => [v[0], v[1], v[2], v[3]]);
+
+  // v5.18.34: JRAの土日で一覧取得/プロキシが空の時に「開催なし」と断定しない。
+  // まず東京・京都だけを安全表示し、レース一覧ボタン側で実race_id確認へ進める。
+  if(isWeekendYmd(date)){
+    return [ ['05','東京',12,null], ['08','京都',12,null] ];
+  }
+  return [];
 }
 
 function knownJraKaisaiForDateVenue(date, venueCode){
@@ -2478,7 +2496,7 @@ async function loadActiveVenuesForDate(){
   try{
     if(status) status.innerHTML = `<div class="url-status">📅 ${date} のnetkeiba開催一覧を確認中...</div>`;
 
-    // v5.18.33 KnownScheduleFix:
+    // v5.18.34 WeekendFallbackFix:
     // 日付を選んだら、まずnetkeibaの race_list.html だけを見る。
     // そこに載っている race_id / kaisai_id から「その日開催する開催場だけ」を抽出する。
     // JRAで一覧が取れた場合は、全場×開催回×開催日を総当たりしないので高速。

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.39 iPadJraNarSeparateFix</title>
+<title>The競馬 EV分析 v5.18.40 RaceListSubFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.39 iPadJraNarSeparateFix</span>
+    <span class="ver">v5.18.40 RaceListSubFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2008,7 +2008,76 @@ function raceListUrl(kind, date, venueCode){
     const base = `https://nar.netkeiba.com/top/race_list.html?kaisai_date=${p.yyyymmdd}`;
     return venueCode ? `${base}&kaisai_id=${narKaisaiId(date, venueCode)}` : base;
   }
-  return `https://race.netkeiba.com/top/race_list.html?kaisai_date=${p.yyyymmdd}`;
+  // JRAの通常 race_list.html は iPad/Safari + netkeiba側のタブ状態で空になることがある。
+  // 実レース一覧は race_list_sub.html 側を主に使う。
+  return `https://race.netkeiba.com/top/race_list_sub.html?kaisai_date=${p.yyyymmdd}&current_group=10${p.yyyymmdd}#racelist_top_a`;
+}
+
+function addLocalDaysYmd(ymd, days){
+  const d = parseLocalDateYMD(ymd);
+  d.setDate(d.getDate() + Number(days || 0));
+  return formatLocalDate(d);
+}
+
+function jraRaceListUrls(date){
+  const p = ymdParts(date);
+  const prev = ymdParts(addLocalDaysYmd(date, -1)).yyyymmdd;
+  const next = ymdParts(addLocalDaysYmd(date, 1)).yyyymmdd;
+  // current_group は週末グループの先頭日になることがあり、
+  // 5/31なら current_group=10+5/30 のようなURLが有効になる。
+  return [
+    `https://race.netkeiba.com/top/race_list_sub.html?kaisai_date=${p.yyyymmdd}&current_group=10${p.yyyymmdd}#racelist_top_a`,
+    `https://race.netkeiba.com/top/race_list_sub.html?kaisai_date=${p.yyyymmdd}&current_group=10${prev}#racelist_top_a`,
+    `https://race.netkeiba.com/top/race_list_sub.html?kaisai_date=${p.yyyymmdd}&current_group=10${next}#racelist_top_a`,
+    `https://race.netkeiba.com/top/race_list_sub.html?kaisai_date=${p.yyyymmdd}#racelist_top_a`,
+    `https://race.netkeiba.com/top/race_list.html?kaisai_date=${p.yyyymmdd}`
+  ];
+}
+
+async function fetchFirstUsefulJraListHtml(date, venueCode){
+  let lastHtml = '';
+  for(const url of jraRaceListUrls(date)){
+    try{
+      const html = await fetchHtmlViaProxy(url);
+      lastHtml = html || lastHtml;
+      const races = parseRaceIdsFromList(html, 'JRA', venueCode || '', date);
+      if(races && races.length) return { html, url, races };
+    }catch(e){}
+  }
+  return { html:lastHtml, url:'', races:[] };
+}
+
+function jraKaisaiFromRaceId(raceId){
+  const id = String(raceId || '');
+  if(id.length < 12) return null;
+  return { kai:Number(id.slice(6,8)), day:Number(id.slice(8,10)) };
+}
+
+async function loadActiveJraVenuesFromRaceListSub(date){
+  const found = [];
+  const got = await fetchFirstUsefulJraListHtml(date, '');
+  const races = got.races || [];
+  if(!races.length) return found;
+
+  const byVenue = new Map();
+  races.forEach(r => {
+    const code = extractVenueCodeFromRaceId(r.raceId, 'JRA');
+    if(!JRA_VENUES.some(v => v[0] === code)) return;
+    const raceNo = Number(String(r.raceId).slice(-2));
+    if(!(raceNo >= 1 && raceNo <= 12)) return;
+    if(!byVenue.has(code)) byVenue.set(code, { set:new Set(), firstRaceId:r.raceId });
+    byVenue.get(code).set.add(raceNo);
+  });
+
+  const cacheKeyBase = ymdParts(date).yyyymmdd;
+  lastJraKaisaiByDateVenue = lastJraKaisaiByDateVenue || {};
+  Array.from(byVenue.entries()).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([code, obj]) => {
+    const name = venueName('JRA', code);
+    const kd = jraKaisaiFromRaceId(obj.firstRaceId);
+    if(kd) lastJraKaisaiByDateVenue[cacheKeyBase + '-' + code] = kd;
+    found.push([code, name, obj.set.size || 12, kd]);
+  });
+  return found;
 }
 
 function shutubaUrl(kind, raceId){
@@ -2101,7 +2170,7 @@ function parseActiveVenuesFromList(html, kind, date){
   const rawHtml = String(html || '');
 
   if(kind !== 'NAR'){
-    // v5.18.39 iPadJraNarSeparateFix:
+    // v5.18.40 RaceListSubFix:
     // 5.18.37 はHTML全体から race_id / kaisai_id / 裸IDを広く拾ったため、
     // 選択日以外のリンクやナビ・過去開催・他場リンクまで混入し、
     // 2026/05/24 に福島・中山・阪神・小倉などが出る事故が起きた。
@@ -2407,7 +2476,7 @@ async function loadActiveJraVenuesByLightProbe(date, candidateCodes){
 // MMDDはrace_idに入らないため、各場の 1R をプローブし、出馬表本文の日付が選択日と一致した場だけ採用する。
 let lastJraKaisaiByDateVenue = {};
 async function loadActiveJraVenuesByRaceId(date){
-  // v5.18.39 iPadJraNarSeparateFix:
+  // v5.18.40 RaceListSubFix:
   // 固定表・季節表は使わず、全JRA場をネット上の出馬表で同時確認する。
   // 表示は「確認中...」だけにし、札幌から順に探しているようなUIにはしない。
   const status = document.getElementById('urlStatus');
@@ -2415,7 +2484,16 @@ async function loadActiveJraVenuesByRaceId(date){
   const cacheKeyBase = ymdParts(date).yyyymmdd;
   lastJraKaisaiByDateVenue = lastJraKaisaiByDateVenue || {};
 
-  if(status && canUpdateStatus()) status.innerHTML = `<div class="url-status">📡 ${date} のJRA開催をネットで確認中...</div>`;
+  if(status && canUpdateStatus()) status.innerHTML = `<div class="url-status">📡 ${date} のJRA開催をnetkeiba race_list_subで確認中...</div>`;
+
+  // v5.18.40: 先生の提案どおり、まず race_list_sub.html?kaisai_date=YYYYMMDD を参照する。
+  // ここに出馬表 race_id が載っていれば、札幌から総当たりせず開催場を一発で確定できる。
+  try{
+    const fromSub = await loadActiveJraVenuesFromRaceListSub(date);
+    if(fromSub && fromSub.length) return fromSub;
+  }catch(e){}
+
+  if(status && canUpdateStatus()) status.innerHTML = `<div class="url-status">📡 race_list_subで見つからないため、出馬表race_idで確認中...</div>`;
 
   const tasks = JRA_VENUES.map(async ([code, name]) => {
     let kd = null;
@@ -3034,6 +3112,25 @@ async function loadRaceList(){
       status.innerHTML = `<div class="url-status">📅 ${date} ${venueName(kind, venueCode)} のrace_idを直接確認中...</div>`;
       races = await loadNarRaceListByRaceId(date, venueCode);
     }else{
+      // v5.18.40: レース一覧は先生の提案どおり race_list_sub.html を最優先。
+      // 取得できた race_id をそのまま使うので、日付・開催場・R番号のズレを防げる。
+      try{
+        status.innerHTML = `<div class="url-status">📅 ${date} ${venueName(kind, venueCode)} のrace_list_subを取得中...</div>`;
+        const got = await fetchFirstUsefulJraListHtml(date, venueCode);
+        races = (got.races || [])
+          .filter(r => raceIdVenueMatches('JRA', r.raceId, venueCode))
+          .sort((a,b) => Number(a.raceNo) - Number(b.raceNo));
+        if(races.length){
+          const cacheKey0 = ymdParts(date).yyyymmdd + '-' + venueCode;
+          const kd0 = jraKaisaiFromRaceId(races[0].raceId);
+          if(kd0){
+            lastJraKaisaiByDateVenue = lastJraKaisaiByDateVenue || {};
+            lastJraKaisaiByDateVenue[cacheKey0] = kd0;
+          }
+        }
+      }catch(e){ races = []; }
+
+      if(!races.length){
       // v5.18.24: レース一覧もrace_id直接確認を優先する。
       const cacheKey = ymdParts(date).yyyymmdd + '-' + venueCode;
       let kd = (lastJraKaisaiByDateVenue || {})[cacheKey] || knownJraKaisaiForDateVenue(date, venueCode) || null;
@@ -3058,9 +3155,9 @@ async function loadRaceList(){
         }
       }else{
         // 保険として従来の一覧HTML解析へフォールバック。
-        const url = raceListUrl(kind, date, venueCode);
-        const html = await fetchHtmlViaProxy(url);
-        races = await getReliableJraRacesFromList(html, date, venueCode);
+        const got = await fetchFirstUsefulJraListHtml(date, venueCode);
+        races = await getReliableJraRacesFromList(got.html || '', date, venueCode);
+      }
       }
     }
 
@@ -4429,7 +4526,7 @@ function json(obj, status = 200) {
 
 
 // ============================================================
-// v5.18.39 iPadJraNarSeparateFix
+// v5.18.40 RaceListSubFix
 // その場凌ぎの固定表を使わず、netkeiba race_list.html の kaisai_id/race_id を信頼して
 // 開催場とレース一覧を作る。JRA race_id は日付を含まないため、出馬表総当たり検証は行わない。
 // ============================================================

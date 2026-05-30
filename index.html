@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.28 ShutubaFirst</title>
+<title>The競馬 EV分析 v5.18.29 NetkeibaFast</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.28 ShutubaFirst</span>
+    <span class="ver">v5.18.29 NetkeibaFast</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2441,7 +2441,6 @@ async function loadActiveVenuesForDate(){
   const raceSelect = document.getElementById('raceSelect');
   if(raceSelect) raceSelect.innerHTML = '<option value="">開催場を選んでレース一覧を取得</option>';
 
-  // 正確な開催場絞り込みにはnetkeiba一覧取得が必須。プロキシ未設定時に全場を出すと誤操作になるため、空にする。
   if(!settings.proxyUrl){
     renderVenueOptions([]);
     if(status) status.innerHTML = '<div class="url-status err">⚠️ プロキシURL未設定のため、開催場を自動取得できません</div>';
@@ -2449,38 +2448,41 @@ async function loadActiveVenuesForDate(){
   }
 
   try{
-    if(status) status.innerHTML = `<div class="url-status">📅 ${date} の開催場を自動確認中...</div>`;
+    if(status) status.innerHTML = `<div class="url-status">📅 ${date} のnetkeiba開催一覧を確認中...</div>`;
 
-    let venues = [];
+    // v5.18.29 NetkeibaFast:
+    // 日付を選んだら、まずnetkeibaの race_list.html だけを見る。
+    // そこに載っている race_id / kaisai_id から「その日開催する開催場だけ」を抽出する。
+    // JRAで一覧が取れた場合は、全場×開催回×開催日を総当たりしないので高速。
+    const html = await fetchHtmlViaProxy(raceListUrl(kind, date));
+    let venues = parseActiveVenuesFromList(html, kind, date)
+      .filter(v => v && v[0])
+      .map(v => [v[0], v[1] || venueName(kind, v[0]), Number(v[2] || 12) || 12]);
 
+    if(seq !== activeVenueLoadSeq) return;
+
+    // NARはrace_listの件数が0表示になりやすいので、一覧に出た場だけ軽く実在確認する。
+    // 一覧に場が出ていない時だけ旧来のrace_id確認へフォールバック。
     if(kind === 'NAR'){
-      const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(raceListUrl(kind, date));
-      const res = await fetch(proxyReq, { cache:'no-store' });
-      if(!res.ok) throw new Error('HTTP ' + res.status);
-      const html = await res.text();
-      const fromHtml = parseActiveVenuesFromList(html, kind, date);
-
-      if(fromHtml.length){
+      if(venues.length){
         const confirmed = [];
-        for(const [code, name] of fromHtml){
+        for(const [code, name] of venues){
           if(seq !== activeVenueLoadSeq) return;
-          try{
-            if(status) status.innerHTML = `<div class="url-status">📅 NAR開催確認中... ${name}</div>`;
-            const count = await countActiveNarRaces(date, code);
-            if(count > 0) confirmed.push([code, name, count]);
-          }catch(e){}
+          if(status) status.innerHTML = `<div class="url-status">📅 NAR開催確認中... ${name}</div>`;
+          const count = await countActiveNarRaces(date, code);
+          if(count > 0) confirmed.push([code, name, count]);
         }
         venues = confirmed;
       }else{
-        if(status) status.innerHTML = `<div class="url-status">📅 NAR全場確認中...</div>`;
+        if(status) status.innerHTML = `<div class="url-status">📅 NAR race_id確認中...</div>`;
         venues = await loadActiveNarVenuesByRaceId(date);
       }
-    }else{
-      // v5.18.24: JRA開催場は一覧HTMLに依存しない。
-      // race_idを直接生成して、出馬表本文の日付が選択日と一致する場だけ表示する。
-      if(status) status.innerHTML = `<div class="url-status">📅 JRA race_id直接確認中...</div>`;
+    }
+
+    // JRAはrace_list由来の開催場をそのまま採用。空の時だけ保険でrace_id直接確認。
+    if(kind === 'JRA' && !venues.length){
+      if(status) status.innerHTML = `<div class="url-status">📅 JRA一覧が空のためrace_id確認に切替...</div>`;
       venues = await loadActiveJraVenuesByRaceId(date);
-      if(status) status.innerHTML = `<div class="url-status">🔍 race_id直接確認: ${venues.map(v=>v[1]).join('、') || 'なし（0件）'}</div>`;
     }
 
     if(seq !== activeVenueLoadSeq) return;
@@ -2488,7 +2490,7 @@ async function loadActiveVenuesForDate(){
     renderVenueOptions(venues);
     if(status) status.innerHTML = venues.length
       ? `<div class="url-status ok">✅ ${date} の${kind}開催場だけを表示しました：${venues.map(v => v[1] + '（' + v[2] + 'R）').join('、')}</div>`
-      : `<div class="url-status err">⚠️ ${date} は${kind}の開催場が見つかりません</div>`;
+      : `<div class="url-status">開催なし日</div>`;
   }catch(e){
     if(seq !== activeVenueLoadSeq) return;
     console.error(e);
@@ -2496,7 +2498,6 @@ async function loadActiveVenuesForDate(){
     if(status) status.innerHTML = `<div class="url-status err">⚠️ 開催場の自動取得に失敗: ${e.message}</div>`;
   }
 }
-
 
 
 function normalizeJapaneseSpaces(s){
@@ -3130,20 +3131,21 @@ function buildNetkeibaOddsUrls(kind, raceId){
   if(kind === 'NAR'){
     return [
       `https://nar.netkeiba.com/odds/index.html?race_id=${raceId}`,
-      `https://nar.netkeiba.com/odds/index.html?race_id=${raceId}&type=b1`
+      `https://nar.netkeiba.com/odds/index.html?race_id=${raceId}&type=b1`,
+      `https://nar.netkeiba.com/race/shutuba.html?race_id=${raceId}&rf=race_submenu`
     ];
   }
   return [
-    // v5.18.28: shutuba.htmlを最初に試す。出馬表取得と同じHTMLなので追加通信ゼロのケースが多い。
-    `https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}&rf=race_submenu`,
-    `https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}`,
-    // 以降はshutuba.htmlでオッズが取れなかった場合の保険
+    // v5.18.29: 人気・単勝オッズはnetkeibaのオッズページ/APIを正ソースにする。
+    // shutuba.htmlは最後の保険。斤量列の55.0等を単勝オッズとして使わない。
     `https://race.netkeiba.com/odds/index.html?race_id=${raceId}&type=b1`,
     `https://race.netkeiba.com/odds/index.html?race_id=${raceId}`,
     `https://race.netkeiba.com/odds/index.html?race_id=${raceId}&rf=shutuba_submenu`,
     `https://race.netkeiba.com/api/api_get_jra_odds.html?race_id=${raceId}&type=b1`,
     `https://race.netkeiba.com/api/api_get_odds.html?race_id=${raceId}&type=b1`,
-    `https://race.netkeiba.com/odds/api_get_odds.html?race_id=${raceId}&type=b1`
+    `https://race.netkeiba.com/odds/api_get_odds.html?race_id=${raceId}&type=b1`,
+    `https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}&rf=race_submenu`,
+    `https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}`
   ];
 }
 

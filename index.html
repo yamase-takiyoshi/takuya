@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.45 ShutubaRaceNameFix</title>
+<title>The競馬 EV分析 v5.18.46 WakurenFrameFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -45,6 +45,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
 .horse-row { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
 .horse-row input { flex: 1; }
 .horse-row .num-in { width: 52px; flex: none; }
+.horse-row .frame-in { width: 42px; flex: none; }
 .horse-row .odds-in { width: 72px; flex: none; }
 .horse-row .pop-in { width: 52px; flex: none; }
 .horse-row .del-btn { width: 28px; height: 28px; background: none; border: 1px solid var(--border); color: var(--muted); border-radius: 6px; cursor: pointer; flex: none; font-size: 14px; }
@@ -217,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.45 ShutubaRaceNameFix</span>
+    <span class="ver">v5.18.46 WakurenFrameFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -294,6 +295,7 @@ body{
         </div>
       </div>
       <div style="display:flex;gap:8px;margin-bottom:6px">
+        <span style="width:42px;font-size:10px;color:var(--muted);text-align:center">枠</span>
         <span style="width:52px;font-size:10px;color:var(--muted);text-align:center">馬番</span>
         <span style="flex:1;font-size:10px;color:var(--muted)">馬名</span>
         <span style="width:72px;font-size:10px;color:var(--muted);text-align:center">単勝オッズ</span>
@@ -781,6 +783,8 @@ function renderHorseRows(){
     const row = document.createElement('div');
     row.className = 'horse-row';
     row.innerHTML = `
+      <input class="frame-in" type="number" value="${h.frame || ''}" min="1" max="8" placeholder="枠"
+        onchange="horses[${i}].frame=Number(this.value)">
       <input class="num-in" type="number" value="${h.num}" min="1" max="30" placeholder="馬番"
         onchange="horses[${i}].num=Number(this.value)">
       <input type="text" value="${h.name || ''}" placeholder="馬名"
@@ -4171,8 +4175,9 @@ async function fetchRace(){
     const oddsCount = horses.filter(h => Number(h.odds) >= 1).length;
     const popCount = horses.filter(h => Number(h.pop) >= 1).length;
     const provisionalCount = horses.filter(h => h.provisionalOdds).length;
+    const frameCount = horses.filter(h => Number(h.frame) >= 1 && Number(h.frame) <= 8).length;
     const oddsNote = provisionalCount > 0 ? ` / ※${provisionalCount}件は予想用の暫定値` : '';
-    status.innerHTML = `<div class="url-status ok">✅ ${escapeHtml(currentRaceName || '')} ${horses.length}頭 取得しました / 単勝オッズ ${oddsCount}件 / 人気 ${popCount}件${oddsNote}</div>`;
+    status.innerHTML = `<div class="url-status ok">✅ ${escapeHtml(currentRaceName || '')} ${horses.length}頭 取得しました / 単勝オッズ ${oddsCount}件 / 人気 ${popCount}件 / 枠番 ${frameCount}件${oddsNote}</div>`;
 
     // 取得後すぐにタブを馬データへ
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -4393,6 +4398,34 @@ function extractPopularityFromRow(tr, horseNo){
   return 0;
 }
 
+function extractFrameFromRow(tr, horseNo){
+  // 枠連用：枠番は必ず1〜8で保持する。
+  // netkeibaの出馬表では「枠」列・Waku系class・行頭セルのいずれかに入る。
+  let frame = firstNumberInCell(cellByHeader(tr, /^枠$|枠番/), false);
+  if(frame >= 1 && frame <= 8) return frame;
+
+  const selectors = ['.Waku','[class*="Waku"]','[class*="Frame"]','td[class*="waku"]','td[class*="frame"]'];
+  for(const sel of selectors){
+    const el = tr.querySelector(sel);
+    frame = firstNumberInCell(el, false);
+    if(frame >= 1 && frame <= 8) return frame;
+  }
+
+  // 左から数セルに「枠」「馬番」が並ぶケースを拾う。
+  const cells = Array.from(tr.querySelectorAll('td,th')).map(td => toHalfNumberText(normCellText(td)));
+  for(let i=0; i<Math.min(4, cells.length); i++){
+    const tx = String(cells[i] || '').trim();
+    if(/^\d$/.test(tx)){
+      const v = Number(tx);
+      if(v >= 1 && v <= 8 && v !== Number(horseNo)) return v;
+    }
+  }
+
+  // 保険：枠が取れない時だけ馬番から概算。
+  // 実レースでは出馬表の枠番を優先するので、通常ここには来ない。
+  return Math.min(8, Math.max(1, Math.ceil(Number(horseNo || 1) / 2)));
+}
+
 function parseHorsesFromDoc(doc, url){
 
   const list = [];
@@ -4447,15 +4480,7 @@ function parseHorsesFromDoc(doc, url){
     if(!num || num < 1 || num > 18) return;
     if(seen.has(num)) return;
 
-    let frame = firstNumberInCell(cellByHeader(tr, /^枠$|枠番/), false);
-    if(!frame){
-      const frameEl =
-        tr.querySelector('.Waku') ||
-        tr.querySelector('[class*="Waku"]') ||
-        tr.querySelector('[class*="Frame"]');
-      frame = firstNumberInCell(frameEl, false) || 0;
-    }
-    if(frame < 1 || frame > 8) frame = Math.ceil(num / 2);
+    const frame = extractFrameFromRow(tr, num);
 
     // JRA出馬表HTML（shutuba.html）ではオッズをJSで動的描画するため、
     // 静的DOMには td.Odds / span.OddsVal が存在せず、斤量列しか残らない。

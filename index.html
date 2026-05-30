@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.17 DebugLog</title>
+<title>The競馬 EV分析 v5.18.18 ScreenDebug</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.17 DebugLog</span>
+    <span class="ver">v5.18.18 ScreenDebug</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2283,7 +2283,9 @@ async function confirmActiveJraVenuesFromHtml(html, date, candidates){
       // ① 一覧HTMLに出ているこの場のrace_idをグループ化して日付照合（1Rだけ）
       const direct = parseRaceIdsFromList(html, 'JRA', code, date)
         .filter(r => raceIdVenueMatches('JRA', r.raceId, code));
-      console.log(`[venue] ${name} direct race_ids:`, direct.map(r=>r.raceId));
+      const dbgIds = direct.map(r=>r.raceId).join(', ') || 'なし';
+      if(status) status.innerHTML = `<div class="url-status">🔍 ${name}: race_id=${dbgIds}</div>`;
+      await new Promise(r=>setTimeout(r,800));
 
       const groups = new Map();
       direct.forEach(r => {
@@ -2292,7 +2294,6 @@ async function confirmActiveJraVenuesFromHtml(html, date, candidates){
         if(!groups.has(key)) groups.set(key, []);
         groups.get(key).push(r);
       });
-      console.log(`[venue] ${name} groups:`, [...groups.keys()]);
 
       let found = false;
       for(const group of groups.values()){
@@ -2300,13 +2301,17 @@ async function confirmActiveJraVenuesFromHtml(html, date, candidates){
         const probe = sorted.find(r => Number(r.raceNo) === 1) || sorted[0];
         try{
           const ok = await verifyJraRaceDateByShutuba(date, probe.raceId);
-          console.log(`[venue] ${name} verify ${probe.raceId} =>`, ok);
+          if(status) status.innerHTML = `<div class="url-status">🔍 ${name} verify ${probe.raceId} => ${ok}</div>`;
+          await new Promise(r=>setTimeout(r,800));
           if(ok){
             confirmed.push([code, name, sorted.length]);
             found = true;
             break;
           }
-        }catch(e){ console.log(`[venue] ${name} verify error:`, e.message); }
+        }catch(e){
+          if(status) status.innerHTML = `<div class="url-status err">❌ ${name} verify error: ${e.message}</div>`;
+          await new Promise(r=>setTimeout(r,800));
+        }
       }
 
       // ② 一覧HTMLにrace_idが無い場合: 開催回1-5×開催日1-8の1Rだけプローブ（最大40回）
@@ -2376,9 +2381,11 @@ async function loadActiveVenuesForDate(){
       const url = raceListUrl(kind, date);
       const html = await fetchHtmlViaProxy(url);
       const fromHtml = parseActiveVenuesFromList(html, kind, date);
-      console.log('[venue] fromHtml candidates:', fromHtml);
+      if(status) status.innerHTML = `<div class="url-status">🔍 候補場: ${fromHtml.map(v=>v[1]).join('、') || 'なし（0件）'} | HTML長: ${html.length}文字</div>`;
+      await new Promise(r=>setTimeout(r,1500));
       venues = await confirmActiveJraVenuesFromHtml(html, date, fromHtml);
-      console.log('[venue] confirmed venues:', venues);
+      if(status) status.innerHTML += `<div class="url-status">🔍 確認済み場: ${venues.map(v=>v[1]).join('、') || 'なし（0件）'}</div>`;
+      await new Promise(r=>setTimeout(r,1500));
     }
 
     if(seq !== activeVenueLoadSeq) return;

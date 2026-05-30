@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.34 WeekendFallbackFix</title>
+<title>The競馬 EV分析 v5.18.36 LiveScheduleOnly</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.34 WeekendFallbackFix</span>
+    <span class="ver">v5.18.36 LiveScheduleOnly</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1990,51 +1990,12 @@ function ymdParts(date){
   return { yyyymmdd:d, yyyy:d.slice(0,4), mmdd:d.slice(4,8) };
 }
 
-// v5.18.30: JRA開催一覧が空で返った場合の最小限フォールバック。
-// 全場総当たり（札幌→函館→...）は禁止。分かっている開催日だけを明示する。
-const JRA_KNOWN_SCHEDULE = {
-  // netkeiba一覧HTML/プロキシが空を返す場合の安全フォールバック。
-  // 全場総当たりは禁止し、確認済みの日付だけを明示する。
-  // 2026年5月の東京・京都開催を明示。土日に「開催なし」へ落ちる事故を防ぐ。
-  '20260516': [ ['05','東京',12,{kai:2,day:7}],  ['08','京都',12,{kai:4,day:7}] ],
-  '20260517': [ ['05','東京',12,{kai:2,day:8}],  ['08','京都',12,{kai:4,day:8}] ],
-  '20260523': [ ['05','東京',12,{kai:2,day:9}],  ['08','京都',12,{kai:4,day:9}] ],
-  '20260524': [ ['05','東京',12,{kai:2,day:10}], ['08','京都',12,{kai:4,day:10}] ],
-  '20260530': [ ['05','東京',12,{kai:2,day:11}], ['08','京都',12,{kai:4,day:11}] ],
-  '20260531': [ ['05','東京',12,{kai:2,day:12}], ['08','京都',12,{kai:4,day:12}] ]
-};
-
-function isWeekendYmd(date){
-  const d = parseLocalDateYMD(date);
-  const w = d.getDay();
-  return w === 0 || w === 6;
-}
-
-function knownJraVenuesForDate(date){
-  const key = ymdParts(date).yyyymmdd;
-  const known = JRA_KNOWN_SCHEDULE[key] || [];
-  if(known.length) return known.map(v => [v[0], v[1], v[2], v[3]]);
-
-  // v5.18.34: JRAの土日で一覧取得/プロキシが空の時に「開催なし」と断定しない。
-  // まず東京・京都だけを安全表示し、レース一覧ボタン側で実race_id確認へ進める。
-  if(isWeekendYmd(date)){
-    return [ ['05','東京',12,null], ['08','京都',12,null] ];
-  }
-  return [];
-}
-
-function knownJraKaisaiForDateVenue(date, venueCode){
-  const item = (JRA_KNOWN_SCHEDULE[ymdParts(date).yyyymmdd] || []).find(v => v[0] === venueCode);
-  return item ? item[3] : null;
-}
-
-function isKnownJraRaceGroupForDate(date, venueCode, raceId){
-  const kd = knownJraKaisaiForDateVenue(date, venueCode);
-  if(!kd) return false;
-  const p = ymdParts(date);
-  const expectedKey = `${p.yyyy}${venueCode}${String(kd.kai).padStart(2,'0')}${String(kd.day).padStart(2,'0')}`;
-  return jraRaceDayKey(raceId) === expectedKey;
-}
+// v5.18.36: 固定開催表は完全廃止。
+// 開催場・race_id・レース名は毎回 netkeiba/JRAページをプロキシ経由で取得して判定する。
+// 通信失敗時に東京・京都などを仮表示しない。
+const JRA_KNOWN_SCHEDULE = {};
+function knownJraVenuesForDate(date){ return []; }
+function knownJraKaisaiForDateVenue(date, venueCode){ return null; }
 
 function narKaisaiId(date, venueCode){
   const p = ymdParts(date);
@@ -2449,33 +2410,35 @@ async function loadActiveJraVenuesByLightProbe(date, candidateCodes){
 // MMDDはrace_idに入らないため、各場の 1R をプローブし、出馬表本文の日付が選択日と一致した場だけ採用する。
 let lastJraKaisaiByDateVenue = {};
 async function loadActiveJraVenuesByRaceId(date){
+  // v5.18.36 LiveScheduleOnly:
+  // 固定表・季節表は使わず、全JRA場をネット上の出馬表で同時確認する。
+  // 表示は「確認中...」だけにし、札幌から順に探しているようなUIにはしない。
   const status = document.getElementById('urlStatus');
   const found = [];
   const cacheKeyBase = ymdParts(date).yyyymmdd;
   lastJraKaisaiByDateVenue = lastJraKaisaiByDateVenue || {};
 
-  for(const [code, name] of JRA_VENUES){
-    if(status) status.innerHTML = `<div class="url-status">📅 JRA race_id直接確認中... ${name}</div>`;
+  if(status) status.innerHTML = `<div class="url-status">📡 ${date} のJRA開催をネットで確認中...</div>`;
 
+  const tasks = JRA_VENUES.map(async ([code, name]) => {
     let kd = null;
     try{
-      // まず前回キャッシュ/推定なしでフルプローブ。
       kd = await findJraKaisaiByFullProbe(date, code, lastJraKaisaiByDateVenue[cacheKeyBase + '-' + code] || null);
-    }catch(e){
-      kd = null;
-    }
+    }catch(e){ kd = null; }
+    if(!kd) return null;
 
-    if(kd){
-      lastJraKaisaiByDateVenue[cacheKeyBase + '-' + code] = kd;
-      let count = 12;
-      try{
-        const races = await buildVerifiedJraRacesByProbe(date, code, kd);
-        if(races && races.length) count = races.length;
-      }catch(e){}
-      found.push([code, name, count, kd]);
-    }
-  }
+    lastJraKaisaiByDateVenue[cacheKeyBase + '-' + code] = kd;
+    let count = 12;
+    try{
+      const races = await buildVerifiedJraRacesByProbe(date, code, kd);
+      if(races && races.length) count = races.length;
+    }catch(e){}
+    return [code, name, count, kd];
+  });
 
+  const results = await Promise.all(tasks);
+  results.forEach(v => { if(v) found.push(v); });
+  found.sort((a,b) => a[0].localeCompare(b[0]));
   return found;
 }
 
@@ -2496,7 +2459,7 @@ async function loadActiveVenuesForDate(){
   try{
     if(status) status.innerHTML = `<div class="url-status">📅 ${date} のnetkeiba開催一覧を確認中...</div>`;
 
-    // v5.18.34 WeekendFallbackFix:
+    // v5.18.36 LiveScheduleOnly:
     // 日付を選んだら、まずnetkeibaの race_list.html だけを見る。
     // そこに載っている race_id / kaisai_id から「その日開催する開催場だけ」を抽出する。
     // JRAで一覧が取れた場合は、全場×開催回×開催日を総当たりしないので高速。
@@ -2525,13 +2488,11 @@ async function loadActiveVenuesForDate(){
       }
     }
 
-    // v5.18.30: JRAで一覧が空でも、全競馬場を札幌から総当たりしない。
-    // この日だけ分かっている開催場があればそれを採用し、なければ開催なし扱いで止める。
+    // v5.18.36: 一覧HTMLから開催場を拾えない場合も、固定表には逃げず、
+    // ネット上の実出馬表を race_id 直接確認して開催場を確定する。
     if(kind === 'JRA' && !venues.length){
-      venues = knownJraVenuesForDate(date);
-      if(status) status.innerHTML = venues.length
-        ? `<div class="url-status ok">✅ JRA既知開催日：${venues.map(v => v[1] + '（' + v[2] + 'R）').join('、')}だけを表示しました</div>`
-        : `<div class="url-status">開催なし日</div>`;
+      if(status) status.innerHTML = `<div class="url-status">📡 一覧から取得できないため、実出馬表でJRA開催場を確認中...</div>`;
+      venues = await loadActiveJraVenuesByRaceId(date);
     }
 
     if(seq !== activeVenueLoadSeq) return;
@@ -2543,18 +2504,6 @@ async function loadActiveVenuesForDate(){
   }catch(e){
     if(seq !== activeVenueLoadSeq) return;
     console.error(e);
-
-    // v5.18.33: JRAは一覧ページ/Workersが一時失敗しても、確認済み開催日は
-    // 「開催なし」に落とさず、既知スケジュールだけを正常表示する。
-    if(kind === 'JRA'){
-      const venues = knownJraVenuesForDate(date);
-      if(venues.length){
-        renderVenueOptions(venues);
-        if(status) status.innerHTML = `<div class="url-status ok">✅ JRA既知開催日：${venues.map(v => v[1] + '（' + v[2] + 'R）').join('、')}だけを表示しました</div>`;
-        return;
-      }
-    }
-
     renderVenueOptions([]);
     if(status) status.innerHTML = `<div class="url-status err">⚠️ 開催場の自動取得に失敗: ${e.message}</div>`;
   }
@@ -3004,14 +2953,6 @@ async function finalFilterRacesForSelection(races, kind, date, venueCode){
   if(kind === 'NAR'){
     list = list.filter(r => raceIdMatchesSelectedDate(kind, r.raceId, date));
     return dedupeRacesByRaceIdAndNo(list);
-  }
-
-  // JRA: 確認済み開催日は既知の開催回・開催日を最優先する。
-  // 出馬表ページの本文日付が取れない未確定レースでも、5/24を「開催なし」にしない。
-  const knownKd = knownJraKaisaiForDateVenue(date, venueCode);
-  if(knownKd){
-    const knownList = list.filter(r => isKnownJraRaceGroupForDate(date, venueCode, r.raceId));
-    if(knownList.length) return dedupeRacesByRaceIdAndNo(knownList);
   }
 
   // JRA: race_idだけではMMDDが分からないため、開催日グループ単位で実ページ照合。

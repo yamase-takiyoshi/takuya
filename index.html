@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.30 TokyoKyotoOnly</title>
+<title>The競馬 EV分析 v5.18.31 ProvisionalOdds</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.30 TokyoKyotoOnly</span>
+    <span class="ver">v5.18.31 ProvisionalOdds</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2466,7 +2466,7 @@ async function loadActiveVenuesForDate(){
   try{
     if(status) status.innerHTML = `<div class="url-status">📅 ${date} のnetkeiba開催一覧を確認中...</div>`;
 
-    // v5.18.30 TokyoKyotoOnly:
+    // v5.18.31 ProvisionalOdds:
     // 日付を選んだら、まずnetkeibaの race_list.html だけを見る。
     // そこに載っている race_id / kaisai_id から「その日開催する開催場だけ」を抽出する。
     // JRAで一覧が取れた場合は、全場×開催回×開催日を総当たりしないので高速。
@@ -3815,6 +3815,48 @@ function applyAuthoritativeJraOdds(baseHorses, oddsMap, safeFallbackMap){
 }
 
 
+// v5.18.31: 予想用の暫定単勝オッズ・人気補完。
+// netkeibaの正式オッズ/APIが未公開・未描画・取得失敗の時でも、EV予想を動かせるようにする。
+// 正式取得済みの値は絶対に上書きしない。未取得馬だけ、馬番順を仮人気として安全な暫定値を入れる。
+function fillProvisionalOddsPopularityForPrediction(baseHorses){
+  const hs = Array.isArray(baseHorses) ? baseHorses.slice() : [];
+  if(!hs.length) return hs;
+  const oddsCount = hs.filter(h => Number(h.odds) >= 1).length;
+  const popCount = hs.filter(h => Number(h.pop) >= 1).length;
+
+  // すでに一定数取れている場合は、欠けている部分だけ補完する。
+  // まったく取れていない場合は、馬番順＝暫定人気順として仮値を入れる。
+  const provisionalOdds = [3.2, 5.8, 8.4, 12.0, 15.5, 22.0, 35.0, 48.0, 62.0, 78.0, 96.0, 125.0, 160.0, 210.0, 280.0, 360.0, 480.0, 650.0];
+
+  let usedPops = new Set(hs.map(h => Number(h.pop || 0)).filter(v => v >= 1 && v <= 18));
+  let nextPop = 1;
+
+  return hs.map((h, i) => {
+    const curOdds = Number(h.odds || 0);
+    const curPop = Number(h.pop || 0);
+    let pop = curPop;
+    let odds = curOdds;
+
+    if(!(pop >= 1 && pop <= 18)){
+      while(usedPops.has(nextPop) && nextPop <= 18) nextPop++;
+      pop = nextPop <= 18 ? nextPop : Math.min(18, i + 1);
+      usedPops.add(pop);
+    }
+
+    if(!(odds >= 1 && odds <= 999.9)){
+      odds = provisionalOdds[Math.max(0, Math.min(provisionalOdds.length - 1, pop - 1))] || (20 + pop * 12);
+    }
+
+    return {
+      ...h,
+      odds: Math.round(Number(odds) * 10) / 10,
+      pop: Number(pop),
+      provisionalOdds: (curOdds < 1 || curPop < 1)
+    };
+  });
+}
+
+
 // ─── netkeibaプロキシ取得 ────────────────────────
 async function fetchRace(){
   const rawUrl = document.getElementById('raceUrl').value.trim();
@@ -3886,6 +3928,10 @@ async function fetchRace(){
 
         // Step3: JRAはここで旧オッズを全消去して、odds由来の値だけを馬番JOINする。
         horses = applyAuthoritativeJraOdds(horses, oddsMap, shutubaOddsMap);
+
+        // Step4: 予想用。正式オッズが未公開/未取得でもEV計算できるよう、未取得分だけ暫定値を補完する。
+        // 正式値が取れている馬は上書きしない。
+        horses = fillProvisionalOddsPopularityForPrediction(horses);
       }else{
         // NAR: 既存ロジックをそのまま維持
         const oddsMap = await fetchWinOddsPopularity(kind, rid, horses);
@@ -3906,7 +3952,8 @@ async function fetchRace(){
 
     const oddsCount = horses.filter(h => Number(h.odds) >= 1).length;
     const popCount = horses.filter(h => Number(h.pop) >= 1).length;
-    const oddsNote = oddsCount < horses.length ? ' / ※斤量誤読防止で未確定オッズは空欄' : '';
+    const provisionalCount = horses.filter(h => h.provisionalOdds).length;
+    const oddsNote = provisionalCount > 0 ? ` / ※${provisionalCount}件は予想用の暫定値` : '';
     status.innerHTML = `<div class="url-status ok">✅ ${escapeHtml(currentRaceName || '')} ${horses.length}頭 取得しました / 単勝オッズ ${oddsCount}件 / 人気 ${popCount}件${oddsNote}</div>`;
 
     // 取得後すぐにタブを馬データへ

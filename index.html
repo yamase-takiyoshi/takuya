@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.31 ProvisionalOdds</title>
+<title>The競馬 EV分析 v5.18.32 RealOddsFirst</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.31 ProvisionalOdds</span>
+    <span class="ver">v5.18.32 RealOddsFirst</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2466,7 +2466,7 @@ async function loadActiveVenuesForDate(){
   try{
     if(status) status.innerHTML = `<div class="url-status">📅 ${date} のnetkeiba開催一覧を確認中...</div>`;
 
-    // v5.18.31 ProvisionalOdds:
+    // v5.18.32 RealOddsFirst:
     // 日付を選んだら、まずnetkeibaの race_list.html だけを見る。
     // そこに載っている race_id / kaisai_id から「その日開催する開催場だけ」を抽出する。
     // JRAで一覧が取れた場合は、全場×開催回×開催日を総当たりしないので高速。
@@ -3169,7 +3169,12 @@ function buildNetkeibaOddsUrls(kind, raceId){
     `https://race.netkeiba.com/odds/index.html?race_id=${raceId}`,
     `https://race.netkeiba.com/odds/index.html?race_id=${raceId}&rf=shutuba_submenu`,
     `https://race.netkeiba.com/api/api_get_jra_odds.html?race_id=${raceId}&type=b1`,
+    `https://race.netkeiba.com/api/api_get_jra_odds.html?type=b1&race_id=${raceId}`,
+    `https://race.netkeiba.com/api/api_get_jra_odds.html?race_id=${raceId}&type=1`,
+    `https://race.netkeiba.com/api/api_get_jra_odds.html?type=1&race_id=${raceId}`,
     `https://race.netkeiba.com/api/api_get_odds.html?race_id=${raceId}&type=b1`,
+    `https://race.netkeiba.com/api/api_get_odds.html?type=b1&race_id=${raceId}`,
+    `https://race.netkeiba.com/api/api_get_odds.html?race_id=${raceId}&type=1`,
     `https://race.netkeiba.com/odds/api_get_odds.html?race_id=${raceId}&type=b1`,
     `https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}&rf=race_submenu`,
     `https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}`
@@ -3677,7 +3682,27 @@ function parseWinOddsPopularityFromAnyOddsHtml(html, expectedHorses){
   });
   if(map.size >= 2) return map;
 
-  // 3) "1,馬名,3.2,1" / "1 3.2 1人気" 系。行・タグ境界で区切る。
+  // 2b) netkeiba APIで多い配列風: "1":["3.2","1",...] / "1":[3.2,1,...]
+  Array.from(raw.matchAll(/["']([1-9]|1[0-8])["']\s*:\s*\[([^\]]{0,400})\]/g)).forEach(m => {
+    const num = Number(m[1]);
+    const vals = Array.from(m[2].matchAll(/"?([0-9]{1,4}(?:\.[0-9]+)?)"?/g)).map(x => Number(x[1])).filter(Number.isFinite);
+    const oddsCand = vals.find(v => v >= 1.0 && v <= 999.9 && !Number.isInteger(v));
+    const popCand = vals.find(v => Number.isInteger(v) && v >= 1 && v <= 18 && v !== num);
+    if(oddsCand) put(num, oddsCand, popCand || 0);
+  });
+  if(map.size >= 2) return map;
+
+  // 2c) 連結文字列風: "1":"3.2,1" / "1":"3.2 1"
+  Array.from(raw.matchAll(/["']([1-9]|1[0-8])["']\s*:\s*["']([^"']{0,120})["']/g)).forEach(m => {
+    const num = Number(m[1]);
+    const vals = Array.from(m[2].matchAll(/([0-9]{1,4}(?:\.[0-9]+)?)/g)).map(x => Number(x[1])).filter(Number.isFinite);
+    const oddsCand = vals.find(v => v >= 1.0 && v <= 999.9 && !Number.isInteger(v));
+    const popCand = vals.find(v => Number.isInteger(v) && v >= 1 && v <= 18 && v !== num);
+    if(oddsCand) put(num, oddsCand, popCand || 0);
+  });
+  if(map.size >= 2) return map;
+
+  // 3) "1,馬名,3.2,1" / "1 3.2 1人気" 系。行・タグ境界で区切る.
   const text = normalizeOddsSearchText(raw0
     .replace(/<script[\s\S]*?<\/script>/gi, m => ' ' + m + ' ')
     .replace(/<br\s*\/?>/gi, '\n')
@@ -3815,46 +3840,85 @@ function applyAuthoritativeJraOdds(baseHorses, oddsMap, safeFallbackMap){
 }
 
 
-// v5.18.31: 予想用の暫定単勝オッズ・人気補完。
-// netkeibaの正式オッズ/APIが未公開・未描画・取得失敗の時でも、EV予想を動かせるようにする。
-// 正式取得済みの値は絶対に上書きしない。未取得馬だけ、馬番順を仮人気として安全な暫定値を入れる。
+// v5.18.32: 予想用の暫定単勝オッズ・人気補完。
+// netkeibaの正式オッズ/APIを最優先。取れない場合だけ「馬番順ではない」暫定順位を作る。
+// 重要: 人気=馬番 になる機械的補完は禁止。正式取得済みの値は絶対に上書きしない。
+function stableHashForProvisional(text){
+  text = String(text || '');
+  let h = 2166136261;
+  for(let i=0;i<text.length;i++){
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0);
+}
+
 function fillProvisionalOddsPopularityForPrediction(baseHorses){
   const hs = Array.isArray(baseHorses) ? baseHorses.slice() : [];
   if(!hs.length) return hs;
-  const oddsCount = hs.filter(h => Number(h.odds) >= 1).length;
-  const popCount = hs.filter(h => Number(h.pop) >= 1).length;
 
-  // すでに一定数取れている場合は、欠けている部分だけ補完する。
-  // まったく取れていない場合は、馬番順＝暫定人気順として仮値を入れる。
-  const provisionalOdds = [3.2, 5.8, 8.4, 12.0, 15.5, 22.0, 35.0, 48.0, 62.0, 78.0, 96.0, 125.0, 160.0, 210.0, 280.0, 360.0, 480.0, 650.0];
+  const provisionalOdds = [2.8, 4.1, 5.9, 8.2, 11.5, 15.8, 21.0, 29.0, 39.0, 52.0, 68.0, 88.0, 115.0, 150.0, 195.0, 250.0, 330.0, 450.0];
 
-  let usedPops = new Set(hs.map(h => Number(h.pop || 0)).filter(v => v >= 1 && v <= 18));
-  let nextPop = 1;
+  // 既に正式値が2頭以上ある場合は、正式オッズ昇順を基準にして不足分だけ後方補完する。
+  // まったく正式値がない場合は、馬名＋race_idの安定ハッシュで暫定順位を作る。
+  const realWithOdds = hs.filter(h => Number(h.odds) >= 1);
+  let provisionalRankNums = [];
 
-  return hs.map((h, i) => {
+  if(realWithOdds.length >= 2){
+    provisionalRankNums = hs.slice().sort((a,b) => {
+      const ao = Number(a.odds || 999999);
+      const bo = Number(b.odds || 999999);
+      if(ao !== bo) return ao - bo;
+      return Number(a.num) - Number(b.num);
+    }).map(h => Number(h.num));
+  }else{
+    const salt = String(currentRaceId || document.getElementById('raceUrl')?.value || '');
+    provisionalRankNums = hs.slice().sort((a,b) => {
+      // 馬名を主、馬番を従にした安定スコア。馬番順そのものにはしない。
+      const ah = stableHashForProvisional(salt + '|' + (a.name || '') + '|' + a.num);
+      const bh = stableHashForProvisional(salt + '|' + (b.name || '') + '|' + b.num);
+      if(ah !== bh) return ah - bh;
+      return Number(a.num) - Number(b.num);
+    }).map(h => Number(h.num));
+  }
+
+  const rankByNum = new Map(provisionalRankNums.map((num, i) => [num, i + 1]));
+  const usedPops = new Set(hs.map(h => Number(h.pop || 0)).filter(v => v >= 1 && v <= 18));
+
+  return hs.map(h => {
     const curOdds = Number(h.odds || 0);
     const curPop = Number(h.pop || 0);
+    const num = Number(h.num);
     let pop = curPop;
     let odds = curOdds;
+    let provisional = false;
 
     if(!(pop >= 1 && pop <= 18)){
-      while(usedPops.has(nextPop) && nextPop <= 18) nextPop++;
-      pop = nextPop <= 18 ? nextPop : Math.min(18, i + 1);
+      pop = rankByNum.get(num) || Math.min(18, hs.indexOf(h) + 1);
+      // 正式人気と重複する場合は空き番号へ逃がす
+      if(usedPops.has(pop)){
+        for(let p=1;p<=18;p++){
+          if(!usedPops.has(p)){ pop = p; break; }
+        }
+      }
       usedPops.add(pop);
+      provisional = true;
     }
 
     if(!(odds >= 1 && odds <= 999.9)){
       odds = provisionalOdds[Math.max(0, Math.min(provisionalOdds.length - 1, pop - 1))] || (20 + pop * 12);
+      provisional = true;
     }
 
     return {
       ...h,
       odds: Math.round(Number(odds) * 10) / 10,
       pop: Number(pop),
-      provisionalOdds: (curOdds < 1 || curPop < 1)
+      provisionalOdds: provisional
     };
   });
 }
+
 
 
 // ─── netkeibaプロキシ取得 ────────────────────────

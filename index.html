@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.43 NetkeibaScheduleDirectFix</title>
+<title>The競馬 EV分析 v5.18.45 ShutubaRaceNameFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.43 NetkeibaScheduleDirectFix</span>
+    <span class="ver">v5.18.45 ShutubaRaceNameFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2177,7 +2177,7 @@ function parseActiveVenuesFromList(html, kind, date){
   const rawHtml = String(html || '');
 
   if(kind !== 'NAR'){
-    // v5.18.43 NetkeibaScheduleDirectFix:
+    // v5.18.45 ShutubaRaceNameFix:
     // 5.18.37 はHTML全体から race_id / kaisai_id / 裸IDを広く拾ったため、
     // 選択日以外のリンクやナビ・過去開催・他場リンクまで混入し、
     // 2026/05/24 に福島・中山・阪神・小倉などが出る事故が起きた。
@@ -4590,7 +4590,7 @@ function json(obj, status = 200) {
 
 
 // ============================================================
-// v5.18.43 NetkeibaScheduleDirectFix
+// v5.18.45 ShutubaRaceNameFix
 // その場凌ぎの固定表を使わず、netkeiba race_list.html の kaisai_id/race_id を信頼して
 // 開催場とレース一覧を作る。JRA race_id は日付を含まないため、出馬表総当たり検証は行わない。
 // ============================================================
@@ -4874,7 +4874,63 @@ loadActiveVenuesForDate = async function(){
   }
 };
 
-// レース一覧取得も同じ日程HTMLを使い、選択場のkaisai_idからrace_idを組む。
+
+// v5.18.45: 開催場・race_idはnetkeiba日程ページから取得し、レース名は各出馬表(shutuba.html)から取得する。
+// race_list_sub.html 側の文字化けを避け、race_id と正式レース名を一致させる。
+function cleanRaceTitleFromShutubaText(text, raceNo){
+  let t = String(text || '').replace(/\s+/g, ' ').trim();
+  if(!t) return '';
+  t = t.replace(/｜.*$/g, '').replace(/\|.*$/g, '').replace(/ - netkeiba.*$/i, '').trim();
+  t = t.replace(/^\d{4}年.*?\s+/,'').trim();
+  t = t.replace(/^\d{1,2}R\s*/,'').trim();
+  t = t.replace(/^出馬表\s*/,'').replace(/^競馬新聞\s*/,'').trim();
+  if(/[�]/.test(t)) return '';
+  if(!/[一-龥ぁ-んァ-ヶA-Za-z]/.test(t)) return '';
+  if(t.length > 40) t = t.slice(0,40).trim();
+  return t || '';
+}
+
+async function fetchRaceNameFromShutubaByRaceId(kind, raceId, raceNo){
+  try{
+    const url = shutubaUrl(kind, raceId);
+    const html = await fetchHtmlViaProxy(url);
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const candidates = [];
+    try{ candidates.push(parseRaceTitleFromDoc(doc)); }catch(e){}
+    const selectors = [
+      '.RaceName', '.RaceName_Name', '.RaceData01 .RaceName',
+      '.RaceList_ItemTitle', '.RaceHeader .RaceName',
+      'h1', 'h2', 'title'
+    ];
+    for(const sel of selectors){
+      doc.querySelectorAll(sel).forEach(el => candidates.push(el.textContent || ''));
+    }
+    const metaOg = doc.querySelector('meta[property="og:title"],meta[name="twitter:title"]');
+    if(metaOg) candidates.push(metaOg.getAttribute('content') || '');
+    for(const c of candidates){
+      const name = cleanRaceTitleFromShutubaText(c, raceNo);
+      if(name && name !== `${raceNo}R`) return name;
+    }
+  }catch(e){
+    console.log('race name fetch skipped', raceId, e?.message || e);
+  }
+  return `${raceNo}R`;
+}
+
+async function fillJraRaceNamesFromShutuba(kind, races, status, date, venueCode){
+  if(kind !== 'JRA') return races;
+  const out = [];
+  for(let i=0;i<races.length;i++){
+    const r = races[i];
+    const no = Number(r.raceNo || String(r.raceId).slice(-2));
+    if(status) status.innerHTML = `<div class="url-status">🏷️ ${venueName(kind, venueCode)} ${no}R のレース名を出馬表から取得中... (${i+1}/${races.length})</div>`;
+    const name = await fetchRaceNameFromShutubaByRaceId(kind, r.raceId, no);
+    out.push({...r, raceNo:no, raceName:name});
+  }
+  return out;
+}
+
+// レース一覧取得：日程ページで race_id を確定 → JRAは shutuba ページで正式レース名を補完。
 loadRaceList = async function(){
   const date = document.getElementById('pickDate')?.value || todayYmd();
   const kind = document.getElementById('pickKind')?.value || 'JRA';
@@ -4899,6 +4955,7 @@ loadRaceList = async function(){
         lastJraKaisaiByDateVenue[cacheKey] = { kai:Number(got.kid.slice(6,8)), day:Number(got.kid.slice(8,10)) };
       }
       races = live37_buildJraRacesFromRaceList(got.html, date, venueCode);
+      races = await fillJraRaceNamesFromShutuba(kind, races, status, date, venueCode);
     }else{
       races = await loadNarRaceListByRaceId(date, venueCode);
       if(!races.length){
@@ -4906,6 +4963,7 @@ loadRaceList = async function(){
         races = parseRaceIdsFromList(html, kind, venueCode, date);
       }
     }
+    races = races.sort((a,b)=>Number(a.raceNo || String(a.raceId).slice(-2)) - Number(b.raceNo || String(b.raceId).slice(-2)));
     if(!races.length){
       raceSelect.innerHTML = '<option value="">レースが見つかりません</option>';
       if(status) status.innerHTML = `<div class="url-status err">⚠️ ${date} の ${venueName(kind, venueCode)} はnetkeiba日程からレースを取得できませんでした。</div>`;
@@ -4913,13 +4971,15 @@ loadRaceList = async function(){
     }
     const dateLabel = raceListDateLabel(date);
     raceSelect.innerHTML = races.map(r => {
+      const no = Number(r.raceNo || String(r.raceId).slice(-2));
       const url = shutubaUrl(kind, r.raceId);
-      const raceName = escapeHtml(r.raceName || `${r.raceNo}R`);
-      const label = `${dateLabel} ${venueName(kind, venueCode)} ${r.raceNo}R ${raceName} / ${r.raceId}`;
+      const raceNameRaw = r.raceName || `${no}R`;
+      const raceName = escapeHtml(raceNameRaw);
+      const label = `${dateLabel} ${venueName(kind, venueCode)} ${no}R ${raceName} / ${r.raceId}`;
       return `<option value="${url}" data-race-id="${r.raceId}" data-race-name="${raceName}">${label}</option>`;
     }).join('');
     applySelectedRaceUrl();
-    if(status) status.innerHTML = `<div class="url-status ok">✅ ${date} ${venueName(kind, venueCode)} ${races.length}レースをnetkeiba日程から取得しました</div>`;
+    if(status) status.innerHTML = `<div class="url-status ok">✅ ${date} ${venueName(kind, venueCode)} ${races.length}レースを取得しました（レース名は出馬表から取得）</div>`;
   }catch(e){
     console.error(e);
     if(status) status.innerHTML = `<div class="url-status err">❌ レース一覧取得失敗: ${e.message}</div>`;

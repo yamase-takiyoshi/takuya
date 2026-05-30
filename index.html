@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.23 FastVenue</title>
+<title>The競馬 EV分析 v5.18.25 OddsPopRaceId</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -217,7 +217,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.23 FastVenue</span>
+    <span class="ver">v5.18.25 OddsPopRaceId</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2397,6 +2397,42 @@ async function loadActiveJraVenuesByLightProbe(date, candidateCodes){
   return found;
 }
 
+
+// v5.18.24: JRA開催場は一覧HTMLではなく race_id を直接生成して確認する。
+// JRA race_id = YYYY + 場コード + 開催回 + 開催日 + R番号。
+// MMDDはrace_idに入らないため、各場の 1R をプローブし、出馬表本文の日付が選択日と一致した場だけ採用する。
+let lastJraKaisaiByDateVenue = {};
+async function loadActiveJraVenuesByRaceId(date){
+  const status = document.getElementById('urlStatus');
+  const found = [];
+  const cacheKeyBase = ymdParts(date).yyyymmdd;
+  lastJraKaisaiByDateVenue = lastJraKaisaiByDateVenue || {};
+
+  for(const [code, name] of JRA_VENUES){
+    if(status) status.innerHTML = `<div class="url-status">📅 JRA race_id直接確認中... ${name}</div>`;
+
+    let kd = null;
+    try{
+      // まず前回キャッシュ/推定なしでフルプローブ。
+      kd = await findJraKaisaiByFullProbe(date, code, lastJraKaisaiByDateVenue[cacheKeyBase + '-' + code] || null);
+    }catch(e){
+      kd = null;
+    }
+
+    if(kd){
+      lastJraKaisaiByDateVenue[cacheKeyBase + '-' + code] = kd;
+      let count = 12;
+      try{
+        const races = await buildVerifiedJraRacesByProbe(date, code, kd);
+        if(races && races.length) count = races.length;
+      }catch(e){}
+      found.push([code, name, count, kd]);
+    }
+  }
+
+  return found;
+}
+
 async function loadActiveVenuesForDate(){
   const seq = ++activeVenueLoadSeq;
   const date = document.getElementById('pickDate')?.value || todayYmd();
@@ -2440,12 +2476,11 @@ async function loadActiveVenuesForDate(){
         venues = await loadActiveNarVenuesByRaceId(date);
       }
     }else{
-      // v5.18.23: JRAはkaisai_date=YYYYMMDDで取得した一覧HTMLのrace_idがその日付分のみ。
-      // shutuba.html確認（プロキシ1往復/場）を廃止し、race_idから場コードを直接確定する。
-      const url = raceListUrl(kind, date);
-      const html = await fetchHtmlViaProxy(url);
-      venues = parseActiveVenuesFromList(html, kind, date);
-      if(status) status.innerHTML = `<div class="url-status">🔍 race_idから開催場確定: ${venues.map(v=>v[1]).join('、') || 'なし（0件）'}</div>`;
+      // v5.18.24: JRA開催場は一覧HTMLに依存しない。
+      // race_idを直接生成して、出馬表本文の日付が選択日と一致する場だけ表示する。
+      if(status) status.innerHTML = `<div class="url-status">📅 JRA race_id直接確認中...</div>`;
+      venues = await loadActiveJraVenuesByRaceId(date);
+      if(status) status.innerHTML = `<div class="url-status">🔍 race_id直接確認: ${venues.map(v=>v[1]).join('、') || 'なし（0件）'}</div>`;
     }
 
     if(seq !== activeVenueLoadSeq) return;
@@ -2986,12 +3021,26 @@ async function loadRaceList(){
       status.innerHTML = `<div class="url-status">📅 ${date} ${venueName(kind, venueCode)} のrace_idを直接確認中...</div>`;
       races = await loadNarRaceListByRaceId(date, venueCode);
     }else{
-      // JRAは race_id に月日が入らないため、一覧HTMLの「前日リンク」や
-      // 「○回東京7日目」の先頭誤検出で1日ズレることがある。
-      // そのため、出馬表ページを1Rだけ実取得して、本文の日付が選択日と一致するrace_idを採用する。
-      const url = raceListUrl(kind, date, venueCode);
-      const html = await fetchHtmlViaProxy(url);
-      races = await getReliableJraRacesFromList(html, date, venueCode);
+      // v5.18.24: レース一覧もrace_id直接確認を優先する。
+      const cacheKey = ymdParts(date).yyyymmdd + '-' + venueCode;
+      let kd = (lastJraKaisaiByDateVenue || {})[cacheKey] || null;
+      if(!kd){
+        status.innerHTML = `<div class="url-status">📅 ${date} ${venueName(kind, venueCode)} のrace_idを直接確認中...</div>`;
+        kd = await findJraKaisaiByFullProbe(date, venueCode, null);
+        if(kd) lastJraKaisaiByDateVenue[cacheKey] = kd;
+      }
+      if(kd){
+        races = await buildVerifiedJraRacesByProbe(date, venueCode, kd);
+        if(!races.length){
+          // 出馬表の一部が未確定でも、確定した開催回・開催日から12R分を生成する。
+          races = buildJraRacesFromFixedKaisai('', date, venueCode, kd);
+        }
+      }else{
+        // 保険として従来の一覧HTML解析へフォールバック。
+        const url = raceListUrl(kind, date, venueCode);
+        const html = await fetchHtmlViaProxy(url);
+        races = await getReliableJraRacesFromList(html, date, venueCode);
+      }
     }
 
     // v5.16.2 最終filter：選択日・開催場と一致するレースだけを残す。
@@ -3085,9 +3134,14 @@ function buildNetkeibaOddsUrls(kind, raceId){
     ];
   }
   return [
-    `https://race.netkeiba.com/odds/index.html?race_id=${raceId}`,
+    // v5.18.25: race_idから単勝オッズ・人気を直接取りに行く候補を増やす。
+    // odds/index.html がJS描画でDOMに出ない場合でも、API/JS断片/本文から拾う。
     `https://race.netkeiba.com/odds/index.html?race_id=${raceId}&type=b1`,
-    `https://race.netkeiba.com/odds/index.html?race_id=${raceId}&rf=shutuba_submenu`
+    `https://race.netkeiba.com/odds/index.html?race_id=${raceId}`,
+    `https://race.netkeiba.com/odds/index.html?race_id=${raceId}&rf=shutuba_submenu`,
+    `https://race.netkeiba.com/api/api_get_jra_odds.html?race_id=${raceId}&type=b1`,
+    `https://race.netkeiba.com/api/api_get_odds.html?race_id=${raceId}&type=b1`,
+    `https://race.netkeiba.com/odds/api_get_odds.html?race_id=${raceId}&type=b1`
   ];
 }
 
@@ -3542,6 +3596,94 @@ function mergeOddsMaps(primary, secondary){
 }
 
 
+// ============================================================
+// v5.18.25 OddsPopRaceId: race_id由来のオッズ/人気 強化パーサ
+// odds/index.htmlやAPI応答のDOM・JSON・JS断片を総当たりで読む。
+// shutuba.htmlの斤量(55.0等)は対象外。ここは odds/API のHTMLだけに使う。
+// ============================================================
+function parseWinOddsPopularityFromAnyOddsHtml(html, expectedHorses){
+  const map = new Map();
+  const raw0 = String(html || '');
+  if(!raw0) return map;
+  const raw = toHalfNumberText(raw0)
+    .replace(/&quot;/g, '"')
+    .replace(/&#034;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\u002F/g, '/')
+    .replace(/\\\//g, '/')
+    .replace(/\s+/g, ' ');
+
+  function put(num, odds, pop){
+    num = Number(num); odds = Number(odds); pop = Number(pop || 0);
+    odds = sanitizeWinOddsValue(odds, String(odds));
+    if(!(num >= 1 && num <= 18)) return;
+    if(!(odds >= 1 && odds <= 999.9)) return;
+    const prev = map.get(num) || {};
+    map.set(num, {
+      odds: Math.round(odds * 10) / 10,
+      pop: (pop >= 1 && pop <= 18) ? pop : (prev.pop || 0)
+    });
+  }
+
+  // 1) JSON/JSオブジェクト風: {"umaban":"1","odds":"3.2","ninki":"1"}
+  const objBlocks = raw.match(/\{[^{}]{0,1200}(?:umaban|horse_num|horseNo|horse_number|馬番|odds|win_odds|tansho|単勝|ninki|popular|popularity|人気)[^{}]{0,1200}\}/gi) || [];
+  objBlocks.forEach(b => {
+    const n = b.match(/(?:umaban|horse_num|horseNo|horse_number|number|馬番)["'\s:=]+"?([1-9]|1[0-8])"?/i);
+    const o = b.match(/(?:odds|win_odds|tansho|tan_odds|odds_tan|単勝)["'\s:=]+"?(\d{1,4}\.\d+)"?/i);
+    const pp = b.match(/(?:ninki|popular|popularity|rank|人気)["'\s:=]+"?([1-9]|1[0-8])"?/i);
+    if(n && o) put(n[1], o[1], pp ? pp[1] : 0);
+  });
+  if(map.size >= 2) return map;
+
+  // 2) 配列/連想配列風: "1":{"odds":"3.2","popular":"1"}
+  Array.from(raw.matchAll(/["']([1-9]|1[0-8])["']\s*:\s*\{([^{}]{0,600})\}/g)).forEach(m => {
+    const num = Number(m[1]);
+    const b = m[2];
+    const o = b.match(/(?:odds|win_odds|tansho|tan_odds|odds_tan|単勝)["'\s:=]+"?(\d{1,4}\.\d+)"?/i);
+    const pp = b.match(/(?:ninki|popular|popularity|rank|人気)["'\s:=]+"?([1-9]|1[0-8])"?/i);
+    if(o) put(num, o[1], pp ? pp[1] : 0);
+  });
+  if(map.size >= 2) return map;
+
+  // 3) "1,馬名,3.2,1" / "1 3.2 1人気" 系。行・タグ境界で区切る。
+  const text = normalizeOddsSearchText(raw0
+    .replace(/<script[\s\S]*?<\/script>/gi, m => ' ' + m + ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(?:tr|li|div|p|td|th|span)>/gi, '\n')
+    .replace(/<[^>]+>/g, ' '));
+  const lines = text.split(/[\n。]+/).map(x => normalizeOddsSearchText(x)).filter(Boolean);
+  lines.forEach(line => {
+    if(line.length > 500) return;
+    if(/払戻|馬連|馬単|ワイド|3連|枠連|複勝|着順|結果/.test(line) && !/単勝|人気|オッズ/.test(line)) return;
+    // 馬番 + 任意文字 + オッズ小数 + 人気
+    const m = line.match(/(?:^|\s)([1-9]|1[0-8])(?:\s|[^0-9.]{1,80})(\d{1,4}\.\d+)\s*(?:倍)?\s*([1-9]|1[0-8])\s*人気?/);
+    if(m) put(m[1], m[2], m[3]);
+  });
+  if(map.size >= 2) return map;
+
+  // 4) 馬名近傍。既存より検索幅を広げ、人気だけ取れる場合も補完。
+  if(Array.isArray(expectedHorses)){
+    expectedHorses.forEach(h => {
+      const num = Number(h && h.num);
+      const name = String((h && h.name) || '').trim();
+      if(!(num >= 1 && num <= 18) || !name) return;
+      const re = new RegExp(escapeRegExpText(name), 'g');
+      let m;
+      while((m = re.exec(text))){
+        const win = text.slice(Math.max(0, m.index - 120), Math.min(text.length, m.index + name.length + 360));
+        if(/払戻|馬連|馬単|ワイド|3連|枠連|着順|結果/.test(win) && !/単勝|人気|オッズ/.test(win)) continue;
+        const o = win.match(/(\d{1,4}\.\d+)\s*(?:倍)?\s*([1-9]|1[0-8])\s*人気/) ||
+                  win.match(/(?:単勝|オッズ|Odds)[^0-9]{0,20}(\d{1,4}\.\d+)[^0-9]{0,20}([1-9]|1[0-8])?/i);
+        if(o){ put(num, o[1], o[2] || 0); break; }
+      }
+    });
+  }
+
+  return map;
+}
+
+
 async function fetchWinOddsPopularity(kind, raceId, expectedHorses){
   if(!settings.proxyUrl || !raceId) return new Map();
   for(const url of buildNetkeibaOddsUrls(kind, raceId)){
@@ -3552,6 +3694,11 @@ async function fetchWinOddsPopularity(kind, raceId, expectedHorses){
 
       // まず従来のDOMテーブル解析
       let map = parseWinOddsPopularityFromDoc(doc);
+
+      // v5.18.25: race_id由来のodds/API応答をJSON/JS/本文まで総当たり。
+      // これによりDOMに描画されない単勝オッズ・人気も拾う。
+      const anyMap = parseWinOddsPopularityFromAnyOddsHtml(html, expectedHorses);
+      map = mergeOddsMaps(map, anyMap);
 
       // JRAでDOM class が変化して 0件になる場合の保険：
       // odds/index.html のHTML本文から、出走馬名近傍の単勝オッズ・人気を拾う。

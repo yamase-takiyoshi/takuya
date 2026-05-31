@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.64 ResultPageLock</title>
+<title>The競馬 EV分析 v5.18.65 ResultExactCopy</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.64 ResultPageLock</span>
+    <span class="ver">v5.18.65 ResultExactCopy</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -4020,7 +4020,105 @@ function extractFinalWinOddsPopStrictFromResultCells(cells, horseAnchor){
   return out;
 }
 
+
+
+// ============================================================
+// v5.18.65 ResultExactCopy: result.html専用・結果表丸ごとコピー方式
+// netkeiba結果表の正式列は「人気 → 単勝オッズ → 後3F」。
+// タイム(2:25.6)・着順(1)・枠番を絶対に人気/単勝へ流用しない。
+// ============================================================
+function parseFinalOddsPopularityFromResultRowsExact(doc, expectedHorses){
+  const map = new Map();
+  if(!doc) return map;
+
+  const expectedByName = new Map();
+  if(Array.isArray(expectedHorses)){
+    expectedHorses.forEach(h => {
+      const name = String(h && h.name || '').replace(/\s+/g,'').trim();
+      const num = Number(h && h.num);
+      if(name && num >= 1 && num <= 18) expectedByName.set(name, num);
+    });
+  }
+
+  function cleanCell(c){ return toHalfNumberText(normCellText(c)).replace(/,/g,'').trim(); }
+  function popVal(t){
+    const m = String(t||'').match(/^([1-9]|1[0-8])\s*(?:人気)?$/);
+    return m ? Number(m[1]) : 0;
+  }
+  function oddsVal(t){
+    if(/斤量|kg|㎏|馬体重|増減|タイム|着差|後3F|上り|通過|コーナー|人気/.test(String(t||''))) return 0;
+    const m = String(t||'').match(/^(\d{1,4}\.\d+)\s*(?:倍)?$/);
+    if(!m) return 0;
+    const v = sanitizeWinOddsValue(Number(m[1]), String(t||''));
+    return (v >= 1 && v <= 999.9) ? Math.round(v * 10) / 10 : 0;
+  }
+  function isAfter3f(t){
+    const m = String(t||'').match(/^(\d{2}\.\d)$/);
+    if(!m) return false;
+    const v = Number(m[1]);
+    return v >= 30 && v <= 45;
+  }
+  function put(num, odds, pop){
+    num = Number(num); odds = Number(odds); pop = Number(pop || 0);
+    if(!(num >= 1 && num <= 18)) return;
+    if(!(odds >= 1 && odds <= 999.9)) return;
+    map.set(num, { odds: Math.round(odds * 10) / 10, pop: (pop >= 1 && pop <= 18) ? pop : 0 });
+  }
+
+  const rows = Array.from(doc.querySelectorAll('tr')).filter(tr => tr.querySelector('a[href*="/horse/"]'));
+  rows.forEach(tr => {
+    const cells = Array.from(tr.querySelectorAll('td,th'));
+    const a = tr.querySelector('a[href*="/horse/"]');
+    if(!a || cells.length < 8) return;
+
+    const nm = normCellText(a).replace(/\s+/g,'').trim();
+    let num = expectedByName.get(nm) || 0;
+
+    if(!(num >= 1 && num <= 18)){
+      const numEl = tr.querySelector('.Umaban, [class*="Umaban"], [class*="HorseNum"]');
+      num = firstNumberInCell(numEl, false);
+    }
+    if(!(num >= 1 && num <= 18)){
+      const horseCellIndex0 = cells.findIndex(c => c.contains(a));
+      for(let i=horseCellIndex0-1; i>=0; i--){
+        const t = cleanCell(cells[i]);
+        if(/^([1-9]|1[0-8])$/.test(t)){ num = Number(t); break; }
+      }
+    }
+    if(!(num >= 1 && num <= 18)) return;
+
+    const tx = cells.map(cleanCell);
+    const horseCellIndex = cells.findIndex(c => c.contains(a));
+    const start = Math.max(0, horseCellIndex + 1);
+
+    // 最優先：隣接3セル「人気 / 単勝オッズ / 後3F」をそのまま読む。
+    for(let i=start; i<tx.length-2; i++){
+      const pop = popVal(tx[i]);
+      const odds = oddsVal(tx[i+1]);
+      if(pop >= 1 && odds >= 1 && isAfter3f(tx[i+2])){
+        put(num, odds, pop);
+        return;
+      }
+    }
+
+    // 保険：空セルや広告用spanで1セルずれる場合、人気セルの直後2セルまでを見る。
+    for(let i=start; i<tx.length-1; i++){
+      const pop = popVal(tx[i]);
+      if(!(pop >= 1)) continue;
+      for(let j=i+1; j<=Math.min(i+2, tx.length-1); j++){
+        const odds = oddsVal(tx[j]);
+        const afterOk = (j+1 < tx.length && isAfter3f(tx[j+1]));
+        if(odds >= 1 && afterOk){ put(num, odds, pop); return; }
+      }
+    }
+  });
+
+  return map;
+}
+
 function parseFinalOddsPopularityFromResultDoc(doc, expectedHorses){
+  const exactResultMap = parseFinalOddsPopularityFromResultRowsExact(doc, expectedHorses);
+  if(exactResultMap && exactResultMap.size >= 2) return exactResultMap;
   const map = parseFinalOddsPopularityByResultTableHeaders(doc, expectedHorses);
   if(!doc) return map;
   const expectedByName = new Map();

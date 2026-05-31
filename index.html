@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.56 RaceIdOddsRankFix</title>
+<title>The競馬 EV分析 v5.18.57 AutoResultFallback</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.56 RaceIdOddsRankFix</span>
+    <span class="ver">v5.18.57 AutoResultFallback</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -4038,7 +4038,7 @@ function fillNarPopularityFromOdds(hs){
   // 既存人気の信頼性チェック: 人気付き馬の人気順がオッズ順と一致しているか
   const popOk = hs.filter(h => Number(h.pop) >= 1);
   if(popOk.length >= 2){
-    // v5.18.56 RaceIdOddsRankFix:
+    // v5.18.57 AutoResultFallback:
     // result/shutuba由来の人気セルが1頭だけズレると「1人気」が重複し、
     // 平均乖離だけでは見逃すことがある（例: 東京11Rオークス 16番が1人気化）。
     // 単勝オッズが揃っている場合、人気は必ず 1..頭数 の一意順位になるため、
@@ -4190,7 +4190,25 @@ async function fetchRace(){
   status.innerHTML = '';
 
   try {
-    const html = await fetchHtmlViaProxy(rawUrl);
+    // v5.18.57: shutuba.htmlで400/404の場合、result.htmlへ自動切り替え
+    let activeUrl = rawUrl;
+    let html;
+    try {
+      html = await fetchHtmlViaProxy(rawUrl);
+    } catch(fetchErr){
+      const msg = fetchErr.message || '';
+      if((msg.includes('400') || msg.includes('404')) && rawUrl.includes('shutuba.html')){
+        const rid0 = (rawUrl.match(/race_id=(\d{10,14})/) || [])[1] || '';
+        const kind0 = document.getElementById('pickKind')?.value || (rawUrl.includes('nar.netkeiba') ? 'NAR' : 'JRA');
+        const host0 = kind0 === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com';
+        if(rid0){
+          activeUrl = `${host0}/race/result.html?race_id=${rid0}&rf=race_submenu`;
+          status.innerHTML = `<div class="url-status">🔄 出馬表が非公開のため結果ページで再取得中...</div>`;
+          document.getElementById('raceUrl').value = activeUrl;
+          html = await fetchHtmlViaProxy(activeUrl);
+        } else { throw fetchErr; }
+      } else { throw fetchErr; }
+    }
     // v5.18.10: JRAはリダイレクト・圧縮等でrace_idがHTMLに残らない場合があるため
     // throwではなくconsole.warnに留め、後続のオッズ取得・パースを続行する。
     if(validation.raceId && !html.includes(validation.raceId)){
@@ -4202,7 +4220,7 @@ async function fetchRace(){
 
     const titleFromDoc = parseRaceTitleFromDoc(doc);
     if(titleFromDoc) currentRaceName = titleFromDoc;
-    const rid = (rawUrl.match(/race_id=(\d{10,14})/) || [])[1];
+    const rid = (activeUrl.match(/race_id=(\d{10,14})/) || [])[1];
     if(rid) currentRaceId = rid;
     const box = document.getElementById('raceTitleBox');
     if(box && currentRaceName){
@@ -4210,7 +4228,7 @@ async function fetchRace(){
       box.textContent = `選択中: ${currentRaceName}`;
     }
 
-    horses = parseHorsesFromDoc(doc, rawUrl);
+    horses = parseHorsesFromDoc(doc, activeUrl);
     if(horses.length < 2){
       throw new Error('出走馬を十分に取得できませんでした。race_idまたは開催情報を確認してください。');
     }
@@ -4223,7 +4241,7 @@ async function fetchRace(){
     // 対策：JRAは必ず odds/index.html を先に取得し、確定値で上書きする。
     // 出馬表HTMLからのオッズ解析は「予想オッズ列が明示されている場合」のみ保険で使う。
     // NAR側の挙動はそのまま維持し、一切変更しない。
-    const kind = document.getElementById('pickKind')?.value || (rawUrl.includes('nar.netkeiba') ? 'NAR' : 'JRA');
+    const kind = document.getElementById('pickKind')?.value || (activeUrl.includes('nar.netkeiba') ? 'NAR' : 'JRA');
 
     if(rid){
       if(kind === 'JRA'){

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.59 ResultFinalOdds</title>
+<title>The競馬 EV分析 v5.18.60 AutoResultReflect</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.59 ResultFinalOdds</span>
+    <span class="ver">v5.18.60 AutoResultReflect</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -275,7 +275,7 @@ body{
         <div id="raceTitleBox" class="race-title-box"></div>
       </div>
       <div class="field">
-        <label>レースURL（netkeiba.com の出馬表ページ）</label>
+        <label>レースURL（出馬表/結果ページどちらも可）</label>
         <input type="url" id="raceUrl" placeholder="https://race.netkeiba.com/race/shutuba.html?race_id=..." />
       </div>
       <div id="urlStatus"></div>
@@ -3880,8 +3880,73 @@ function parseWinOddsPopularityFromAnyOddsHtml(html, expectedHorses){
 }
 
 
-function parseFinalOddsPopularityFromResultDoc(doc, expectedHorses){
+
+function parseFinalOddsPopularityByResultTableHeaders(doc, expectedHorses){
   const map = new Map();
+  if(!doc) return map;
+  const expectedByName = new Map();
+  if(Array.isArray(expectedHorses)){
+    expectedHorses.forEach(h => {
+      const nm = String(h && h.name || '').replace(/\s+/g,'').trim();
+      const no = Number(h && h.num);
+      if(nm && no >= 1 && no <= 18) expectedByName.set(nm, no);
+    });
+  }
+  function put(num, odds, pop){
+    num = Number(num); odds = sanitizeWinOddsValue(Number(odds), String(odds)); pop = Number(pop || 0);
+    if(!(num >= 1 && num <= 18) || !(odds >= 1 && odds <= 999.9)) return;
+    map.set(num, { odds: Math.round(odds * 10) / 10, pop: (pop >= 1 && pop <= 18) ? pop : 0 });
+  }
+  const tables = Array.from(doc.querySelectorAll('table'));
+  tables.forEach(table => {
+    const ths = Array.from(table.querySelectorAll('thead th, tr th')).map(th => normCellText(th));
+    const idxOf = (re) => ths.findIndex(t => re.test(t));
+    let idxNum = idxOf(/^馬番$/);
+    let idxOdds = idxOf(/単勝\s*オッズ|^オッズ$/);
+    let idxPop = idxOf(/^人気$/);
+    const rows = Array.from(table.querySelectorAll('tbody tr, tr')).filter(tr => tr.querySelector('a[href*="/horse/"]'));
+    rows.forEach(tr => {
+      const cells = Array.from(tr.querySelectorAll('td,th'));
+      if(cells.length < 5) return;
+      const a = tr.querySelector('a[href*="/horse/"]');
+      const name = a ? normCellText(a).replace(/\s+/g,'').trim() : '';
+      let num = expectedByName.get(name) || 0;
+      if(!(num >= 1 && num <= 18) && idxNum >= 0 && cells[idxNum]) num = firstNumberInCell(cells[idxNum], false);
+      if(!(num >= 1 && num <= 18) && a){
+        const horseCellIndex = cells.findIndex(c => c.contains(a));
+        for(let i=horseCellIndex-1; i>=0; i--){
+          const t = toHalfNumberText(normCellText(cells[i])).trim();
+          if(/^([1-9]|1[0-8])$/.test(t)){ num = Number(t); break; }
+        }
+      }
+      if(!(num >= 1 && num <= 18)) return;
+      let odds = 0, pop = 0;
+      if(idxOdds >= 0 && cells[idxOdds]) odds = sanitizeWinOddsValue(firstNumberInCell(cells[idxOdds], true), normCellText(cells[idxOdds]));
+      if(idxPop >= 0 && cells[idxPop]) pop = firstNumberInCell(cells[idxPop], false);
+      if(!(odds >= 1) || !(pop >= 1)){
+        const tx = cells.map(c => toHalfNumberText(normCellText(c)).replace(/,/g,'').trim());
+        for(let i=tx.length-1; i>=Math.max(0, tx.length-8); i--){
+          if(!(odds >= 1)){
+            const mo = tx[i].match(/^(\d{1,4}\.\d+)$/);
+            if(mo){
+              const vo = sanitizeWinOddsValue(Number(mo[1]), tx[i]);
+              if(vo >= 1 && !/斤量|kg|㎏|タイム|着差|馬体重/.test(tx[i])) odds = vo;
+            }
+          }
+          if(!(pop >= 1)){
+            const mp = tx[i].match(/^([1-9]|1[0-8])\s*(?:人気)?$/);
+            if(mp && Number(mp[1]) !== num) pop = Number(mp[1]);
+          }
+        }
+      }
+      put(num, odds, pop);
+    });
+  });
+  return map;
+}
+
+function parseFinalOddsPopularityFromResultDoc(doc, expectedHorses){
+  const map = parseFinalOddsPopularityByResultTableHeaders(doc, expectedHorses);
   if(!doc) return map;
   const expectedByName = new Map();
   if(Array.isArray(expectedHorses)){
@@ -4226,7 +4291,31 @@ async function fetchRace(){
     }
 
     const parser = new DOMParser();
-    const doc = parser.parseFromString(html, 'text/html');
+    let doc = parser.parseFromString(html, 'text/html');
+
+    // v5.18.60: 確定済みレースは、入力欄がshutuba.htmlのままでもresult.htmlを本体として反映する。
+    // オークス等の確定レースは結果ページの最終単勝オッズ・最終人気をそのまま表示する。
+    const ridAuto = (activeUrl.match(/race_id=(\d{10,14})/) || [])[1] || validation.raceId || '';
+    const kindAuto = document.getElementById('pickKind')?.value || (activeUrl.includes('nar.netkeiba') ? 'NAR' : 'JRA');
+    if(ridAuto && /\/race\/shutuba\.html/i.test(activeUrl)){
+      try{
+        const resultHost = kindAuto === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com';
+        const resultUrl = `${resultHost}/race/result.html?race_id=${ridAuto}&rf=race_submenu`;
+        const resultHtml = await fetchHtmlViaProxy(resultUrl);
+        const resultDoc = parser.parseFromString(resultHtml, 'text/html');
+        const resultHorsesProbe = parseHorsesFromDoc(resultDoc, resultUrl);
+        const resultOddsProbe = parseFinalOddsPopularityFromResultDoc(resultDoc, resultHorsesProbe);
+        if(resultHorsesProbe.length >= 2 && resultOddsProbe.size >= 2){
+          activeUrl = resultUrl;
+          html = resultHtml;
+          doc = resultDoc;
+          document.getElementById('raceUrl').value = resultUrl;
+          status.innerHTML = `<div class="url-status">🏁 確定済みのため result.html の最終値を反映中...</div>`;
+        }
+      }catch(e){
+        console.log('result auto-reflect skipped:', e?.message || e);
+      }
+    }
 
     const titleFromDoc = parseRaceTitleFromDoc(doc);
     if(titleFromDoc) currentRaceName = titleFromDoc;

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.61 HorseNumSort</title>
+<title>The競馬 EV分析 v5.18.62 ResultOddsStrict</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.61 HorseNumSort</span>
+    <span class="ver">v5.18.62 ResultOddsStrict</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -3947,6 +3947,48 @@ function parseFinalOddsPopularityByResultTableHeaders(doc, expectedHorses){
   return map;
 }
 
+
+
+// v5.18.62: result.html専用の最終単勝オッズ・人気セル抽出。
+// 結果表では「タイム 2:25.6」が小数として見えるため、汎用抽出に任せると
+// 勝ち馬の単勝オッズが 25.6 のように誤代入される。必ず「人気 → 単勝オッズ → 後3F」の並びで読む。
+function extractFinalWinOddsPopStrictFromResultCells(cells, horseAnchor){
+  const out = { odds: 0, pop: 0 };
+  if(!cells || !cells.length) return out;
+  const tx = Array.from(cells).map(c => toHalfNumberText(normCellText(c)).replace(/,/g,'').trim());
+  let horseCellIndex = horseAnchor ? Array.from(cells).findIndex(c => c.contains(horseAnchor)) : -1;
+  if(horseCellIndex < 0) horseCellIndex = 0;
+
+  function isPopText(t){ return /^([1-9]|1[0-8])\s*(?:人気)?$/.test(String(t||'')); }
+  function popVal(t){ const m = String(t||'').match(/^([1-9]|1[0-8])\s*(?:人気)?$/); return m ? Number(m[1]) : 0; }
+  function oddsVal(t){
+    if(/斤量|kg|㎏|馬体重|増減|タイム|着差|後3F|上り|通過|コーナー/.test(String(t||''))) return 0;
+    const m = String(t||'').match(/^(\d{1,4}\.\d+)$/) || String(t||'').match(/^(\d{1,4}\.\d+)\s*(?:倍)?$/);
+    if(!m) return 0;
+    const v = sanitizeWinOddsValue(Number(m[1]), String(t||''));
+    return (v >= 1 && v <= 999.9) ? Math.round(v * 10) / 10 : 0;
+  }
+  function isAfter3fText(t){
+    const m = String(t||'').match(/^(\d{2}\.\d)$/);
+    if(!m) return false;
+    const v = Number(m[1]);
+    return v >= 30 && v <= 45;
+  }
+
+  // 標準JRA result.html: ... タイム / 着差 / 人気 / 単勝オッズ / 後3F / ...
+  for(let i=horseCellIndex+1; i<tx.length-1; i++){
+    const pop = popVal(tx[i]);
+    const odds = oddsVal(tx[i+1]);
+    if(pop >= 1 && odds >= 1){
+      // 次セルが後3Fなら最有力。次が無くても、直前にタイムが存在すれば採用。
+      const afterOk = (i+2 < tx.length && isAfter3fText(tx[i+2]));
+      const timeBefore = tx.slice(Math.max(horseCellIndex+1, i-5), i).some(t => /^\d{1,2}:\d{2}\.\d$/.test(t));
+      if(afterOk || timeBefore){ out.pop = pop; out.odds = odds; return out; }
+    }
+  }
+  return out;
+}
+
 function parseFinalOddsPopularityFromResultDoc(doc, expectedHorses){
   const map = parseFinalOddsPopularityByResultTableHeaders(doc, expectedHorses);
   if(!doc) return map;
@@ -4008,10 +4050,15 @@ function parseFinalOddsPopularityFromResultDoc(doc, expectedHorses){
 
     if(!(num >= 1 && num <= 18)) return;
 
-    let odds = extractOddsFromRow(tr, num);
-    let pop = extractPopularityFromRow(tr, num);
+    // result.htmlでは汎用抽出より先に、結果表の正式列（人気→単勝オッズ→後3F）を読む。
+    // これでタイム「2:25.6」を単勝25.6として拾う事故を防ぐ。
+    const strictFinal = extractFinalWinOddsPopStrictFromResultCells(cells, a);
+    let odds = Number(strictFinal.odds || 0);
+    let pop = Number(strictFinal.pop || 0);
+    if(!(odds >= 1)) odds = extractOddsFromRow(tr, num);
+    if(!(pop >= 1)) pop = extractPopularityFromRow(tr, num);
 
-    // result.htmlの行は「着順 枠 馬番 馬名 ... 単勝 人気」のように右端に最終値がある。
+    // result.htmlの行は「着順 枠 馬番 馬名 ... 人気 単勝オッズ 後3F」のように正式値が並ぶ。
     // ヘッダーやclassが取れない場合は、右側5セルから「小数=単勝」「1〜18=人気」を拾う。
     if(!(odds >= 1) || !(pop >= 1)){
       const tx = cells.map(c => toHalfNumberText(normCellText(c)).replace(/,/g,'').trim());

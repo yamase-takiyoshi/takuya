@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.55 JraPopFix</title>
+<title>The競馬 EV分析 v5.18.56 RaceIdOddsRankFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.55 JraPopFix</span>
+    <span class="ver">v5.18.56 RaceIdOddsRankFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -4032,16 +4032,25 @@ function fillNarPopularityFromOdds(hs){
   // 既存人気の信頼性チェック: 人気付き馬の人気順がオッズ順と一致しているか
   const popOk = hs.filter(h => Number(h.pop) >= 1);
   if(popOk.length >= 2){
-    // オッズ昇順ランクと人気番号のスピアマン順位相関を簡易計算
+    // v5.18.56 RaceIdOddsRankFix:
+    // result/shutuba由来の人気セルが1頭だけズレると「1人気」が重複し、
+    // 平均乖離だけでは見逃すことがある（例: 東京11Rオークス 16番が1人気化）。
+    // 単勝オッズが揃っている場合、人気は必ず 1..頭数 の一意順位になるため、
+    // 重複・欠番・オッズ順位との不一致があれば race_id で取得した単勝オッズ順を正とする。
     const sorted = withOdds.slice().sort((a,b) => Number(a.odds) - Number(b.odds));
-    const oddsRank = new Map(sorted.map((h,i) => [h.num, i+1]));
+    const oddsRank = new Map(sorted.map((h,i) => [Number(h.num), i+1]));
+    const expectedMax = sorted.length;
+    const pops = popOk.map(h => Number(h.pop)).filter(v => v >= 1 && v <= expectedMax);
+    const uniquePops = new Set(pops);
+    const hasDuplicate = uniquePops.size !== pops.length;
+    const hasMissing = sorted.length >= hs.length - 1 && uniquePops.size < expectedMax;
     let diff = 0;
     popOk.forEach(h => {
-      const or = oddsRank.get(h.num);
+      const or = oddsRank.get(Number(h.num));
       if(or) diff += Math.abs(or - Number(h.pop));
     });
     const avgDiff = diff / popOk.length;
-    if(avgDiff <= 1.5) return hs; // 平均乖離1.5以内なら信頼できる→そのまま返す
+    if(!hasDuplicate && !hasMissing && avgDiff <= 1.5) return hs; // 信頼できる→そのまま返す
   }
 
   // 人気を再計算: オッズ昇順で1,2,3...を割り当て

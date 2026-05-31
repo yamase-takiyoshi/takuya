@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.63 Fix1stPlaceOdds</title>
+<title>The競馬 EV分析 v5.18.64 ResultPageLock</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.63 Fix1stPlaceOdds</span>
+    <span class="ver">v5.18.64 ResultPageLock</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -4398,15 +4398,19 @@ async function fetchRace(){
     if(rid){
       if(kind === 'JRA'){
         // Step1: 確定レース(result.html)なら、このページ内の最終単勝オッズ・最終人気を最優先。
-        // 未確定または不足時だけ result/odds/shutuba の順にフォールバック。
+        // v5.18.64: result.html で2件以上取れた場合は odds/API を一切呼ばない（確定値汚染防止）。
         let oddsMap = isResultPage ? parseFinalOddsPopularityFromResultDoc(doc, horses) : new Map();
-        if(!oddsMap || oddsMap.size < horses.length){
-          oddsMap = mergeOddsMaps(oddsMap, await fetchWinOddsPopularity('JRA', rid, horses));
+        const resultPageFull = isResultPage && oddsMap && oddsMap.size >= 2;
+        if(!resultPageFull){
+          if(!oddsMap || oddsMap.size < horses.length){
+            oddsMap = mergeOddsMaps(oddsMap, await fetchWinOddsPopularity('JRA', rid, horses));
+          }
         }
 
         // Step2: 不足がある場合、既取得HTMLを保険で解析。
         // shutuba は予想オッズ列が明示されている場合のみ返すので斤量誤読なし。
-        const shutubaOddsMap = (!oddsMap || oddsMap.size < horses.length)
+        // v5.18.64: result.html 確定値が揃っている場合はshutuba解析も不要。
+        const shutubaOddsMap = (!resultPageFull && (!oddsMap || oddsMap.size < horses.length))
           ? (isResultPage ? parseFinalOddsPopularityFromResultDoc(doc, horses) : parseWinOddsPopularityFromShutuba(doc))
           : new Map();
 
@@ -4414,11 +4418,17 @@ async function fetchRace(){
         horses = applyAuthoritativeJraOdds(horses, oddsMap, shutubaOddsMap);
 
         // Step3b: JRAもオッズ順人気を再計算。オッズが正しく取れているのに人気だけズレるケースを修正。
-        horses = fillNarPopularityFromOdds(horses);
+        // v5.18.64: result.html 確定値が揃っている場合は確定人気をオッズ順で上書きしない。
+        if(!resultPageFull){
+          horses = fillNarPopularityFromOdds(horses);
+        }
 
         // Step4: 予想用。正式オッズが未公開/未取得でもEV計算できるよう、未取得分だけ暫定値を補完する。
         // 正式値が取れている馬は上書きしない。
-        horses = fillProvisionalOddsPopularityForPrediction(horses);
+        // v5.18.64: result.html 確定値が揃っている場合は暫定補完もしない（確定値が正）。
+        if(!resultPageFull){
+          horses = fillProvisionalOddsPopularityForPrediction(horses);
+        }
       }else{
         // NAR: 既存ロジックをそのまま維持
         const oddsMap = await fetchWinOddsPopularity(kind, rid, horses);

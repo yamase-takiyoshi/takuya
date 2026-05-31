@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.52 WorkerCharsetFix</title>
+<title>The競馬 EV分析 v5.18.53 Race1RNameFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.52 WorkerCharsetFix</span>
+    <span class="ver">v5.18.53 Race1RNameFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -5223,6 +5223,8 @@ function extractRaceNameFromScheduleHtml49(html, raceId, raceNo){
     for(const a of links){
       let node = a;
       for(let depth=0; node && depth<7; depth++, node=node.parentElement){
+        // scriptタグ・styleタグ自体は除外
+        if(node.tagName && /^(SCRIPT|STYLE)$/i.test(node.tagName)) break;
         const name = cleanRaceName49(node.textContent || '', raceNo, raceId);
         if(name) return name;
       }
@@ -5230,9 +5232,16 @@ function extractRaceNameFromScheduleHtml49(html, raceId, raceNo){
       if(name) return name;
     }
   }catch(e){}
+  // フォールバック: script/styleブロックを除去した安全なHTML文字列でチャンク検索
+  const safeHtml = s
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ');
   let idx = -1;
-  while((idx = s.indexOf(String(raceId), idx + 1)) >= 0){
-    const chunk = s.slice(Math.max(0, idx-2500), Math.min(s.length, idx+2500));
+  while((idx = safeHtml.indexOf(String(raceId), idx + 1)) >= 0){
+    const chunk = safeHtml.slice(Math.max(0, idx-2500), Math.min(safeHtml.length, idx+2500));
+    // JSコードが混入しているチャンクは弾く（// や function( や var が多い場合）
+    const jsScore = (chunk.match(/\/\/|function\s*\(|var\s+\w|addEventListener|messageEvent/g) || []).length;
+    if(jsScore >= 3) continue;
     const name = cleanRaceName49(chunk, raceNo, raceId);
     if(name) return name;
   }

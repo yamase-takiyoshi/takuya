@@ -2743,7 +2743,13 @@ function buildWorkerRequestUrl(targetUrl){
 async function fetchHtmlViaProxy(url){
   const proxyReq = buildWorkerRequestUrl(url);
   const res = await fetch(proxyReq, { cache:'no-store' });
-  if(!res.ok) throw new Error('HTTP ' + res.status);
+  if(!res.ok){
+    if(res.status === 400) throw new Error('HTTP 400（netkeibaが出馬表ページを返しませんでした。race_idが無効・未公開・開催終了後の可能性があります）');
+    if(res.status === 403) throw new Error('HTTP 403（netkeibaへのアクセスが拒否されました。しばらく待ってから再試行してください）');
+    if(res.status === 404) throw new Error('HTTP 404（出馬表ページが見つかりません。race_idを確認してください）');
+    if(res.status === 503 || res.status === 502) throw new Error(`HTTP ${res.status}（netkeiba側が一時的に利用不可です。少し待って再試行してください）`);
+    throw new Error('HTTP ' + res.status);
+  }
   return await res.text();
 }
 
@@ -4273,7 +4279,20 @@ async function fetchRace(){
 
   } catch(e) {
     console.error(e);
-    status.innerHTML = `<div class="url-status err">❌ 取得失敗: ${e.message}</div>`;
+    // 400エラーの場合、result.htmlで再取得を案内する
+    const msg = e.message || '';
+    let hint = '';
+    if(msg.includes('400') || msg.includes('404')){
+      const rawUrl = document.getElementById('raceUrl').value.trim();
+      const rid = (rawUrl.match(/race_id=(\d{10,14})/) || [])[1] || '';
+      const kind = document.getElementById('pickKind')?.value || 'JRA';
+      if(rid){
+        const host = kind === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com';
+        const resultUrl = `${host}/race/result.html?race_id=${rid}&rf=race_submenu`;
+        hint = `<br><span style="font-size:11px;color:var(--muted)">💡 レース終了後は出馬表が非公開になります。結果ページ（<a href="${resultUrl}" target="_blank" style="color:var(--accent)">result.html</a>）に変更してみてください。</span>`;
+      }
+    }
+    status.innerHTML = `<div class="url-status err">❌ 取得失敗: ${escapeHtml(msg)}${hint}</div>`;
   } finally {
     progress.classList.remove('show');
   }
@@ -4704,6 +4723,11 @@ export default {
       const contentType = res.headers.get('content-type') || '';
       const charset = detectCharset(contentType, buf);
       const html = new TextDecoder(charset, { fatal: false }).decode(buf);
+
+      // netkeibaが4xx/5xxを返した場合はエラーJSONで通知（クライアント側で判別しやすくする）
+      if (!res.ok) {
+        return json({ ok: false, error: 'netkeiba returned HTTP ' + res.status, upstreamStatus: res.status }, 502);
+      }
 
       return new Response(html, {
         status: res.status,

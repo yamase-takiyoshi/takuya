@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.58 OddsDebugLog</title>
+<title>The競馬 EV分析 v5.18.59 ResultFinalOdds</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.58 OddsDebugLog</span>
+    <span class="ver">v5.18.59 ResultFinalOdds</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -4048,7 +4048,7 @@ function fillNarPopularityFromOdds(hs){
   // 既存人気の信頼性チェック: 人気付き馬の人気順がオッズ順と一致しているか
   const popOk = hs.filter(h => Number(h.pop) >= 1);
   if(popOk.length >= 2){
-    // v5.18.58 OddsDebugLog:
+    // v5.18.59 ResultFinalOdds:
     // result/shutuba由来の人気セルが1頭だけズレると「1人気」が重複し、
     // 平均乖離だけでは見逃すことがある（例: 東京11Rオークス 16番が1人気化）。
     // 単勝オッズが揃っている場合、人気は必ず 1..頭数 の一意順位になるため、
@@ -4252,17 +4252,21 @@ async function fetchRace(){
     // 出馬表HTMLからのオッズ解析は「予想オッズ列が明示されている場合」のみ保険で使う。
     // NAR側の挙動はそのまま維持し、一切変更しない。
     const kind = document.getElementById('pickKind')?.value || (activeUrl.includes('nar.netkeiba') ? 'NAR' : 'JRA');
+    const isResultPage = /\/race\/result\.html/i.test(activeUrl);
 
     if(rid){
       if(kind === 'JRA'){
-        // Step1: shutuba.htmlを最初に試みる（出馬表取得と同じHTMLのためキャッシュ効果あり）。
-        // shutuba.htmlでオッズが取れない場合はodds/index.html等にフォールバック。
-        const oddsMap = await fetchWinOddsPopularity('JRA', rid, horses);
+        // Step1: 確定レース(result.html)なら、このページ内の最終単勝オッズ・最終人気を最優先。
+        // 未確定または不足時だけ result/odds/shutuba の順にフォールバック。
+        let oddsMap = isResultPage ? parseFinalOddsPopularityFromResultDoc(doc, horses) : new Map();
+        if(!oddsMap || oddsMap.size < horses.length){
+          oddsMap = mergeOddsMaps(oddsMap, await fetchWinOddsPopularity('JRA', rid, horses));
+        }
 
-        // Step2: Step1で不足がある場合、既取得の出馬表HTML（追加通信ゼロ）を保険で解析。
-        // parseWinOddsPopularityFromShutuba は「予想オッズ列が明示されている場合のみ」返すので斤量誤読なし。
+        // Step2: 不足がある場合、既取得HTMLを保険で解析。
+        // shutuba は予想オッズ列が明示されている場合のみ返すので斤量誤読なし。
         const shutubaOddsMap = (!oddsMap || oddsMap.size < horses.length)
-          ? parseWinOddsPopularityFromShutuba(doc)
+          ? (isResultPage ? parseFinalOddsPopularityFromResultDoc(doc, horses) : parseWinOddsPopularityFromShutuba(doc))
           : new Map();
 
         // Step3: JRAはここで旧オッズを全消去して、odds由来の値だけを馬番JOINする。
@@ -4297,7 +4301,8 @@ async function fetchRace(){
     const provisionalCount = horses.filter(h => h.provisionalOdds).length;
     const frameCount = horses.filter(h => Number(h.frame) >= 1 && Number(h.frame) <= 8).length;
     const oddsNote = provisionalCount > 0 ? ` / ※${provisionalCount}件は未取得のため予想用暫定値` : '';
-    status.innerHTML = `<div class="url-status ok">✅ ${escapeHtml(currentRaceName || '')} ${horses.length}頭 取得しました / 単勝オッズ ${oddsCount}件 / 人気 ${popCount}件 / 枠番 ${frameCount}件${oddsNote}</div>`;
+    const pageNote = /\/race\/result\.html/i.test(activeUrl) ? ' / result.html最終値' : '';
+    status.innerHTML = `<div class="url-status ok">✅ ${escapeHtml(currentRaceName || '')} ${horses.length}頭 取得しました${pageNote} / 単勝オッズ ${oddsCount}件 / 人気 ${popCount}件 / 枠番 ${frameCount}件${oddsNote}</div>`;
 
     // 取得後すぐにタブを馬データへ
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -4599,10 +4604,12 @@ function parseHorsesFromDoc(doc, url){
   const list = [];
   const seen = new Set();
 
-  // JRAの出馬表HTML（shutuba.html）かどうかを判定する。
-  // JRAは odds/index.html で別途オッズを取得するため、ここではオッズ/人気を0に初期化する。
-  // これにより斤量列（55.0等）をオッズとして誤読する問題を根本から排除する。
-  const isJraShutubaUrl = /race\.netkeiba\.com/.test(String(url || '')) && !/nar\.netkeiba/.test(String(url || ''));
+  // v5.18.59: ページ種別をURLで厳密判定。
+  // shutuba.html はJRAの単勝オッズがJS動的描画なので0初期化。
+  // result.html は確定オッズ・確定人気が静的DOMにあるため、ここで読めるだけ読む。
+  const pageUrl = String(url || '');
+  const isResultUrl = /\/race\/result\.html/i.test(pageUrl);
+  const isJraShutubaUrl = /race\.netkeiba\.com/.test(pageUrl) && !/nar\.netkeiba/.test(pageUrl) && /\/race\/shutuba\.html/i.test(pageUrl);
 
   // JRA/NARとも「馬リンクが存在する行」だけを採用。広告・払戻・分析タブの混入を遮断する。
   const rows = Array.from(doc.querySelectorAll('tr.HorseList, tr[class*="HorseList"], tbody tr, table tr'));
@@ -4632,6 +4639,22 @@ function parseHorsesFromDoc(doc, url){
         tr.querySelector('td[class*="HorseNum"]') ||
         tr.querySelector('td[class*="Num"]');
       num = firstNumberInCell(numEl, false);
+    }
+
+    // v5.18.59: result.html では左端が「着順」なので、左から拾うと馬番が着順に化ける。
+    // 馬名セルの直前側にある独立数字を馬番として採用する。
+    if(!num && isResultUrl && horseLink){
+      const cellsRaw = Array.from(tr.querySelectorAll('td,th'));
+      const horseCellIndex = cellsRaw.findIndex(c => c.contains(horseLink));
+      if(horseCellIndex > 0){
+        for(let i=horseCellIndex-1; i>=0; i--){
+          const t = toHalfNumberText(normCellText(cellsRaw[i])).trim();
+          if(/^([1-9]|1[0-8])$/.test(t)){
+            num = Number(t);
+            break;
+          }
+        }
+      }
     }
 
     if(!num){

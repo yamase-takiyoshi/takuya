@@ -303,6 +303,7 @@ body{
         <span style="width:28px"></span>
       </div>
       <div id="horseRows"></div>
+      <div id="popDupWarn" style="display:none;margin-top:6px;padding:8px 10px;border-radius:8px;font-size:12px;color:var(--red);background:rgba(248,113,113,0.1);border:1px solid rgba(248,113,113,0.3)"></div>
       <button class="btn btn-primary" style="margin-top:10px" onclick="runPredict()">📐 EV計算・買い目推奨</button>
     </div>
 
@@ -735,7 +736,7 @@ function renderHorseRows(){
       <input class="odds-in" type="number" value="${h.odds || ''}" step="0.1" min="1" placeholder="倍"
         onchange="horses[${i}].odds=Number(this.value)">
       <input class="pop-in" type="number" value="${h.pop || ''}" min="1" max="30" placeholder="人気"
-        onchange="horses[${i}].pop=Number(this.value)">
+        onchange="horses[${i}].pop=Number(this.value);checkPopDuplicate()">
       <button class="del-btn" onclick="removeHorse(${i})">✕</button>
     `;
     container.appendChild(row);
@@ -748,6 +749,20 @@ function addHorseRow(){
 }
 function removeHorse(i){ horses.splice(i, 1); renderHorseRows(); }
 function clearHorses(){ horses = []; renderHorseRows(); }
+function checkPopDuplicate(){
+  const warn = document.getElementById("popDupWarn");
+  if(!warn) return;
+  const pops = horses.map(h => Number(h.pop || 0)).filter(v => v >= 1);
+  const seen = new Set();
+  const dups = new Set();
+  pops.forEach(v => { if(seen.has(v)) dups.add(v); else seen.add(v); });
+  if(dups.size > 0){
+    warn.textContent = "⚠️ 人気が重複しています（" + [...dups].sort((a,b)=>a-b).join("、") + "番人気）。正しい値に修正してください。";
+    warn.style.display = "block";
+  } else {
+    warn.style.display = "none";
+  }
+}
 
 // ─── EV計算モデル（結合版.jsから移植） ─────────────
 function isNAR(){ return settings.nar; }
@@ -1024,6 +1039,19 @@ function runPredict(){
   if(valid.length < 2){
     alert('出走馬を2頭以上入力してください。');
     return;
+  }
+
+  // 人気重複チェック
+  {
+    const pops = valid.map(h => Number(h.pop || 0)).filter(v => v >= 1);
+    const seen = new Set();
+    const dups = new Set();
+    pops.forEach(v => { if(seen.has(v)) dups.add(v); else seen.add(v); });
+    if(dups.size > 0){
+      alert('⚠️ 人気が重複しています（' + [...dups].sort((a,b)=>a-b).join('、') + '番人気）。\n修正してから計算してください。');
+      checkPopDuplicate();
+      return;
+    }
   }
 
   const { recs, rated } = generateCandidates(valid);

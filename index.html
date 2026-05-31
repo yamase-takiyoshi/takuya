@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.53 Race1RNameFix</title>
+<title>The競馬 EV分析 v5.18.54 Race1RNameFix2</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.53 Race1RNameFix</span>
+    <span class="ver">v5.18.54 Race1RNameFix2</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -4832,7 +4832,10 @@ function live37_bestKaisaiIdForVenue(html, venueCode){
   return kids[0];
 }
 function live37_extractRaceNameNearHtml(html, raceId, raceNo){
-  const s = String(html || '');
+  // script/styleブロックを除去してからチャンク検索する
+  const s = String(html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ');
   const idx = s.indexOf(String(raceId));
   if(idx >= 0){
     const chunk = s.slice(Math.max(0, idx-900), Math.min(s.length, idx+1400));
@@ -5276,7 +5279,12 @@ async function fillJraRaceNamesFromShutuba(kind, races, status, date, venueCode,
     const no = Number(r.raceNo || String(r.raceId).slice(-2));
     if(status) status.innerHTML = `<div class="url-status">🏷️ ${venueName(kind, venueCode)} ${no}R のレース名を取得中... (${i+1}/${races.length})</div>`;
     let name = '';
-    if(r.raceName && !isGenericRaceName49(r.raceName, no)) name = r.raceName;
+    // JS汚染チェック：messageEvent・//・function( などが含まれるraceNameは汚染とみなす
+    const isJsContaminated = (s) => {
+      if(!s) return false;
+      return /messageEvent|addEventListener|function\s*\(|\/\/\s*var\s|eventer\(/.test(s);
+    };
+    if(r.raceName && !isGenericRaceName49(r.raceName, no) && !isJsContaminated(r.raceName)) name = r.raceName;
     if(!name) name = extractRaceNameFromScheduleHtml49(scheduleHtml || '', r.raceId, no);
     if(!name) name = await fetchRaceNameFromPage49(kind, r.raceId, no, 'shutuba');
     if(!name) name = await fetchRaceNameFromPage49(kind, r.raceId, no, 'result');

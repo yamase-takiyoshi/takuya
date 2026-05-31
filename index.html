@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.57 AutoResultFallback</title>
+<title>The競馬 EV分析 v5.18.58 OddsDebugLog</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.57 AutoResultFallback</span>
+    <span class="ver">v5.18.58 OddsDebugLog</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -3976,42 +3976,52 @@ function parseFinalOddsPopularityFromResultDoc(doc, expectedHorses){
 
 async function fetchWinOddsPopularity(kind, raceId, expectedHorses){
   if(!settings.proxyUrl || !raceId) return new Map();
+  // v5.18.58 Debug: ステータス欄にオッズ取得ログを表示
+  const dbgEl = document.getElementById('urlStatus');
+  const dbgLog = [];
+  function dbgAppend(msg){
+    dbgLog.push(msg);
+    if(dbgEl) dbgEl.innerHTML = `<div class="url-status" style="font-size:11px;line-height:1.8">${dbgLog.map(l=>escapeHtml(l)).join('<br>')}</div>`;
+  }
+  dbgAppend(`🔍 オッズ取得開始: ${raceId}`);
+
   for(const url of buildNetkeibaOddsUrls(kind, raceId)){
+    const shortUrl = url.replace('https://race.netkeiba.com','').replace('https://nar.netkeiba.com','');
     try{
       const html = await fetchHtmlViaProxy(url);
-      if(!html) continue;
+      if(!html){ dbgAppend(`⬜ 空レスポンス: ${shortUrl}`); continue; }
       const doc = new DOMParser().parseFromString(html, 'text/html');
 
-      // v5.18.47: result.html は確定済みレースの最終オッズ・人気を持つため最優先。
-      // 取得できた場合は予想オッズ/APIで上書きしない。
       let map = url.includes('result.html')
         ? parseFinalOddsPopularityFromResultDoc(doc, expectedHorses)
         : parseWinOddsPopularityFromDoc(doc);
-      if(url.includes('result.html') && map.size >= 2) return map;
 
-      // v5.18.25: race_id由来のodds/API応答をJSON/JS/本文まで総当たり。
-      // これによりDOMに描画されない単勝オッズ・人気も拾う。
+      if(url.includes('result.html')){
+        dbgAppend(`📄 result.html → ${map.size}件取得`);
+        if(map.size >= 2) return map;
+      }
+
       const anyMap = parseWinOddsPopularityFromAnyOddsHtml(html, expectedHorses);
       map = mergeOddsMaps(map, anyMap);
 
-      // JRAでDOM class が変化して 0件になる場合の保険：
-      // odds/index.html のHTML本文から、出走馬名近傍の単勝オッズ・人気を拾う。
       if((!map || map.size < 2) && kind === 'JRA' && Array.isArray(expectedHorses) && expectedHorses.length){
         const byName = parseWinOddsPopularityByHorseNamesFromHtml(html, expectedHorses);
         map = mergeOddsMaps(map, byName);
       }
 
-      // v5.18.27: 候補URLが shutuba.html の場合、予想オッズ列専用パーサも試す
       if((!map || map.size < 2) && url.includes('shutuba.html')){
         const sMap = parseWinOddsPopularityFromShutuba(doc);
         map = mergeOddsMaps(map, sMap);
       }
 
+      dbgAppend(`${map.size >= 2 ? '✅' : '❌'} ${shortUrl} → ${map.size}件`);
       if(map.size >= 2) return map;
     }catch(e){
+      dbgAppend(`💥 エラー: ${shortUrl} → ${e.message || e}`);
       console.warn('odds fetch failed:', e);
     }
   }
+  dbgAppend('⚠️ オッズ取得失敗（全URL試行済み）');
   return new Map();
 }
 
@@ -4038,7 +4048,7 @@ function fillNarPopularityFromOdds(hs){
   // 既存人気の信頼性チェック: 人気付き馬の人気順がオッズ順と一致しているか
   const popOk = hs.filter(h => Number(h.pop) >= 1);
   if(popOk.length >= 2){
-    // v5.18.57 AutoResultFallback:
+    // v5.18.58 OddsDebugLog:
     // result/shutuba由来の人気セルが1頭だけズレると「1人気」が重複し、
     // 平均乖離だけでは見逃すことがある（例: 東京11Rオークス 16番が1人気化）。
     // 単勝オッズが揃っている場合、人気は必ず 1..頭数 の一意順位になるため、

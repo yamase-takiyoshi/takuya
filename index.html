@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.68 NARRaceNameExactCopy</title>
+<title>The競馬 EV分析 v5.18.69 NARRaceNameNoList</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.68 NARRaceNameExactCopy</span>
+    <span class="ver">v5.18.69 NARRaceNameNoList</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2095,11 +2095,12 @@ function raceIdMatchesSelectedDate(kind, raceId, date){
 function cleanRaceName(txt, raceNo){
   let t = String(txt || '')
     .replace(/\s+/g, ' ')
-    .replace(/出馬表|オッズ|結果|払戻|予想|\|.*$/g, '')
+    .replace(/出馬表|オッズ|結果|払戻|予想|レース情報|レース一覧|netkeiba\.com|netkeiba|ネット競馬|\|.*$/g, '')
     .trim();
   const m = t.match(new RegExp(`${raceNo}R\\s*([^0-9]{1,40})`));
   if(m) t = m[1].trim();
   t = t.replace(/^\d{1,2}R\s*/, '').replace(/^(レース|Race)\s*/i, '').trim();
+  if(!t || /^(一覧|情報|レース一覧|レース情報|netkeiba|ネット競馬)$/i.test(t)) return `${raceNo}R`;
   return t || `${raceNo}R`;
 }
 
@@ -2314,7 +2315,19 @@ async function probeNarRaceById(date, venueCode, raceNo){
   const horsesFound = parseHorsesFromDoc(doc, url).length;
   if(horsesFound < 2) return null;
 
-  const name = parseRaceTitleFromDoc(doc) || `${raceNo}R`;
+  let name = parseRaceTitleFromDoc(doc, raceNo);
+  // 出馬表が「レース一覧」等の汎用titleしか返さない場合は、結果ページから補完する。
+  if(!name){
+    try{
+      const resultUrl = `https://nar.netkeiba.com/race/result.html?race_id=${raceId}&rf=race_submenu`;
+      const html2 = await fetchHtmlViaProxy(resultUrl);
+      if(String(html2 || '').includes(raceId)){
+        const doc2 = new DOMParser().parseFromString(html2, 'text/html');
+        name = parseRaceTitleFromDoc(doc2, raceNo);
+      }
+    }catch(e){}
+  }
+  name = name || `${raceNo}R`;
   return { raceId, raceNo, venueCode, raceName:name, shutuba:url, horsesFound };
 }
 
@@ -3118,7 +3131,16 @@ async function enrichRaceNamesFromShutuba(races, kind){
       try{
         const html = await fetchHtmlViaProxy(shutubaUrl(kind, r.raceId));
         const doc = new DOMParser().parseFromString(html, 'text/html');
-        const got = parseRaceTitleFromDoc(doc, raceNo);
+        let got = parseRaceTitleFromDoc(doc, raceNo);
+        // NARの一部レースは出馬表側のtitleが「レース一覧」になるため、結果ページも確認する。
+        if(!got && kind === 'NAR'){
+          try{
+            const resultUrl = `https://nar.netkeiba.com/race/result.html?race_id=${r.raceId}&rf=race_submenu`;
+            const html2 = await fetchHtmlViaProxy(resultUrl);
+            const doc2 = new DOMParser().parseFromString(html2, 'text/html');
+            got = parseRaceTitleFromDoc(doc2, raceNo);
+          }catch(e2){}
+        }
         if(got) name = got;
       }catch(e){
         console.warn('race name from shutuba failed', r.raceId, e);
@@ -4618,7 +4640,7 @@ function cleanRaceNameSafe51(raw, raceNo){
     .replace(/&amp;/g, '&')
     .replace(/&#039;/g, "'")
     .replace(/&quot;/g, '"')
-    .replace(/出馬表|オッズ|競馬データベース|netkeiba\.com|netkeiba|ネット競馬|JRA|地方競馬|レース情報/gi, ' ')
+    .replace(/出馬表|オッズ|競馬データベース|netkeiba\.com|netkeiba|ネット競馬|JRA|地方競馬|レース情報|レース一覧/gi, ' ')
     .replace(/[｜|].*$/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -4636,6 +4658,7 @@ function cleanRaceNameSafe51(raw, raceNo){
   if(t.length > 40) return '';
   if(bad.test(t)) return '';
   if(mojibake.test(t)) return '';
+  if(/^(一覧|情報|レース一覧|レース情報|netkeiba|ネット競馬)$/i.test(t)) return '';
   if(generic.test(t) || /^\d{1,2}R$/.test(t)) return '';
   // 日本語レース名として最低限、漢字・かな・カナのどれかを含むものだけ採用
   if(!/[一-龥ぁ-んァ-ヶ]/.test(t)) return '';
@@ -4661,6 +4684,9 @@ function parseRaceTitleFromDoc(doc, raceNo){
       if(got) return got;
     }
   }
+  const metaTitle = doc.querySelector('meta[property="og:title"], meta[name="twitter:title"], meta[name="title"]')?.getAttribute('content') || '';
+  const metaParts = metaTitle.split(/[｜|]/).map(x => cleanRaceNameSafe51(x, raceNo)).filter(Boolean);
+  if(metaParts[0]) return metaParts[0];
   const titleRaw = doc.querySelector('title')?.textContent || '';
   const titleParts = titleRaw.split(/[｜|]/).map(x => cleanRaceNameSafe51(x, raceNo)).filter(Boolean);
   return titleParts[0] || '';

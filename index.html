@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.70 NARRaceNameNoListDeep</title>
+<title>The競馬 EV分析 v5.18.71 NARRaceNameFinalFallback</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.70 NARRaceNameNoListDeep</span>
+    <span class="ver">v5.18.71 NARRaceNameFinalFallback</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -5952,6 +5952,170 @@ loadRaceList = async function(){
     if(!n) return '';
     if(/レース一覧/i.test(String(n))) return '';
     return n;
+  };
+})();
+
+
+
+
+/* ============================================================
+   v5.18.71 NAR RaceName Final Fallback
+   ・NARの「レース一覧」は絶対にレース名として表示しない
+   ・既存の補完が失敗した場合も、race_id付きの選択肢は「1R」等に落とす
+   ・一覧HTML/出馬表/結果ページを再探索し、取れた正式名だけ採用する
+   ============================================================ */
+(function(){
+  function nar71_isBadRaceName(name, raceNo){
+    const no = Number(raceNo || 0);
+    const t = String(name || '').replace(/\s+/g,' ').trim();
+    const c = t.replace(/\s+/g,'');
+    if(!c) return true;
+    if(c === `${no}R` || c === `第${no}R` || /^\d{1,2}R$/.test(c)) return true;
+    if(/レース一覧|レース情報|netkeiba|ネット競馬|地方競馬|出馬表|オッズ|結果|払戻|競馬データベース/i.test(t)) return true;
+    if(/attachEvent|addEventListener|messageEvent|function\s*\(|window\.|document\.|var\s|let\s|const\s|=>|<script/i.test(t)) return true;
+    return false;
+  }
+
+  function nar71_stripHtml(raw){
+    return String(raw || '')
+      .replace(/<script[\s\S]*?<\/script>/gi,' ')
+      .replace(/<style[\s\S]*?<\/style>/gi,' ')
+      .replace(/<[^>]+>/g,' ')
+      .replace(/&nbsp;|&#160;/g,' ')
+      .replace(/&amp;/g,'&')
+      .replace(/&quot;/g,'"')
+      .replace(/&#039;/g,"'")
+      .replace(/&lt;/g,'<')
+      .replace(/&gt;/g,'>')
+      .replace(/\s+/g,' ')
+      .trim();
+  }
+
+  function nar71_clean(raw, raceNo, raceId){
+    const no = Number(raceNo || 0);
+    let t = nar71_stripHtml(raw);
+    if(raceId) t = t.replace(new RegExp(String(raceId),'g'),' ');
+    t = t.replace(/\d{4}[\/年-]\d{1,2}[\/月-]\d{1,2}日?/g,' ')
+         .replace(/[｜|].*$/g,' ')
+         .replace(/出馬表|オッズ|購入|予想|結果|払戻|レース映像|掲示板|お気に入り馬|レース情報|レース一覧|netkeiba\.com|netkeiba|ネット競馬|地方競馬|競馬データベース/gi,' ')
+         .replace(/\s+/g,' ')
+         .trim();
+
+    // 「水沢 3R C2六組」のような形を優先して抜く。会場名はここでは消さない。
+    const pats = [
+      new RegExp(`${no}R\\s+([^/｜|]{2,60})`),
+      new RegExp(`${no}Ｒ\\s+([^/｜|]{2,60})`),
+      new RegExp(`第${no}R\\s+([^/｜|]{2,60})`),
+      /(?:RaceName|レース名)\s*[:：]?\s*([^/｜|]{2,60})/
+    ];
+    for(const re of pats){
+      const m = t.match(re);
+      if(m){
+        let n = m[1]
+          .replace(/^\d{1,2}R\s*/,'')
+          .replace(/^第\d{1,2}R\s*/,'')
+          .replace(/\s*\d{10,14}.*$/,'')
+          .replace(/門別|盛岡|水沢|浦和|船橋|大井|川崎|金沢|笠松|名古屋|園田|姫路|高知|佐賀/g,' ')
+          .replace(/\s+/g,' ')
+          .trim();
+        if(n && !nar71_isBadRaceName(n, no) && /[一-龥ぁ-んァ-ヶA-Za-z]/.test(n)) return n.slice(0,50);
+      }
+    }
+
+    // 最終候補。会場名・R番号を落としてから短い日本語名だけ採用。
+    t = t.replace(/門別|盛岡|水沢|浦和|船橋|大井|川崎|金沢|笠松|名古屋|園田|姫路|高知|佐賀/g,' ')
+         .replace(new RegExp(`^\\s*(第)?${no}R\\s*`),' ')
+         .replace(/\s+/g,' ')
+         .trim();
+    if(t && !nar71_isBadRaceName(t, no) && t.length <= 50 && /[一-龥ぁ-んァ-ヶ]/.test(t)) return t;
+    return '';
+  }
+
+  function nar71_extract(html, raceId, raceNo){
+    const s = String(html || '');
+    if(!s) return '';
+    try{
+      const doc = new DOMParser().parseFromString(s, 'text/html');
+      const candidates = [];
+      const og = doc.querySelector('meta[property="og:title"],meta[name="twitter:title"],meta[name="title"]');
+      if(og) candidates.push(og.getAttribute('content') || '');
+      ['.RaceName','[class*="RaceName"]','.RaceData01','.RaceList_ItemTitle','.RaceList_DataItem','.RaceList_DataTitle','h1','h2','title'].forEach(sel=>{
+        doc.querySelectorAll(sel).forEach(el=>candidates.push(el.textContent || ''));
+      });
+      if(raceId){
+        doc.querySelectorAll(`a[href*="${raceId}"], a[href*="race_id=${raceId}"]`).forEach(a=>{
+          candidates.push(a.textContent || '');
+          let node = a;
+          for(let depth=0; node && depth<8; depth++, node=node.parentElement){
+            if(node.tagName && /^(SCRIPT|STYLE)$/i.test(node.tagName)) break;
+            candidates.push(node.textContent || '');
+          }
+        });
+      }
+      for(const c of candidates){
+        const n = nar71_clean(c, raceNo, raceId);
+        if(n) return n;
+      }
+    }catch(e){}
+    if(raceId){
+      const safe = s.replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ');
+      let idx = -1;
+      while((idx = safe.indexOf(String(raceId), idx + 1)) >= 0){
+        const chunk = safe.slice(Math.max(0, idx-3500), Math.min(safe.length, idx+3500));
+        const n = nar71_clean(chunk, raceNo, raceId);
+        if(n) return n;
+      }
+    }
+    return '';
+  }
+
+  async function nar71_fetchName(raceId, raceNo, page){
+    const url = page === 'result'
+      ? `https://nar.netkeiba.com/race/result.html?race_id=${raceId}&rf=race_submenu`
+      : `https://nar.netkeiba.com/race/shutuba.html?race_id=${raceId}&rf=race_submenu`;
+    const html = await fetchHtmlViaProxy(url);
+    return nar71_extract(html, raceId, raceNo);
+  }
+
+  // 既存関数を最終上書き。失敗時は必ず「nR」に落とし、「レース一覧」は出さない。
+  fillNarRaceNames68 = async function(races, date, venueCode, status){
+    if(!Array.isArray(races) || !races.length) return races || [];
+    let listHtml = '';
+    try{ listHtml = await fetchHtmlViaProxy(raceListUrl('NAR', date, venueCode)); }catch(e){ listHtml = ''; }
+    const out = [];
+    for(let i=0;i<races.length;i++){
+      const r = races[i];
+      const no = Number(r.raceNo || String(r.raceId || '').slice(-2));
+      if(status) status.innerHTML = `<div class="url-status">🏷️ ${venueName('NAR', venueCode)} ${no}R のレース名を最終確認中... (${i+1}/${races.length})</div>`;
+      let name = nar71_clean(r.raceName || '', no, r.raceId);
+      if(!name) name = nar71_extract(listHtml, r.raceId, no);
+      if(!name){ try{ name = await nar71_fetchName(r.raceId, no, 'shutuba'); }catch(e){} }
+      if(!name){ try{ name = await nar71_fetchName(r.raceId, no, 'result'); }catch(e){} }
+      if(nar71_isBadRaceName(name, no)) name = '';
+      out.push({...r, raceNo:no, raceName:(name || `${no}R`)});
+    }
+    return out;
+  };
+
+  const prevGeneric68 = isGenericRaceName68;
+  isGenericRaceName68 = function(name, raceNo){
+    return nar71_isBadRaceName(name, raceNo) || prevGeneric68(name, raceNo);
+  };
+
+  const prevApply = applySelectedRaceUrl;
+  applySelectedRaceUrl = function(){
+    prevApply();
+    const sel = document.getElementById('raceSelect');
+    const opt = sel?.selectedOptions?.[0];
+    if(opt){
+      const no = Number((opt.dataset.raceId || '').slice(-2));
+      if(isGenericRaceName68(opt.dataset.raceName || '', no)){
+        opt.dataset.raceName = `${no}R`;
+        currentRaceName = `${no}R`;
+        const box = document.getElementById('raceTitleBox');
+        if(box && box.textContent && /レース一覧|レース情報|netkeiba/i.test(box.textContent)) box.textContent = `選択中: ${no}R`;
+      }
+    }
   };
 })();
 

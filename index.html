@@ -7518,7 +7518,7 @@ if(horses.length === 0){
    ・「開催なし日」を確実に解消する。
    ============================================================ */
 (function(){
-  const VERSION87 = 'v5.18.87 NARParallelProbe';
+  const VERSION87 = 'v5.18.90 NARStructuredProbe';
 
   function esc87(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
   function ymd87(date){return String(date||'').replace(/[^0-9]/g,'').slice(0,8);}
@@ -7547,7 +7547,12 @@ if(horses.length === 0){
     for(let r=1; r<=maxR; r++){
       const rid = raceId87(date, venueCode, r);
       const pageUrl = past ? resultUrl87(rid) : shutubaUrl87(rid);
-      const proxyReq = px + '?url=' + encodeURIComponent(pageUrl);
+      // v5.18.90: NARの出馬表/結果ページは ?url= 素通しだとJS動的描画のため
+      // 静的HTMLに race_id が含まれず probe が全滅する。
+      // JRAと同じく buildWorkerRequestUrl の type/kind/race_id 構造化APIを使う。
+      const proxyReq = (typeof buildWorkerRequestUrl === 'function')
+        ? buildWorkerRequestUrl(pageUrl)
+        : px + '?url=' + encodeURIComponent(pageUrl);
       tasks.push((async(raceId, rno, proxyUrl)=>{
         try{
           const res = await fetch(proxyUrl, {cache:'no-store', signal: AbortSignal.timeout ? AbortSignal.timeout(8000) : undefined});
@@ -7582,7 +7587,10 @@ if(horses.length === 0){
     const step1 = await Promise.all(NAR_VENUES.map(async ([code, name])=>{
       const rid = raceId87(date, code, 1);
       const pageUrl = past ? resultUrl87(rid) : shutubaUrl87(rid);
-      const proxyReq = px + '?url=' + encodeURIComponent(pageUrl);
+      // v5.18.90: 同上。?url= 素通しではなく構造化APIで取得する。
+      const proxyReq = (typeof buildWorkerRequestUrl === 'function')
+        ? buildWorkerRequestUrl(pageUrl)
+        : px + '?url=' + encodeURIComponent(pageUrl);
       try{
         const ctrl = new AbortController();
         const timer = setTimeout(()=>ctrl.abort(), 9000);

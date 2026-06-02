@@ -2916,6 +2916,19 @@ function buildWorkerRequestUrl(targetUrl){
 }
 
 async function fetchHtmlViaProxy(url){
+  // v5.18.97: NARは Userscriptブリッジ（iPad回線IP・CORS/Akamai回避）を最優先。
+  // ブリッジが無い/失敗したらワーカーにフォールバックする。
+  if(typeof window.__narBridgeFetch === 'function' && window.__NAR_BRIDGE_READY__ && /\/\/nar\.netkeiba\.com\//.test(String(url))){
+    try{
+      const r = await window.__narBridgeFetch(url);
+      if(r && r.status >= 200 && r.status < 300 && r.text) return r.text;
+      // ブリッジが非200を返した場合は実netkeiba応答なのでエラー扱い（ワーカーでも同じ結果になりやすい）
+      if(r && r.status){ throw new Error('HTTP ' + r.status + '（ブリッジ）'); }
+    }catch(e){
+      console.warn('[narBridge] fallback to worker:', e && e.message);
+      // 取得失敗時はワーカーへフォールバック
+    }
+  }
   const proxyReq = buildWorkerRequestUrl(url);
   const res = await fetch(proxyReq, { cache:'no-store' });
   if(!res.ok){
@@ -7518,7 +7531,53 @@ if(horses.length === 0){
    ・「開催なし日」を確実に解消する。
    ============================================================ */
 (function(){
-  const VERSION87 = 'v5.18.96 NARHorseGate';
+  const VERSION87 = 'v5.18.97 NARBridge';
+
+  // ── Userscriptブリッジ（iPad回線IPでnar.netkeibaを取得）──────────────
+  // CloudflareワーカーのIPはAkamaiに弾かれるため、NARはブラウザのUserscript経由で
+  // 住宅IP＋本物クッキーで取得する。Userscriptが無ければ自動的にワーカーへフォールバック。
+  (function setupNarBridge(){
+    const pending = {};
+    let seq = 0;
+    window.addEventListener('message', function(ev){
+      const d = ev && ev.data;
+      if(!d || !d.__narBridge) return;
+      if(d.__narBridge === 'ready'){
+        if(!window.__NAR_BRIDGE_READY__){
+          window.__NAR_BRIDGE_READY__ = true;
+          console.log('[narBridge] ready');
+          try{ const v = document.querySelector('.ver'); if(v && !/🌉/.test(v.textContent)) v.textContent = v.textContent + ' 🌉'; }catch(e){}
+        }
+        return;
+      }
+      if(d.__narBridge === 'error'){ console.warn('[narBridge]', d.error); return; }
+      if(d.__narBridge === 'response' && d.id && pending[d.id]){ pending[d.id](d); delete pending[d.id]; }
+    });
+    window.__narBridgeFetch = function(url){
+      return new Promise(function(resolve, reject){
+        const id = 'nb' + (++seq) + '_' + Date.now();
+        const to = setTimeout(function(){ if(pending[id]){ delete pending[id]; reject(new Error('bridge timeout')); } }, 17000);
+        pending[id] = function(d){ clearTimeout(to); if(!d.status){ reject(new Error(d.error || 'bridge error')); } else { resolve({status:d.status, text:d.text || ''}); } };
+        try{ window.postMessage({ __narBridge:'request', id:id, url:url }, '*'); }
+        catch(e){ clearTimeout(to); delete pending[id]; reject(e); }
+      });
+    };
+  })();
+
+  // NAR用の低レベル取得：ブリッジ優先、無ければワーカー。{ok,status,text()} を返す。
+  async function narGet87(targetUrl){
+    if(typeof window.__narBridgeFetch === 'function' && window.__NAR_BRIDGE_READY__ && /\/\/nar\.netkeiba\.com\//.test(String(targetUrl))){
+      try{
+        const r = await window.__narBridgeFetch(targetUrl);
+        const html = r && r.text || '';
+        return { ok: !!(r && r.status >= 200 && r.status < 300), status: (r && r.status) || 0, text: async()=>html };
+      }catch(e){ /* フォールバック */ }
+    }
+    const px = (settings && settings.proxyUrl) ? settings.proxyUrl.replace(/\/$/,'') : '';
+    const proxyReq = (typeof buildWorkerRequestUrl === 'function') ? buildWorkerRequestUrl(targetUrl) : (px + '?url=' + encodeURIComponent(targetUrl));
+    const res = await fetch(proxyReq, { cache:'no-store' });
+    return { ok: res.ok, status: res.status, text: ()=>res.text() };
+  }
 
   function esc87(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
   function ymd87(date){return String(date||'').replace(/[^0-9]/g,'').slice(0,8);}
@@ -7581,28 +7640,49 @@ if(horses.length === 0){
     const listReq = (typeof buildWorkerRequestUrl==='function') ? buildWorkerRequestUrl(listUrl) : px+'?url='+encodeURIComponent(listUrl);
     const list = await probe('NAR 公式一覧', listReq, '');
 
+    // 4) NAR をブリッジ経由で取得（Userscriptが入っていれば住宅IPで取れるはず）
+    await new Promise(r=>setTimeout(r, 800));
+    const bridgeRow = {label:'NAR 出馬表（ブリッジ経由）', status:'-', len:0, raceIdCount:0, horses:0, head:'', err:''};
+    if(typeof window.__narBridgeFetch === 'function' && window.__NAR_BRIDGE_READY__){
+      try{
+        const r = await window.__narBridgeFetch(narUrl);
+        bridgeRow.status = r.status;
+        const html = r.text || '';
+        bridgeRow.len = html.length;
+        bridgeRow.raceIdCount = (html.match(/race_id=\d{12}/g)||[]).length;
+        try{ bridgeRow.horses = parseHorsesFromDoc(new DOMParser().parseFromString(html,'text/html'), narUrl).length; }catch(e){}
+        bridgeRow.head = html.replace(/\s+/g,' ').slice(0,300);
+      }catch(e){ bridgeRow.err = (e && e.message) || String(e); }
+    } else {
+      bridgeRow.err = 'ブリッジ未検出（Userscript未導入 or GM.xmlHttpRequest非対応）';
+    }
+
     const esc = esc87;
     const row = r => `<div style="font-family:monospace;font-size:11px;line-height:1.5;border-bottom:1px solid rgba(255,255,255,.08);padding:3px 0;">`
       + `<b>${esc(r.label)}</b> | HTTP ${esc(r.status)} | len=${r.len} | race_id件数=${r.raceIdCount} | 馬=${r.horses}${r.err?` | ERR:${esc(r.err)}`:''}<br>`
       + `<span style="opacity:.75">本文先頭: ${esc(r.head || '(空)')}</span></div>`;
 
+    const bridgeReady = !!window.__NAR_BRIDGE_READY__;
+    const bridgeOk = String(bridgeRow.status)==='200' && (bridgeRow.raceIdCount>0 || bridgeRow.horses>=2);
     const jraOk = String(jra.status)==='200' && (jra.raceIdCount>0 || jra.horses>=2);
     const narBlocked = String(nar1.status)==='403' || String(list.status)==='403';
     let verdict;
-    if(jraOk && narBlocked){
-      verdict = '🟠 JRA(race.netkeiba)は取得OK・NAR(nar.netkeiba)だけ403。netkeibaがNARホストへのワーカーアクセスを拒否。下の「本文先頭」がCloudflare系(Attention Required/Ray ID/1020)なら<b>IP/ボットのハードブロック</b>、netkeibaの文言なら<b>ヘッダ/クッキーで回避できる可能性</b>。';
-    } else if(!jraOk && narBlocked){
-      verdict = '🔴 JRAも怪しくNARは403。ワーカー経由のnetkeibaアクセス全体がブロック気味。本文先頭を確認。';
+    if(bridgeOk){
+      verdict = '🟢 ブリッジ経由でNARが取れています（住宅IP）。これでNARは安定取得できます。';
+    } else if(bridgeReady && !bridgeOk){
+      verdict = '🟡 ブリッジは検出されましたが取得に失敗。@connect nar.netkeiba.com とGM.xmlHttpRequest対応を確認してください。';
+    } else if(jraOk && narBlocked){
+      verdict = '🟠 ブリッジ未検出。ワーカー経由はNARだけAkamaiに403で弾かれています。Userscriptブリッジを入れると住宅IPで取れます。';
     } else if(jraOk && !narBlocked){
-      verdict = '🟢 NARも200で取れている → 先ほどの403はバースト/レート制限だった可能性。リクエストを直列化すれば解決。';
+      verdict = '🟢 ワーカー経由でもNARが取れています（Akamaiが空いている時間帯）。';
     } else {
-      verdict = '⚪ 想定外。各行のHTTPと本文先頭を確認。';
+      verdict = '⚪ 各行のHTTPと本文先頭を確認してください。';
     }
 
     if(status){
       status.innerHTML = `<div class="url-status">`
-        + `<b>🔍 NAR診断 ${esc(date)}（v5.18.94）</b><br>${verdict}<br>`
-        + `<div style="margin-top:6px;">${row(jra)}${row(nar1)}${row(list)}</div>`
+        + `<b>🔍 NAR診断 ${esc(date)}（v5.18.97）</b><br>ブリッジ: ${bridgeReady?'🌉 検出':'未検出'}<br>${verdict}<br>`
+        + `<div style="margin-top:6px;">${row(jra)}${row(nar1)}${row(list)}${row(bridgeRow)}</div>`
         + `<div style="margin-top:6px;font-size:11px;opacity:.8;">プロキシ: ${esc(px||'未設定')}</div>`
         + `</div>`;
     }
@@ -7642,11 +7722,8 @@ if(horses.length === 0){
     const one = async (rno)=>{
       const rid = raceId87(date, venueCode, rno);
       const pageUrl = past ? resultUrl87(rid) : shutubaUrl87(rid);
-      const proxyUrl = (typeof buildWorkerRequestUrl === 'function')
-        ? buildWorkerRequestUrl(pageUrl)
-        : px + '?url=' + encodeURIComponent(pageUrl);
       try{
-        const res = await fetch(proxyUrl, {cache:'no-store', signal: AbortSignal.timeout ? AbortSignal.timeout(12000) : undefined});
+        const res = await narGet87(pageUrl);
         if(!res.ok) return null;
         const html = await res.text();
         if(!looksLikeRace87(html, rid, date, venueCode, rno)) return null;
@@ -7732,20 +7809,14 @@ if(horses.length === 0){
     for(const [code, name] of NAR_VENUES){
       const rid = raceId87(date, code, 1);
       const pageUrl = past ? resultUrl87(rid) : shutubaUrl87(rid);
-      const proxyReq = (typeof buildWorkerRequestUrl === 'function')
-        ? buildWorkerRequestUrl(pageUrl)
-        : px + '?url=' + encodeURIComponent(pageUrl);
       try{
-        const ctrl = new AbortController();
-        const timer = setTimeout(()=>ctrl.abort(), 12000);
-        const res = await fetch(proxyReq, {cache:'no-store', signal:ctrl.signal});
-        clearTimeout(timer);
+        const res = await narGet87(pageUrl);
         if(res.ok){
           const html = await res.text();
           if(looksLikeRace87(html, rid, date, code, 1)) probedCodes.push([code, name]); // 実在(馬2頭以上)のみ
         }
       }catch(e){}
-      await new Promise(r=>setTimeout(r, 250)); // 場間に小休止してレート制限を避ける
+      await new Promise(r=>setTimeout(r, 250)); // 場間に小休止
     }
     // 開催が見つかった場だけ、レース数を順次確認
     const probed = [];

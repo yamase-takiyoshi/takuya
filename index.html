@@ -7518,7 +7518,7 @@ if(horses.length === 0){
    ・「開催なし日」を確実に解消する。
    ============================================================ */
 (function(){
-  const VERSION87 = 'v5.18.90 NARStructuredProbe';
+  const VERSION87 = 'v5.18.91 NARProbeRobust';
 
   function esc87(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
   function ymd87(date){return String(date||'').replace(/[^0-9]/g,'').slice(0,8);}
@@ -7535,6 +7535,30 @@ if(horses.length === 0){
     return `${d.slice(0,4)}${String(venueCode).padStart(2,'0')}${d.slice(4,8)}${String(raceNo).padStart(2,'0')}`;
   }
   function dateLabel87(date){return String(date||'').replace(/-/g,'/');}
+
+  // v5.18.91: race_id文字列がHTMLに出ないNARページ対策。
+  // 「race_idが本文にある」または「正しい場・日付・R番号の出馬表で2頭以上拾える」なら実在レースとみなす。
+  // canonical/og:url が別race_idを指すページ（汎用/別場の誤認）は除外する。v5.18.88 probeNarRaceById と同じ判定。
+  function looksLikeRace87(html, rid, date, venueCode, raceNo){
+    const raw = String(html || '');
+    if(!raw) return false;
+    let doc;
+    try{ doc = new DOMParser().parseFromString(raw, 'text/html'); }catch(e){ return raw.includes(rid); }
+    // 別race_idを指すcanonical/og:urlは別ページの誤認なので除外
+    try{
+      const canonical = doc.querySelector('link[rel="canonical"]')?.getAttribute('href') || '';
+      const ogUrl = doc.querySelector('meta[property="og:url"]')?.getAttribute('content') || '';
+      const cm = String(canonical || ogUrl || '').match(/race_id=(\d{10,14})/);
+      if(cm && cm[1] !== rid) return false;
+    }catch(e){}
+    // 本文にrace_idがあれば確定
+    if(raw.includes(rid)) return true;
+    // race_id未掲載でも、正しい場・日付・R番号の出馬表で馬が拾えれば実在とみなす
+    let horses = 0;
+    try{ horses = parseHorsesFromDoc(doc, shutubaUrl87(rid)).length; }catch(e){ horses = 0; }
+    if(horses < 2) return false;
+    try{ return narHtmlMatchesSelectedRace(raw, date, venueCode, raceNo); }catch(e){ return false; }
+  }
 
   // 1場の開催確認：1R〜maxRまでのshutuba/resultを試して最初にrace_idが返ったものを採用
   async function probeVenue87(date, venueCode, maxR){
@@ -7558,7 +7582,7 @@ if(horses.length === 0){
           const res = await fetch(proxyUrl, {cache:'no-store', signal: AbortSignal.timeout ? AbortSignal.timeout(8000) : undefined});
           if(!res.ok) return null;
           const html = await res.text();
-          if(!html.includes(raceId)) return null;
+          if(!looksLikeRace87(html, raceId, date, venueCode, rno)) return null;
           // レース名を簡易抽出
           let name = `${rno}R`;
           try{
@@ -7598,13 +7622,43 @@ if(horses.length === 0){
         clearTimeout(timer);
         if(!res.ok) return null;
         const html = await res.text();
-        if(!html.includes(rid)) return null;
+        if(!looksLikeRace87(html, rid, date, code, 1)) return null;
         return {code, name, has1R:true};
       }catch(e){ return null; }
     }));
 
     const activeVenues = step1.filter(Boolean);
-    if(!activeVenues.length) return [];
+    if(!activeVenues.length){
+      // v5.18.91: 1Rが発走済み等でprobeに失敗しても開催を取りこぼさないよう、
+      // 1R全滅時だけ後続レース(4R/9R)で再確認する。通常日はここに入らないので負荷は増えない。
+      if(statusEl) statusEl.innerHTML = `<div class="url-status">📡 ${esc87(date)} 1R全滅 → 後続レースで再確認中...</div>`;
+      const retry = [];
+      for(const [code, name] of NAR_VENUES){
+        for(const rno of [4, 9]){
+          const rid = raceId87(date, code, rno);
+          const pageUrl = past ? resultUrl87(rid) : shutubaUrl87(rid);
+          const proxyReq = (typeof buildWorkerRequestUrl === 'function')
+            ? buildWorkerRequestUrl(pageUrl)
+            : px + '?url=' + encodeURIComponent(pageUrl);
+          retry.push((async(c, nm, r, pu)=>{
+            try{
+              const ctrl = new AbortController();
+              const timer = setTimeout(()=>ctrl.abort(), 9000);
+              const res = await fetch(pu, {cache:'no-store', signal:ctrl.signal});
+              clearTimeout(timer);
+              if(!res.ok) return null;
+              const html = await res.text();
+              if(!looksLikeRace87(html, raceId87(date, c, r), date, c, r)) return null;
+              return {code:c, name:nm};
+            }catch(e){ return null; }
+          })(code, name, rno, proxyReq));
+        }
+      }
+      const retryHits = (await Promise.all(retry)).filter(Boolean);
+      const seen = new Set();
+      retryHits.forEach(v => { if(!seen.has(v.code)){ seen.add(v.code); activeVenues.push({code:v.code, name:v.name, has1R:false}); } });
+      if(!activeVenues.length) return [];
+    }
 
     // Step2: 開催確認できた場のレース数を確認（12Rまで並列確認）
     if(statusEl) statusEl.innerHTML = `<div class="url-status">📡 ${esc87(date)} 開催確認：${activeVenues.map(v=>esc87(v.name)).join('、')}。レース数を確認中...</div>`;

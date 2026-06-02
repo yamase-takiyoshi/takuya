@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.78 NAROpenNoneClean</title>
+<title>The競馬 EV分析 v5.18.79 DateTouchFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -6637,6 +6637,12 @@ loadRaceList = async function(){
      2. nar77_fetchActiveVenues が途中で status にエラーを書いた後、
         activeVenueLoadSeq ミスマッチで最終「開催なし日」上書きがスキップされた
         → 途中エラー書き込みを削除。seq≠の場合も status だけは更新する。
+
+   v5.18.79 DateTouchFix
+   ・sessionStorage の tk-date-manual-touched にタッチ日付を持たせる。
+     iPad Safari はバックグラウンド復元でセッションを引き継ぐため、
+     昨日タッチしたフラグが今日も残り日付が前日固定になる問題を修正。
+     → フラグ値を '1' → 当日 yyyymmdd に変更し、今日以外のフラグは無視。
    ============================================================ */
 (function(){
   const prevInitUI77 = initUI;
@@ -6645,10 +6651,14 @@ loadRaceList = async function(){
     const d = document.getElementById('pickDate');
     if(d){
       // iPad Safari が前回値/履歴復元で前日を残すことがあるため、初回ロードだけ今日へ戻す。
-      if(!sessionStorage.getItem('tk-date-manual-touched')){
-        d.value = todayYmd();
+      // v5.18.79: フラグに日付を持たせ、今日以外のタッチフラグは無視して今日の日付へ戻す。
+      const todayStr = todayYmd();
+      const touchedDate = sessionStorage.getItem('tk-date-manual-touched');
+      if(touchedDate !== todayStr){
+        d.value = todayStr;
+        sessionStorage.removeItem('tk-date-manual-touched');
       }
-      d.addEventListener('change', () => sessionStorage.setItem('tk-date-manual-touched','1'), { once:false });
+      d.addEventListener('change', () => sessionStorage.setItem('tk-date-manual-touched', todayYmd()), { once:false });
     }
     // initUI内の旧setTimeoutより後にもう一度キックして、今日の日付で開催場を取り直す。
     setTimeout(() => {

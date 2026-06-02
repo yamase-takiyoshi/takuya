@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.76 NARDebugLog</title>
+<title>The競馬 EV分析 v5.18.77 NARTodayAutoFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.76 NARDebugLog</span>
+    <span class="ver">v5.18.77 NARTodayAutoFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -6626,6 +6626,114 @@ loadRaceList = async function(){
     }catch(e){
       console.error(e);
       if(status) status.innerHTML = `<div class="url-status err">❌ NARレース一覧取得失敗: ${e.message}</div>`;
+    }
+  };
+})();
+
+
+
+/* ============================================================
+   v5.18.77 NAR Today Auto Fix + Debug
+   ・初回表示時に日付が前日(2026/06/01等)で固定される問題を回避
+   ・初回だけ必ず todayYmd() に合わせる（手動変更後は尊重）
+   ・NAR開催場取得時に生成URL/kaisai_idを画面に出す
+   ・race_list.html 直参照＋旧方式フォールバックを維持
+   ============================================================ */
+(function(){
+  const prevInitUI77 = initUI;
+  initUI = function(){
+    prevInitUI77();
+    const d = document.getElementById('pickDate');
+    if(d){
+      // iPad Safari が前回値/履歴復元で前日を残すことがあるため、初回ロードだけ今日へ戻す。
+      if(!sessionStorage.getItem('tk-date-manual-touched')){
+        d.value = todayYmd();
+      }
+      d.addEventListener('change', () => sessionStorage.setItem('tk-date-manual-touched','1'), { once:false });
+    }
+    // initUI内の旧setTimeoutより後にもう一度キックして、今日の日付で開催場を取り直す。
+    setTimeout(() => {
+      try{ onRaceDateKindChanged(); }catch(e){ console.error('[v5.18.77 init reload]', e); }
+    }, 260);
+  };
+
+  function nar77_debugLine(date, venueCode){
+    const p = ymdParts(date);
+    const kid = narKaisaiId(date, venueCode || '36');
+    const sampleUrl = `https://nar.netkeiba.com/top/race_list.html?kaisai_id=${kid}&kaisai_date=${p.yyyymmdd}&rf=race_list`;
+    return `date=${date} / yyyymmdd=${p.yyyymmdd} / venue=${venueCode || '36'} / kaisai_id=${kid}<br>URL: ${escapeHtml(sampleUrl)}`;
+  }
+
+  async function nar77_fetchActiveVenues(date, statusEl){
+    const found = [];
+    const dbg = [];
+    for(const [code, name] of NAR_VENUES){
+      const kid = narKaisaiId(date, code);
+      const urls = (typeof nar74_masterUrls === 'function') ? nar74_masterUrls(date, code) : [raceListUrl('NAR', date, code)];
+      let count = 0;
+      let last = '';
+      for(const url of urls){
+        try{
+          const html = await fetchHtmlViaProxy(url);
+          last = String(html || '').slice(0, 220).replace(/</g,'&lt;').replace(/>/g,'&gt;');
+          let races = [];
+          try{
+            if(typeof nar74_parseRaces === 'function') races = nar74_parseRaces(html, date, code) || [];
+            if(!races.length && typeof nar73_parseRacesFromMasterHtml === 'function') races = nar73_parseRacesFromMasterHtml(html, date, code) || [];
+            if(!races.length) races = parseRaceIdsFromList(html, 'NAR', code, date) || [];
+          }catch(e){}
+          count = races.length;
+          if(count) break;
+        }catch(e){
+          last = e.message;
+        }
+      }
+      if(count) found.push([code, name, count]);
+      if(['36','43','46','48'].includes(code)) dbg.push(`${name}:${kid}:${count || 0}`);
+    }
+    if(statusEl && !found.length){
+      statusEl.innerHTML = `<div class="url-status err">⚠️ NAR開催場0件。デバッグ<br>${nar77_debugLine(date, '36')}<br>主要場: ${escapeHtml(dbg.join(' / '))}</div>`;
+    }
+    return found;
+  }
+
+  const prevLoadActiveVenuesForDate77 = loadActiveVenuesForDate;
+  loadActiveVenuesForDate = async function(){
+    const date = document.getElementById('pickDate')?.value || todayYmd();
+    const kind = document.getElementById('pickKind')?.value || 'JRA';
+    if(kind !== 'NAR') return prevLoadActiveVenuesForDate77();
+    const seq = ++activeVenueLoadSeq;
+    const status = document.getElementById('urlStatus');
+    const raceSelect = document.getElementById('raceSelect');
+    if(raceSelect) raceSelect.innerHTML = '<option value="">開催場を選んでレース一覧を取得</option>';
+    if(!settings.proxyUrl){
+      renderVenueOptions([]);
+      if(status) status.innerHTML = '<div class="url-status err">⚠️ プロキシURL未設定のため、開催場を自動取得できません</div>';
+      return;
+    }
+    try{
+      if(status) status.innerHTML = `<div class="url-status">📡 ${date} のNAR開催場を取得中...<br>${nar77_debugLine(date, '36')}</div>`;
+      let venues = await nar77_fetchActiveVenues(date, status);
+      if(!venues.length && typeof nar73_fetchActiveVenues === 'function'){
+        try{ venues = await nar73_fetchActiveVenues(date); }catch(e){}
+      }
+      if(!venues.length){
+        try{ venues = await loadActiveNarVenuesByRaceId(date); }catch(e){}
+      }
+      if(seq !== activeVenueLoadSeq) return;
+      renderVenueOptions(venues);
+      if(status) status.innerHTML = venues.length
+        ? `<div class="url-status ok">✅ ${date} のNAR開催場を取得：${venues.map(v=>v[1]+'（'+v[2]+'R）').join('、')}<br>${nar77_debugLine(date, venues[0][0])}</div>`
+        : `<div class="url-status">開催なし日<br>${nar77_debugLine(date, '36')}</div>`;
+      // 開催場が取れたら、そのまま最初の場のレース一覧まで入れる。
+      if(venues.length){
+        setTimeout(() => { try{ loadRaceList(); }catch(e){ console.error(e); } }, 80);
+      }
+    }catch(e){
+      if(seq !== activeVenueLoadSeq) return;
+      console.error(e);
+      renderVenueOptions([]);
+      if(status) status.innerHTML = `<div class="url-status err">⚠️ NAR開催場取得失敗: ${escapeHtml(e.message)}<br>${nar77_debugLine(date, '36')}</div>`;
     }
   };
 })();

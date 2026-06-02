@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.94 NarVenueParallelProbe</title>
+<title>The競馬 EV分析 v5.18.95 NarRaceListTrustFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.94 NarVenueParallelProbe</span>
+    <span class="ver">v5.18.95 NarRaceListTrustFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2361,6 +2361,65 @@ async function loadNarRaceListByRaceId(date, venueCode){
   return out;
 }
 
+
+function cleanNarRaceNameFromListText(text, raceNo){
+  let t = String(text || '').replace(/\s+/g, ' ').trim();
+  t = t.replace(new RegExp('^' + raceNo + 'R\s*'), '').trim();
+  t = t.replace(/\d{1,2}:\d{2}\s*/g, ' ')
+       .replace(/ダ\s*\d{3,4}m\s*/g, ' ')
+       .replace(/芝\s*\d{3,4}m\s*/g, ' ')
+       .replace(/\d+頭\s*/g, ' ')
+       .replace(/¥\s*\d+\S*/g, ' ')
+       .replace(/天気\s*[:：]?\s*\S+/g, ' ')
+       .replace(/馬場\s*[:：]?\s*\S+/g, ' ')
+       .replace(/映像|オッズ|予想|結果|払戻|出馬表|地方競馬/g, ' ')
+       .replace(/\s+/g, ' ').trim();
+  if(!t || /^(一覧|レース一覧|レース|情報)$/.test(t)) return `${raceNo}R`;
+  return t.length > 40 ? t.slice(0,40).trim() : t;
+}
+
+async function loadNarRaceListFromRaceListPage(date, venueCode){
+  // NARは出馬表プローブがnetkeiba側の状態で失敗する日があるため、
+  // 開催レース一覧ページを一次ソースとして信用する。
+  const html = await fetchHtmlViaProxy(raceListUrl('NAR', date, venueCode));
+  let races = parseRaceIdsFromList(html, 'NAR', venueCode, date)
+    .filter(r => r && r.raceId && raceIdMatchesSelectedDate('NAR', r.raceId, date))
+    .sort((a,b)=>Number(a.raceNo)-Number(b.raceNo));
+
+  if(races.length) return dedupeRacesByRaceIdAndNo(races);
+
+  // race_idリンクがHTML上で薄い場合の保険：表示テキストの「1R〜12R」からrace_idを組み立てる。
+  try{
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const items = Array.from(doc.querySelectorAll('a, li, tr, div'));
+    const out = [];
+    const seenNo = new Set();
+    for(const el of items){
+      const txt = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      const m = txt.match(/(?:^|\s)(\d{1,2})R(?:\s|$)/);
+      if(!m) continue;
+      const raceNo = Number(m[1]);
+      if(!(raceNo >= 1 && raceNo <= 12) || seenNo.has(raceNo)) continue;
+      // 開催場タブやメニューではなく、発走時刻・距離・頭数のどれかを持つ行だけ採用する。
+      if(!/(\d{1,2}:\d{2}|ダ\s*\d{3,4}m|芝\s*\d{3,4}m|\d+頭)/.test(txt)) continue;
+      const p = ymdParts(date);
+      const raceId = `${p.yyyy}${venueCode}${p.mmdd}${String(raceNo).padStart(2,'0')}`;
+      seenNo.add(raceNo);
+      out.push({
+        raceId,
+        raceNo,
+        venueCode,
+        raceName: cleanNarRaceNameFromListText(txt, raceNo),
+        shutuba: shutubaUrl('NAR', raceId),
+        fromRaceList:true
+      });
+    }
+    return out.sort((a,b)=>Number(a.raceNo)-Number(b.raceNo));
+  }catch(e){
+    return [];
+  }
+}
+
 let activeVenueLoadSeq = 0;
 
 function canUpdateStatus(){ return true; }
@@ -2606,21 +2665,14 @@ async function loadActiveVenuesForDate(){
       const html = await fetchHtmlViaProxy(raceListUrl(kind, date));
       if(!stillCurrent()) return;
 
+      // v5.18.95: NARは開催一覧ページそのものを正とする。
+      // 以前はここで各場の出馬表を再プローブしていたため、出馬表側の一時的な404/別HTML/未公開状態で
+      // 水沢・船橋・金沢・名古屋のような実開催場まで「開催なし」に落ちていた。
       venues = parseActiveVenuesFromList(html, kind, date)
-        .filter(v => v && v[0])
-        .map(v => [v[0], v[1] || venueName(kind, v[0]), Number(v[2] || 12) || 12]);
+        .filter(v => v && v[0] && NAR_VENUES.some(n => n[0] === v[0]))
+        .map(v => [v[0], v[1] || venueName(kind, v[0]), Number(v[2] || 0) || 12]);
 
-      if(venues.length){
-        const confirmed = [];
-        for(const [code, name] of venues){
-          if(!stillCurrent()) return;
-          setStatus(`<div class="url-status">📅 NAR開催確認中... ${name}</div>`);
-          const count = await countActiveNarRaces(date, code);
-          if(!stillCurrent()) return;
-          if(count > 0) confirmed.push([code, name, count]);
-        }
-        venues = confirmed;
-      }else{
+      if(!venues.length){
         setStatus(`<div class="url-status">📅 NAR race_id確認中...</div>`);
         venues = await loadActiveNarVenuesByRaceId(date);
         if(!stillCurrent()) return;
@@ -3202,9 +3254,14 @@ async function loadRaceList(){
     let races = [];
 
     if(kind === 'NAR'){
-      // NARは一覧HTMLのタブ状態に引きずられるため、race_idを直接生成して実在確認する。
-      status.innerHTML = `<div class="url-status">📅 ${date} ${venueName(kind, venueCode)} のrace_idを直接確認中...</div>`;
-      races = await loadNarRaceListByRaceId(date, venueCode);
+      // v5.18.95: まず開催レース一覧ページから取得する。ここが先生の画面と一致する一次ソース。
+      status.innerHTML = `<div class="url-status">📅 ${date} ${venueName(kind, venueCode)} の開催レース一覧を取得中...</div>`;
+      races = await loadNarRaceListFromRaceListPage(date, venueCode);
+      if(!races.length){
+        // 保険としてrace_id直接確認へフォールバック。
+        status.innerHTML = `<div class="url-status">📅 ${date} ${venueName(kind, venueCode)} のrace_idを直接確認中...</div>`;
+        races = await loadNarRaceListByRaceId(date, venueCode);
+      }
     }else{
       // v5.18.40: レース一覧は先生の提案どおり race_list_sub.html を最優先。
       // 取得できた race_id をそのまま使うので、日付・開催場・R番号のズレを防げる。
@@ -6890,8 +6947,8 @@ if(horses.length === 0){
 
   setTimeout(() => {
     const ver = document.querySelector('.ver');
-    if(ver) ver.textContent = 'v5.18.94 NarVenueParallelProbe';
-    document.title = 'The競馬 EV分析 v5.18.94 NarVenueParallelProbe';
+    if(ver) ver.textContent = 'v5.18.95 NarRaceListTrustFix';
+    document.title = 'The競馬 EV分析 v5.18.95 NarRaceListTrustFix';
   }, 0);
 })();
 </script>
@@ -7063,8 +7120,8 @@ if(horses.length === 0){
 
   setTimeout(() => {
     const ver = document.querySelector('.ver');
-    if(ver) ver.textContent = 'v5.18.94 NarVenueParallelProbe';
-    document.title = 'The競馬 EV分析 v5.18.94 NarVenueParallelProbe';
+    if(ver) ver.textContent = 'v5.18.95 NarRaceListTrustFix';
+    document.title = 'The競馬 EV分析 v5.18.95 NarRaceListTrustFix';
   }, 0);
 })();
 </script>
@@ -7073,14 +7130,14 @@ if(horses.length === 0){
 
 <script>
 /* ============================================================
-   v5.18.94 NarVenueParallelProbe
+   v5.18.95 NarRaceListTrustFix
    ・ユーザーがカレンダーで選んだ日付を絶対に尊重する。
    ・今日へ強制補正しない。昨日・過去日のシミュレーションを妨げない。
    ・NARの過去日レースは result.html を優先して、最終オッズ/人気/結果を拾いやすくする。
    ・レース名が空欄/1Rだけの場合は、既存の簡易名補完を維持する。
    ============================================================ */
 (function(){
-  const VERSION85 = 'v5.18.94 NarVenueParallelProbe';
+  const VERSION85 = 'v5.18.95 NarRaceListTrustFix';
 
   function nar85Esc(s){
     return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -7204,7 +7261,7 @@ if(horses.length === 0){
    ・過去日は result.html 優先でシミュレーション向けにする。
    ============================================================ */
 (function(){
-  const VERSION86 = 'v5.18.94 NarVenueParallelProbe';
+  const VERSION86 = 'v5.18.95 NarRaceListTrustFix';
   function esc86(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
   function ymd86(date){return String(date||'').replace(/[^0-9]/g,'').slice(0,8);}
   function dateLabel86(date){const d=String(date||'').replace(/-/g,'/');return d||date;}
@@ -7398,7 +7455,7 @@ if(horses.length === 0){
    ・過去日は result.html 優先、未来/当日は shutuba.html 優先。
    ============================================================ */
 (function(){
-  const VERSION87 = 'v5.18.94 NarVenueParallelProbe';
+  const VERSION87 = 'v5.18.95 NarRaceListTrustFix';
   function esc87(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
   function ymd87(date){return String(date||'').replace(/[^0-9]/g,'').slice(0,8);}
   function parts87(date){const y=ymd87(date);return {yyyymmdd:y,yyyy:y.slice(0,4),mmdd:y.slice(4,8)};}
@@ -7633,7 +7690,7 @@ try{ if(!window.prevLoadActiveVenuesForDate88 && typeof loadActiveVenuesForDate=
    ・レース名が空なら 2歳/C2/B1 等の条件名を優先
    ============================================================ */
 (function(){
-  const VER='v5.18.94 NarVenueParallelProbe';
+  const VER='v5.18.95 NarRaceListTrustFix';
   function setVer88(){
     try{
       document.title='The競馬 EV分析 '+VER;
@@ -7895,13 +7952,13 @@ try{ if(!window.prevLoadActiveVenuesForDate88 && typeof loadActiveVenuesForDate=
 
 <script>
 /* ============================================================
-   v5.18.94 NarVenueParallelProbe
+   v5.18.95 NarRaceListTrustFix
    ・カレンダーで選んだ日付を sessionStorage/localStorage に保存。
    ・ページ更新やGitHub Pages差し替え後も、前回選択日を復元。
    ・NAR過去日シミュレーション用に、06/01などを勝手に06/02へ戻さない。
    ============================================================ */
 (function(){
-  const VER='v5.18.94 NarVenueParallelProbe';
+  const VER='v5.18.95 NarRaceListTrustFix';
   function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
   function validDate(s){return /^\d{4}-\d{2}-\d{2}$/.test(String(s||''));}
   function getStoredDate(){
@@ -7985,13 +8042,13 @@ try{ if(!window.prevLoadActiveVenuesForDate88 && typeof loadActiveVenuesForDate=
 
 <script>
 /* ============================================================
-   v5.18.94 NarVenueParallelProbe
+   v5.18.95 NarRaceListTrustFix
    ・NAR開催場ドロップダウンは「選択日のrace_list.htmlに出ている開催場だけ」に限定。
    ・全NAR場の直接プローブ結果を開催場一覧に混ぜない。
    ・選択日付はv5.18.89同様に保持。
    ============================================================ */
 (function(){
-  const VER='v5.18.94 NarVenueParallelProbe';
+  const VER='v5.18.95 NarRaceListTrustFix';
   function setVer(){
     try{
       document.title='The競馬 EV分析 '+VER;
@@ -8115,14 +8172,14 @@ try{ if(!window.prevLoadActiveVenuesForDate88 && typeof loadActiveVenuesForDate=
 
 <script>
 /* ============================================================
-   v5.18.94 NarVenueParallelProbe
+   v5.18.95 NarRaceListTrustFix
    ・NAR開催場は「選択日の kaisai_id 付き race_list.html」を各場確認して判定。
    ・日付一覧ページが空/未展開でも、当日開催場だけを抽出。
    ・全NAR場を無条件表示しない。
    ・レース一覧も同じ race_list.html 由来で、2歳/C2/B1等をできるだけ表示。
    ============================================================ */
 (function(){
-  const VER = 'v5.18.94 NarVenueParallelProbe';
+  const VER = 'v5.18.95 NarRaceListTrustFix';
 
   function setVer91(){
     try{
@@ -8488,13 +8545,13 @@ try{ if(!window.prevLoadActiveVenuesForDate88 && typeof loadActiveVenuesForDate=
 
 <script>
 /* ============================================================
-   v5.18.94 NarVenueParallelProbe
+   v5.18.95 NarRaceListTrustFix
    ・日付/区分変更時に、古いNARデバッグ系 onRaceDateKindChanged を通さない。
    ・NARでは必ず v5.18.91 の「当日開催場だけ」取得ルートへ直行する。
    ・選択日付は保存し、勝手に今日へ戻さない。
    ============================================================ */
 (function(){
-  const VER='v5.18.94 NarVenueParallelProbe';
+  const VER='v5.18.95 NarRaceListTrustFix';
   function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
   function validDate(s){return /^\d{4}-\d{2}-\d{2}$/.test(String(s||''));}
   function saveDate(s){

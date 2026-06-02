@@ -7518,7 +7518,7 @@ if(horses.length === 0){
    ・「開催なし日」を確実に解消する。
    ============================================================ */
 (function(){
-  const VERSION87 = 'v5.18.94 NARDiagBody';
+  const VERSION87 = 'v5.18.95 NARThrottle';
 
   function esc87(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
   function ymd87(date){return String(date||'').replace(/[^0-9]/g,'').slice(0,8);}
@@ -7635,44 +7635,42 @@ if(horses.length === 0){
     try{ return narHtmlMatchesSelectedRace(raw, date, venueCode, raceNo); }catch(e){ return false; }
   }
 
-  // 1場の開催確認：1R〜maxRまでのshutuba/resultを試して最初にrace_idが返ったものを採用
+  // 1場の開催確認：1R〜maxRを確認。v5.18.95: Akamaiのレート制限を避けるため
+  // 全並列ではなく3本ずつのバッチ＋小休止で投げる。
   async function probeVenue87(date, venueCode, maxR){
     const px = (settings && settings.proxyUrl) ? settings.proxyUrl.replace(/\/$/,'') : '';
     if(!px) return [];
-    const d = ymd87(date);
     const past = isPast87(date);
-    const found = [];
-    const tasks = [];
-    for(let r=1; r<=maxR; r++){
-      const rid = raceId87(date, venueCode, r);
+    const one = async (rno)=>{
+      const rid = raceId87(date, venueCode, rno);
       const pageUrl = past ? resultUrl87(rid) : shutubaUrl87(rid);
-      // v5.18.90: NARの出馬表/結果ページは ?url= 素通しだとJS動的描画のため
-      // 静的HTMLに race_id が含まれず probe が全滅する。
-      // JRAと同じく buildWorkerRequestUrl の type/kind/race_id 構造化APIを使う。
-      const proxyReq = (typeof buildWorkerRequestUrl === 'function')
+      const proxyUrl = (typeof buildWorkerRequestUrl === 'function')
         ? buildWorkerRequestUrl(pageUrl)
         : px + '?url=' + encodeURIComponent(pageUrl);
-      tasks.push((async(raceId, rno, proxyUrl)=>{
+      try{
+        const res = await fetch(proxyUrl, {cache:'no-store', signal: AbortSignal.timeout ? AbortSignal.timeout(12000) : undefined});
+        if(!res.ok) return null;
+        const html = await res.text();
+        if(!looksLikeRace87(html, rid, date, venueCode, rno)) return null;
+        let name = `${rno}R`;
         try{
-          const res = await fetch(proxyUrl, {cache:'no-store', signal: AbortSignal.timeout ? AbortSignal.timeout(8000) : undefined});
-          if(!res.ok) return null;
-          const html = await res.text();
-          if(!looksLikeRace87(html, raceId, date, venueCode, rno)) return null;
-          // レース名を簡易抽出
-          let name = `${rno}R`;
-          try{
-            const doc = new DOMParser().parseFromString(html,'text/html');
-            const t = doc.querySelector('.RaceName,.race_name,h1,.RaceData01')?.textContent?.trim();
-            if(t && t.length > 1 && !/^(出馬表|レース一覧|地方競馬)/.test(t)) name = t.slice(0,30).trim() || `${rno}R`;
-          }catch(e){}
-          return {raceId, venueCode, raceNo:rno, raceName:name};
-        }catch(e){
-          return null;
-        }
-      })(rid, r, proxyReq));
+          const doc = new DOMParser().parseFromString(html,'text/html');
+          const t = doc.querySelector('.RaceName,.race_name,h1,.RaceData01')?.textContent?.trim();
+          if(t && t.length > 1 && !/^(出馬表|レース一覧|地方競馬)/.test(t)) name = t.slice(0,30).trim() || `${rno}R`;
+        }catch(e){}
+        return {raceId:rid, venueCode, raceNo:rno, raceName:name};
+      }catch(e){ return null; }
+    };
+    const found = [];
+    const BATCH = 3;
+    for(let start=1; start<=maxR; start+=BATCH){
+      const batch = [];
+      for(let r=start; r<start+BATCH && r<=maxR; r++) batch.push(one(r));
+      const res = await Promise.all(batch);
+      res.forEach(x=>{ if(x) found.push(x); });
+      if(start+BATCH<=maxR) await new Promise(r=>setTimeout(r, 200));
     }
-    const results = await Promise.all(tasks);
-    return results.filter(Boolean);
+    return found.sort((a,b)=>a.raceNo-b.raceNo);
   }
 
   // 全場を並列確認（各場は1Rだけ先に確認して開催有無を判定）
@@ -7726,35 +7724,41 @@ if(horses.length === 0){
       return sortByList(results);
     }
 
-    // ── 保険: 公式一覧が空（JS描画/未公開）のときだけ race_id を厳格probe ──────
-    // 誤検出を避けるため「本文に race_id がそのまま載っているページ」だけ採用する。
-    if(statusEl) statusEl.innerHTML = `<div class="url-status">📡 ${esc87(date)} 公式一覧が空 → race_id厳格probeで確認中（保険）...</div>`;
+    // ── 保険: 公式一覧が空（403/未公開/JS描画）のときだけ、控えめに race_id を確認 ──────
+    // v5.18.95: 180本同時の総当たりは Akamai のレート制限を踏んで自滅するため廃止。
+    // 各場 1R だけを「直列・間隔あけて」確認し、本文に race_id があるものだけ採用する。
+    // ワーカー側(v4)が403を自動リトライするので、ゆっくり投げれば通る確率が上がる。
+    if(statusEl) statusEl.innerHTML = `<div class="url-status">📡 ${esc87(date)} 公式一覧が空 → 各場1Rを順次確認中（控えめ）...</div>`;
     const past = isPast87(date);
-    const probed = await Promise.all(NAR_VENUES.map(async ([code, name])=>{
-      const tasks = [];
-      for(let r=1; r<=12; r++){
-        const rid = raceId87(date, code, r);
-        const pageUrl = past ? resultUrl87(rid) : shutubaUrl87(rid);
-        const proxyReq = (typeof buildWorkerRequestUrl === 'function')
-          ? buildWorkerRequestUrl(pageUrl)
-          : px + '?url=' + encodeURIComponent(pageUrl);
-        tasks.push((async(id, pu)=>{
-          try{
-            const ctrl = new AbortController();
-            const timer = setTimeout(()=>ctrl.abort(), 9000);
-            const res = await fetch(pu, {cache:'no-store', signal:ctrl.signal});
-            clearTimeout(timer);
-            if(!res.ok) return false;
-            const html = await res.text();
-            return html.includes(id); // 厳格: 本文race_id一致のみ
-          }catch(e){ return false; }
-        })(rid, proxyReq));
-      }
-      const hits = (await Promise.all(tasks)).filter(Boolean).length;
-      return hits > 0 ? [code, name, hits] : null;
-    }));
+    const probedCodes = [];
+    for(const [code, name] of NAR_VENUES){
+      const rid = raceId87(date, code, 1);
+      const pageUrl = past ? resultUrl87(rid) : shutubaUrl87(rid);
+      const proxyReq = (typeof buildWorkerRequestUrl === 'function')
+        ? buildWorkerRequestUrl(pageUrl)
+        : px + '?url=' + encodeURIComponent(pageUrl);
+      try{
+        const ctrl = new AbortController();
+        const timer = setTimeout(()=>ctrl.abort(), 12000);
+        const res = await fetch(proxyReq, {cache:'no-store', signal:ctrl.signal});
+        clearTimeout(timer);
+        if(res.ok){
+          const html = await res.text();
+          if(html.includes(rid)) probedCodes.push([code, name]); // 厳格: 本文race_id一致のみ
+        }
+      }catch(e){}
+      await new Promise(r=>setTimeout(r, 250)); // 場間に小休止してレート制限を避ける
+    }
+    // 開催が見つかった場だけ、レース数を順次確認
+    const probed = [];
+    for(const [code, name] of probedCodes){
+      let cnt = 1;
+      try{ cnt = (await probeVenue87(date, code, 12)).length || 1; }catch(e){ cnt = 1; }
+      probed.push([code, name, cnt]);
+      await new Promise(r=>setTimeout(r, 250));
+    }
     window.__nar92src = 'probe';
-    return sortByList(probed.filter(Boolean));
+    return sortByList(probed);
   }
 
   // レース一覧を構築：公式の場別一覧（race_id確定）を優先し、取れない時だけprobe。

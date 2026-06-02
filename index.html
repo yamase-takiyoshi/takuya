@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.83 DatePreInitReset</title>
+<title>The競馬 EV分析 v5.18.85 SelectedDateRespect</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.83 DatePreInitReset</span>
+    <span class="ver">v5.18.85 SelectedDateRespect</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -6749,70 +6749,6 @@ loadRaceList = async function(){
   };
 })();
 
-
-/* ============================================================
-   v5.18.83 Date Pre-Init Reset
-   ・重要：initUI() が走る前に日付を今日へ戻す。
-   ・iPad/Safari/GitHub Pages の履歴復元で 2026/06/01 が残る問題を
-     先に潰してから、既存の開催場取得処理を走らせる。
-   ・手動変更はロード後の change 操作では尊重する。
-   ============================================================ */
-(function(){
-  function nar83TodayYmd(){
-    try{
-      const now = new Date();
-      const jst = new Date(now.getTime() + (9 * 60 + now.getTimezoneOffset()) * 60 * 1000);
-      const y = jst.getFullYear();
-      const m = String(jst.getMonth() + 1).padStart(2, '0');
-      const d = String(jst.getDate()).padStart(2, '0');
-      return `${y}-${m}-${d}`;
-    }catch(e){
-      const d = new Date();
-      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-    }
-  }
-
-  const __oldTodayYmd83 = (typeof todayYmd === 'function') ? todayYmd : null;
-  todayYmd = function(){ return nar83TodayYmd(); };
-
-  const __oldInitUI83 = initUI;
-  initUI = function(){
-    try{
-      // 古い「手動変更済み」フラグが残ると前日固定になるため、起動時だけ破棄。
-      sessionStorage.removeItem('tk-date-manual-touched');
-      sessionStorage.removeItem('tk-date-manual-value');
-    }catch(e){}
-
-    __oldInitUI83();
-
-    const d = document.getElementById('pickDate');
-    const k = document.getElementById('pickKind');
-    const status = document.getElementById('urlStatus');
-    const today = nar83TodayYmd();
-
-    if(d){
-      d.value = today;
-      d.defaultValue = today;
-    }
-    if(k && !k.value) k.value = 'NAR';
-
-    // 古い06/01の開催場・レース選択を一掃。
-    const venue = document.getElementById('pickVenue');
-    const raceSelect = document.getElementById('raceSelect');
-    const raceUrl = document.getElementById('raceUrl');
-    const box = document.getElementById('raceTitleBox');
-    if(venue) venue.innerHTML = '<option value="">今日の開催場を取得中...</option>';
-    if(raceSelect) raceSelect.innerHTML = '<option value="">今日の開催場を取得中...</option>';
-    if(raceUrl) raceUrl.value = '';
-    if(box){ box.style.display = 'none'; box.textContent = ''; }
-    if(status) status.innerHTML = `<div class="url-status ok">✅ 起動時に日付を今日 ${today} へ先行補正しました。</div>`;
-
-    // 既存の初期処理より後に、今日の日付で開催場→レース一覧を再取得。
-    setTimeout(() => { try{ onRaceDateKindChanged(); }catch(e){ console.error('[v5.18.83 reload-1]', e); } }, 150);
-    setTimeout(() => { try{ onRaceDateKindChanged(); }catch(e){ console.error('[v5.18.83 reload-2]', e); } }, 650);
-  };
-})();
-
 // ─── 起動 ────────────────────────────────────────
 initUI();
 initCalendarPicker();
@@ -6950,8 +6886,8 @@ if(horses.length === 0){
 
   setTimeout(() => {
     const ver = document.querySelector('.ver');
-    if(ver) ver.textContent = 'v5.18.83 DatePreInitReset';
-    document.title = 'The競馬 EV分析 v5.18.83 DatePreInitReset';
+    if(ver) ver.textContent = 'v5.18.85 SelectedDateRespect';
+    document.title = 'The競馬 EV分析 v5.18.85 SelectedDateRespect';
   }, 0);
 })();
 </script>
@@ -7123,8 +7059,8 @@ if(horses.length === 0){
 
   setTimeout(() => {
     const ver = document.querySelector('.ver');
-    if(ver) ver.textContent = 'v5.18.81 NARRaceNameLooseFallback';
-    document.title = 'The競馬 EV分析 v5.18.81 NARRaceNameLooseFallback';
+    if(ver) ver.textContent = 'v5.18.85 SelectedDateRespect';
+    document.title = 'The競馬 EV分析 v5.18.85 SelectedDateRespect';
   }, 0);
 })();
 </script>
@@ -7133,65 +7069,121 @@ if(horses.length === 0){
 
 <script>
 /* ============================================================
-   v5.18.82 NAR Today Hard Reset
-   ・前版のinitUIラップは initUI() 実行後に定義されていたため、
-     iPad/Safariの履歴復元で前日(06/01)が残る問題を完全には直せなかった。
-   ・このパッチは読み込み完了後に直接 pickDate を todayYmd() へ戻し、
-     NAR開催場を再取得する。
-   ・手動で日付を変える操作は、読み込み後は通常どおり尊重する。
+   v5.18.85 SelectedDateRespect
+   ・ユーザーがカレンダーで選んだ日付を絶対に尊重する。
+   ・今日へ強制補正しない。昨日・過去日のシミュレーションを妨げない。
+   ・NARの過去日レースは result.html を優先して、最終オッズ/人気/結果を拾いやすくする。
+   ・レース名が空欄/1Rだけの場合は、既存の簡易名補完を維持する。
    ============================================================ */
 (function(){
-  function nar82Today(){
-    try{ if(typeof todayYmd === 'function') return todayYmd(); }catch(e){}
+  const VERSION85 = 'v5.18.85 SelectedDateRespect';
+
+  function nar85Esc(s){
+    return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+  }
+  function nar85DigitsDate(date){
+    return String(date || '').replace(/[^0-9]/g,'').slice(0,8);
+  }
+  function nar85TodayDigits(){
     const d = new Date();
     const y = d.getFullYear();
     const m = String(d.getMonth()+1).padStart(2,'0');
     const day = String(d.getDate()).padStart(2,'0');
-    return `${y}-${m}-${day}`;
+    return `${y}${m}${day}`;
   }
-  function nar82SetTodayAndReload(){
-    const d = document.getElementById('pickDate');
-    const kind = document.getElementById('pickKind');
-    const status = document.getElementById('urlStatus');
-    const today = nar82Today();
-    try{ sessionStorage.removeItem('tk-date-manual-touched'); }catch(e){}
-
-    if(d && d.value !== today){
-      d.value = today;
+  function nar85IsPastDate(date){
+    const d = nar85DigitsDate(date);
+    const t = nar85TodayDigits();
+    return /^\d{8}$/.test(d) && d < t;
+  }
+  function nar85RaceIdFromUrl(url){
+    return (String(url || '').match(/race_id=(\d{10,14})/) || [])[1] || '';
+  }
+  function nar85ResultUrl(raceId){
+    return `https://nar.netkeiba.com/race/result.html?race_id=${raceId}&rf=race_submenu`;
+  }
+  function nar85ShutubaUrl(raceId){
+    return `https://nar.netkeiba.com/race/shutuba.html?race_id=${raceId}&rf=race_submenu`;
+  }
+  function nar85UseResultForPastSelectedDate(){
+    const date = document.getElementById('pickDate')?.value || '';
+    const kind = document.getElementById('pickKind')?.value || '';
+    if(kind !== 'NAR' || !nar85IsPastDate(date)) return false;
+    const sel = document.getElementById('raceSelect');
+    if(!sel) return false;
+    let changed = false;
+    [...sel.options].forEach(opt => {
+      const rid = opt.dataset?.raceId || nar85RaceIdFromUrl(opt.value);
+      if(rid){
+        opt.value = nar85ResultUrl(rid);
+        changed = true;
+      }
+    });
+    const opt = sel.selectedOptions?.[0];
+    const raceUrl = document.getElementById('raceUrl');
+    if(opt && raceUrl && /^https?:/.test(opt.value || '')) raceUrl.value = opt.value;
+    if(changed){
+      const status = document.getElementById('urlStatus');
       if(status){
-        status.innerHTML = `<div class="url-status ok">✅ iPad/Safariの履歴復元日付を今日 ${today} に補正しました。</div>`;
+        const cur = status.innerHTML || '';
+        const msg = `<div class="url-status ok">✅ 選択日 ${nar85Esc(date)} を尊重。過去日のため結果ページ(result.html)を優先します。</div>`;
+        if(!/結果ページ\(result\.html\)を優先/.test(cur)) status.innerHTML = cur ? cur + msg : msg;
       }
     }
-    if(kind && kind.value === 'NAR'){
-      // 既存の古い06/01レース選択を消して、今日の開催場から再取得する。
-      const raceSelect = document.getElementById('raceSelect');
-      const raceUrl = document.getElementById('raceUrl');
-      const box = document.getElementById('raceTitleBox');
-      if(raceSelect) raceSelect.innerHTML = '<option value="">今日の開催場を取得中...</option>';
-      if(raceUrl) raceUrl.value = '';
-      if(box){ box.style.display='none'; box.textContent=''; }
-      try{ onRaceDateKindChanged(); }catch(e){ console.warn('[nar82] reload failed', e); }
-    }
+    return changed;
   }
 
-  // initUI() は既に実行済みなので、後追いで直接補正する。
-  setTimeout(nar82SetTodayAndReload, 80);
-  setTimeout(nar82SetTodayAndReload, 420);
-
-  // 日付を手で変更した後はその値を保持するため、以後は強制補正しない。
+  // 日付選択時に「今日へ戻す」処理は一切しない。選択値を記録するだけ。
   setTimeout(() => {
     const d = document.getElementById('pickDate');
     if(d){
       d.addEventListener('change', () => {
-        try{ sessionStorage.setItem('tk-date-manual-value', d.value || ''); }catch(e){}
-      }, { once:false });
+        try{ sessionStorage.setItem('tk-selected-date-respect', d.value || ''); }catch(e){}
+      }, {passive:true});
     }
-  }, 700);
+  }, 0);
+
+  const prevLoadRaceList85 = window.loadRaceList;
+  window.loadRaceList = async function(){
+    const beforeDate = document.getElementById('pickDate')?.value || '';
+    const ret = prevLoadRaceList85 ? await prevLoadRaceList85.apply(this, arguments) : undefined;
+    // 前段処理が何かで日付を書き換えた場合も、ユーザー選択日へ戻す。
+    const d = document.getElementById('pickDate');
+    if(d && beforeDate && d.value !== beforeDate){
+      d.value = beforeDate;
+      const status = document.getElementById('urlStatus');
+      if(status) status.innerHTML += `<div class="url-status ok">✅ 選択日 ${nar85Esc(beforeDate)} を保持しました。</div>`;
+    }
+    nar85UseResultForPastSelectedDate();
+    return ret;
+  };
+
+  const prevApply85 = window.applySelectedRaceUrl;
+  window.applySelectedRaceUrl = function(){
+    if(prevApply85) prevApply85.apply(this, arguments);
+    nar85UseResultForPastSelectedDate();
+  };
+
+  const prevFetchRace85 = window.fetchRace;
+  window.fetchRace = async function(){
+    const date = document.getElementById('pickDate')?.value || '';
+    const kind = document.getElementById('pickKind')?.value || '';
+    const input = document.getElementById('raceUrl');
+    if(kind === 'NAR' && input && nar85IsPastDate(date)){
+      const rid = nar85RaceIdFromUrl(input.value);
+      if(rid && /\/race\/shutuba\.html/i.test(input.value)){
+        input.value = nar85ResultUrl(rid);
+        const status = document.getElementById('urlStatus');
+        if(status) status.innerHTML = `<div class="url-status ok">🏁 過去日のため result.html から最終値を取得します。</div>`;
+      }
+    }
+    return prevFetchRace85 ? prevFetchRace85.apply(this, arguments) : undefined;
+  };
 
   setTimeout(() => {
     const ver = document.querySelector('.ver');
-    if(ver) ver.textContent = 'v5.18.83 DatePreInitReset';
-    document.title = 'The競馬 EV分析 v5.18.83 DatePreInitReset';
+    if(ver) ver.textContent = VERSION85;
+    document.title = 'The競馬 EV分析 ' + VERSION85;
   }, 0);
 })();
 </script>

@@ -7690,7 +7690,7 @@ try{ if(!window.prevLoadActiveVenuesForDate88 && typeof loadActiveVenuesForDate=
    ・レース名が空なら 2歳/C2/B1 等の条件名を優先
    ============================================================ */
 (function(){
-  const VER='v5.18.98 NARTypeApiProbe';
+  const VER='v5.18.99 FetchUrlFirst';
   function setVer88(){
     try{
       document.title='The競馬 EV分析 '+VER;
@@ -7958,7 +7958,7 @@ try{ if(!window.prevLoadActiveVenuesForDate88 && typeof loadActiveVenuesForDate=
    ・NAR過去日シミュレーション用に、06/01などを勝手に06/02へ戻さない。
    ============================================================ */
 (function(){
-  const VER='v5.18.98 NARTypeApiProbe';
+  const VER='v5.18.99 FetchUrlFirst';
   function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
   function validDate(s){return /^\d{4}-\d{2}-\d{2}$/.test(String(s||''));}
   function getStoredDate(){
@@ -8048,7 +8048,7 @@ try{ if(!window.prevLoadActiveVenuesForDate88 && typeof loadActiveVenuesForDate=
    ・選択日付はv5.18.96 NARForceActualList同様に保持。
    ============================================================ */
 (function(){
-  const VER='v5.18.98 NARTypeApiProbe';
+  const VER='v5.18.99 FetchUrlFirst';
   function setVer(){
     try{
       document.title='The競馬 EV分析 '+VER;
@@ -8551,7 +8551,7 @@ try{ if(!window.prevLoadActiveVenuesForDate88 && typeof loadActiveVenuesForDate=
    ・選択日付は保存し、勝手に今日へ戻さない。
    ============================================================ */
 (function(){
-  const VER='v5.18.98 NARTypeApiProbe';
+  const VER='v5.18.99 FetchUrlFirst';
   function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
   function validDate(s){return /^\d{4}-\d{2}-\d{2}$/.test(String(s||''));}
   function saveDate(s){
@@ -9264,7 +9264,7 @@ try{ if(!window.prevLoadActiveVenuesForDate88 && typeof loadActiveVenuesForDate=
    ・それでも取れない場合だけ race_id を url= 直参照で並列確認する。
    ============================================================ */
 (function(){
-  const VER='v5.18.98 NARTypeApiProbe';
+  const VER='v5.18.99 FetchUrlFirst';
   function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
   function setVer(){try{document.title='The競馬 EV分析 '+VER;document.querySelectorAll('.ver').forEach(e=>e.textContent=VER);}catch(e){}}
   function ymd(){const v=document.getElementById('pickDate')?.value||'';if(/^\d{4}-\d{2}-\d{2}$/.test(v))return v;if(typeof formatLocalDate==='function')return formatLocalDate(new Date());const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
@@ -9328,15 +9328,39 @@ try{ if(!window.prevLoadActiveVenuesForDate88 && typeof loadActiveVenuesForDate=
   }
   async function listVenues(date){
     const p=parts(date);
-    const urls=[
+    const baseUrls=[
       `https://nar.netkeiba.com/top/race_list.html?kaisai_date=${p.yyyymmdd}&rf=race_list`,
       `https://nar.netkeiba.com/top/race_list.html?kaisai_date=${p.yyyymmdd}`,
       `https://nar.netkeiba.com/top/race_list.html?current_group=${p.yyyymmdd}&kaisai_date=${p.yyyymmdd}`,
       `https://nar.netkeiba.com/top/race_list.html`
     ];
     let best=[];
-    for(const url of urls){
+    for(const url of baseUrls){
       try{const html=await fetchUrl(url);const arr=parseListVenues(html,date);if(arr.length){best=arr;break;}}catch(e){}
+    }
+    if(!best.length){
+      // kaisai_date一覧で取れない場合、全NAR場のkaisai_idページを並列確認
+      const map=new Map();
+      await Promise.all(venues().map(async([code,name])=>{
+        const code2=String(code).padStart(2,'0');
+        const kid=`${p.yyyy}${code2}${p.mmdd}`;
+        const u=`https://nar.netkeiba.com/top/race_list.html?kaisai_id=${kid}&kaisai_date=${p.yyyymmdd}&rf=race_list`;
+        try{
+          const html=await fetchUrl(u);
+          // parse試み
+          const arr=parseListVenues(html,date);
+          arr.forEach(v=>{const old=map.get(v.code)||{...v};old.count=Math.max(old.count||0,v.count||0);map.set(v.code,old);});
+          // HTMLにkaisai_idが含まれていれば開催あり（R数は後でfillCountsで補完）
+          if(!arr.some(v=>v.code===code2)){
+            const raw=String(html||'');
+            if(raw.includes(kid)||raw.includes(`${p.yyyy}${code2}${p.mmdd}01`)){
+              map.set(code2, map.get(code2)||{code:code2,name,count:0});
+            }
+          }
+        }catch(e){}
+      }));
+      const order=venues().map(v=>String(v[0]).padStart(2,'0'));
+      best=[...map.values()].sort((a,b)=>order.indexOf(a.code)-order.indexOf(b.code));
     }
     return best;
   }
@@ -9362,13 +9386,13 @@ try{ if(!window.prevLoadActiveVenuesForDate88 && typeof loadActiveVenuesForDate=
     const rid=raceId(date,code,no);
     const shutubaUrl=`https://nar.netkeiba.com/race/shutuba.html?race_id=${rid}&rf=race_submenu`;
     const resultUrl=`https://nar.netkeiba.com/race/result.html?race_id=${rid}&rf=race_submenu`;
-    // type/race_id API方式を優先（Workerが正しいHTMLを返す）
-    // フォールバックとして url= 方式も試す
+    // url= 方式を優先（Workerが type/kind/race_id 未実装の場合でも動く）
+    // フォールバックとして type/race_id API方式も試す
     const attempts=[
-      ()=>fetchByTypeApi('shutuba','NAR',rid),
-      ()=>fetchByTypeApi('result','NAR',rid),
       ()=>fetchUrl(shutubaUrl),
-      ()=>fetchUrl(resultUrl)
+      ()=>fetchUrl(resultUrl),
+      ()=>fetchByTypeApi('shutuba','NAR',rid),
+      ()=>fetchByTypeApi('result','NAR',rid)
     ];
     for(const fn of attempts){try{const html=await fn();if(validRace(html,rid))return{raceId:rid,raceNo:no,venueCode:code,raceName:raceNameFrom(html,no),shutuba:shutubaUrl,result:resultUrl};}catch(e){}}
     return null;

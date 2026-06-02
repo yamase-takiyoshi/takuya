@@ -7379,5 +7379,210 @@ if(horses.length === 0){
 })();
 </script>
 
+
+
+<script>
+/* ============================================================
+   v5.18.87 NAR Parallel Probe Fix
+   ・v5.18.86 の kaisai_date 一覧URLはJavaScript動的ロードのため
+     プロキシ経由の静的HTML取得では race_id が含まれない問題がある。
+   ・対策：全15場の kaisai_id を並列(Promise.all)で直接確認する。
+     → nar77の逐次処理(for...of)を並列化して高速化。
+   ・各場の 1R 出馬表URL を叩いて race_id が返ってきたら開催あり。
+   ・「開催なし日」を確実に解消する。
+   ============================================================ */
+(function(){
+  const VERSION87 = 'v5.18.87 NARParallelProbe';
+
+  function esc87(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
+  function ymd87(date){return String(date||'').replace(/[^0-9]/g,'').slice(0,8);}
+  function isPast87(date){
+    const d=ymd87(date), n=new Date(), t=`${n.getFullYear()}${String(n.getMonth()+1).padStart(2,'0')}${String(n.getDate()).padStart(2,'0')}`;
+    return /^\d{8}$/.test(d)&&d<t;
+  }
+  function venueName87(code){try{return venueName('NAR',code)||code;}catch(e){return code;}}
+  function shutubaUrl87(rid){return `https://nar.netkeiba.com/race/shutuba.html?race_id=${rid}&rf=race_submenu`;}
+  function resultUrl87(rid){return `https://nar.netkeiba.com/race/result.html?race_id=${rid}&rf=race_submenu`;}
+  function selectedUrl87(rid,date){return isPast87(date)?resultUrl87(rid):shutubaUrl87(rid);}
+  function raceId87(date,venueCode,raceNo){
+    const d=ymd87(date);
+    return `${d.slice(0,4)}${String(venueCode).padStart(2,'0')}${d.slice(4,8)}${String(raceNo).padStart(2,'0')}`;
+  }
+  function dateLabel87(date){return String(date||'').replace(/-/g,'/');}
+
+  // 1場の開催確認：1R〜maxRまでのshutuba/resultを試して最初にrace_idが返ったものを採用
+  async function probeVenue87(date, venueCode, maxR){
+    const px = (settings && settings.proxyUrl) ? settings.proxyUrl.replace(/\/$/,'') : '';
+    if(!px) return [];
+    const d = ymd87(date);
+    const past = isPast87(date);
+    const found = [];
+    const tasks = [];
+    for(let r=1; r<=maxR; r++){
+      const rid = raceId87(date, venueCode, r);
+      const pageUrl = past ? resultUrl87(rid) : shutubaUrl87(rid);
+      const proxyReq = px + '?url=' + encodeURIComponent(pageUrl);
+      tasks.push((async(raceId, rno, proxyUrl)=>{
+        try{
+          const res = await fetch(proxyUrl, {cache:'no-store', signal: AbortSignal.timeout ? AbortSignal.timeout(8000) : undefined});
+          if(!res.ok) return null;
+          const html = await res.text();
+          if(!html.includes(raceId)) return null;
+          // レース名を簡易抽出
+          let name = `${rno}R`;
+          try{
+            const doc = new DOMParser().parseFromString(html,'text/html');
+            const t = doc.querySelector('.RaceName,.race_name,h1,.RaceData01')?.textContent?.trim();
+            if(t && t.length > 1 && !/^(出馬表|レース一覧|地方競馬)/.test(t)) name = t.slice(0,30).trim() || `${rno}R`;
+          }catch(e){}
+          return {raceId, venueCode, raceNo:rno, raceName:name};
+        }catch(e){
+          return null;
+        }
+      })(rid, r, proxyReq));
+    }
+    const results = await Promise.all(tasks);
+    return results.filter(Boolean);
+  }
+
+  // 全場を並列確認（各場は1Rだけ先に確認して開催有無を判定）
+  async function detectVenues87(date, statusEl){
+    const px = (settings && settings.proxyUrl) ? settings.proxyUrl.replace(/\/$/,'') : '';
+    if(!px) return [];
+    const past = isPast87(date);
+
+    // Step1: 全15場の1Rを並列確認
+    if(statusEl) statusEl.innerHTML = `<div class="url-status">📡 ${esc87(date)} NAR全場を並列確認中（1R probe）...</div>`;
+    const step1 = await Promise.all(NAR_VENUES.map(async ([code, name])=>{
+      const rid = raceId87(date, code, 1);
+      const pageUrl = past ? resultUrl87(rid) : shutubaUrl87(rid);
+      const proxyReq = px + '?url=' + encodeURIComponent(pageUrl);
+      try{
+        const ctrl = new AbortController();
+        const timer = setTimeout(()=>ctrl.abort(), 9000);
+        const res = await fetch(proxyReq, {cache:'no-store', signal:ctrl.signal});
+        clearTimeout(timer);
+        if(!res.ok) return null;
+        const html = await res.text();
+        if(!html.includes(rid)) return null;
+        return {code, name, has1R:true};
+      }catch(e){ return null; }
+    }));
+
+    const activeVenues = step1.filter(Boolean);
+    if(!activeVenues.length) return [];
+
+    // Step2: 開催確認できた場のレース数を確認（12Rまで並列確認）
+    if(statusEl) statusEl.innerHTML = `<div class="url-status">📡 ${esc87(date)} 開催確認：${activeVenues.map(v=>esc87(v.name)).join('、')}。レース数を確認中...</div>`;
+    const venueResults = await Promise.all(activeVenues.map(async ({code, name})=>{
+      const races = await probeVenue87(date, code, 12);
+      return races.length ? [code, name, races.length] : null;
+    }));
+
+    return venueResults.filter(Boolean)
+      .sort((a,b)=>NAR_VENUES.findIndex(v=>v[0]===a[0])-NAR_VENUES.findIndex(v=>v[0]===b[0]));
+  }
+
+  // レース一覧をrace_id probeで構築
+  async function buildRaceList87(date, venueCode, statusEl){
+    const races = await probeVenue87(date, venueCode, 12);
+    if(!races.length) return false;
+    const raceSelect = document.getElementById('raceSelect');
+    const raceUrl = document.getElementById('raceUrl');
+    const box = document.getElementById('raceTitleBox');
+    if(!raceSelect) return false;
+    const vname = venueName87(venueCode);
+    raceSelect.innerHTML = races.map(r=>{
+      const nm = r.raceName || `${r.raceNo}R`;
+      const url = selectedUrl87(r.raceId, date);
+      const label = `${dateLabel87(date)} ${vname} ${r.raceNo}R ${nm} / ${r.raceId}`;
+      return `<option value="${esc87(url)}" data-race-id="${esc87(r.raceId)}" data-race-name="${esc87(nm)}">${esc87(label)}</option>`;
+    }).join('');
+    const opt = raceSelect.options[0];
+    if(opt){
+      if(raceUrl) raceUrl.value = opt.value;
+      window.currentRaceId = opt.dataset.raceId || '';
+      window.currentRaceName = opt.dataset.raceName || '';
+      if(box){box.style.display='block'; box.textContent=opt.textContent||'';}
+    }
+    if(statusEl) statusEl.innerHTML = `<div class="url-status ok">✅ ${esc87(date)} ${esc87(vname)} ${races.length}R を確認（probe方式）。${isPast87(date)?'過去日→結果ページ優先。':''}</div>`;
+    return true;
+  }
+
+  // loadActiveVenuesForDate を上書き（最上位として登録）
+  const prevLoadActive87 = window.loadActiveVenuesForDate;
+  window.loadActiveVenuesForDate = async function(){
+    const date = document.getElementById('pickDate')?.value || (typeof todayYmd==='function'?todayYmd():'');
+    const kind = document.getElementById('pickKind')?.value || 'JRA';
+    if(kind !== 'NAR') return prevLoadActive87 ? prevLoadActive87.apply(this,arguments) : undefined;
+    if(!(settings && settings.proxyUrl)){
+      const status = document.getElementById('urlStatus');
+      if(status) status.innerHTML='<div class="url-status err">⚠️ プロキシURL未設定</div>';
+      return;
+    }
+    const seq = ++activeVenueLoadSeq;
+    const status = document.getElementById('urlStatus');
+    const raceSelect = document.getElementById('raceSelect');
+    if(raceSelect) raceSelect.innerHTML='<option value="">開催場を選んでレース一覧を取得</option>';
+    try{
+      const venues = await detectVenues87(date, status);
+      if(seq !== activeVenueLoadSeq) return;
+      if(venues.length){
+        renderVenueOptions(venues);
+        if(status) status.innerHTML=`<div class="url-status ok">✅ ${esc87(date)} のNAR開催場：${venues.map(v=>esc87(v[1]+'（'+v[2]+'R）')).join('、')}</div>`;
+        setTimeout(()=>{try{window.loadRaceList();}catch(e){console.error(e);}}, 60);
+      } else {
+        renderVenueOptions([]);
+        if(status) status.innerHTML=`<div class="url-status">開催なし日（probe確認済み）</div>`;
+      }
+    }catch(e){
+      if(seq !== activeVenueLoadSeq) return;
+      console.error('[nar87]', e);
+      if(status) status.innerHTML=`<div class="url-status err">⚠️ NAR開催場取得失敗: ${esc87(e.message||e)}</div>`;
+    }
+  };
+
+  // loadRaceList を上書き
+  const prevLoadRaceList87 = window.loadRaceList;
+  window.loadRaceList = async function(){
+    const date = document.getElementById('pickDate')?.value || (typeof todayYmd==='function'?todayYmd():'');
+    const kind = document.getElementById('pickKind')?.value || 'JRA';
+    const venueCode = document.getElementById('pickVenue')?.value || '';
+    if(kind !== 'NAR') return prevLoadRaceList87 ? prevLoadRaceList87.apply(this,arguments) : undefined;
+    if(!venueCode){
+      const status = document.getElementById('urlStatus');
+      if(status) status.innerHTML='<div class="url-status">開催場を選択してください</div>';
+      return;
+    }
+    if(!(settings && settings.proxyUrl)){ alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。'); return; }
+    const status = document.getElementById('urlStatus');
+    if(status) status.innerHTML=`<div class="url-status">📅 ${esc87(date)} ${esc87(venueName87(venueCode))} のレース一覧を確認中...</div>`;
+    try{
+      const ok = await buildRaceList87(date, venueCode, status);
+      if(!ok){
+        // 旧処理にフォールバック
+        if(prevLoadRaceList87) return prevLoadRaceList87.apply(this,arguments);
+        const raceSelect = document.getElementById('raceSelect');
+        if(raceSelect) raceSelect.innerHTML='<option value="">レースが見つかりません</option>';
+        if(status) status.innerHTML=`<div class="url-status err">⚠️ ${esc87(date)} ${esc87(venueName87(venueCode))} のレースが見つかりませんでした。</div>`;
+      }
+    }catch(e){
+      console.error('[nar87 loadRaceList]', e);
+      if(status) status.innerHTML=`<div class="url-status err">❌ レース一覧取得失敗: ${esc87(e.message||e)}</div>`;
+    }
+  };
+
+  setTimeout(()=>{
+    const ver=document.querySelector('.ver'); if(ver) ver.textContent=VERSION87;
+    document.title='The競馬 EV分析 '+VERSION87;
+    // 画面リロード時に自動的に開催場取得を走らせる
+    const kind=document.getElementById('pickKind')?.value||'JRA';
+    if(kind==='NAR'){
+      try{ window.loadActiveVenuesForDate(); }catch(e){ console.error(e); }
+    }
+  }, 200);
+})();
+</script>
+
 </body>
 </html>

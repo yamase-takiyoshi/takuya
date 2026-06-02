@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.77 NARTodayAutoFix</title>
+<title>The競馬 EV分析 v5.18.78 NAROpenNoneClean</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.77 NARTodayAutoFix</span>
+    <span class="ver">v5.18.78 NAROpenNoneClean</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -6537,18 +6537,8 @@ loadRaceList = async function(){
     });
     const res = await Promise.all(tasks);
     const found = res.filter(Boolean);
-    if(!found.length && statusEl){
-      try{
-        const testUrl = nar74_masterUrls(date, '36')[0];
-        const proxyReq = buildWorkerRequestUrl(testUrl);
-        const r = await fetch(proxyReq, {cache:'no-store'});
-        const body = await r.text();
-        const head = body.slice(0, 300).replace(/</g,'&lt;');
-        statusEl.innerHTML = '<div class="url-status err">⚠️ NAR取得デバッグ (水沢): HTTP ' + r.status + '<br>URL: ' + testUrl + '<br>' + head + '</div>';
-      }catch(e2){
-        statusEl.innerHTML = '<div class="url-status err">⚠️ NAR取得デバッグ: ' + e2.message + '</div>';
-      }
-    }
+    // v5.18.78: 0件時のデバッグ表示を削除。上位の loadActiveVenuesForDate が「開催なし」を表示する。
+    // HTTP 400 は開催なし/kaisai_id不存在を意味するため正常系として扱う。
     return found.sort((a,b)=>NAR_VENUES.findIndex(v=>v[0]===a[0])-NAR_VENUES.findIndex(v=>v[0]===b[0]));
   }
 
@@ -6638,6 +6628,15 @@ loadRaceList = async function(){
    ・初回だけ必ず todayYmd() に合わせる（手動変更後は尊重）
    ・NAR開催場取得時に生成URL/kaisai_idを画面に出す
    ・race_list.html 直参照＋旧方式フォールバックを維持
+
+   v5.18.78 NAR Open-None Clean Display
+   ・NAR開催場0件（HTTP 400 = 今日は開催なし）のとき赤いデバッグエラーが
+     残留する問題を修正。原因は2点：
+     1. nar74_activeVenues が HTTP 400 を赤いエラーとして status に表示していた
+        → デバッグブロックを削除し、開催なしは上位が「開催なし日」で表示する。
+     2. nar77_fetchActiveVenues が途中で status にエラーを書いた後、
+        activeVenueLoadSeq ミスマッチで最終「開催なし日」上書きがスキップされた
+        → 途中エラー書き込みを削除。seq≠の場合も status だけは更新する。
    ============================================================ */
 (function(){
   const prevInitUI77 = initUI;
@@ -6691,9 +6690,8 @@ loadRaceList = async function(){
       if(count) found.push([code, name, count]);
       if(['36','43','46','48'].includes(code)) dbg.push(`${name}:${kid}:${count || 0}`);
     }
-    if(statusEl && !found.length){
-      statusEl.innerHTML = `<div class="url-status err">⚠️ NAR開催場0件。デバッグ<br>${nar77_debugLine(date, '36')}<br>主要場: ${escapeHtml(dbg.join(' / '))}</div>`;
-    }
+    // v5.18.78: 0件時の途中エラー表示を削除。seqミスマッチで古いエラーが残る問題を回避。
+    // 上位の loadActiveVenuesForDate が seq チェック後に最終結果（開催なし）を表示する。
     return found;
   }
 
@@ -6720,8 +6718,11 @@ loadRaceList = async function(){
       if(!venues.length){
         try{ venues = await loadActiveNarVenuesByRaceId(date); }catch(e){}
       }
-      if(seq !== activeVenueLoadSeq) return;
-      renderVenueOptions(venues);
+      // v5.18.78: seqが変わっていても status だけは「開催なし日」に更新してエラー表示を消す。
+      // renderVenueOptions は古いseqでは行わない（UI競合防止）。
+      if(seq === activeVenueLoadSeq){
+        renderVenueOptions(venues);
+      }
       if(status) status.innerHTML = venues.length
         ? `<div class="url-status ok">✅ ${date} のNAR開催場を取得：${venues.map(v=>v[1]+'（'+v[2]+'R）').join('、')}<br>${nar77_debugLine(date, venues[0][0])}</div>`
         : `<div class="url-status">開催なし日<br>${nar77_debugLine(date, '36')}</div>`;

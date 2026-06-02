@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.86 NARDateVenueRespect</title>
+<title>The競馬 EV分析 v5.18.88 NARFallbackProbe</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.86 NARDateVenueRespect</span>
+    <span class="ver">v5.18.88 NARFallbackProbe</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -257,7 +257,7 @@ body{
       <div class="pick-grid">
         <div class="field">
           <label>開催場</label>
-          <select id="pickVenue"></select>
+          <select id="pickVenue" onchange="resetRaceState('開催場変更のためレース選択を初期化しました')"></select>
         </div>
         <div class="field">
           <label>操作</label>
@@ -2224,16 +2224,14 @@ function parseActiveVenuesFromList(html, kind, date){
 }
 
 async function countActiveNarRaces(date, venueCode){
-  // NARは開催場ごとに race_id を直接作り、実在したレース番号だけを数える。
-  // これによりJRAと同じ「盛岡（12R）」形式で表示できる。
-  let count = 0;
+  // v5.18.88: NARは race_id を直接生成し、1R〜12Rを並列確認する。
+  // 一覧HTMLに kaisai_id だけ出て race_id が出ない日でも、実在レースだけを数える。
+  const tasks = [];
   for(let r=1; r<=12; r++){
-    try{
-      const item = await probeNarRaceById(date, venueCode, r);
-      if(item) count++;
-    }catch(e){}
+    tasks.push(probeNarRaceById(date, venueCode, r).catch(() => null));
   }
-  return count;
+  const items = await Promise.all(tasks);
+  return items.filter(Boolean).length;
 }
 
 async function detectActiveNarVenue(date, venueCode){
@@ -2241,14 +2239,13 @@ async function detectActiveNarVenue(date, venueCode){
 }
 
 async function loadActiveNarVenuesByRaceId(date){
-  const found = [];
   const status = document.getElementById('urlStatus');
-  for(const [code,name] of NAR_VENUES){
-    if(status) status.innerHTML = `<div class="url-status">📅 NAR開催確認中... ${name}</div>`;
-    const count = await countActiveNarRaces(date, code);
-    if(count > 0) found.push([code, name, count]);
-  }
-  return found;
+  if(status) status.innerHTML = `<div class="url-status">📅 NAR全開催場をrace_idで並列確認中...</div>`;
+  const results = await Promise.all(NAR_VENUES.map(async ([code, name]) => {
+    const count = await countActiveNarRaces(date, code).catch(() => 0);
+    return count > 0 ? [code, name, count] : null;
+  }));
+  return results.filter(Boolean).sort((a,b) => a[0].localeCompare(b[0]));
 }
 
 
@@ -2316,11 +2313,18 @@ async function probeNarRaceById(date, venueCode, raceNo){
   if(!res.ok) return null;
   const html = await res.text();
 
-  // netkeibaが別日・別場に飛ばした場合は、HTML内に当該race_idが残らないため除外する。
-  if(!html.includes(raceId)) return null;
-
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
+
+  // v5.18.88: NARページは本文に race_id 文字列が出ないことがある。
+  // canonical/og:url が別IDを示す場合だけ除外し、本文未掲載だけでは捨てない。
+  try{
+    const canonical = doc.querySelector('link[rel="canonical"]')?.getAttribute('href') || '';
+    const ogUrl = doc.querySelector('meta[property="og:url"]')?.getAttribute('content') || '';
+    const cm = String(canonical || ogUrl || '').match(/race_id=(\d{10,14})/);
+    if(cm && cm[1] !== raceId) return null;
+  }catch(e){}
+
   const horsesFound = parseHorsesFromDoc(doc, url).length;
   if(horsesFound < 2) return null;
 
@@ -2612,6 +2616,13 @@ async function loadActiveVenuesForDate(){
           if(count > 0) confirmed.push([code, name, count]);
         }
         venues = confirmed;
+        // v5.18.88: 一覧HTMLに候補だけ出て direct count が0件の時は、全NAR場race_id確認へ戻す。
+        // ここで終わると「開催なし」と誤判定するため。
+        if(!venues.length){
+          setStatus(`<div class="url-status">📅 NAR候補を再確認中... 全場race_idで確認します</div>`);
+          venues = await loadActiveNarVenuesByRaceId(date);
+          if(!stillCurrent()) return;
+        }
       }else{
         setStatus(`<div class="url-status">📅 NAR race_id確認中...</div>`);
         venues = await loadActiveNarVenuesByRaceId(date);
@@ -2625,7 +2636,7 @@ async function loadActiveVenuesForDate(){
       setStatus(`<div class="url-status ok">✅ ${date} の${kind}開催場だけを表示しました：${venues.map(v => v[1] + '（' + v[2] + 'R）').join('、')}</div>`);
     }else{
       console.log('開催なし日');
-      setStatus('<div class="url-status">開催なし日</div>');
+      setStatus(`<div class="url-status">${date} の${kind}は開催なし（確認済み）</div>`);
     }
   }catch(e){
     if(!stillCurrent()) return;
@@ -6882,8 +6893,8 @@ if(horses.length === 0){
 
   setTimeout(() => {
     const ver = document.querySelector('.ver');
-    if(ver) ver.textContent = 'v5.18.86 NARDateVenueRespect';
-    document.title = 'The競馬 EV分析 v5.18.86 NARDateVenueRespect';
+    if(ver) ver.textContent = 'v5.18.88 NARFallbackProbe';
+    document.title = 'The競馬 EV分析 v5.18.88 NARFallbackProbe';
   }, 0);
 })();
 </script>
@@ -7055,8 +7066,8 @@ if(horses.length === 0){
 
   setTimeout(() => {
     const ver = document.querySelector('.ver');
-    if(ver) ver.textContent = 'v5.18.86 NARDateVenueRespect';
-    document.title = 'The競馬 EV分析 v5.18.86 NARDateVenueRespect';
+    if(ver) ver.textContent = 'v5.18.88 NARFallbackProbe';
+    document.title = 'The競馬 EV分析 v5.18.88 NARFallbackProbe';
   }, 0);
 })();
 </script>
@@ -7065,14 +7076,14 @@ if(horses.length === 0){
 
 <script>
 /* ============================================================
-   v5.18.86 NARDateVenueRespect
+   v5.18.88 NARFallbackProbe
    ・ユーザーがカレンダーで選んだ日付を絶対に尊重する。
    ・今日へ強制補正しない。昨日・過去日のシミュレーションを妨げない。
    ・NARの過去日レースは result.html を優先して、最終オッズ/人気/結果を拾いやすくする。
    ・レース名が空欄/1Rだけの場合は、既存の簡易名補完を維持する。
    ============================================================ */
 (function(){
-  const VERSION85 = 'v5.18.86 NARDateVenueRespect';
+  const VERSION85 = 'v5.18.88 NARFallbackProbe';
 
   function nar85Esc(s){
     return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -7196,7 +7207,7 @@ if(horses.length === 0){
    ・過去日は result.html 優先でシミュレーション向けにする。
    ============================================================ */
 (function(){
-  const VERSION86 = 'v5.18.86 NARDateVenueRespect';
+  const VERSION86 = 'v5.18.88 NARFallbackProbe';
   function esc86(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
   function ymd86(date){return String(date||'').replace(/[^0-9]/g,'').slice(0,8);}
   function dateLabel86(date){const d=String(date||'').replace(/-/g,'/');return d||date;}

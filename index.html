@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.71 NARRaceNameFinalFallback</title>
+<title>The競馬 EV分析 v5.18.72 NARRaceNameSimplified</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.71 NARRaceNameFinalFallback</span>
+    <span class="ver">v5.18.72 NARRaceNameSimplified</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2093,13 +2093,22 @@ function raceIdMatchesSelectedDate(kind, raceId, date){
 }
 
 function cleanRaceName(txt, raceNo){
-  let t = String(txt || '')
-    .replace(/\s+/g, ' ')
-    .replace(/出馬表|オッズ|結果|払戻|予想|レース情報|レース一覧|netkeiba\.com|netkeiba|ネット競馬|\|.*$/g, '')
-    .trim();
-  const m = t.match(new RegExp(`${raceNo}R\\s*([^0-9]{1,40})`));
+  let t = String(txt || '').replace(/\s+/g, ' ')
+    .replace(/出馬表|オッズ|結果|払戻|予想|レース情報|レース一覧|netkeiba\.com|netkeiba|ネット競馬/g, '')
+    .replace(/\|.*$/, '').trim();
+  // NR以降の文字列を取得（C2六組のように数字を含む名前も許容）
+  const m = t.match(new RegExp(String(raceNo) + 'R\\s*(.{1,60}?)(?:\\s*\\/\\s*\\d{10,14}|$)'));
   if(m) t = m[1].trim();
+  else t = t.replace(new RegExp('.*' + String(raceNo) + 'R\\s*'), '').trim();
   t = t.replace(/^\d{1,2}R\s*/, '').replace(/^(レース|Race)\s*/i, '').trim();
+  // 発走時刻・距離・天候・馬場などレース条件文字列を除去してレース名だけ残す
+  t = t.replace(/\d{1,2}:\d{2}発走\s*/g, '')
+       .replace(/[（(][左右内外][）)]/g, '')
+       .replace(/(?:芝|ダ(?:ート)?|障)\s*\d{3,4}m\S*/gi, '')
+       .replace(/天候\s*[:：]?\s*\S+/g, '')
+       .replace(/馬場\s*[:：]?\s*\S+/g, '')
+       .replace(/\s*[\/／]\s*/g, ' ')
+       .replace(/\s+/g, ' ').trim();
   if(!t || /^(一覧|情報|レース一覧|レース情報|netkeiba|ネット競馬)$/i.test(t)) return `${raceNo}R`;
   return t || `${raceNo}R`;
 }
@@ -5921,7 +5930,9 @@ loadRaceList = async function(){
       const no = Number(r.raceNo || String(r.raceId).slice(-2));
       const url = shutubaUrl(kind, r.raceId);
       const raw = String(r.raceName || '').trim();
-      const safeRaw = (!raw || isGenericRaceName68(raw, no)) ? `${no}R` : raw;
+      // 発走時刻・距離・天候情報のみの場合はnRにフォールバック
+      const rawCleaned = raw.replace(/\d{1,2}:\d{2}発走\s*/g,'').replace(/(?:芝|ダ(?:ート)?|障)\s*\d{3,4}m\S*/gi,'').replace(/天候\s*[:：]?\s*\S+/g,'').replace(/馬場\s*[:：]?\s*\S+/g,'').replace(/[（(][左右内外][）)]/g,'').replace(/[\/／]/g,' ').replace(/\s+/g,' ').trim();
+      const safeRaw = (!rawCleaned || isGenericRaceName68(rawCleaned, no)) ? `${no}R` : rawCleaned;
       const raceName = escapeHtml(safeRaw);
       const label = `${dateLabel} ${venueName(kind, venueCode)} ${no}R ${raceName} / ${r.raceId}`;
       return `<option value="${url}" data-race-id="${r.raceId}" data-race-name="${raceName}">${label}</option>`;
@@ -6027,6 +6038,13 @@ loadRaceList = async function(){
          .replace(new RegExp(`^\\s*(第)?${no}R\\s*`),' ')
          .replace(/\s+/g,' ')
          .trim();
+    // 発走時刻・距離・天候・馬場を除去
+    t = t.replace(/\d{1,2}:\d{2}発走\s*/g, '')
+         .replace(/[（(][左右内外][）)]/g, '')
+         .replace(/(?:芝|ダ(?:ート)?|障)\s*\d{3,4}m[^\s]*/gi, '')
+         .replace(/天候\s*[:：]?\s*\S+/g, '')
+         .replace(/馬場\s*[:：]?\s*\S+/g, '')
+         .replace(/\s*[\/／]\s*/g, ' ').replace(/\s+/g, ' ').trim();
     if(t && !nar71_isBadRaceName(t, no) && t.length <= 50 && /[一-龥ぁ-んァ-ヶ]/.test(t)) return t;
     return '';
   }

@@ -8551,5 +8551,261 @@ try{ if(!window.prevLoadActiveVenuesForDate88 && typeof loadActiveVenuesForDate=
 })();
 </script>
 
+
+
+<script>
+/* ============================================================
+   v5.18.95 NarRaceIdDirectVenueFix
+   ・NAR開催場取得で race_list.html が取れない場合でも、race_id直参照で当日開催場を判定。
+   ・開催場は「実在したrace_idがある場だけ」表示。
+   ・レース一覧も race_id直参照で実在Rだけ生成し、レース名を補完。
+   ============================================================ */
+(function(){
+  const VER='v5.18.95 NarRaceIdDirectVenueFix';
+  const MAX_PARALLEL_VENUE = 5;
+  const MAX_PARALLEL_RACE = 4;
+
+  function esc95(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
+  function parts95(date){
+    const d=String(date||'').replace(/[^0-9]/g,'');
+    return {yyyymmdd:d.slice(0,8), yyyy:d.slice(0,4), mmdd:d.slice(4,8)};
+  }
+  function raceId95(date, code, no){
+    const p=parts95(date);
+    return `${p.yyyy}${String(code).padStart(2,'0')}${p.mmdd}${String(no).padStart(2,'0')}`;
+  }
+  function today95(){
+    if(typeof formatLocalDate==='function') return formatLocalDate(new Date());
+    const d=new Date();
+    const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), dd=String(d.getDate()).padStart(2,'0');
+    return `${y}-${m}-${dd}`;
+  }
+  function runPool95(items, limit, worker){
+    const out=new Array(items.length);
+    let i=0;
+    const n=Math.max(1, Number(limit)||3);
+    async function one(){
+      while(i<items.length){
+        const idx=i++;
+        try{ out[idx]=await worker(items[idx], idx); }catch(e){ out[idx]=null; }
+      }
+    }
+    return Promise.all(Array.from({length:Math.min(n,items.length)}, one)).then(()=>out);
+  }
+  function text95(html){
+    return String(html||'')
+      .replace(/<script[\s\S]*?<\/script>/gi,' ')
+      .replace(/<style[\s\S]*?<\/style>/gi,' ')
+      .replace(/<[^>]+>/g,' ')
+      .replace(/&nbsp;|&#160;/g,' ')
+      .replace(/&amp;/g,'&')
+      .replace(/\s+/g,' ')
+      .trim();
+  }
+  function htmlLooksLikeRace95(html, rid){
+    const raw=String(html||'');
+    const t=text95(raw);
+    if(!raw || raw.length<800) return false;
+    if(/ok\s*:\s*false|"ok"\s*:\s*false|race_id\/type or url required|netkeiba only/i.test(raw)) return false;
+    if(raw.includes(String(rid))) return true;
+    if(/出馬表|結果|払戻|単勝|複勝|馬番|馬名/.test(t) && !/開催レース一覧/.test(t)) return true;
+    return false;
+  }
+  function cleanName95(name, no){
+    let s=String(name||'')
+      .replace(/[\t\r\n]+/g,' ')
+      .replace(/\s+/g,' ')
+      .trim();
+    s=s
+      .replace(/^\d{1,2}R\s*/,'')
+      .replace(/出馬表|結果|払戻|オッズ|競馬データベース|netkeiba\.com|netkeiba|ネット競馬|地方競馬|レース情報|レース一覧/gi,' ')
+      .replace(/https?:\/\/\S+/g,' ')
+      .replace(/race_id=\d+/g,' ')
+      .replace(/\b20\d{8,12}\b/g,' ')
+      .replace(/\s+/g,' ')
+      .trim();
+    s=s
+      .replace(/^\d{1,2}:\d{2}.*$/,'')
+      .replace(/\b\d{1,2}:\d{2}\b.*$/,'')
+      .replace(/[芝ダ]\s*\d{3,4}m?.*$/,'')
+      .replace(/\d+頭.*$/,'')
+      .replace(/^\s*[（(]?(右|左|内|外)[）)]?\s*/,'')
+      .replace(/\s+/g,' ')
+      .trim();
+    if(!s || s.length>34) return `${no}R`;
+    if(/開催|一覧|メニュー|TOP|お気に入り|ログイン|広告|LIVE|競輪|ニュース/.test(s)) return `${no}R`;
+    return s;
+  }
+  function extractRaceName95(html, no){
+    const raw=String(html||'');
+    try{
+      const doc=new DOMParser().parseFromString(raw,'text/html');
+      const candidates=[];
+      const h1=doc.querySelector('h1'); if(h1) candidates.push(h1.textContent||'');
+      doc.querySelectorAll('.RaceName,.Race_Name,.RaceList_ItemTitle,.RaceList_DataTitle,[class*="RaceName"],[class*="Race_Name"]').forEach(el=>candidates.push(el.textContent||''));
+      const title=doc.querySelector('title'); if(title) candidates.push(title.textContent||'');
+      for(const c of candidates){
+        const n=cleanName95(c,no);
+        if(n && n!==`${no}R`) return n;
+      }
+    }catch(e){}
+    const t=text95(raw);
+    const rn=String(no);
+    const patterns=[
+      new RegExp(`${rn}R\\s+(.{1,36}?)(?=\\s+\\d{1,2}:\\d{2}|\\s+[芝ダ]\\s*\\d{3,4}m|\\s+\\d+頭|\\s*$)`),
+      new RegExp(`${rn}R\\s+(.{1,36}?)(?=\\s+${Number(no)+1}R|\\s*$)`)
+    ];
+    for(const re of patterns){
+      const m=t.match(re);
+      if(m){
+        const n=cleanName95(m[1],no);
+        if(n && n!==`${no}R`) return n;
+      }
+    }
+    return `${no}R`;
+  }
+  async function fetchRaceHtml95(date, code, no){
+    const rid=raceId95(date, code, no);
+    const urls=[];
+    // 過去・当日は結果ページが強い。未来は出馬表が強いので両方試す。
+    urls.push(`https://nar.netkeiba.com/race/result.html?race_id=${rid}&rf=race_submenu`);
+    urls.push(`https://nar.netkeiba.com/race/shutuba.html?race_id=${rid}&rf=race_submenu`);
+    for(const url of urls){
+      try{
+        const html=await fetchHtmlViaProxy(url);
+        if(htmlLooksLikeRace95(html,rid)) return {rid, html, url};
+      }catch(e){}
+    }
+    return null;
+  }
+  async function fetchVenueRacesByRaceId95(date, code, statusPrefix){
+    const nums=Array.from({length:12},(_,i)=>i+1);
+    const found=[];
+    await runPool95(nums, MAX_PARALLEL_RACE, async no=>{
+      const got=await fetchRaceHtml95(date, code, no);
+      if(got){
+        found.push({
+          raceId:got.rid,
+          raceNo:no,
+          venueCode:code,
+          raceName:extractRaceName95(got.html,no),
+          shutuba:`https://nar.netkeiba.com/race/shutuba.html?race_id=${got.rid}&rf=race_submenu`,
+          result:`https://nar.netkeiba.com/race/result.html?race_id=${got.rid}&rf=race_submenu`
+        });
+      }
+    });
+    found.sort((a,b)=>a.raceNo-b.raceNo);
+    return found;
+  }
+  async function fetchActiveVenuesByRaceId95(date){
+    const status=document.getElementById('urlStatus');
+    const venues=(Array.isArray(window.NAR_VENUES)?window.NAR_VENUES:(typeof NAR_VENUES!=='undefined'?NAR_VENUES:[]));
+    const results=[];
+    let done=0;
+    await runPool95(venues, MAX_PARALLEL_VENUE, async v=>{
+      const [code,name]=v;
+      done++;
+      if(status) status.innerHTML=`<div class="url-status">📡 ${esc95(date)} のNAR開催場をrace_idで直接確認中... ${done}/${venues.length} ${esc95(name)}</div>`;
+      const races=await fetchVenueRacesByRaceId95(date, code);
+      if(races.length) results.push([code,name,Math.max(...races.map(r=>r.raceNo)),races]);
+    });
+    results.sort((a,b)=>{
+      const ia=venues.findIndex(v=>v[0]===a[0]);
+      const ib=venues.findIndex(v=>v[0]===b[0]);
+      return ia-ib;
+    });
+    return results;
+  }
+
+  const prevLoadActive = window.loadActiveVenuesForDate;
+  window.loadActiveVenuesForDate = async function(){
+    const date=document.getElementById('pickDate')?.value || today95();
+    const kind=document.getElementById('pickKind')?.value || 'JRA';
+    const status=document.getElementById('urlStatus');
+    const raceSelect=document.getElementById('raceSelect');
+    if(kind!=='NAR') return prevLoadActive ? prevLoadActive.apply(this,arguments) : undefined;
+    if(raceSelect) raceSelect.innerHTML='<option value="">開催場を選んでレース一覧を取得</option>';
+    try{
+      // まず既存のrace_list系を試す。ここで取れたら速い。
+      if(prevLoadActive) await prevLoadActive.apply(this,arguments);
+      const venueEl=document.getElementById('pickVenue');
+      const hasVenue=venueEl && venueEl.value && !/開催なし/.test(venueEl.textContent||'');
+      if(hasVenue) return;
+    }catch(e){}
+    try{
+      const found=await fetchActiveVenuesByRaceId95(date);
+      renderVenueOptions(found.map(v=>[v[0],v[1],v[2]]));
+      window.__nar95VenueRaceCache = window.__nar95VenueRaceCache || {};
+      window.__nar95VenueRaceCache[date] = Object.fromEntries(found.map(v=>[v[0],v[3]]));
+      if(status) status.innerHTML = found.length
+        ? `<div class="url-status ok">✅ ${esc95(date)} のNAR当日開催場だけ表示：${found.map(v=>esc95(v[1])+'（'+v[2]+'R）').join('、')}<br>race_id直参照で確認済み</div>`
+        : `<div class="url-status">開催なし日、または ${esc95(date)} の開催場一覧が未公開です</div>`;
+    }catch(e){
+      renderVenueOptions([]);
+      if(status) status.innerHTML=`<div class="url-status err">⚠️ NAR開催場取得失敗: ${esc95(e.message)}</div>`;
+    }
+  };
+
+  const prevLoadRaceList = window.loadRaceList;
+  window.loadRaceList = async function(){
+    const date=document.getElementById('pickDate')?.value || today95();
+    const kind=document.getElementById('pickKind')?.value || 'JRA';
+    const venueCode=document.getElementById('pickVenue')?.value || '';
+    const status=document.getElementById('urlStatus');
+    const raceSelect=document.getElementById('raceSelect');
+    if(kind!=='NAR') return prevLoadRaceList ? prevLoadRaceList.apply(this,arguments) : undefined;
+    if(!venueCode){
+      await window.loadActiveVenuesForDate();
+      if(!document.getElementById('pickVenue')?.value){ alert('当日の開催場を選択してください。'); return; }
+    }
+    const code=document.getElementById('pickVenue')?.value || venueCode;
+    try{
+      let races = window.__nar95VenueRaceCache?.[date]?.[code] || [];
+      if(!races.length){
+        if(prevLoadRaceList) await prevLoadRaceList.apply(this,arguments);
+        // 既存で取れた場合はそのまま終了。ただし「見つからない/開催なし」の時だけrace_id直参照へ。
+        const txt=(raceSelect?.textContent||'')+(status?.textContent||'');
+        if(raceSelect && raceSelect.value && !/見つかりません|開催なし|未公開|取得できません/.test(txt)) return;
+      }
+      if(!races.length){
+        if(status) status.innerHTML=`<div class="url-status">📅 ${esc95(date)} ${esc95(venueName('NAR',code))} のレースをrace_idで直接確認中...</div>`;
+        races=await fetchVenueRacesByRaceId95(date, code);
+      }
+      if(!races.length){
+        if(raceSelect) raceSelect.innerHTML='<option value="">レースが見つかりません</option>';
+        if(status) status.innerHTML=`<div class="url-status">開催なし日、または ${esc95(date)} ${esc95(venueName('NAR',code))} のレース一覧が未公開です</div>`;
+        return;
+      }
+      window.__nar95VenueRaceCache = window.__nar95VenueRaceCache || {};
+      window.__nar95VenueRaceCache[date] = window.__nar95VenueRaceCache[date] || {};
+      window.__nar95VenueRaceCache[date][code]=races;
+      const isPast=String(date)<today95();
+      const dateLabel=String(date).replaceAll('-','/');
+      if(raceSelect){
+        raceSelect.innerHTML=races.map(r=>{
+          const url=isPast ? (r.result || `https://nar.netkeiba.com/race/result.html?race_id=${r.raceId}&rf=race_submenu`) : (r.shutuba || `https://nar.netkeiba.com/race/shutuba.html?race_id=${r.raceId}&rf=race_submenu`);
+          const name=r.raceName || `${r.raceNo}R`;
+          const label=`${dateLabel} ${venueName('NAR',code)} ${r.raceNo}R ${name} / ${r.raceId}`;
+          return `<option value="${esc95(url)}" data-race-id="${esc95(r.raceId)}" data-race-name="${esc95(name)}">${esc95(label)}</option>`;
+        }).join('');
+      }
+      if(typeof applySelectedRaceUrl==='function') applySelectedRaceUrl();
+      if(status) status.innerHTML=`<div class="url-status ok">✅ ${esc95(date)} ${esc95(venueName('NAR',code))} ${races.length}レースをrace_id直参照で取得しました</div>`;
+    }catch(e){
+      if(status) status.innerHTML=`<div class="url-status err">❌ NARレース一覧取得失敗: ${esc95(e.message)}</div>`;
+    }
+  };
+
+  setTimeout(()=>{
+    document.querySelectorAll('.ver').forEach(e=>e.textContent=VER);
+    document.title='The競馬 EV分析 '+VER;
+    const kind=document.getElementById('pickKind')?.value;
+    if(kind==='NAR'){
+      try{ window.onRaceDateKindChanged && window.onRaceDateKindChanged(); }catch(e){}
+    }
+  },250);
+})();
+</script>
+
 </body>
 </html>

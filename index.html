@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.75 InitDateJSTFix</title>
+<title>The競馬 EV分析 v5.18.76 NARDebugLog</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.75 InitDateJSTFix</span>
+    <span class="ver">v5.18.76 NARDebugLog</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -6522,20 +6522,34 @@ loadRaceList = async function(){
       try{
         const html = await fetchHtmlViaProxy(url);
         const races = nar74_parseRaces(html, date, venueCode);
+        if(!races.length) console.warn('[nar74] races=0', venueCode, url, String(html).slice(0,300));
         if(races.length) return { races, html, url };
       }catch(e){
-        // 無効なkaisai_idは開催なし候補として扱う。ここで全体を止めない。
+        console.warn('[nar74] fetch error', venueCode, url, e.message);
       }
     }
     return { races: [], html: '', url: '' };
   }
-  async function nar74_activeVenues(date){
+  async function nar74_activeVenues(date, statusEl){
     const tasks = NAR_VENUES.map(async ([code, name]) => {
       const got = await nar74_fetchRaces(date, code);
       return got.races.length ? [code, name, got.races.length] : null;
     });
     const res = await Promise.all(tasks);
-    return res.filter(Boolean).sort((a,b)=>NAR_VENUES.findIndex(v=>v[0]===a[0])-NAR_VENUES.findIndex(v=>v[0]===b[0]));
+    const found = res.filter(Boolean);
+    if(!found.length && statusEl){
+      try{
+        const testUrl = nar74_masterUrls(date, '36')[0];
+        const proxyReq = buildWorkerRequestUrl(testUrl);
+        const r = await fetch(proxyReq, {cache:'no-store'});
+        const body = await r.text();
+        const head = body.slice(0, 300).replace(/</g,'&lt;');
+        statusEl.innerHTML = '<div class="url-status err">⚠️ NAR取得デバッグ (水沢): HTTP ' + r.status + '<br>URL: ' + testUrl + '<br>' + head + '</div>';
+      }catch(e2){
+        statusEl.innerHTML = '<div class="url-status err">⚠️ NAR取得デバッグ: ' + e2.message + '</div>';
+      }
+    }
+    return found.sort((a,b)=>NAR_VENUES.findIndex(v=>v[0]===a[0])-NAR_VENUES.findIndex(v=>v[0]===b[0]));
   }
 
   const prevLoadActiveVenuesForDate74 = loadActiveVenuesForDate;
@@ -6554,7 +6568,7 @@ loadRaceList = async function(){
     }
     try{
       if(status) status.innerHTML = `<div class="url-status">📡 ${date} のNAR開催場を kaisai_id 直接参照で確認中...</div>`;
-      const venues = await nar74_activeVenues(date);
+      const venues = await nar74_activeVenues(date, status);
       if(seq !== activeVenueLoadSeq) return;
       renderVenueOptions(venues);
       if(status) status.innerHTML = venues.length

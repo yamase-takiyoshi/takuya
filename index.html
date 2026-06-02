@@ -7531,7 +7531,7 @@ if(horses.length === 0){
    ・「開催なし日」を確実に解消する。
    ============================================================ */
 (function(){
-  const VERSION87 = 'v5.18.97 NARBridge';
+  const VERSION87 = 'v5.18.98 NARRaceName';
 
   // ── Userscriptブリッジ（iPad回線IPでnar.netkeibaを取得）──────────────
   // CloudflareワーカーのIPはAkamaiに弾かれるため、NARはブラウザのUserscript経由で
@@ -7594,6 +7594,42 @@ if(horses.length === 0){
     return `${d.slice(0,4)}${String(venueCode).padStart(2,'0')}${d.slice(4,8)}${String(raceNo).padStart(2,'0')}`;
   }
   function dateLabel87(date){return String(date||'').replace(/-/g,'/');}
+
+  // v5.18.98: NARの番組名は「2歳」「C2三組」「B1」「3歳B2三組」など短いクラス名が多い。
+  // 既存 parseRaceTitleFromDoc は日本語必須で「B1/B2」を弾くため、NAR用に緩い抽出を用意する。
+  function extractNarRaceName87(html, doc, rno){
+    let d = doc;
+    if(!d){ try{ d = new DOMParser().parseFromString(String(html||''), 'text/html'); }catch(e){ return ''; } }
+    const sels = ['.RaceName', '.RaceList_ItemTitle', '[class*="RaceName"]', '.RaceData01 .RaceName', 'h1.RaceName', 'h1'];
+    const clean = (raw)=>{
+      let t = String(raw||'').replace(/\u00a0/g,' ').replace(/[\r\n\t]+/g,' ').replace(/\s+/g,' ').trim();
+      t = t.replace(/^第?\s*\d{1,2}\s*R\s*/,'').trim(); // 先頭の「1R」等を除去
+      if(!t) return '';
+      if(/^\d{1,2}R$/.test(t)) return '';
+      if(/^(出馬表|レース一覧|地方競馬|netkeiba|ネット競馬|一覧|情報)$/i.test(t)) return '';
+      if(/�|\uFFFD/.test(t)) return '';
+      if(t.length > 40) t = t.slice(0,40).trim();
+      // 数字/英字のみ（B1, B2, C2 等）も番組名として許容する
+      if(!/[一-龥ぁ-んァ-ヶA-Za-z0-9]/.test(t)) return '';
+      return t;
+    };
+    for(const sel of sels){
+      for(const el of d.querySelectorAll(sel)){
+        const got = clean(el.textContent || '');
+        if(got) return got;
+      }
+    }
+    // og:title / title からも拾う（「水沢1R 2歳｜地方競馬」等）
+    const meta = d.querySelector('meta[property="og:title"], meta[name="twitter:title"]')?.getAttribute('content') || '';
+    const title = d.querySelector('title')?.textContent || '';
+    for(const src of [meta, title]){
+      for(const part of String(src).split(/[｜|]/)){
+        const got = clean(part);
+        if(got) return got;
+      }
+    }
+    return '';
+  }
 
   // v5.18.93/94: 開催が取れない原因を iPad 画面上で切り分ける診断。
   // JRA(race.netkeiba) と NAR(nar.netkeiba) を同条件で比較し、403本文の中身を表示して
@@ -7727,13 +7763,12 @@ if(horses.length === 0){
         if(!res.ok) return null;
         const html = await res.text();
         if(!looksLikeRace87(html, rid, date, venueCode, rno)) return null;
-        let name = `${rno}R`;
+        let name = '';
         try{
           const doc = new DOMParser().parseFromString(html,'text/html');
-          const t = doc.querySelector('.RaceName,.race_name,h1,.RaceData01')?.textContent?.trim();
-          if(t && t.length > 1 && !/^(出馬表|レース一覧|地方競馬)/.test(t)) name = t.slice(0,30).trim() || `${rno}R`;
+          name = extractNarRaceName87(html, doc, rno) || (typeof parseRaceTitleFromDoc==='function' ? parseRaceTitleFromDoc(doc, rno) : '');
         }catch(e){}
-        return {raceId:rid, venueCode, raceNo:rno, raceName:name};
+        return {raceId:rid, venueCode, raceNo:rno, raceName: name || `${rno}R`};
       }catch(e){ return null; }
     };
     const found = [];
@@ -7830,21 +7865,41 @@ if(horses.length === 0){
     return sortByList(probed);
   }
 
-  // レース一覧を構築：公式の場別一覧（race_id確定）を優先し、取れない時だけprobe。
+  // レース一覧を構築：v5.18.98 ブリッジで各レースを取得して番組名も付ける probe を主にする。
+  // probeVenue87 は各レースの出馬表を取得して名前(2歳/C2三組/B1等)まで抽出するため、
+  // 公式一覧（race_id確定だが名前が「{n}R」になりがち）より見やすい。公式一覧は保険。
   async function buildRaceList87(date, venueCode, statusEl){
     let races = [];
-    let src = 'official';
+    let src = 'probe';
     try{
-      if(typeof loadNarRaceListFromOfficialList === 'function'){
-        races = await loadNarRaceListFromOfficialList(date, venueCode);
-      }
-    }catch(e){ console.warn('[nar92] official race list failed', e); races = []; }
-    if(!races.length){
-      src = 'probe';
       races = await probeVenue87(date, venueCode, 12);
+    }catch(e){ console.warn('[nar98] probe race list failed', e); races = []; }
+    if(!races.length){
+      src = 'official';
+      try{
+        if(typeof loadNarRaceListFromOfficialList === 'function'){
+          races = await loadNarRaceListFromOfficialList(date, venueCode);
+        }
+      }catch(e){ console.warn('[nar98] official race list failed', e); races = []; }
     }
     if(!races.length) return false;
     races = races.slice().sort((a,b)=>Number(a.raceNo)-Number(b.raceNo));
+
+    // 名前が「{n}R」のままのレースは、その出馬表を取り直して番組名を補完する
+    for(const r of races){
+      if(r.raceName && !/^\d{1,2}R$/.test(r.raceName)) continue;
+      try{
+        const url = selectedUrl87(r.raceId, date);
+        const res = await narGet87(url);
+        if(res.ok){
+          const html = await res.text();
+          const nm = extractNarRaceName87(html, null, r.raceNo);
+          if(nm) r.raceName = nm;
+        }
+      }catch(e){}
+      await new Promise(x=>setTimeout(x, 150));
+    }
+
     const raceSelect = document.getElementById('raceSelect');
     const raceUrl = document.getElementById('raceUrl');
     const box = document.getElementById('raceTitleBox');
@@ -7863,7 +7918,7 @@ if(horses.length === 0){
       window.currentRaceName = opt.dataset.raceName || '';
       if(box){box.style.display='block'; box.textContent=opt.textContent||'';}
     }
-    if(statusEl) statusEl.innerHTML = `<div class="url-status ok">✅ ${esc87(date)} ${esc87(vname)} ${races.length}R を確認（${src==='official'?'公式一覧':'probe保険'}）。${isPast87(date)?'過去日→結果ページ優先。':''}</div>`;
+    if(statusEl) statusEl.innerHTML = `<div class="url-status ok">✅ ${esc87(date)} ${esc87(vname)} ${races.length}R を確認（${src==='probe'?'probe＋番組名':'公式一覧'}）。${isPast87(date)?'過去日→結果ページ優先。':''}</div>`;
     return true;
   }
 

@@ -7518,7 +7518,7 @@ if(horses.length === 0){
    ・「開催なし日」を確実に解消する。
    ============================================================ */
 (function(){
-  const VERSION87 = 'v5.18.93 NARDiag';
+  const VERSION87 = 'v5.18.94 NARDiagBody';
 
   function esc87(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
   function ymd87(date){return String(date||'').replace(/[^0-9]/g,'').slice(0,8);}
@@ -7536,12 +7536,13 @@ if(horses.length === 0){
   }
   function dateLabel87(date){return String(date||'').replace(/-/g,'/');}
 
-  // v5.18.93: 開催が取れない原因を iPad 画面上で切り分ける診断。
-  // プロキシが「JSシェル（race_id無し）」を返しているのか、HTMLは来ているが解析が外しているのかを確定させる。
+  // v5.18.93/94: 開催が取れない原因を iPad 画面上で切り分ける診断。
+  // JRA(race.netkeiba) と NAR(nar.netkeiba) を同条件で比較し、403本文の中身を表示して
+  // 「IP/ボットのハードブロック」か「バースト/レート制限」かを判別する。
   async function narDiag93(date){
     const px = (settings && settings.proxyUrl) ? settings.proxyUrl.replace(/\/$/,'') : '';
     const probe = async (label, reqUrl, expectId)=>{
-      const row = {label, reqUrl, status:'-', len:0, hasId:false, kaisaiCount:0, raceIdCount:0, horses:0, err:''};
+      const row = {label, reqUrl, status:'-', len:0, hasId:false, raceIdCount:0, kaisaiCount:0, horses:0, head:'', err:''};
       try{
         const ctrl = new AbortController();
         const timer = setTimeout(()=>ctrl.abort(), 12000);
@@ -7550,50 +7551,63 @@ if(horses.length === 0){
         row.status = res.status;
         const html = await res.text();
         row.len = html.length;
-        row.kaisaiCount = (html.match(/kaisai_id=\d{10}/g)||[]).length;
         row.raceIdCount = (html.match(/race_id=\d{12}/g)||[]).length;
+        row.kaisaiCount = (html.match(/kaisai_id=\d{10}/g)||[]).length;
         if(expectId) row.hasId = html.includes(expectId);
         try{ row.horses = parseHorsesFromDoc(new DOMParser().parseFromString(html,'text/html'), reqUrl).length; }catch(e){}
+        row.head = html.replace(/\s+/g,' ').slice(0,300);
       }catch(e){ row.err = (e && e.message) || String(e); }
       return row;
     };
 
-    // 1) 公式当日一覧（race_idなし → ?url= 素通し）
+    const status = document.getElementById('urlStatus');
+    if(status) status.innerHTML = `<div class="url-status">🔍 NAR診断中（JRA比較＋403本文確認）...</div>`;
+
+    // 1) JRA 1本（接続テストと同じ経路 = race.netkeiba.com）
+    const jraUrl = 'https://race.netkeiba.com/race/shutuba.html?race_id=202605021211&rf=race_submenu';
+    const jraReq = (typeof buildWorkerRequestUrl==='function') ? buildWorkerRequestUrl(jraUrl) : px+'?url='+encodeURIComponent(jraUrl);
+    const jra = await probe('JRA 出馬表（比較用）', jraReq, '');
+
+    // 2) 少し待ってから NAR 1本だけ（バーストではない単発リクエスト）
+    await new Promise(r=>setTimeout(r, 1500));
+    const narRid = raceId87(date, '36', 1); // 36=水沢（毎日ではないが、403判定には場は不問）
+    const narUrl = isPast87(date) ? resultUrl87(narRid) : shutubaUrl87(narRid);
+    const narReq = (typeof buildWorkerRequestUrl==='function') ? buildWorkerRequestUrl(narUrl) : px+'?url='+encodeURIComponent(narUrl);
+    const nar1 = await probe('NAR 出馬表（単発）', narReq, narRid);
+
+    // 3) 公式一覧（?url= 素通し）
+    await new Promise(r=>setTimeout(r, 1500));
     const listUrl = (typeof raceListUrl==='function') ? raceListUrl('NAR', date, '') : `https://nar.netkeiba.com/top/race_list.html?kaisai_date=${ymd87(date)}`;
     const listReq = (typeof buildWorkerRequestUrl==='function') ? buildWorkerRequestUrl(listUrl) : px+'?url='+encodeURIComponent(listUrl);
-    const listRow = await probe('公式一覧 race_list.html', listReq, '');
+    const list = await probe('NAR 公式一覧', listReq, '');
 
-    // 2) 各場 1R の出馬表（race_idあり → 構造化API ?type=shutuba）
-    const past = isPast87(date);
-    const venueRows = await Promise.all(NAR_VENUES.map(async ([code, name])=>{
-      const rid = raceId87(date, code, 1);
-      const url = past ? resultUrl87(rid) : shutubaUrl87(rid);
-      const req = (typeof buildWorkerRequestUrl==='function') ? buildWorkerRequestUrl(url) : px+'?url='+encodeURIComponent(url);
-      const r = await probe(`${name} 1R`, req, rid);
-      r.code = code; r.rid = rid;
-      return r;
-    }));
+    const esc = esc87;
+    const row = r => `<div style="font-family:monospace;font-size:11px;line-height:1.5;border-bottom:1px solid rgba(255,255,255,.08);padding:3px 0;">`
+      + `<b>${esc(r.label)}</b> | HTTP ${esc(r.status)} | len=${r.len} | race_id件数=${r.raceIdCount} | 馬=${r.horses}${r.err?` | ERR:${esc(r.err)}`:''}<br>`
+      + `<span style="opacity:.75">本文先頭: ${esc(r.head || '(空)')}</span></div>`;
 
-    const status = document.getElementById('urlStatus');
-    const fmt = r => `<div style="font-family:monospace;font-size:11px;line-height:1.5;border-bottom:1px solid rgba(255,255,255,.08);padding:2px 0;">`
-      + `${esc87(r.label)} | HTTP ${esc87(r.status)} | len=${r.len} | race_id件数=${r.raceIdCount} | kaisai件数=${r.kaisaiCount}`
-      + (r.rid ? ` | 本文race_id=${r.hasId?'✅':'❌'}` : '')
-      + ` | 馬=${r.horses}${r.err?` | ERR:${esc87(r.err)}`:''}</div>`;
-    const hits = venueRows.filter(r=>r.hasId || r.horses>=2);
-    const verdict = (listRow.raceIdCount>0 || listRow.kaisaiCount>0)
-      ? '🟢 公式一覧に開催リンクあり → 解析側の問題（一覧パースを直せば解決）。'
-      : (hits.length>0
-          ? '🟡 公式一覧は空だが出馬表APIは生きている → 一覧に頼らず構造化APIで開催判定すべき。'
-          : '🔴 一覧も出馬表も race_id を含まない → プロキシがJSシェル/エラーを返している（ワーカー側の問題）。');
+    const jraOk = String(jra.status)==='200' && (jra.raceIdCount>0 || jra.horses>=2);
+    const narBlocked = String(nar1.status)==='403' || String(list.status)==='403';
+    let verdict;
+    if(jraOk && narBlocked){
+      verdict = '🟠 JRA(race.netkeiba)は取得OK・NAR(nar.netkeiba)だけ403。netkeibaがNARホストへのワーカーアクセスを拒否。下の「本文先頭」がCloudflare系(Attention Required/Ray ID/1020)なら<b>IP/ボットのハードブロック</b>、netkeibaの文言なら<b>ヘッダ/クッキーで回避できる可能性</b>。';
+    } else if(!jraOk && narBlocked){
+      verdict = '🔴 JRAも怪しくNARは403。ワーカー経由のnetkeibaアクセス全体がブロック気味。本文先頭を確認。';
+    } else if(jraOk && !narBlocked){
+      verdict = '🟢 NARも200で取れている → 先ほどの403はバースト/レート制限だった可能性。リクエストを直列化すれば解決。';
+    } else {
+      verdict = '⚪ 想定外。各行のHTTPと本文先頭を確認。';
+    }
+
     if(status){
       status.innerHTML = `<div class="url-status">`
-        + `<b>🔍 NAR診断 ${esc87(date)}（v5.18.93）</b><br>${verdict}<br>`
-        + `<div style="margin-top:6px;">${fmt(listRow)}${venueRows.map(fmt).join('')}</div>`
-        + `<div style="margin-top:6px;font-size:11px;opacity:.8;">一覧URL: ${esc87(listUrl)}<br>プロキシ: ${esc87(px||'未設定')}</div>`
+        + `<b>🔍 NAR診断 ${esc(date)}（v5.18.94）</b><br>${verdict}<br>`
+        + `<div style="margin-top:6px;">${row(jra)}${row(nar1)}${row(list)}</div>`
+        + `<div style="margin-top:6px;font-size:11px;opacity:.8;">プロキシ: ${esc(px||'未設定')}</div>`
         + `</div>`;
     }
-    console.log('[narDiag93]', {list:listRow, venues:venueRows, verdict});
-    return {list:listRow, venues:venueRows, hits, verdict};
+    console.log('[narDiag94]', {jra, nar1, list, verdict});
+    return {jra, nar1, list, verdict};
   }
   window.narDiag93 = narDiag93;
 

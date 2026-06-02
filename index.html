@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.67 FixRaceName</title>
+<title>The競馬 EV分析 v5.18.68 NARRaceNameExactCopy</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.67 FixRaceName</span>
+    <span class="ver">v5.18.68 NARRaceNameExactCopy</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -5711,6 +5711,197 @@ loadRaceList = async function(){
     }).join('');
     applySelectedRaceUrl();
     if(status) status.innerHTML = `<div class="url-status ok">✅ ${date} ${venueName(kind, venueCode)} ${races.length}レースを取得しました（11Rレース名補完対応）</div>`;
+  }catch(e){
+    console.error(e);
+    if(status) status.innerHTML = `<div class="url-status err">❌ レース一覧取得失敗: ${e.message}</div>`;
+  }
+};
+
+
+
+
+/* ============================================================
+   v5.18.68 NAR RaceName ExactCopy Fix
+   NARで一部レース名が「レース情報 - netkeiba」になる問題を修正。
+   ・「レース情報」「netkeiba」等の汎用タイトルはレース名として採用しない
+   ・NARもレース一覧HTML → 出馬表 → 結果ページの順で正式レース名を補完
+   ・JRA側の既存ロジックは維持
+   ============================================================ */
+function isGenericRaceName68(name, raceNo){
+  const no = Number(raceNo || 0);
+  const t = String(name || '').replace(/\s+/g,' ').trim();
+  const compact = t.replace(/\s+/g,'');
+  if(!compact) return true;
+  if(compact === `${no}R` || compact === `第${no}R` || /^\d{1,2}R$/.test(compact)) return true;
+  if(/レース情報|netkeiba|ネット競馬|地方競馬|出馬表|オッズ|結果|払戻|競馬データベース/i.test(t)) return true;
+  if(/attachEvent|addEventListener|messageEvent|function\s*\(|window\.|document\.|var\s|let\s|const\s|=>|<script/i.test(t)) return true;
+  return false;
+}
+function cleanNarRaceName68(raw, raceNo, raceId){
+  let t = String(raw || '')
+    .replace(/<script[\s\S]*?<\/script>/gi,' ')
+    .replace(/<style[\s\S]*?<\/style>/gi,' ')
+    .replace(/<[^>]+>/g,' ')
+    .replace(/&nbsp;|&#160;/g,' ')
+    .replace(/&amp;/g,'&')
+    .replace(/&quot;/g,'"')
+    .replace(/&#039;/g,"'")
+    .replace(/&lt;/g,'<')
+    .replace(/&gt;/g,'>')
+    .replace(/\s+/g,' ')
+    .trim();
+  if(raceId) t = t.replace(new RegExp(String(raceId),'g'),' ');
+  t = t
+    .replace(/\d{4}[\/年-]\d{1,2}[\/月-]\d{1,2}日?/g,' ')
+    .replace(/門別|盛岡|水沢|浦和|船橋|大井|川崎|金沢|笠松|名古屋|園田|姫路|高知|佐賀/g,' ')
+    .replace(/出馬表|オッズ|購入|予想|結果|払戻|レース映像|掲示板|お気に入り馬|レース情報|netkeiba\.com|netkeiba|ネット競馬|地方競馬|競馬データベース/gi,' ')
+    .replace(/[｜|].*$/g,' ')
+    .replace(/\s+/g,' ')
+    .trim();
+
+  const no = Number(raceNo || 0);
+  const pats = [
+    new RegExp(`${no}R\\s+([^/｜|]{2,60})`),
+    new RegExp(`${no}Ｒ\\s+([^/｜|]{2,60})`),
+    /(?:RaceName|レース名)\s*[:：]?\s*([^/｜|]{2,60})/
+  ];
+  for(const re of pats){
+    const m = t.match(re);
+    if(m){
+      let n = m[1]
+        .replace(/^\d{1,2}R\s*/,'')
+        .replace(/\s*\d{10,14}.*$/,'')
+        .replace(/\s+/g,' ')
+        .trim();
+      if(n && !isGenericRaceName68(n, no) && /[一-龥ぁ-んァ-ヶA-Za-z]/.test(n)) return n.slice(0,50);
+    }
+  }
+  t = t.replace(new RegExp(`^${no}R\\s*`),'').replace(new RegExp(`^第${no}R\\s*`),'').trim();
+  if(t && !isGenericRaceName68(t, no) && t.length <= 50 && /[一-龥ぁ-んァ-ヶ]/.test(t)) return t;
+  const m2 = t.match(/([A-Za-z0-9０-９一-龥ぁ-んァ-ヶ（）()・ー\-]{2,40})/);
+  if(m2){
+    const n = m2[1].trim();
+    if(n && !isGenericRaceName68(n, no) && /[一-龥ぁ-んァ-ヶ]/.test(n)) return n;
+  }
+  return '';
+}
+function extractNarRaceNameFromHtml68(html, raceId, raceNo){
+  const s = String(html || '');
+  if(!s) return '';
+  try{
+    const doc = new DOMParser().parseFromString(s, 'text/html');
+    const candidates = [];
+    const og = doc.querySelector('meta[property="og:title"],meta[name="twitter:title"],meta[name="title"]');
+    if(og) candidates.push(og.getAttribute('content') || '');
+    ['.RaceName','[class*="RaceName"]','.RaceData01','.RaceList_ItemTitle','.RaceList_DataItem','h1','h2','title'].forEach(sel=>{
+      doc.querySelectorAll(sel).forEach(el=>candidates.push(el.textContent || ''));
+    });
+    for(const c of candidates){
+      const n = cleanNarRaceName68(c, raceNo, raceId);
+      if(n) return n;
+    }
+    if(raceId){
+      const links = Array.from(doc.querySelectorAll(`a[href*="${raceId}"], a[href*="race_id=${raceId}"]`));
+      for(const a of links){
+        let node = a;
+        for(let depth=0; node && depth<7; depth++, node=node.parentElement){
+          if(node.tagName && /^(SCRIPT|STYLE)$/i.test(node.tagName)) break;
+          const n = cleanNarRaceName68(node.textContent || '', raceNo, raceId);
+          if(n) return n;
+        }
+      }
+    }
+  }catch(e){}
+  const safe = s.replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ');
+  if(raceId){
+    let idx = -1;
+    while((idx = safe.indexOf(String(raceId), idx + 1)) >= 0){
+      const chunk = safe.slice(Math.max(0, idx-2200), Math.min(safe.length, idx+2200));
+      const n = cleanNarRaceName68(chunk, raceNo, raceId);
+      if(n) return n;
+    }
+  }
+  return '';
+}
+async function fetchNarRaceName68(raceId, raceNo, page){
+  const url = page === 'result'
+    ? `https://nar.netkeiba.com/race/result.html?race_id=${raceId}&rf=race_submenu`
+    : shutubaUrl('NAR', raceId);
+  const html = await fetchHtmlViaProxy(url);
+  return extractNarRaceNameFromHtml68(html, raceId, raceNo);
+}
+async function fillNarRaceNames68(races, date, venueCode, status){
+  if(!Array.isArray(races) || !races.length) return races || [];
+  let listHtml = '';
+  try{ listHtml = await fetchHtmlViaProxy(raceListUrl('NAR', date, venueCode)); }catch(e){ listHtml = ''; }
+  const out = [];
+  for(let i=0;i<races.length;i++){
+    const r = races[i];
+    const no = Number(r.raceNo || String(r.raceId || '').slice(-2));
+    if(status) status.innerHTML = `<div class="url-status">🏷️ ${venueName('NAR', venueCode)} ${no}R のレース名を補完中... (${i+1}/${races.length})</div>`;
+    let name = cleanNarRaceName68(r.raceName || '', no, r.raceId);
+    if(!name) name = extractNarRaceNameFromHtml68(listHtml, r.raceId, no);
+    if(!name){ try{ name = await fetchNarRaceName68(r.raceId, no, 'shutuba'); }catch(e){} }
+    if(!name){ try{ name = await fetchNarRaceName68(r.raceId, no, 'result'); }catch(e){} }
+    out.push({...r, raceNo:no, raceName:(name || `${no}R`)});
+  }
+  return out;
+}
+
+// JRA最終版を保ったまま、NARだけ正式レース名補完を追加した最終override。
+loadRaceList = async function(){
+  const date = document.getElementById('pickDate')?.value || todayYmd();
+  const kind = document.getElementById('pickKind')?.value || 'JRA';
+  const venueCode = document.getElementById('pickVenue')?.value || '';
+  const status = document.getElementById('urlStatus');
+  const raceSelect = document.getElementById('raceSelect');
+  currentRaceId = '';
+  currentRaceName = '';
+  const raceUrl = document.getElementById('raceUrl');
+  if(raceUrl) raceUrl.value = '';
+  const box = document.getElementById('raceTitleBox');
+  if(box){ box.style.display = 'none'; box.textContent = ''; }
+  if(!settings.proxyUrl){ alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。'); return; }
+  if(!venueCode){ alert('開催場を選択してください。'); return; }
+  try{
+    if(status) status.innerHTML = `<div class="url-status">📅 ${date} ${venueName(kind, venueCode)} のnetkeiba日程を取得中...</div>`;
+    let races = [];
+    let scheduleHtml = '';
+    if(kind === 'JRA'){
+      const got = await live43_fetchJraSchedule(date, venueCode);
+      scheduleHtml = got.html || '';
+      if(got.kid){
+        const cacheKey = ymdParts(date).yyyymmdd + '-' + venueCode;
+        lastJraKaisaiByDateVenue[cacheKey] = { kai:Number(got.kid.slice(6,8)), day:Number(got.kid.slice(8,10)) };
+      }
+      races = live37_buildJraRacesFromRaceList(scheduleHtml, date, venueCode);
+      races = await fillJraRaceNamesFromShutuba(kind, races, status, date, venueCode, scheduleHtml);
+    }else{
+      races = await loadNarRaceListByRaceId(date, venueCode);
+      if(!races.length){
+        const html = await fetchHtmlViaProxy(raceListUrl(kind, date, venueCode));
+        races = parseRaceIdsFromList(html, kind, venueCode, date);
+      }
+      races = await fillNarRaceNames68(races, date, venueCode, status);
+    }
+    races = races.sort((a,b)=>Number(a.raceNo || String(a.raceId).slice(-2)) - Number(b.raceNo || String(b.raceId).slice(-2)));
+    if(!races.length){
+      raceSelect.innerHTML = '<option value="">レースが見つかりません</option>';
+      if(status) status.innerHTML = `<div class="url-status err">⚠️ ${date} の ${venueName(kind, venueCode)} はnetkeiba日程からレースを取得できませんでした。</div>`;
+      return;
+    }
+    const dateLabel = raceListDateLabel(date);
+    raceSelect.innerHTML = races.map(r => {
+      const no = Number(r.raceNo || String(r.raceId).slice(-2));
+      const url = shutubaUrl(kind, r.raceId);
+      const raw = String(r.raceName || '').trim();
+      const safeRaw = (!raw || isGenericRaceName68(raw, no)) ? `${no}R` : raw;
+      const raceName = escapeHtml(safeRaw);
+      const label = `${dateLabel} ${venueName(kind, venueCode)} ${no}R ${raceName} / ${r.raceId}`;
+      return `<option value="${url}" data-race-id="${r.raceId}" data-race-name="${raceName}">${label}</option>`;
+    }).join('');
+    applySelectedRaceUrl();
+    if(status) status.innerHTML = `<div class="url-status ok">✅ ${date} ${venueName(kind, venueCode)} ${races.length}レースを取得しました（NAR/JRAレース名補完対応）</div>`;
   }catch(e){
     console.error(e);
     if(status) status.innerHTML = `<div class="url-status err">❌ レース一覧取得失敗: ${e.message}</div>`;

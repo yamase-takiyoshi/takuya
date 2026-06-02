@@ -7518,7 +7518,7 @@ if(horses.length === 0){
    ・「開催なし日」を確実に解消する。
    ============================================================ */
 (function(){
-  const VERSION87 = 'v5.18.92 NAROfficialFirst';
+  const VERSION87 = 'v5.18.93 NARDiag';
 
   function esc87(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
   function ymd87(date){return String(date||'').replace(/[^0-9]/g,'').slice(0,8);}
@@ -7535,6 +7535,67 @@ if(horses.length === 0){
     return `${d.slice(0,4)}${String(venueCode).padStart(2,'0')}${d.slice(4,8)}${String(raceNo).padStart(2,'0')}`;
   }
   function dateLabel87(date){return String(date||'').replace(/-/g,'/');}
+
+  // v5.18.93: 開催が取れない原因を iPad 画面上で切り分ける診断。
+  // プロキシが「JSシェル（race_id無し）」を返しているのか、HTMLは来ているが解析が外しているのかを確定させる。
+  async function narDiag93(date){
+    const px = (settings && settings.proxyUrl) ? settings.proxyUrl.replace(/\/$/,'') : '';
+    const probe = async (label, reqUrl, expectId)=>{
+      const row = {label, reqUrl, status:'-', len:0, hasId:false, kaisaiCount:0, raceIdCount:0, horses:0, err:''};
+      try{
+        const ctrl = new AbortController();
+        const timer = setTimeout(()=>ctrl.abort(), 12000);
+        const res = await fetch(reqUrl, {cache:'no-store', signal:ctrl.signal});
+        clearTimeout(timer);
+        row.status = res.status;
+        const html = await res.text();
+        row.len = html.length;
+        row.kaisaiCount = (html.match(/kaisai_id=\d{10}/g)||[]).length;
+        row.raceIdCount = (html.match(/race_id=\d{12}/g)||[]).length;
+        if(expectId) row.hasId = html.includes(expectId);
+        try{ row.horses = parseHorsesFromDoc(new DOMParser().parseFromString(html,'text/html'), reqUrl).length; }catch(e){}
+      }catch(e){ row.err = (e && e.message) || String(e); }
+      return row;
+    };
+
+    // 1) 公式当日一覧（race_idなし → ?url= 素通し）
+    const listUrl = (typeof raceListUrl==='function') ? raceListUrl('NAR', date, '') : `https://nar.netkeiba.com/top/race_list.html?kaisai_date=${ymd87(date)}`;
+    const listReq = (typeof buildWorkerRequestUrl==='function') ? buildWorkerRequestUrl(listUrl) : px+'?url='+encodeURIComponent(listUrl);
+    const listRow = await probe('公式一覧 race_list.html', listReq, '');
+
+    // 2) 各場 1R の出馬表（race_idあり → 構造化API ?type=shutuba）
+    const past = isPast87(date);
+    const venueRows = await Promise.all(NAR_VENUES.map(async ([code, name])=>{
+      const rid = raceId87(date, code, 1);
+      const url = past ? resultUrl87(rid) : shutubaUrl87(rid);
+      const req = (typeof buildWorkerRequestUrl==='function') ? buildWorkerRequestUrl(url) : px+'?url='+encodeURIComponent(url);
+      const r = await probe(`${name} 1R`, req, rid);
+      r.code = code; r.rid = rid;
+      return r;
+    }));
+
+    const status = document.getElementById('urlStatus');
+    const fmt = r => `<div style="font-family:monospace;font-size:11px;line-height:1.5;border-bottom:1px solid rgba(255,255,255,.08);padding:2px 0;">`
+      + `${esc87(r.label)} | HTTP ${esc87(r.status)} | len=${r.len} | race_id件数=${r.raceIdCount} | kaisai件数=${r.kaisaiCount}`
+      + (r.rid ? ` | 本文race_id=${r.hasId?'✅':'❌'}` : '')
+      + ` | 馬=${r.horses}${r.err?` | ERR:${esc87(r.err)}`:''}</div>`;
+    const hits = venueRows.filter(r=>r.hasId || r.horses>=2);
+    const verdict = (listRow.raceIdCount>0 || listRow.kaisaiCount>0)
+      ? '🟢 公式一覧に開催リンクあり → 解析側の問題（一覧パースを直せば解決）。'
+      : (hits.length>0
+          ? '🟡 公式一覧は空だが出馬表APIは生きている → 一覧に頼らず構造化APIで開催判定すべき。'
+          : '🔴 一覧も出馬表も race_id を含まない → プロキシがJSシェル/エラーを返している（ワーカー側の問題）。');
+    if(status){
+      status.innerHTML = `<div class="url-status">`
+        + `<b>🔍 NAR診断 ${esc87(date)}（v5.18.93）</b><br>${verdict}<br>`
+        + `<div style="margin-top:6px;">${fmt(listRow)}${venueRows.map(fmt).join('')}</div>`
+        + `<div style="margin-top:6px;font-size:11px;opacity:.8;">一覧URL: ${esc87(listUrl)}<br>プロキシ: ${esc87(px||'未設定')}</div>`
+        + `</div>`;
+    }
+    console.log('[narDiag93]', {list:listRow, venues:venueRows, verdict});
+    return {list:listRow, venues:venueRows, hits, verdict};
+  }
+  window.narDiag93 = narDiag93;
 
   // v5.18.91: race_id文字列がHTMLに出ないNARページ対策。
   // 「race_idが本文にある」または「正しい場・日付・R番号の出馬表で2頭以上拾える」なら実在レースとみなす。
@@ -7744,7 +7805,10 @@ if(horses.length === 0){
         setTimeout(()=>{try{window.loadRaceList();}catch(e){console.error(e);}}, 60);
       } else {
         renderVenueOptions([]);
-        if(status) status.innerHTML=`<div class="url-status">開催なし日（${esc87(src)}で確認）</div>`;
+        // v5.18.93: NARはどこかしら毎日開催しているため、空＝ほぼ確実に取得失敗。
+        // 「開催なし」で止めず、原因を画面に出す診断を自動実行する。
+        if(status) status.innerHTML=`<div class="url-status">⚠️ 開催場0件。原因を診断中...（NARは通常毎日開催のため取得失敗の可能性大）</div>`;
+        try{ await narDiag93(date); }catch(e){ console.error('[narDiag93]', e); if(status) status.innerHTML=`<div class="url-status err">診断失敗: ${esc87(e.message||e)}</div>`; }
       }
     }catch(e){
       if(seq !== activeVenueLoadSeq) return;

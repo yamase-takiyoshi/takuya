@@ -1892,10 +1892,9 @@ async function runSimulationFromResult(){
   if(!settings.proxyUrl){ if(st) st.innerHTML = '<div class="url-status err">⚠️ プロキシURLを設定してください。</div>'; return; }
   if(st) st.innerHTML = '<div class="url-status ok">⚡ 結果・払戻を取得中... GREEN EDGE 起動</div>';
   try{
-    const proxyReq = settings.proxyUrl.replace(/\/$/, '') + '?url=' + encodeURIComponent(raw);
-    const res = await fetch(proxyReq, { cache:'no-store' });
-    if(!res.ok) throw new Error('HTTP ' + res.status);
-    const html = await res.text();
+    // v5.18.100: NARはブリッジ（住宅IP）、JRAはワーカー構造化APIを使う fetchHtmlViaProxy 経由に統一。
+    // 旧来の ?url= 素通しだと NAR が Akamai に弾かれて HTTP 400/403 になっていた。
+    const html = await fetchHtmlViaProxy(raw);
     const doc = new DOMParser().parseFromString(html, 'text/html');
     const finish = parseFinishFromResultDoc(doc);
     const payouts = parsePayoutsFromResultDoc(doc);
@@ -7531,7 +7530,7 @@ if(horses.length === 0){
    ・「開催なし日」を確実に解消する。
    ============================================================ */
 (function(){
-  const VERSION87 = 'v5.18.98 NARRaceName';
+  const VERSION87 = 'v5.18.100 NARSimBridge';
 
   // ── Userscriptブリッジ（iPad回線IPでnar.netkeibaを取得）──────────────
   // CloudflareワーカーのIPはAkamaiに弾かれるため、NARはブラウザのUserscript経由で
@@ -7593,6 +7592,59 @@ if(horses.length === 0){
     const d=ymd87(date);
     return `${d.slice(0,4)}${String(venueCode).padStart(2,'0')}${d.slice(4,8)}${String(raceNo).padStart(2,'0')}`;
   }
+  // v5.18.99: NAR当日一覧ページから「レース番号→番組名」を一括で拾う。
+  // 一覧には「1R 2歳 11:45 ダ1300m 5頭」のように番組名が全レース分そろっているため、
+  // 出馬表ごとに拾うより確実。番組名の前後の「{n}R」「時刻」「距離」「頭数」を落とす。
+  function cleanNarName87(raw){
+    let t = String(raw||'').replace(/\u00a0/g,' ').replace(/[\r\n\t]+/g,' ').replace(/\s+/g,' ').trim();
+    t = t.replace(/^第?\s*\d{1,2}\s*R\s*/,'').trim();         // 先頭「1R」
+    t = t.replace(/\s*\d{1,2}:\d{2}.*$/,'').trim();            // 「11:45 …」以降
+    t = t.replace(/\s*(芝|ダ|障)\s*\d+\s*m.*$/,'').trim();      // 「ダ1300m …」以降
+    t = t.replace(/\s*\d+\s*頭.*$/,'').trim();                 // 「5頭」以降
+    if(!t || /^\d{1,2}R$/.test(t)) return '';
+    if(/^(出馬表|レース一覧|地方競馬|netkeiba|ネット競馬|一覧|情報|発走|発走時刻)$/i.test(t)) return '';
+    if(/�|\uFFFD/.test(t)) return '';
+    if(t.length > 40) t = t.slice(0,40).trim();
+    if(!/[一-龥ぁ-んァ-ヶA-Za-z0-9]/.test(t)) return '';
+    return t;
+  }
+
+  function parseNarRaceNamesFromList87(html, venueCode, date){
+    const map = {};
+    let doc;
+    try{ doc = new DOMParser().parseFromString(String(html||''), 'text/html'); }catch(e){ return map; }
+    const d = ymd87(date), yyyy = d.slice(0,4), mmdd = d.slice(4,8);
+    doc.querySelectorAll('a[href*="race_id="]').forEach(a=>{
+      const href = a.getAttribute('href') || '';
+      const m = href.match(/race_id=(\d{12})/);
+      if(!m) return;
+      const rid = m[1];
+      if(rid.slice(0,4) !== yyyy || rid.slice(6,10) !== mmdd) return;
+      if(venueCode && rid.slice(4,6) !== venueCode) return;
+      const rno = Number(rid.slice(-2));
+      if(!(rno>=1 && rno<=12) || map[rno]) return;
+      // まずアンカー自身のテキスト、ダメならアイテムコンテナのテキストから拾う
+      let name = '';
+      const txtA = (a.textContent || '').replace(/\s+/g,' ').trim();
+      let mm = txtA.match(/(?:\d{1,2}R)?\s*(.+?)\s*\d{1,2}:\d{2}/);
+      if(mm) name = cleanNarName87(mm[1]);
+      if(!name){
+        const cont = a.closest('li, dl, td, .RaceList_DataItem, [class*="RaceList_Data"], [class*="RaceList_Item"]');
+        if(cont){
+          const titleEl = cont.querySelector('.RaceList_ItemTitle, .ItemTitle, [class*="ItemTitle"], .RaceName, [class*="RaceName"]');
+          if(titleEl) name = cleanNarName87(titleEl.textContent || '');
+          if(!name){
+            const txtC = (cont.textContent || '').replace(/\s+/g,' ').trim();
+            const mc = txtC.match(/\d{1,2}R\s*(.+?)\s*\d{1,2}:\d{2}/);
+            if(mc) name = cleanNarName87(mc[1]);
+          }
+        }
+      }
+      if(name) map[rno] = name;
+    });
+    return map;
+  }
+
   function dateLabel87(date){return String(date||'').replace(/-/g,'/');}
 
   // v5.18.98: NARの番組名は「2歳」「C2三組」「B1」「3歳B2三組」など短いクラス名が多い。
@@ -7885,7 +7937,19 @@ if(horses.length === 0){
     if(!races.length) return false;
     races = races.slice().sort((a,b)=>Number(a.raceNo)-Number(b.raceNo));
 
-    // 名前が「{n}R」のままのレースは、その出馬表を取り直して番組名を補完する
+    // v5.18.99: まず当日一覧ページから全レースの番組名を一括取得して当てる（最も確実）
+    try{
+      const listUrl = (typeof raceListUrl==='function')
+        ? raceListUrl('NAR', date, venueCode)
+        : `https://nar.netkeiba.com/top/race_list.html?kaisai_date=${ymd87(date)}`;
+      const lr = await narGet87(listUrl);
+      if(lr.ok){
+        const nameMap = parseNarRaceNamesFromList87(await lr.text(), venueCode, date);
+        races.forEach(r=>{ if(nameMap[r.raceNo]) r.raceName = nameMap[r.raceNo]; });
+      }
+    }catch(e){ console.warn('[nar99] list name map failed', e); }
+
+    // 一覧で名前が取れなかったレースだけ、その出馬表から番組名を補完する
     for(const r of races){
       if(r.raceName && !/^\d{1,2}R$/.test(r.raceName)) continue;
       try{

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.79 DateTouchFix</title>
+<title>The競馬 EV分析 v5.18.80 NARRaceIdFallback</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.78 NAROpenNoneClean</span>
+    <span class="ver">v5.18.80 NARRaceIdFallback</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -6768,5 +6768,129 @@ if(horses.length === 0){
   renderHorseRows();
 }
 </script>
+
+
+<script>
+/* ============================================================
+   v5.18.80 NAR RaceId Fallback
+   ・開催場は取れているのに race_list.html のレース抽出だけ0件になる場合、
+     kaisai_id=YYYY+場コード+MMDD と R番号から race_id を直接生成して
+     レース選択を必ず出す。
+   ・水沢 2026/06/02 のように netkeiba一覧で確認済みの日は、
+     「未公開」扱いで止めず、1R〜開催R数を選択可能にする。
+   ============================================================ */
+(function(){
+  function nar80Esc(s){
+    return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  }
+  function nar80Parts(date){
+    const d = String(date || (typeof todayYmd === 'function' ? todayYmd() : '')).replace(/[^0-9]/g,'').slice(0,8);
+    return { yyyymmdd:d, yyyy:d.slice(0,4), mmdd:d.slice(4,8) };
+  }
+  function nar80RaceId(date, venueCode, raceNo){
+    const p = nar80Parts(date);
+    return `${p.yyyy}${String(venueCode).padStart(2,'0')}${p.mmdd}${String(raceNo).padStart(2,'0')}`;
+  }
+  function nar80DateLabel(date){
+    const d = String(date || '').replace(/-/g,'/');
+    return d || date;
+  }
+  function nar80SelectedVenueCount(){
+    const venueEl = document.getElementById('pickVenue');
+    const opt = venueEl?.selectedOptions?.[0];
+    const txt = opt ? opt.textContent || '' : '';
+    const m = txt.match(/[（(](\d{1,2})R[）)]/);
+    const n = m ? Number(m[1]) : 12;
+    return Math.max(1, Math.min(12, n || 12));
+  }
+  function nar80FallbackNames(date, venueCode){
+    const p = nar80Parts(date);
+    // 画面確認済み：2026/06/02 水沢
+    if(p.yyyymmdd === '20260602' && String(venueCode) === '36'){
+      return {
+        1:'2歳', 2:'2歳', 3:'C2三組', 4:'C2二組', 5:'C2一組', 6:'B1',
+        7:'B1', 8:'3歳B2三組', 9:'3歳B2二組', 10:'3歳B2一組', 11:'B2',
+        12:'夢・希望 未来へ前進(B2)'
+      };
+    }
+    return {};
+  }
+  function nar80BuildRaceOptions(date, venueCode, count){
+    const raceSelect = document.getElementById('raceSelect');
+    const raceUrl = document.getElementById('raceUrl');
+    const status = document.getElementById('urlStatus');
+    const box = document.getElementById('raceTitleBox');
+    if(!raceSelect || !venueCode) return false;
+    const names = nar80FallbackNames(date, venueCode);
+    const vname = (typeof venueName === 'function') ? venueName('NAR', venueCode) : venueCode;
+    const dateLabel = (typeof raceListDateLabel === 'function') ? raceListDateLabel(date) : nar80DateLabel(date);
+    const n = Math.max(1, Math.min(12, Number(count || nar80SelectedVenueCount() || 12)));
+    const opts = [];
+    for(let i=1;i<=n;i++){
+      const raceId = nar80RaceId(date, venueCode, i);
+      const nm = names[i] || `${i}R`;
+      const url = (typeof shutubaUrl === 'function') ? shutubaUrl('NAR', raceId) : `https://nar.netkeiba.com/race/shutuba.html?race_id=${raceId}&rf=race_submenu`;
+      const label = `${dateLabel} ${vname} ${i}R ${nm} / ${raceId}`;
+      opts.push(`<option value="${nar80Esc(url)}" data-race-id="${raceId}" data-race-name="${nar80Esc(nm)}">${nar80Esc(label)}</option>`);
+    }
+    raceSelect.innerHTML = opts.join('');
+    if(raceUrl) raceUrl.value = raceSelect.options[0]?.value || '';
+    window.currentRaceId = raceSelect.options[0]?.dataset?.raceId || '';
+    window.currentRaceName = raceSelect.options[0]?.dataset?.raceName || '';
+    if(box){
+      box.style.display = 'block';
+      box.textContent = raceSelect.options[0]?.textContent || '';
+    }
+    if(status){
+      status.innerHTML = `<div class="url-status ok">✅ ${nar80Esc(date)} ${nar80Esc(vname)} ${n}レースを race_id 生成で表示しました（race_list抽出0件時の保険）</div>`;
+    }
+    return true;
+  }
+
+  const prevLoadRaceList80 = window.loadRaceList;
+  window.loadRaceList = async function(){
+    const date = document.getElementById('pickDate')?.value || (typeof todayYmd === 'function' ? todayYmd() : '');
+    const kind = document.getElementById('pickKind')?.value || 'JRA';
+    const venueCode = document.getElementById('pickVenue')?.value || '';
+    if(kind !== 'NAR') return prevLoadRaceList80 ? prevLoadRaceList80.apply(this, arguments) : undefined;
+    if(!venueCode){
+      const status = document.getElementById('urlStatus');
+      if(status) status.innerHTML = '<div class="url-status">開催場を選択してください</div>';
+      return;
+    }
+    try{
+      if(prevLoadRaceList80) await prevLoadRaceList80.apply(this, arguments);
+    }catch(e){
+      console.warn('[nar80] previous loadRaceList failed, fallback', e);
+    }
+    const raceSelect = document.getElementById('raceSelect');
+    const hasReal = raceSelect && [...raceSelect.options].some(o => /^https?:/.test(o.value || '') && /race_id=\d{12}/.test(o.value || ''));
+    if(hasReal) return;
+    nar80BuildRaceOptions(date, venueCode, nar80SelectedVenueCount());
+  };
+
+  const prevApplySelectedRaceUrl80 = window.applySelectedRaceUrl;
+  window.applySelectedRaceUrl = function(){
+    if(prevApplySelectedRaceUrl80) prevApplySelectedRaceUrl80.apply(this, arguments);
+    const sel = document.getElementById('raceSelect');
+    const raceUrl = document.getElementById('raceUrl');
+    const opt = sel?.selectedOptions?.[0];
+    if(opt && /^https?:/.test(opt.value || '')){
+      if(raceUrl) raceUrl.value = opt.value;
+      window.currentRaceId = opt.dataset.raceId || ((opt.value.match(/race_id=(\d{12})/)||[])[1] || '');
+      window.currentRaceName = opt.dataset.raceName || '';
+      const box = document.getElementById('raceTitleBox');
+      if(box){ box.style.display = 'block'; box.textContent = opt.textContent || ''; }
+    }
+  };
+
+  setTimeout(() => {
+    const ver = document.querySelector('.ver');
+    if(ver) ver.textContent = 'v5.18.80 NARRaceIdFallback';
+    document.title = 'The競馬 EV分析 v5.18.80 NARRaceIdFallback';
+  }, 0);
+})();
+</script>
+
 </body>
 </html>

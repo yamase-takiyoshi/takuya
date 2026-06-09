@@ -2941,13 +2941,14 @@ function looksBlockedHtml(text){
 
 // ブリッジ（iPad住宅IP）でURLを取得。準備未完/失敗なら null を返す。
 async function fetchViaBridge(url){
-  if(typeof window.__narBridgeFetch !== 'function' || !window.__NAR_BRIDGE_READY__) return null;
+  if(typeof window.__narBridgeFetch !== 'function' || !window.__NAR_BRIDGE_READY__){ window.__bridgeLastError = 'ブリッジ未準備'; return null; }
   try{
     const r = await window.__narBridgeFetch(url);
-    if(r && r.status >= 200 && r.status < 300 && r.text) return r.text;
-    if(r && r.status) console.warn('[bridge] HTTP ' + r.status);
+    if(r && r.status >= 200 && r.status < 300 && r.text){ window.__bridgeLastError = ''; window.__fetchPath = 'bridge'; return r.text; }
+    if(r && r.status){ window.__bridgeLastError = 'ブリッジHTTP ' + r.status; console.warn('[bridge] HTTP ' + r.status); }
   }catch(e){
-    console.warn('[bridge] fetch failed:', e && e.message);
+    window.__bridgeLastError = (e && e.message) ? e.message : String(e);
+    console.warn('[bridge] fetch failed:', window.__bridgeLastError);
   }
   return null;
 }
@@ -2995,6 +2996,7 @@ async function fetchHtmlViaProxy(url){
     throw new Error(`ワーカーIPがブロックされた可能性（200だが拒否/空・本文${text.length}字）。Userscriptブリッジ🌉を有効にしてください`);
   }
 
+  window.__fetchPath = 'worker';
   return text;
 }
 
@@ -4340,6 +4342,16 @@ function parseFinalOddsPopularityFromResultRowsExact(doc, expectedHorses){
         if(odds >= 1 && afterOk){ put(num, odds, pop); return; }
       }
     }
+
+    // v5.18.104: 競走中止/除外など「後3Fが無い」行は上の2ループで取りこぼす。
+    // 中止馬も人気・単勝オッズは確定値が出るので、後3Fを要求せず
+    // 隣接する「人気 → 単勝オッズ」をそのまま採用する。
+    // start(=馬名セルの右隣)以降のみ走査するため、着順/枠/馬番/斤量を誤読しない。
+    for(let i=start; i<tx.length-1; i++){
+      const pop = popVal(tx[i]);
+      const odds = oddsVal(tx[i+1]);
+      if(pop >= 1 && odds >= 1){ put(num, odds, pop); return; }
+    }
   });
 
   return map;
@@ -4736,7 +4748,12 @@ async function fetchRace(){
 
     horses = parseHorsesFromDoc(doc, activeUrl);
     if(horses.length < 2){
-      throw new Error('出走馬を十分に取得できませんでした。race_idまたは開催情報を確認してください。');
+      // v5.18.103: iPadはSafariコンソールが使えないため、失敗理由をステータス欄に直接出す。
+      const hl = (String(html).match(/\/horse\//g) || []).length;
+      const path = window.__fetchPath || '?';
+      const be = window.__bridgeLastError || '';
+      const blocked = (typeof looksBlockedHtml === 'function') ? looksBlockedHtml(html) : false;
+      throw new Error(`出走馬を十分に取得できませんでした（経路:${path} / HTML${String(html).length}字 / 馬リンク${hl} / ブロック判定:${blocked?'有':'無'}${be?' / ブリッジ:'+be:''}）`);
     }
 
     // ── 単勝オッズ・人気取得（v5.18.9 RaceIdCheckFix） ──────────────────────────
@@ -7588,7 +7605,7 @@ if(horses.length === 0){
    ・「開催なし日」を確実に解消する。
    ============================================================ */
 (function(){
-  const VERSION87 = 'v5.18.102 BridgeAllHosts';
+  const VERSION87 = 'v5.18.104 DNFoddsFix';
 
   // ── Userscriptブリッジ（iPad回線IPでnar.netkeibaを取得）──────────────
   // CloudflareワーカーのIPはAkamaiに弾かれるため、NARはブラウザのUserscript経由で

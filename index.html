@@ -2931,30 +2931,71 @@ function buildWorkerRequestUrl(targetUrl){
   return base + '?url=' + encodeURIComponent(u);
 }
 
-async function fetchHtmlViaProxy(url){
-  // v5.18.97: NARは Userscriptブリッジ（iPad回線IP・CORS/Akamai回避）を最優先。
-  // ブリッジが無い/失敗したらワーカーにフォールバックする。
-  if(typeof window.__narBridgeFetch === 'function' && window.__NAR_BRIDGE_READY__ && /\/\/nar\.netkeiba\.com\//.test(String(url))){
-    try{
-      const r = await window.__narBridgeFetch(url);
-      if(r && r.status >= 200 && r.status < 300 && r.text) return r.text;
-      // ブリッジが非200を返した場合は実netkeiba応答なのでエラー扱い（ワーカーでも同じ結果になりやすい）
-      if(r && r.status){ throw new Error('HTTP ' + r.status + '（ブリッジ）'); }
-    }catch(e){
-      console.warn('[narBridge] fallback to worker:', e && e.message);
-      // 取得失敗時はワーカーへフォールバック
-    }
+// v5.18.102: ワーカー応答がAkamaiのソフトブロック/JSチャレンジ本文かを判定する。
+// HTTP200でも馬データの無い拒否ページが返ることがあり、これを「成功」と誤認すると
+// パース段で「出走馬を十分に取得できませんでした」になり原因が隠れる。
+function looksBlockedHtml(text){
+  if(!text) return true;
+  return /Access Denied|Reference\s*#|don't have permission to access|errors\.edgesuite\.net|Pardon Our Interruption|Incapsula|Just a moment|cf-browser-verification|bm-verify|akamai/i.test(text);
+}
+
+// ブリッジ（iPad住宅IP）でURLを取得。準備未完/失敗なら null を返す。
+async function fetchViaBridge(url){
+  if(typeof window.__narBridgeFetch !== 'function' || !window.__NAR_BRIDGE_READY__) return null;
+  try{
+    const r = await window.__narBridgeFetch(url);
+    if(r && r.status >= 200 && r.status < 300 && r.text) return r.text;
+    if(r && r.status) console.warn('[bridge] HTTP ' + r.status);
+  }catch(e){
+    console.warn('[bridge] fetch failed:', e && e.message);
   }
+  return null;
+}
+
+async function fetchHtmlViaProxy(url){
+  const isNetkeiba = /\/\/(nar|race)\.netkeiba\.com\//.test(String(url));
+  const isRaceData = /\/race\/(shutuba|result)\.html|\/odds\//.test(String(url));
+
+  // v5.18.97/102: netkeibaは Userscriptブリッジ（iPad回線IP・Akamai回避）を最優先。
+  // NARだけでなく race.netkeiba.com(JRA) もワーカーIPが弾かれるため、全ホストでブリッジ優先。
+  if(isNetkeiba){
+    const bridgeText = await fetchViaBridge(url);
+    if(bridgeText && !looksBlockedHtml(bridgeText)) return bridgeText;
+    // ブリッジ未準備/失敗時はワーカーへフォールバック
+  }
+
   const proxyReq = buildWorkerRequestUrl(url);
-  const res = await fetch(proxyReq, { cache:'no-store' });
+  let res;
+  try{
+    res = await fetch(proxyReq, { cache:'no-store' });
+  }catch(netErr){
+    const bt = await fetchViaBridge(url);
+    if(bt && !looksBlockedHtml(bt)) return bt;
+    throw netErr;
+  }
+
   if(!res.ok){
+    if(res.status === 403 || res.status === 502 || res.status === 503){
+      const bt = await fetchViaBridge(url);
+      if(bt && !looksBlockedHtml(bt)) return bt;
+    }
     if(res.status === 400) throw new Error('HTTP 400（netkeibaが出馬表ページを返しませんでした。race_idが無効・未公開・開催終了後の可能性があります）');
-    if(res.status === 403) throw new Error('HTTP 403（netkeibaへのアクセスが拒否されました。しばらく待ってから再試行してください）');
+    if(res.status === 403) throw new Error('HTTP 403（アクセス拒否。Userscriptブリッジ🌉を有効にすると住宅IPで取得できます）');
     if(res.status === 404) throw new Error('HTTP 404（出馬表ページが見つかりません。race_idを確認してください）');
-    if(res.status === 503 || res.status === 502) throw new Error(`HTTP ${res.status}（netkeiba側が一時的に利用不可です。少し待って再試行してください）`);
+    if(res.status === 502 || res.status === 503) throw new Error(`HTTP ${res.status}（netkeiba側が一時的に利用不可です。少し待って再試行してください）`);
     throw new Error('HTTP ' + res.status);
   }
-  return await res.text();
+
+  const text = await res.text();
+
+  // HTTP200でも中身が拒否ページ/空ならブロックとみなし、ブリッジで再取得。
+  if(isNetkeiba && (looksBlockedHtml(text) || (isRaceData && text.length < 1500))){
+    const bt = await fetchViaBridge(url);
+    if(bt && !looksBlockedHtml(bt)) return bt;
+    throw new Error(`ワーカーIPがブロックされた可能性（200だが拒否/空・本文${text.length}字）。Userscriptブリッジ🌉を有効にしてください`);
+  }
+
+  return text;
 }
 
 async function verifyJraRaceDateByShutuba(date, raceId){
@@ -7547,7 +7588,7 @@ if(horses.length === 0){
    ・「開催なし日」を確実に解消する。
    ============================================================ */
 (function(){
-  const VERSION87 = 'v5.18.101 NARSimBridge';
+  const VERSION87 = 'v5.18.102 BridgeAllHosts';
 
   // ── Userscriptブリッジ（iPad回線IPでnar.netkeibaを取得）──────────────
   // CloudflareワーカーのIPはAkamaiに弾かれるため、NARはブラウザのUserscript経由で

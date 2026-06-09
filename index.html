@@ -503,6 +503,23 @@ body{
       <div id="evThreshGrid"></div>
     </div>
 
+    <div class="card">
+      <h2>💾 データ保存・読込</h2>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <button class="btn-sm" onclick="exportStateJSON()">💾 JSON保存</button>
+        <button class="btn-sm" onclick="triggerImportJSON()">📂 JSON読込</button>
+        <button class="btn-sm" onclick="clearHorsesConfirm()">🧹 馬データをクリア</button>
+        <button class="btn-sm" onclick="resetSettingsToDefault()">♻️ 設定を初期化</button>
+      </div>
+      <input type="file" id="importJsonFile" accept="application/json,.json" style="display:none" onchange="handleImportJSON(this)">
+      <div id="dataIoStatus" style="font-size:12px;color:var(--muted);margin-top:8px"></div>
+      <div class="proxy-note" style="margin-top:8px;font-size:11px;line-height:1.7">
+        <b>JSON保存</b>：出走馬データ・各種設定・選択中レース情報をまとめて1ファイルに書き出します（バックアップ／別端末への移行用）。<br>
+        <b>JSON読込</b>：保存したファイルから一括復元します。<br>
+        <b>設定を初期化</b>：各種設定を初期値に戻します（プロキシURLは保持）。
+      </div>
+    </div>
+
   </div>
 
   <!-- プロキシタブ -->
@@ -649,6 +666,147 @@ function saveSettings(){
 function saveProxy(){
   settings.proxyUrl = document.getElementById('proxyUrl')?.value?.trim() || '';
   localStorage.setItem('tk-html-settings', JSON.stringify(settings));
+}
+
+// ─── v5.18.105: データ保存・読込・初期化 ───────────────────
+function dataIoStatus(msg, ok){
+  const el = document.getElementById('dataIoStatus');
+  if(!el) return;
+  el.textContent = msg;
+  el.style.color = (ok === false) ? '#f87171' : (ok ? '#34d399' : 'var(--muted)');
+}
+
+function buildStateSnapshot(){
+  // 現在のUI入力値を settings へ反映してから書き出す
+  try{ saveSettings(); }catch(e){}
+  try{ saveProxy(); }catch(e){}
+  return {
+    app: 'The競馬 EV分析',
+    schema: 1,
+    version: (typeof VERSION87 !== 'undefined') ? VERSION87 : '',
+    exportedAt: new Date().toISOString(),
+    settings: settings,
+    horses: horses,
+    currentRaceName: currentRaceName,
+    currentRaceId: currentRaceId,
+    profitHistory: profitHistory
+  };
+}
+
+function exportStateJSON(){
+  try{
+    const json = JSON.stringify(buildStateSnapshot(), null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const rid = String(currentRaceId || '').replace(/[^\d]/g, '');
+    a.href = url;
+    a.download = `keiba-ev_${formatLocalDate().replace(/-/g,'')}${rid ? '_' + rid : ''}.json`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { try{ document.body.removeChild(a); }catch(e){} URL.revokeObjectURL(url); }, 1500);
+    dataIoStatus(`💾 保存しました（出走馬${horses.length}頭・設定一式）`, true);
+  }catch(e){
+    dataIoStatus('保存に失敗しました: ' + (e && e.message ? e.message : e), false);
+  }
+}
+
+function triggerImportJSON(){
+  const f = document.getElementById('importJsonFile');
+  if(f){ f.value = ''; f.click(); }
+}
+
+function handleImportJSON(input){
+  const file = input && input.files && input.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = function(){
+    try{
+      applyStateSnapshot(JSON.parse(String(reader.result || '{}')));
+    }catch(e){
+      dataIoStatus('読込に失敗しました（JSONとして解釈できません）: ' + (e && e.message ? e.message : e), false);
+    }
+  };
+  reader.onerror = function(){ dataIoStatus('ファイルの読み取りに失敗しました', false); };
+  reader.readAsText(file);
+}
+
+function applyStateSnapshot(data){
+  if(!data || typeof data !== 'object'){ dataIoStatus('読込に失敗しました（中身が不正です）', false); return; }
+  // 設定（既存デフォルトを保ちつつ上書き）
+  if(data.settings && typeof data.settings === 'object'){
+    Object.assign(settings, data.settings);
+    if(!settings.minEVByType) settings.minEVByType = {...DEFAULT_MIN_EV};
+    TICKET_TYPES.forEach(t => { if(settings.minEVByType[t] == null) settings.minEVByType[t] = DEFAULT_MIN_EV[t]; });
+    if(!settings.proxyUrl) settings.proxyUrl = 'https://takuya.nitta-katsuhiko.workers.dev/';
+  }
+  // 出走馬
+  if(Array.isArray(data.horses)){
+    horses = data.horses.map(h => ({
+      num: Number(h && h.num) || 0,
+      name: String(h && h.name || ''),
+      odds: Number(h && h.odds) || 0,
+      pop: Number(h && h.pop) || 0,
+      frame: Number(h && h.frame) || 0
+    }));
+  }
+  if(typeof data.currentRaceName === 'string') currentRaceName = data.currentRaceName;
+  if(data.currentRaceId != null) currentRaceId = String(data.currentRaceId);
+  if(Array.isArray(data.profitHistory)) profitHistory = data.profitHistory;
+
+  // 永続化＆UI反映
+  localStorage.setItem('tk-html-settings', JSON.stringify(settings));
+  localStorage.setItem('tk-profit-history', JSON.stringify((profitHistory || []).slice(-200)));
+  refreshSettingsUI();
+  renderHorseRows();
+  try{ renderManualFinishPicker(); }catch(e){}
+  try{ checkPopDuplicate(); }catch(e){}
+  try{ renderProfitChart(); }catch(e){}
+  dataIoStatus(`📂 読込しました（出走馬${horses.length}頭${currentRaceName ? ' / ' + currentRaceName : ''}）`, true);
+}
+
+function refreshSettingsUI(){
+  const setNar = document.getElementById('setNar'); if(setNar) setNar.value = settings.nar ? '1' : '0';
+  const setBudget = document.getElementById('setBudget'); if(setBudget) setBudget.value = settings.budget;
+  const setUnit = document.getElementById('setUnit'); if(setUnit) setUnit.value = settings.unit;
+  const setMax = document.getElementById('setMaxTickets'); if(setMax) setMax.value = settings.maxTickets;
+  const setAnti = document.getElementById('setAntigami'); if(setAnti) setAnti.checked = settings.antigami !== false;
+  const pUrl = document.getElementById('proxyUrl'); if(pUrl) pUrl.value = settings.proxyUrl || '';
+  const nb = document.getElementById('narBadge'); if(nb) nb.style.display = settings.nar ? '' : 'none';
+  TICKET_TYPES.forEach(t => {
+    const el = document.getElementById('ev-' + t);
+    if(el) el.value = (settings.minEVByType && settings.minEVByType[t] != null) ? settings.minEVByType[t] : DEFAULT_MIN_EV[t];
+  });
+  // モードボタンのactive更新（ラベル一致で判定）
+  document.querySelectorAll('#modeGrid .mode-btn').forEach(b => {
+    const opt = MODE_OPTIONS.find(o => o[1] === b.textContent);
+    b.classList.toggle('active', !!opt && opt[0] === settings.mode);
+  });
+}
+
+function clearHorsesConfirm(){
+  if(horses.length && !confirm('出走馬データをすべてクリアします。よろしいですか？')) return;
+  clearHorses();
+  try{ renderManualFinishPicker(); }catch(e){}
+  dataIoStatus('🧹 馬データをクリアしました', true);
+}
+
+function resetSettingsToDefault(){
+  if(!confirm('各種設定を初期値に戻します（プロキシURLは保持）。よろしいですか？')) return;
+  const keepProxy = settings.proxyUrl;
+  settings = {
+    mode: 'roi100',
+    nar: false,
+    budget: 500,
+    unit: 100,
+    maxTickets: 5,
+    antigami: true,
+    minEVByType: {...DEFAULT_MIN_EV},
+    proxyUrl: keepProxy || 'https://takuya.nitta-katsuhiko.workers.dev/'
+  };
+  localStorage.setItem('tk-html-settings', JSON.stringify(settings));
+  refreshSettingsUI();
+  dataIoStatus('♻️ 設定を初期化しました（プロキシURLは保持）', true);
 }
 
 // ─── UI初期化 ───────────────────────────────────
@@ -7605,7 +7763,7 @@ if(horses.length === 0){
    ・「開催なし日」を確実に解消する。
    ============================================================ */
 (function(){
-  const VERSION87 = 'v5.18.104 DNFoddsFix';
+  const VERSION87 = 'v5.18.105 DataIO';
 
   // ── Userscriptブリッジ（iPad回線IPでnar.netkeibaを取得）──────────────
   // CloudflareワーカーのIPはAkamaiに弾かれるため、NARはブラウザのUserscript経由で

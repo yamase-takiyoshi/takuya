@@ -2406,20 +2406,37 @@ function raceIdVenueMatches(kind, raceId, venueCode){
   return extractVenueCodeFromRaceId(raceId, kind) === venueCode;
 }
 
+function trackKindOfRaceId(raceId){
+  // 先頭から5-6桁目の場コードでJRA(01-10)/NARを判定する。race_idが最も信頼できる出所。
+  return /^(0[1-9]|10)$/.test(String(raceId||'').slice(4,6)) ? 'JRA' : 'NAR';
+}
+
 function validateRaceUrlForCurrentSelection(rawUrl){
-  const kind = document.getElementById('pickKind')?.value || 'JRA';
+  let kind = document.getElementById('pickKind')?.value || 'JRA';
   const date = document.getElementById('pickDate')?.value || todayYmd();
   const venueCode = document.getElementById('pickVenue')?.value || '';
   let u;
   try{ u = new URL(rawUrl); }catch(e){ return {ok:false, message:'URL形式が不正です'}; }
 
-  const expectedHost = expectedHostForKind(kind);
-  if(u.hostname !== expectedHost){
-    return {ok:false, message:`区分は${kind}ですがURLが${u.hostname}です。${expectedHost} のURLを選び直してください。`};
-  }
-
   const raceId = u.searchParams.get('race_id') || '';
   if(!/^\d{10,14}$/.test(raceId)) return {ok:false, message:'race_id が取得できません'};
+
+  // v5.18.101: race_idの場コードを真実の出所として、hostと区分をそれに合わせて自己修復する。
+  // NAR用一覧ビルダーがJRAのrace_idに nar.netkeiba.com を付けてしまった場合などを、
+  // 「区分とURLが不一致」エラーで止めずに自動で正す。
+  const trueKind = trackKindOfRaceId(raceId);
+  const expectedHost = expectedHostForKind(trueKind);
+  if(u.hostname !== expectedHost){
+    u.hostname = expectedHost;
+    rawUrl = u.toString();
+    const field = document.getElementById('raceUrl');
+    if(field) field.value = rawUrl;
+  }
+  if(trueKind !== kind){
+    const kindEl = document.getElementById('pickKind');
+    if(kindEl) kindEl.value = trueKind; // 以降の kind 読み取りを race_id に一致させる（changeは発火させず選択は維持）
+    kind = trueKind;
+  }
 
   if(!raceIdVenueMatches(kind, raceId, venueCode)){
     return {ok:false, message:`開催場が一致しません。選択=${venueName(kind, venueCode)} / race_id=${raceId}`};
@@ -7530,7 +7547,7 @@ if(horses.length === 0){
    ・「開催なし日」を確実に解消する。
    ============================================================ */
 (function(){
-  const VERSION87 = 'v5.18.100 NARSimBridge';
+  const VERSION87 = 'v5.18.101 NARSimBridge';
 
   // ── Userscriptブリッジ（iPad回線IPでnar.netkeibaを取得）──────────────
   // CloudflareワーカーのIPはAkamaiに弾かれるため、NARはブラウザのUserscript経由で
@@ -7585,8 +7602,12 @@ if(horses.length === 0){
     return /^\d{8}$/.test(d)&&d<t;
   }
   function venueName87(code){try{return venueName('NAR',code)||code;}catch(e){return code;}}
-  function shutubaUrl87(rid){return `https://nar.netkeiba.com/race/shutuba.html?race_id=${rid}&rf=race_submenu`;}
-  function resultUrl87(rid){return `https://nar.netkeiba.com/race/result.html?race_id=${rid}&rf=race_submenu`;}
+  // v5.18.101: race_idの場コード(5-6桁目)でhostを決める。JRA(01-10)は race.netkeiba.com、
+  // それ以外(NAR)は nar.netkeiba.com。NAR用ビルダーにJRAのrace_idが紛れても誤host化しない。
+  function trackKindOfRaceId87(rid){ return /^(0[1-9]|10)$/.test(String(rid||'').slice(4,6)) ? 'JRA' : 'NAR'; }
+  function hostForRaceId87(rid){ return trackKindOfRaceId87(rid)==='JRA' ? 'https://race.netkeiba.com' : 'https://nar.netkeiba.com'; }
+  function shutubaUrl87(rid){return `${hostForRaceId87(rid)}/race/shutuba.html?race_id=${rid}&rf=race_submenu`;}
+  function resultUrl87(rid){return `${hostForRaceId87(rid)}/race/result.html?race_id=${rid}&rf=race_submenu`;}
   function selectedUrl87(rid,date){return isPast87(date)?resultUrl87(rid):shutubaUrl87(rid);}
   function raceId87(date,venueCode,raceNo){
     const d=ymd87(date);

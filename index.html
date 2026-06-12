@@ -444,6 +444,7 @@ body{
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn-sm" id="ptsParseBtn" onclick="ptsParsePreview()">📥 テキスト読み込み（プレビュー）</button>
         <button class="btn btn-primary" id="ptsRunBtn" onclick="runPredictionTextSettlement()">💰 結果取得・一括精算</button>
+        <button class="btn-sm" id="ptsCopyBtn" onclick="copySettlementResultText()" style="display:none">📋 精算結果をテキストコピー</button>
         <button class="btn-sm" id="ptsClearBtn" onclick="ptsClearText()">🗑 クリア</button>
       </div>
       <div id="ptsProgress" style="margin-top:10px"></div>
@@ -9188,7 +9189,11 @@ if(horses.length === 0){
 (function(){
   'use strict';
 
-  const VERSION89 = 'v5.18.112 PredictTextSettle';
+  const VERSION89 = 'v5.18.113 PredictTextSettleCopy';
+
+  // 直近の精算結果（テキストコピー用）
+  let pts_lastRows = [];
+  let pts_lastMeta = null;
 
   function $(id){ return document.getElementById(id); }
   function pts_esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c])); }
@@ -9482,9 +9487,81 @@ if(horses.length === 0){
   function ptsClearText(){
     const ta = $('ptsText');
     if(ta) ta.value = '';
+    pts_lastRows = [];
+    pts_lastMeta = null;
+    const copyBtn = $('ptsCopyBtn');
+    if(copyBtn) copyBtn.style.display = 'none';
     $('ptsProgress').innerHTML = '';
     $('ptsSummary').innerHTML = '';
     $('ptsTable').innerHTML = '';
+  }
+
+  // ── 精算結果のテキスト化（iPad向け・メモ/LINE共有用）──
+  function pts_buildResultText(){
+    if(!pts_lastMeta || !pts_lastRows.length) return '';
+    const m = pts_lastMeta;
+    let out = `💰 精算結果 ${m.date} ${m.kind} ${m.venue}` + (m.mode ? `（モード:${m.mode}）` : '') + '\n';
+
+    pts_lastRows.forEach(r => {
+      if(r.status === 'pass'){
+        out += `\n■ ${r.no}R ${r.raceName || ''}\n  見送り（精算対象外）\n`;
+        return;
+      }
+      if(r.status === 'error'){
+        out += `\n■ ${r.no}R ${r.raceName || ''}\n  ⚠️ 精算失敗: ${r.error || ''}\n`;
+        return;
+      }
+      out += `\n■ ${r.no}R ${r.raceName || ''}`;
+      out += r.hasFinish ? ` 着順 ${r.finishTop.join('-')}\n` : `【未確定】\n`;
+      (r.detail || []).forEach(t => {
+        const judge = !r.hasFinish ? '未確定'
+          : t.hit ? `◎的中 ${pts_yen(t.ret)}円` + (t.paySource === 'estimate' ? '(推定)' : '')
+          : '✕外れ';
+        out += `  ${t.type} ${(t.nums||[]).join('-')} ${pts_yen(t.amount)}円 → ${judge}\n`;
+      });
+      if(r.hasFinish){
+        out += `  投資${pts_yen(r.bet)}円 → 払戻${pts_yen(r.ret)}円 （${r.profit>=0?'+':''}${pts_yen(r.profit)}円 / 回収率${r.bet ? r.roi.toFixed(0) : 0}%）\n`;
+      } else {
+        out += `  投資${pts_yen(r.bet)}円 → 未確定\n`;
+      }
+    });
+
+    // 合計（確定レースのみ）
+    const settled = pts_lastRows.filter(r => r.status === 'ok' && r.hasFinish);
+    const pending = pts_lastRows.filter(r => r.status === 'ok' && !r.hasFinish).length;
+    const errs    = pts_lastRows.filter(r => r.status === 'error').length;
+    const bet = settled.reduce((s, r) => s + (r.bet || 0), 0);
+    const ret = settled.reduce((s, r) => s + (r.ret || 0), 0);
+    const profit = ret - bet;
+    const roi = bet ? ret / bet * 100 : 0;
+    const hitRaces = settled.filter(r => r.hit > 0).length;
+    out += `\n━━━━━━━━━━━━━━\n`;
+    out += `精算${settled.length}R（的中${hitRaces}R）`;
+    if(pending) out += ` / 未確定${pending}R`;
+    if(errs) out += ` / 失敗${errs}R`;
+    out += `\n投資 ${pts_yen(bet)}円 → 払戻 ${pts_yen(ret)}円\n`;
+    out += `収支 ${profit>=0?'+':''}${pts_yen(profit)}円 ｜ 回収率 ${roi.toFixed(1)}%\n`;
+    return out;
+  }
+
+  async function copySettlementResultText(){
+    const text = pts_buildResultText();
+    if(!text){ alert('先に「💰 結果取得・一括精算」を実行してください。'); return; }
+    try{
+      await navigator.clipboard.writeText(text);
+      alert('📋 精算結果をコピーしました。');
+    }catch(e){
+      // Safariでclipboardが使えない場合のフォールバック
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      let ok = false;
+      try{ ok = document.execCommand('copy'); }catch(e2){}
+      document.body.removeChild(ta);
+      alert(ok ? '📋 精算結果をコピーしました。' : 'コピーできませんでした。');
+    }
   }
 
   // ── メイン：予想テキスト一括精算 ──
@@ -9501,10 +9578,14 @@ if(horses.length === 0){
     if(!settings.proxyUrl){ alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。'); return; }
 
     if(btn){ btn.disabled = true; btn.textContent = '⏳ 精算中...'; }
+    const copyBtn = $('ptsCopyBtn');
+    if(copyBtn) copyBtn.style.display = 'none';
     $('ptsSummary').innerHTML = '';
     $('ptsTable').innerHTML = '';
 
     const rows = [];
+    pts_lastRows = rows;
+    pts_lastMeta = { ...parsed.meta };
     try{
       // 馬データタブの選択をテキストに合わせ、R番号→race_id を解決
       pts_applyMetaToPick(parsed.meta);
@@ -9556,6 +9637,7 @@ if(horses.length === 0){
       if(parts.length) msg += `（${parts.join('、')}）`;
       msg += '。';
       if(prog) prog.innerHTML = `<div class="url-status ok">${msg}</div>`;
+      if(copyBtn && rows.some(x => x.status === 'ok')) copyBtn.style.display = '';
     }catch(e){
       console.error('[runPredictionTextSettlement]', e);
       if(prog) prog.innerHTML = `<div class="url-status err">❌ 予想テキスト精算失敗: ${pts_esc((e && e.message) || e)}</div>`;
@@ -9568,6 +9650,7 @@ if(horses.length === 0){
   window.ptsParsePreview = ptsParsePreview;
   window.ptsClearText = ptsClearText;
   window.runPredictionTextSettlement = runPredictionTextSettlement;
+  window.copySettlementResultText = copySettlementResultText;
 
   // バージョン表記の更新（VERSION88の450msより後に実行）
   setTimeout(function(){

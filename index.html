@@ -424,6 +424,33 @@ body{
       <div id="predSimTable" style="margin-top:10px"></div>
     </div>
 
+    <!-- v5.18.112: 予想テキスト読み込み精算カード -->
+    <div class="card" style="margin-top:12px" id="ptsCard">
+      <div class="section-header">
+        <h2>📋 予想テキスト読み込み精算</h2>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.5">
+        「🔮 予想シミュレーション」の<b>📋 予想をテキストコピー</b>でコピーしたテキストを下に貼り付けると、
+        買い目を復元し、各レースの結果ページから<b>着順・払戻を取得して精算</b>します。
+        開催日・区分・開催場はテキスト1行目から自動設定されます（メモ・LINEに保存した予想を後日精算できます）。
+      </div>
+      <textarea id="ptsText" rows="8" spellcheck="false"
+        placeholder="🔮 レース予想 2026-06-13 JRA 東京（モード:roi100）&#10;&#10;■ 1R 3歳未勝利&#10;  単勝 5 1,000円 (想定3.2倍 / EV1.23)&#10;  馬連 3-5 500円 (想定12.0倍 / EV1.10)&#10;  投資1,500円 → 期待2,000円"
+        style="width:100%;box-sizing:border-box;background:rgba(15,23,42,0.55);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px;font-size:12px;font-family:monospace;line-height:1.5;resize:vertical"></textarea>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:10px 0;cursor:pointer;user-select:none">
+        <input type="checkbox" id="ptsRecord" checked style="width:18px;height:18px;accent-color:var(--green)">
+        <span>📉 精算結果を収支グラフへ記録する（race_id単位で上書き）</span>
+      </label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn-sm" id="ptsParseBtn" onclick="ptsParsePreview()">📥 テキスト読み込み（プレビュー）</button>
+        <button class="btn btn-primary" id="ptsRunBtn" onclick="runPredictionTextSettlement()">💰 結果取得・一括精算</button>
+        <button class="btn-sm" id="ptsClearBtn" onclick="ptsClearText()">🗑 クリア</button>
+      </div>
+      <div id="ptsProgress" style="margin-top:10px"></div>
+      <div id="ptsSummary" style="margin-top:10px"></div>
+      <div id="ptsTable" style="margin-top:10px"></div>
+    </div>
+
     <!-- 買い目編集カード -->
     <div class="card" style="margin-top:12px" id="simEditCard">
       <div class="section-header">
@@ -9143,6 +9170,410 @@ if(horses.length === 0){
     document.title = 'The競馬 EV分析 ' + VERSION88;
     ps_renderTarget();
   }, 450);
+})();
+</script>
+
+<!-- ============================================================
+     v5.18.112 PredictTextSettle
+     「予想シミュレーション」でコピーした予想テキストを貼り付けて
+     買い目を復元し、結果ページの着順・払戻で一括精算する。
+     ・テキスト1行目（日付/区分/開催場/モード）から馬データタブの
+       選択を自動設定し、既存 loadRaceList で R番号→race_id を解決。
+     ・精算は既存の judgeTicketHit / payoutForTicket /
+       parseFinishFromResultDoc / parsePayoutsFromResultDoc を再利用。
+     ・チェックONで simRecordProfit により収支グラフへ記録
+       （race_id 単位で上書き）。既存機能には一切手を入れない。
+     ============================================================ -->
+<script>
+(function(){
+  'use strict';
+
+  const VERSION89 = 'v5.18.112 PredictTextSettle';
+
+  function $(id){ return document.getElementById(id); }
+  function pts_esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c])); }
+  function pts_host(kind){ return kind === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com'; }
+  function pts_yen(n){ return Number(n||0).toLocaleString(); }
+  function pts_ymd8(date){ return String(date||'').replace(/[^0-9]/g,'').slice(0,8); }
+
+  const PTS_TYPES = ['単勝','複勝','枠連','馬連','ワイド','馬単','3連複','3連単'];
+
+  // ── 開催場名 → 場コード（JRA_VENUES/NAR_VENUESの逆引き）──
+  function pts_venueCode(kind, name){
+    const list = kind === 'NAR' ? NAR_VENUES : JRA_VENUES;
+    const n = String(name||'').trim();
+    const hit = list.find(v => v[1] === n) || list.find(v => n.startsWith(v[1]) || v[1].startsWith(n));
+    return hit ? hit[0] : '';
+  }
+
+  // ── 予想テキストのパース ──
+  // 戻り値: { meta:{date,kind,venue,venueCode,mode}, races:[{no,name,confirmed,tickets:[]}], errors:[] }
+  function pts_parseText(text){
+    const out = { meta: null, races: [], errors: [] };
+    const lines = String(text||'').replace(/\r\n?/g, '\n').split('\n');
+    let cur = null;
+
+    for(const raw of lines){
+      const line = raw.trim();
+      if(!line) continue;
+
+      // 1行目（ヘッダ）: 🔮 レース予想 2026-06-13 JRA 東京（モード:roi100）
+      if(!out.meta && /レース予想/.test(line)){
+        const m = line.match(/レース予想\s+([\d\-\/\.]+)\s+(JRA|NAR)\s+(.+)$/);
+        if(m){
+          let venue = m[3].trim(), mode = '';
+          const mm = venue.match(/^(.*?)[（(]\s*モード\s*[:：]\s*(.*?)[）)]\s*$/);
+          if(mm){ venue = mm[1].trim(); mode = mm[2].trim(); }
+          const date = m[1].replace(/[\/\.]/g, '-');
+          out.meta = { date, kind: m[2], venue, venueCode: pts_venueCode(m[2], venue), mode };
+        } else {
+          out.errors.push('1行目の形式を解釈できませんでした: ' + line);
+        }
+        continue;
+      }
+
+      // レース行: ■ 1R レース名【確定済】
+      let m = line.match(/^[■◾▪]\s*(\d{1,2})\s*R\s*(.*)$/);
+      if(m){
+        const no = Number(m[1]);
+        let name = (m[2]||'').replace(/【確定済】/g, '').trim();
+        cur = { no, name, confirmed: /【確定済】/.test(m[2]||''), tickets: [], pass: false };
+        out.races.push(cur);
+        continue;
+      }
+
+      if(!cur) continue;
+      if(/^見送り/.test(line)){ cur.pass = true; continue; }
+      if(/^投資/.test(line)) continue; // 集計行はスキップ（買い目から再計算する）
+
+      // 買い目行: 単勝 5 1,000円 (想定3.2倍 / EV1.23)
+      m = line.match(/^(単勝|複勝|枠連|馬連|ワイド|馬単|3連複|3連単)\s+([\d\s\-–−]+?)\s+([\d,]+)\s*円(?:.*?想定\s*([\d.]+)\s*倍)?(?:.*?EV\s*([\d.]+))?/);
+      if(m){
+        const nums = m[2].split(/[-–−]/).map(s => Number(s.trim())).filter(n => n >= 1 && n <= 18);
+        const amount = Number(m[3].replace(/,/g, ''));
+        if(nums.length && amount > 0){
+          cur.tickets.push({
+            type: m[1],
+            nums,
+            amount,
+            odds: Number(m[4] || 0),
+            ev: Number(m[5] || 0)
+          });
+        } else {
+          out.errors.push(`${cur.no}R: 買い目行を解釈できませんでした: ` + line);
+        }
+        continue;
+      }
+    }
+
+    if(!out.meta) out.errors.push('ヘッダ行（🔮 レース予想 …）が見つかりません。');
+    else if(!out.meta.venueCode) out.errors.push(`開催場「${out.meta.venue}」の場コードが特定できませんでした。`);
+    if(!out.races.length) out.errors.push('レース行（■ 1R …）が見つかりません。');
+    return out;
+  }
+
+  // ── ヘッダの開催日・区分・開催場を馬データタブへ反映 ──
+  function pts_applyMetaToPick(meta){
+    const kindEl = $('pickKind'), dateEl = $('pickDate'), venueEl = $('pickVenue');
+    if(kindEl && kindEl.value !== meta.kind){
+      kindEl.value = meta.kind;
+      try{ renderVenueOptions(); }catch(e){}
+    }
+    if(dateEl && /^\d{4}-\d{2}-\d{2}$/.test(meta.date)) dateEl.value = meta.date;
+    if(venueEl && meta.venueCode){
+      if(![...venueEl.options].some(o => o.value === meta.venueCode)){
+        const op = document.createElement('option');
+        op.value = meta.venueCode;
+        op.textContent = meta.venue || meta.venueCode;
+        venueEl.appendChild(op);
+      }
+      venueEl.value = meta.venueCode;
+    }
+  }
+
+  // ── R番号→race_id 解決（既存 loadRaceList → raceSelect 読み取り）──
+  async function pts_resolveRaceIds(meta){
+    const map = {};
+    try{
+      await loadRaceList();
+      const sel = $('raceSelect');
+      if(sel){
+        [...sel.querySelectorAll('option')].forEach(o => {
+          if(!o.value || !/race_id=/.test(o.value)) return;
+          const rid = o.dataset.raceId || (o.value.match(/race_id=(\d{10,14})/) || [])[1] || '';
+          if(!rid) return;
+          const no = Number(o.dataset.raceNo || String(rid).slice(-2));
+          if(no >= 1 && no <= 12 && !map[no]) map[no] = rid;
+        });
+      }
+    }catch(e){ console.warn('[pts_resolveRaceIds] loadRaceList失敗', e); }
+
+    // NARは race_id が日付・場コードから決定できるため、欠けたR番号を補完する
+    if(meta.kind === 'NAR' && meta.venueCode){
+      const d = pts_ymd8(meta.date);
+      if(/^\d{8}$/.test(d)){
+        for(let no = 1; no <= 12; no++){
+          if(!map[no]) map[no] = `${d.slice(0,4)}${meta.venueCode}${d.slice(4,8)}${String(no).padStart(2,'0')}`;
+        }
+      }
+    }
+    return map;
+  }
+
+  // ── 1レース精算：結果ページ取得 → 着順・払戻 → 買い目判定 ──
+  async function pts_settleRace(kind, rid, tickets){
+    const url = `${pts_host(kind)}/race/result.html?race_id=${rid}&rf=race_submenu`;
+    const html = await fetchHtmlViaProxy(url);
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+
+    // parseFinishFromResultDoc / judgeTicketHit(複勝の頭数判定) は global horses を参照する
+    const rHorses = parseHorsesFromDoc(doc, url);
+    if(!rHorses || rHorses.length < 2) throw new Error('結果ページから出走馬を取得できませんでした');
+    horses = rHorses;
+
+    const raceName = parseRaceTitleFromDoc(doc) || '';
+    const finish = parseFinishFromResultDoc(doc) || [];
+    const hasFinish = finish.length >= 2;
+    const payouts = hasFinish ? parsePayoutsFromResultDoc(doc) : {};
+
+    let bet = 0, ret = 0, hit = 0;
+    const detail = tickets.map(t => {
+      const a = Number(t.amount || 0);
+      bet += a;
+      const isHit = hasFinish ? judgeTicketHit(t, finish) : false;
+      const pay = isHit ? payoutForTicket(t, payouts) : { amount: 0, source: '' };
+      const r = isHit ? Math.floor(a / 100) * Number(pay.amount || 0) : 0;
+      if(isHit) hit++;
+      ret += r;
+      return { ...t, hit: isHit, pay100: Number(pay.amount || 0), paySource: pay.source || '', ret: r };
+    });
+
+    return {
+      raceName, hasFinish,
+      finishTop: hasFinish ? finish.slice(0,3).map(x => x.horseNo) : [],
+      bet, ret, hit, profit: ret - bet, roi: bet ? ret / bet * 100 : 0,
+      detail
+    };
+  }
+
+  // ── 表示 ──
+  function pts_renderSummary(rows){
+    const sum = $('ptsSummary');
+    if(!sum) return;
+    const done    = rows.filter(r => r.status === 'ok');
+    const settled = done.filter(r => r.hasFinish);
+    const pending = done.filter(r => !r.hasFinish);
+    const errors  = rows.filter(r => r.status === 'error');
+    const settledBet = settled.reduce((s, r) => s + (r.bet || 0), 0);
+    const ret     = settled.reduce((s, r) => s + (r.ret || 0), 0);
+    const profit  = ret - settledBet;
+    const roi     = settledBet ? ret / settledBet * 100 : 0;
+    const hitRaces = settled.filter(r => r.hit > 0).length;
+
+    sum.innerHTML = `
+      <div class="sim-kpi-grid" style="margin-top:0">
+        <div class="sim-kpi"><div class="v">${settled.length}</div><div class="l">精算R</div></div>
+        <div class="sim-kpi"><div class="v">${hitRaces}</div><div class="l">的中R</div></div>
+        <div class="sim-kpi"><div class="v">${pts_yen(settledBet)}</div><div class="l">投資円(確定)</div></div>
+        <div class="sim-kpi"><div class="v">${pts_yen(ret)}</div><div class="l">払戻円</div></div>
+        <div class="sim-kpi"><div class="v" style="color:${profit>=0?'var(--green)':'var(--red)'}">${profit>=0?'+':''}${pts_yen(profit)}</div><div class="l">収支円</div></div>
+        <div class="sim-kpi"><div class="v" style="color:${roi>=100?'var(--green)':'var(--yellow)'}">${roi.toFixed(1)}%</div><div class="l">回収率</div></div>
+        <div class="sim-kpi"><div class="v">${pending.length}</div><div class="l">未確定R</div></div>
+        <div class="sim-kpi"><div class="v">${errors.length}</div><div class="l">失敗R</div></div>
+      </div>`;
+  }
+
+  function pts_detailHtml(r){
+    if(!r.detail || !r.detail.length){
+      return `<div style="font-size:11px;color:var(--muted);padding:4px 0">買い目なし（見送り）</div>`;
+    }
+    let h = `<table style="width:100%;border-collapse:collapse;font-size:11px;margin-top:4px">
+      <thead><tr style="color:var(--muted);text-align:left">
+        <th style="padding:3px 4px">券種</th>
+        <th style="padding:3px 4px">買い目</th>
+        <th style="padding:3px 4px;text-align:right">金額</th>
+        <th style="padding:3px 4px;text-align:center">判定</th>
+        <th style="padding:3px 4px;text-align:right">払戻(100円)</th>
+        <th style="padding:3px 4px;text-align:right">払戻額</th>
+      </tr></thead><tbody>`;
+    r.detail.forEach(t => {
+      const judge = !r.hasFinish ? '<span style="color:var(--muted)">未確定</span>'
+        : t.hit ? '<span style="color:var(--green);font-weight:700">的中</span>'
+        : '<span style="color:var(--muted)">外れ</span>';
+      const est = t.hit && t.paySource === 'estimate' ? ' <span style="color:var(--yellow);font-size:10px">(推定)</span>' : '';
+      h += `<tr style="border-top:1px solid var(--border)${t.hit?';background:rgba(0,255,136,0.06)':''}">
+        <td style="padding:3px 4px">${pts_esc(t.type)}</td>
+        <td style="padding:3px 4px">${(t.nums||[]).join('-')}</td>
+        <td style="padding:3px 4px;text-align:right">${pts_yen(t.amount)}円</td>
+        <td style="padding:3px 4px;text-align:center">${judge}</td>
+        <td style="padding:3px 4px;text-align:right">${t.hit ? pts_yen(t.pay100) + '円' + est : '-'}</td>
+        <td style="padding:3px 4px;text-align:right;font-weight:700">${t.hit ? pts_yen(t.ret) + '円' : '-'}</td>
+      </tr>`;
+    });
+    h += `</tbody></table>`;
+    return h;
+  }
+
+  function pts_renderTable(rows){
+    const box = $('ptsTable');
+    if(!box) return;
+    if(!rows.length){ box.innerHTML = ''; return; }
+    let h = '';
+    rows.forEach(r => {
+      if(r.status === 'error'){
+        h += `<div style="border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:6px;background:rgba(15,23,42,0.35)">
+          <b>${r.no}R</b> <span style="color:var(--red)">⚠️ ${pts_esc(r.error || '精算失敗')}</span>
+        </div>`;
+        return;
+      }
+      if(r.status === 'pass'){
+        h += `<div style="border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:6px;background:rgba(15,23,42,0.35);color:var(--muted);font-size:12px">
+          <b style="color:var(--text)">${r.no}R</b> ${pts_esc(r.raceName || '')} ｜ 見送り（精算対象外）
+        </div>`;
+        return;
+      }
+      const fin = r.hasFinish ? r.finishTop.join('-') : '未確定';
+      const profitColor = (r.profit || 0) >= 0 ? 'var(--green)' : 'var(--red)';
+      const roiColor = (r.roi || 0) >= 100 ? 'var(--green)' : ((r.bet || 0) ? 'var(--yellow)' : 'var(--muted)');
+      h += `<details style="border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:6px;background:rgba(15,23,42,0.35)" ${r.hit>0?'open':''}>
+        <summary style="cursor:pointer;list-style:none;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <b>${r.no}R</b>
+          <span style="flex:1;min-width:120px">${pts_esc(r.raceName || (r.no + 'R'))}</span>
+          <span style="font-size:11px;color:var(--muted)">着順 ${fin}</span>
+          <span style="font-size:11px">投資 ${pts_yen(r.bet)}円</span>
+          <span style="font-size:11px">払戻 ${r.hasFinish ? pts_yen(r.ret) + '円' : '-'}</span>
+          <span style="font-size:11px;font-weight:700;color:${profitColor}">${r.hasFinish ? ((r.profit>=0?'+':'') + pts_yen(r.profit) + '円') : ''}</span>
+          <span style="font-size:11px;font-weight:700;color:${roiColor}">${r.hasFinish && r.bet ? r.roi.toFixed(0) + '%' : ''}</span>
+        </summary>
+        ${pts_detailHtml(r)}
+      </details>`;
+    });
+    box.innerHTML = h;
+  }
+
+  // ── プレビュー（パース結果の確認のみ・通信なし）──
+  function ptsParsePreview(){
+    const prog = $('ptsProgress');
+    $('ptsSummary').innerHTML = '';
+    $('ptsTable').innerHTML = '';
+    const parsed = pts_parseText($('ptsText')?.value || '');
+    if(parsed.errors.length && (!parsed.meta || !parsed.races.length)){
+      if(prog) prog.innerHTML = `<div class="url-status err">❌ ${pts_esc(parsed.errors.join(' / '))}</div>`;
+      return;
+    }
+    const m = parsed.meta;
+    const withBets = parsed.races.filter(r => r.tickets.length);
+    const tickets = withBets.reduce((s, r) => s + r.tickets.length, 0);
+    const bet = withBets.reduce((s, r) => s + r.tickets.reduce((a, t) => a + t.amount, 0), 0);
+    let msg = `📥 読み込みOK：<b>${pts_esc(m.date)} ${pts_esc(m.kind)} ${pts_esc(m.venue)}</b>`
+      + (m.mode ? `（モード:${pts_esc(m.mode)}）` : '')
+      + ` ｜ 買い目あり ${withBets.length}R / 見送り ${parsed.races.length - withBets.length}R / ${tickets}点 / 投資 ${pts_yen(bet)}円`;
+    if(parsed.errors.length) msg += `<br><span style="color:var(--yellow)">⚠️ ${pts_esc(parsed.errors.join(' / '))}</span>`;
+    if(prog) prog.innerHTML = `<div class="url-status ok">${msg}</div>`;
+
+    const rows = parsed.races.map(r => r.tickets.length
+      ? { no: r.no, raceName: r.name, status: 'ok', hasFinish: false, finishTop: [],
+          bet: r.tickets.reduce((s, t) => s + t.amount, 0), ret: 0, hit: 0, profit: 0, roi: 0,
+          detail: r.tickets.map(t => ({ ...t, hit: false, pay100: 0, paySource: '', ret: 0 })) }
+      : { no: r.no, raceName: r.name, status: 'pass' });
+    pts_renderTable(rows);
+  }
+
+  function ptsClearText(){
+    const ta = $('ptsText');
+    if(ta) ta.value = '';
+    $('ptsProgress').innerHTML = '';
+    $('ptsSummary').innerHTML = '';
+    $('ptsTable').innerHTML = '';
+  }
+
+  // ── メイン：予想テキスト一括精算 ──
+  async function runPredictionTextSettlement(){
+    const btn = $('ptsRunBtn');
+    const prog = $('ptsProgress');
+    const record = !!$('ptsRecord')?.checked;
+
+    const parsed = pts_parseText($('ptsText')?.value || '');
+    if(!parsed.meta || !parsed.meta.venueCode || !parsed.races.length){
+      if(prog) prog.innerHTML = `<div class="url-status err">❌ ${pts_esc(parsed.errors.join(' / ') || 'テキストを解釈できませんでした。')}</div>`;
+      return;
+    }
+    if(!settings.proxyUrl){ alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。'); return; }
+
+    if(btn){ btn.disabled = true; btn.textContent = '⏳ 精算中...'; }
+    $('ptsSummary').innerHTML = '';
+    $('ptsTable').innerHTML = '';
+
+    const rows = [];
+    try{
+      // 馬データタブの選択をテキストに合わせ、R番号→race_id を解決
+      pts_applyMetaToPick(parsed.meta);
+      if(prog) prog.innerHTML = '<div class="url-status">📅 レース一覧を取得して race_id を解決中...</div>';
+      const ridMap = await pts_resolveRaceIds(parsed.meta);
+
+      const targets = parsed.races;
+      for(let i = 0; i < targets.length; i++){
+        const r = targets[i];
+        if(!r.tickets.length){
+          rows.push({ no: r.no, raceName: r.name, status: 'pass' });
+          pts_renderTable(rows);
+          continue;
+        }
+        if(prog) prog.innerHTML = `<div class="url-status">💰 ${i+1}/${targets.length} … ${r.no}R を精算中</div>`;
+        const rid = ridMap[r.no];
+        if(!rid){
+          rows.push({ no: r.no, raceName: r.name, status: 'error', error: 'race_idを解決できませんでした（開催日・開催場を確認してください）' });
+          pts_renderSummary(rows); pts_renderTable(rows);
+          continue;
+        }
+        try{
+          const s = await pts_settleRace(parsed.meta.kind, rid, r.tickets);
+          const row = { no: r.no, rid, raceName: s.raceName || r.name || (r.no + 'R'), status: 'ok', ...s };
+          rows.push(row);
+
+          // 収支グラフへ記録（確定済みのみ・race_id単位で上書き）
+          if(record && s.hasFinish){
+            try{
+              currentRaceId = rid;
+              currentRaceName = row.raceName;
+              simRecordProfit(true, s.bet, s.ret, s.hit, r.tickets.length, '予想テキスト精算');
+            }catch(e){ console.warn('[pts] 収支記録失敗', e); }
+          }
+        }catch(e){
+          rows.push({ no: r.no, rid, raceName: r.name, status: 'error', error: (e && e.message) || String(e) });
+        }
+        pts_renderSummary(rows);
+        pts_renderTable(rows);
+      }
+
+      const settled = rows.filter(x => x.status === 'ok' && x.hasFinish).length;
+      const pending = rows.filter(x => x.status === 'ok' && !x.hasFinish).length;
+      const errs    = rows.filter(x => x.status === 'error').length;
+      let msg = `✅ 完了：${settled}レースを精算しました`;
+      const parts = [];
+      if(pending) parts.push(`未確定 ${pending}R`);
+      if(errs) parts.push(`失敗 ${errs}R`);
+      if(parts.length) msg += `（${parts.join('、')}）`;
+      msg += '。';
+      if(prog) prog.innerHTML = `<div class="url-status ok">${msg}</div>`;
+    }catch(e){
+      console.error('[runPredictionTextSettlement]', e);
+      if(prog) prog.innerHTML = `<div class="url-status err">❌ 予想テキスト精算失敗: ${pts_esc((e && e.message) || e)}</div>`;
+    }finally{
+      if(btn){ btn.disabled = false; btn.textContent = '💰 結果取得・一括精算'; }
+    }
+  }
+
+  // 公開
+  window.ptsParsePreview = ptsParsePreview;
+  window.ptsClearText = ptsClearText;
+  window.runPredictionTextSettlement = runPredictionTextSettlement;
+
+  // バージョン表記の更新（VERSION88の450msより後に実行）
+  setTimeout(function(){
+    const ver = document.querySelector('.ver'); if(ver) ver.textContent = VERSION89;
+    document.title = 'The競馬 EV分析 ' + VERSION89;
+  }, 550);
 })();
 </script>
 

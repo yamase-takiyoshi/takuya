@@ -398,20 +398,25 @@ body{
       <div id="allSimTable" style="margin-top:10px"></div>
     </div>
 
-    <!-- v5.18.110: 未確定レース 予想シミュレーションカード -->
+    <!-- v5.18.111: 予想シミュレーションカード（スイッチで確定済みも予想可） -->
     <div class="card" style="margin-top:12px" id="predSimCard">
       <div class="section-header">
         <h2>🔮 未確定レース 予想シミュレーション</h2>
       </div>
       <div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.5">
-        「馬データ」タブで選んだ <b>開催日・区分・開催場</b> の 1R〜最終レースのうち、
-        <b>結果が未確定のレースだけ</b>を対象に、現在の設定（モード・EV閾値・1点額・予算）で
-        買い目を自動生成し、レース別に「予想買い目・投資額・期待払戻・期待回収率」を一覧表示します。
-        確定済みレースは自動でスキップされます（精算はしません）。
+        「馬データ」タブで選んだ <b>開催日・区分・開催場</b> の 1R〜最終レースを対象に、
+        現在の設定（モード・EV閾値・1点額・予算）で買い目を自動生成し、
+        レース別に「予想買い目・投資額・期待払戻・期待回収率」を一覧表示します。
+        通常は<b>未確定レースだけ</b>が対象で、確定済みレースは自動スキップされます。
+        下のスイッチをONにすると<b>確定済みレースも最終オッズで予想</b>します（精算はしません）。
       </div>
       <div id="predSimTarget" style="font-size:12px;color:var(--text);margin-bottom:10px"></div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:10px;cursor:pointer;user-select:none">
+        <input type="checkbox" id="predSimIncludeConfirmed" style="width:18px;height:18px;accent-color:var(--green)">
+        <span>🏁 確定済みレースも予想する（最終オッズで予想・精算なし）</span>
+      </label>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-primary" id="predSimBtn" onclick="runUnsettledPredictionSimulation()">🔮 未確定レースを一括予想</button>
+        <button class="btn btn-primary" id="predSimBtn" onclick="runUnsettledPredictionSimulation()">🔮 対象レースを一括予想</button>
         <button class="btn-sm" id="predSimCopyBtn" onclick="copyUnsettledPredictionText()" style="display:none">📋 予想をテキストコピー</button>
       </div>
       <div id="predSimProgress" style="margin-top:10px"></div>
@@ -8731,10 +8736,12 @@ if(horses.length === 0){
 </script>
 
 <!-- ============================================================
-     v5.18.110 UnsettledPredictSim
-     指定開催日・開催場の 1R〜最終R のうち「結果が未確定のレース」だけを
-     対象に、現在の設定で買い目を自動生成して予想シミュレーションする。
-     確定済みレースは結果ページの着順検出でスキップ（精算しない）。
+     v5.18.111 PredictSim+Confirmed
+     指定開催日・開催場の 1R〜最終R を対象に、現在の設定で買い目を
+     自動生成して予想シミュレーションする。
+     通常は未確定レースのみ（確定済みは結果ページの着順検出でスキップ）。
+     v5.18.111: スイッチONで確定済みレースも result.html の最終オッズを
+     使って予想できるようにした（精算はしない）。
      既存の取得/オッズ/EV/買い目ロジック（グローバル関数）をそのまま
      再利用するヘッドレス版。既存の単レース処理・一括精算には手を入れない。
      ============================================================ -->
@@ -8742,7 +8749,7 @@ if(horses.length === 0){
 (function(){
   'use strict';
 
-  const VERSION88 = 'v5.18.110 UnsettledPredictSim';
+  const VERSION88 = 'v5.18.111 PredictSim+Confirmed';
 
   function $(id){ return document.getElementById(id); }
   function ps_esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c])); }
@@ -8809,6 +8816,47 @@ if(horses.length === 0){
     return { horses: hs, raceName };
   }
 
+  // ── v5.18.111: 確定済みレースの出走馬＋最終オッズ取得（result.html本体）──
+  // ps_checkConfirmed で取得済みの resultDoc を使い回し、再フェッチしない。
+  async function ps_loadHorsesFromResult(kind, rid, resultDoc){
+    const url = `${ps_host(kind)}/race/result.html?race_id=${rid}&rf=race_submenu`;
+    let doc = resultDoc;
+    if(!doc){
+      const html = await fetchHtmlViaProxy(url);
+      doc = new DOMParser().parseFromString(html, 'text/html');
+    }
+    let hs = parseHorsesFromDoc(doc, url);
+    if(!hs || hs.length < 2) throw new Error('結果ページから出走馬を取得できませんでした');
+
+    const raceName = parseRaceTitleFromDoc(doc) || '';
+
+    // 結果ページの「最終単勝オッズ・最終人気」を最優先（v5.18.64と同方針）。
+    const finalMap = parseFinalOddsPopularityFromResultDoc(doc, hs);
+    const finalFull = finalMap && finalMap.size >= 2;
+    if(kind === 'JRA'){
+      if(finalFull){
+        hs = applyAuthoritativeJraOdds(hs, finalMap, new Map());
+      } else {
+        // 最終値が拾えない場合のみ odds/API で補完（確定後も最終値を返す）
+        let oddsMap = finalMap || new Map();
+        oddsMap = mergeOddsMaps(oddsMap, await fetchWinOddsPopularity('JRA', rid, hs));
+        hs = applyAuthoritativeJraOdds(hs, oddsMap, new Map());
+        hs = fillNarPopularityFromOdds(hs);
+        hs = fillProvisionalOddsPopularityForPrediction(hs);
+      }
+    } else {
+      if(finalFull){
+        hs = mergeOddsPopularityIntoHorses(hs, finalMap);
+      } else {
+        const oddsMap = await fetchWinOddsPopularity(kind, rid, hs);
+        if(oddsMap.size >= 2) hs = mergeOddsPopularityIntoHorses(hs, oddsMap);
+      }
+      hs = fillNarPopularityFromOdds(hs);
+      hs = fillProvisionalOddsPopularityForPrediction(hs);
+    }
+    return { horses: hs, raceName };
+  }
+
   // ── 対象レース一覧（既存loadRaceListを使い、raceSelectから読む）──
   async function ps_collectRaces(){
     await loadRaceList();
@@ -8847,6 +8895,7 @@ if(horses.length === 0){
     const predicted = rows.filter(r => r.status === 'ok');
     const withBets  = predicted.filter(r => r.count > 0);
     const passed    = predicted.filter(r => r.count === 0);
+    const confPred  = predicted.filter(r => r.confirmedPredicted);
     const skipped   = rows.filter(r => r.status === 'confirmed');
     const errors    = rows.filter(r => r.status === 'error');
     const tickets   = predicted.reduce((s, r) => s + (r.count || 0), 0);
@@ -8858,6 +8907,7 @@ if(horses.length === 0){
       <div class="sim-kpi-grid" style="margin-top:0">
         <div class="sim-kpi"><div class="v">${withBets.length}</div><div class="l">予想R</div></div>
         <div class="sim-kpi"><div class="v">${passed.length}</div><div class="l">見送りR</div></div>
+        <div class="sim-kpi"><div class="v">${confPred.length}</div><div class="l">確定予想R</div></div>
         <div class="sim-kpi"><div class="v">${skipped.length}</div><div class="l">確定スキップ</div></div>
         <div class="sim-kpi"><div class="v">${tickets}</div><div class="l">総点数</div></div>
         <div class="sim-kpi"><div class="v">${ps_yen(bet)}</div><div class="l">総投資円</div></div>
@@ -8917,10 +8967,14 @@ if(horses.length === 0){
       }
       const expRoi = r.bet ? r.expRet / r.bet * 100 : 0;
       const roiColor = expRoi >= 100 ? 'var(--green)' : (r.bet ? 'var(--yellow)' : 'var(--muted)');
+      const confBadge = r.confirmedPredicted
+        ? `<span style="font-size:10px;font-weight:700;color:var(--green);border:1px solid var(--green);border-radius:4px;padding:0 4px">🏁 確定済</span>`
+        : '';
       h += `<details style="border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:6px;background:rgba(15,23,42,0.35)" ${r.count>0?'open':''}>
         <summary style="cursor:pointer;list-style:none;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <b>${r.no}R</b>
           <span style="flex:1;min-width:120px">${ps_esc(r.raceName || (r.no + 'R'))}</span>
+          ${confBadge}
           <span style="font-size:11px;color:var(--muted)">${r.count}点</span>
           <span style="font-size:11px">投資 ${ps_yen(r.bet)}円</span>
           <span style="font-size:11px">期待 ${ps_yen(Math.round(r.expRet))}円</span>
@@ -8936,10 +8990,10 @@ if(horses.length === 0){
   function ps_buildText(){
     if(!ps_lastMeta) return '';
     const m = ps_lastMeta;
-    let out = `🔮 未確定レース予想 ${m.date} ${m.kind} ${m.venue}（モード:${m.mode}）\n`;
+    let out = `🔮 レース予想 ${m.date} ${m.kind} ${m.venue}（モード:${m.mode}）\n`;
     ps_lastRows.forEach(r => {
       if(r.status !== 'ok') return;
-      out += `\n■ ${r.no}R ${r.raceName || ''}\n`;
+      out += `\n■ ${r.no}R ${r.raceName || ''}${r.confirmedPredicted ? '【確定済】' : ''}\n`;
       if(!r.tickets || !r.tickets.length){ out += '  見送り\n'; return; }
       r.tickets.forEach(t => {
         out += `  ${t.type} ${(t.nums||[]).join('-')} ${ps_yen(t.amount)}円 (想定${Number(t.odds||0).toFixed(1)}倍 / EV${Number(t.ev||0).toFixed(2)})\n`;
@@ -8977,6 +9031,7 @@ if(horses.length === 0){
     const kind = $('pickKind')?.value || 'JRA';
     const venueCode = $('pickVenue')?.value || '';
     const date = $('pickDate')?.value || (typeof todayYmd === 'function' ? todayYmd() : '');
+    const includeConfirmed = !!$('predSimIncludeConfirmed')?.checked;
 
     ps_renderTarget();
 
@@ -9006,9 +9061,9 @@ if(horses.length === 0){
         const row = { no: r.no, rid: r.rid, raceName: r.name || (r.no + 'R'), status: 'pending',
                       count: 0, bet: 0, expRet: 0, tickets: [] };
         try{
-          // 1) 確定済み判定（確定ならスキップ）
+          // 1) 確定済み判定（スイッチOFFなら確定済みはスキップ）
           const chk = await ps_checkConfirmed(kind, r.rid);
-          if(chk.confirmed){
+          if(chk.confirmed && !includeConfirmed){
             row.status = 'confirmed';
             rows.push(row);
             ps_renderSummary(rows);
@@ -9017,7 +9072,15 @@ if(horses.length === 0){
           }
 
           // 2) 出走馬＋予想用オッズ
-          const loaded = await ps_loadHorsesForPredict(kind, r.rid);
+          //    確定済み（スイッチON）→ result.html の最終オッズ
+          //    未確定 → 従来どおり odds/API → shutuba 補完
+          let loaded;
+          if(chk.confirmed){
+            row.confirmedPredicted = true;
+            loaded = await ps_loadHorsesFromResult(kind, r.rid, chk.resultDoc);
+          } else {
+            loaded = await ps_loadHorsesForPredict(kind, r.rid);
+          }
           horses = loaded.horses;
           currentRaceId = r.rid;
           currentRaceName = loaded.raceName || r.name || (r.no + 'R');
@@ -9044,14 +9107,23 @@ if(horses.length === 0){
       }
 
       const predCount = rows.filter(x => x.status === 'ok').length;
+      const confPred  = rows.filter(x => x.status === 'ok' && x.confirmedPredicted).length;
       const skipCount = rows.filter(x => x.status === 'confirmed').length;
-      if(prog) prog.innerHTML = `<div class="url-status ok">✅ 完了：未確定 ${predCount}レースを予想しました（確定済み ${skipCount}レースはスキップ）。</div>`;
+      if(prog){
+        let msg = `✅ 完了：${predCount}レースを予想しました`;
+        const parts = [];
+        if(confPred) parts.push(`うち確定済み ${confPred}レース`);
+        if(skipCount) parts.push(`確定済み ${skipCount}レースはスキップ`);
+        if(parts.length) msg += `（${parts.join('、')}）`;
+        msg += '。';
+        prog.innerHTML = `<div class="url-status ok">${msg}</div>`;
+      }
       if(copyBtn && predCount > 0) copyBtn.style.display = '';
     }catch(e){
       console.error('[runUnsettledPredictionSimulation]', e);
       if(prog) prog.innerHTML = `<div class="url-status err">❌ 予想シミュレーション失敗: ${ps_esc((e && e.message) || e)}</div>`;
     }finally{
-      if(btn){ btn.disabled = false; btn.textContent = '🔮 未確定レースを一括予想'; }
+      if(btn){ btn.disabled = false; btn.textContent = '🔮 対象レースを一括予想'; }
     }
   }
 

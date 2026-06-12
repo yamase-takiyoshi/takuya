@@ -381,6 +381,23 @@ body{
       <div id="simStatus" style="margin-top:10px"></div>
     </div>
 
+    <!-- 全レース一括シミュレーションカード -->
+    <div class="card" style="margin-top:12px" id="allSimCard">
+      <div class="section-header">
+        <h2>🏟️ 全レース一括シミュレーション</h2>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.5">
+        「馬データ」タブで選んだ <b>開催日・区分・開催場</b> の 1R〜最終レースを順番に取得し、
+        現在の設定（モード・EV閾値・1点額・予算）で買い目を自動生成 → 結果ページの着順・払戻で精算します。
+        確定済みレースは実払戻、未確定は推定で計算します。
+      </div>
+      <div id="allSimTarget" style="font-size:12px;color:var(--text);margin-bottom:10px"></div>
+      <button class="btn btn-primary" id="allSimBtn" onclick="runAllRacesSimulation()">🏟️ 全レースを一括シミュレーション</button>
+      <div id="allSimProgress" style="margin-top:10px"></div>
+      <div id="allSimSummary" style="margin-top:10px"></div>
+      <div id="allSimTable" style="margin-top:10px"></div>
+    </div>
+
     <!-- 買い目編集カード -->
     <div class="card" style="margin-top:12px" id="simEditCard">
       <div class="section-header">
@@ -7763,7 +7780,7 @@ if(horses.length === 0){
    ・「開催なし日」を確実に解消する。
    ============================================================ */
 (function(){
-  const VERSION87 = 'v5.18.105 DataIO';
+  const VERSION87 = 'v5.18.106 AllRaceSim';
 
   // ── Userscriptブリッジ（iPad回線IPでnar.netkeibaを取得）──────────────
   // CloudflareワーカーのIPはAkamaiに弾かれるため、NARはブラウザのUserscript経由で
@@ -8299,6 +8316,312 @@ if(horses.length === 0){
       try{ window.loadActiveVenuesForDate(); }catch(e){ console.error(e); }
     }
   }, 200);
+})();
+</script>
+
+<!-- ============================================================
+     v5.18.106 AllRaceSim
+     指定開催日・開催場の 1R〜最終R を一括でEV計算→精算する。
+     既存の取得/オッズ/EV/判定/払戻ロジックをそのまま再利用し、
+     UI副作用（タブ切替・進捗バー）を伴わないヘッドレス版で回す。
+     既存の単レース処理(fetchRace/runPredict)には一切手を入れない。
+     ============================================================ -->
+<script>
+(function(){
+  'use strict';
+
+  function $(id){ return document.getElementById(id); }
+  function asw_esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c])); }
+  function asw_host(kind){ return kind === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com'; }
+  function asw_chip(type){ return (typeof CHIP_CLASS !== 'undefined' && CHIP_CLASS[type]) || ''; }
+
+  // ── 1レース分の出走馬＋オッズ取得（fetchRace のコア部分を副作用なしで再現）──
+  // 戻り値: { horses, raceName, isResultPage, resultDoc(あれば結果docを使い回す) }
+  async function asw_loadHorses(kind, rid){
+    const host = asw_host(kind);
+    const parser = new DOMParser();
+
+    let activeUrl = `${host}/race/shutuba.html?race_id=${rid}&rf=race_submenu`;
+    let html;
+    try {
+      html = await fetchHtmlViaProxy(activeUrl);
+    } catch(e){
+      // 出馬表が非公開（開催後/未公開）なら結果ページへ
+      activeUrl = `${host}/race/result.html?race_id=${rid}&rf=race_submenu`;
+      html = await fetchHtmlViaProxy(activeUrl);
+    }
+    let doc = parser.parseFromString(html, 'text/html');
+    let isResultPage = /\/race\/result\.html/i.test(activeUrl);
+    let resultDoc = isResultPage ? doc : null;
+
+    // 出馬表のままでも確定済みなら結果ページの最終値を本体にする（fetchRace と同じ判断）
+    if(/\/race\/shutuba\.html/i.test(activeUrl)){
+      try{
+        const rUrl = `${host}/race/result.html?race_id=${rid}&rf=race_submenu`;
+        const rHtml = await fetchHtmlViaProxy(rUrl);
+        const rDoc = parser.parseFromString(rHtml, 'text/html');
+        const rHorses = parseHorsesFromDoc(rDoc, rUrl);
+        const rOdds = parseFinalOddsPopularityFromResultDoc(rDoc, rHorses);
+        resultDoc = rDoc; // 精算で使い回す
+        if(rHorses.length >= 2 && rOdds.size >= 2){
+          activeUrl = rUrl; html = rHtml; doc = rDoc; isResultPage = true;
+        }
+      }catch(e){ /* 未確定レースは結果なし */ }
+    }
+
+    let hs = parseHorsesFromDoc(doc, activeUrl);
+    if(hs.length < 2) throw new Error('出走馬を取得できませんでした');
+
+    const raceName = parseRaceTitleFromDoc(doc) || '';
+
+    // ── オッズ・人気（fetchRace と同じ手順）──
+    if(kind === 'JRA'){
+      let oddsMap = isResultPage ? parseFinalOddsPopularityFromResultDoc(doc, hs) : new Map();
+      const resultPageFull = isResultPage && oddsMap && oddsMap.size >= 2;
+      if(!resultPageFull){
+        if(!oddsMap || oddsMap.size < hs.length){
+          oddsMap = mergeOddsMaps(oddsMap, await fetchWinOddsPopularity('JRA', rid, hs));
+        }
+      }
+      const shutubaOddsMap = (!resultPageFull && (!oddsMap || oddsMap.size < hs.length))
+        ? (isResultPage ? parseFinalOddsPopularityFromResultDoc(doc, hs) : parseWinOddsPopularityFromShutuba(doc))
+        : new Map();
+      hs = applyAuthoritativeJraOdds(hs, oddsMap, shutubaOddsMap);
+      if(!resultPageFull) hs = fillNarPopularityFromOdds(hs);
+      if(!resultPageFull) hs = fillProvisionalOddsPopularityForPrediction(hs);
+    } else {
+      const oddsMap = await fetchWinOddsPopularity(kind, rid, hs);
+      if(oddsMap.size >= 2){
+        hs = mergeOddsPopularityIntoHorses(hs, oddsMap);
+      } else {
+        const shutubaOddsMap = parseWinOddsPopularityFromDoc(doc);
+        if(shutubaOddsMap.size >= 2) hs = mergeOddsPopularityIntoHorses(hs, shutubaOddsMap);
+      }
+      hs = fillNarPopularityFromOdds(hs);
+    }
+    return { horses: hs, raceName, isResultPage, resultDoc };
+  }
+
+  // ── 着順・払戻の取得（結果docを使い回せれば再フェッチしない）──
+  async function asw_getResult(kind, rid, resultDoc){
+    let doc = resultDoc;
+    if(!doc){
+      const url = `${asw_host(kind)}/race/result.html?race_id=${rid}&rf=race_submenu`;
+      const html = await fetchHtmlViaProxy(url);
+      doc = new DOMParser().parseFromString(html, 'text/html');
+    }
+    const finish  = parseFinishFromResultDoc(doc);   // 内部で global horses を参照するので先にセット必須
+    const payouts = parsePayoutsFromResultDoc(doc);
+    return { finish, payouts };
+  }
+
+  // ── 現在の global horses 前提で買い目を精算（renderSimulation の計算部分を流用）──
+  function asw_settle(tickets, finish, payouts){
+    let bet = 0, ret = 0, hit = 0;
+    const hasFinish = finish && finish.length >= 2;
+    tickets.forEach(t => {
+      const a = Number(t.amount || 0);
+      bet += a;
+      const isHit = hasFinish ? judgeTicketHit(t, finish) : false;
+      const pay  = isHit ? payoutForTicket(t, payouts) : { amount: 0 };
+      const r    = isHit ? Math.floor(a / 100) * Number(pay.amount || 0) : 0;
+      if(isHit) hit++;
+      ret += r;
+    });
+    return { bet, ret, hit, profit: ret - bet, roi: bet ? ret / bet * 100 : 0, count: tickets.length, hasFinish };
+  }
+
+  // ── 対象レース一覧を取得（既存 loadRaceList を走らせて raceSelect から読む）──
+  async function asw_collectRaces(){
+    await loadRaceList(); // 開催回検出・NAR公式一覧など堅牢な既存ロジックをそのまま使う
+    const sel = $('raceSelect');
+    if(!sel) return [];
+    const out = [];
+    [...sel.querySelectorAll('option')].forEach(o => {
+      if(!o.value || !/race_id=/.test(o.value)) return;
+      const rid = o.dataset.raceId || (o.value.match(/race_id=(\d{10,14})/) || [])[1] || '';
+      if(!rid) return;
+      const no = Number(o.dataset.raceNo || String(rid).slice(-2)) || out.length + 1;
+      const name = o.dataset.raceName || '';
+      out.push({ rid, no, name });
+    });
+    // 重複除去・R順
+    const seen = new Set();
+    return out.filter(r => { if(seen.has(r.rid)) return false; seen.add(r.rid); return true; })
+              .sort((a, b) => a.no - b.no);
+  }
+
+  function asw_renderTarget(){
+    const box = $('allSimTarget');
+    if(!box) return;
+    const kind = $('pickKind')?.value || 'JRA';
+    const date = $('pickDate')?.value || (typeof todayYmd === 'function' ? todayYmd() : '');
+    const vc   = $('pickVenue')?.value || '';
+    const vn   = vc ? venueName(kind, vc) : '（未選択）';
+    box.innerHTML = `🎯 対象: <b>${asw_esc(date)}</b> / <b>${asw_esc(kind)}</b> / <b>${asw_esc(vn)}</b>`
+      + (vc ? '' : ' <span style="color:var(--red)">← 馬データタブで開催場を選択してください</span>');
+  }
+
+  function asw_renderSummary(rows){
+    const sum = $('allSimSummary');
+    if(!sum) return;
+    const done    = rows.filter(r => r.status === 'ok');
+    const settled = done.filter(r => r.hasFinish);
+    const bet     = done.reduce((s, r) => s + (r.bet || 0), 0);
+    const ret     = settled.reduce((s, r) => s + (r.ret || 0), 0);
+    const profit  = ret - settled.reduce((s, r) => s + (r.bet || 0), 0);
+    const settledBet = settled.reduce((s, r) => s + (r.bet || 0), 0);
+    const roi     = settledBet ? ret / settledBet * 100 : 0;
+    const hitRaces = settled.filter(r => r.hit > 0).length;
+    const pending  = done.filter(r => !r.hasFinish).length;
+
+    sum.innerHTML = `
+      <div class="sim-kpi-grid" style="margin-top:0">
+        <div class="sim-kpi"><div class="v">${done.length}</div><div class="l">処理R</div></div>
+        <div class="sim-kpi"><div class="v">${settled.length}</div><div class="l">確定R</div></div>
+        <div class="sim-kpi"><div class="v">${hitRaces}</div><div class="l">的中R</div></div>
+        <div class="sim-kpi"><div class="v">${settledBet.toLocaleString()}</div><div class="l">投資円(確定)</div></div>
+        <div class="sim-kpi"><div class="v">${ret.toLocaleString()}</div><div class="l">払戻円</div></div>
+        <div class="sim-kpi"><div class="v" style="color:${profit>=0?'var(--green)':'var(--red)'}">${profit>=0?'+':''}${profit.toLocaleString()}</div><div class="l">収支円</div></div>
+        <div class="sim-kpi"><div class="v" style="color:${roi>=100?'var(--green)':'var(--yellow)'}">${roi.toFixed(1)}%</div><div class="l">回収率</div></div>
+        <div class="sim-kpi"><div class="v">${pending}</div><div class="l">未確定R</div></div>
+      </div>`;
+  }
+
+  function asw_renderTable(rows){
+    const box = $('allSimTable');
+    if(!box) return;
+    if(!rows.length){ box.innerHTML = ''; return; }
+    let h = `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="color:var(--muted);text-align:left">
+        <th style="padding:6px 4px">R</th>
+        <th style="padding:6px 4px">レース名</th>
+        <th style="padding:6px 4px;text-align:center">着順</th>
+        <th style="padding:6px 4px;text-align:right">点</th>
+        <th style="padding:6px 4px;text-align:right">投資</th>
+        <th style="padding:6px 4px;text-align:right">払戻</th>
+        <th style="padding:6px 4px;text-align:right">収支</th>
+        <th style="padding:6px 4px;text-align:right">ROI</th>
+      </tr></thead><tbody>`;
+    rows.forEach(r => {
+      if(r.status === 'error'){
+        h += `<tr style="border-top:1px solid var(--border)">
+          <td style="padding:6px 4px;font-weight:700">${r.no}R</td>
+          <td style="padding:6px 4px" colspan="7"><span style="color:var(--red)">⚠️ ${asw_esc(r.error || '取得失敗')}</span></td>
+        </tr>`;
+        return;
+      }
+      const fin = r.hasFinish ? r.finishTop.join('-') : '<span style="color:var(--muted)">未確定</span>';
+      const profitColor = (r.profit || 0) >= 0 ? 'var(--green)' : 'var(--red)';
+      const roiColor = (r.roi || 0) >= 100 ? 'var(--green)' : ((r.bet || 0) ? 'var(--yellow)' : 'var(--muted)');
+      const passNote = (r.count === 0) ? ' <span style="color:var(--muted);font-size:10px">(見送り)</span>' : '';
+      h += `<tr style="border-top:1px solid var(--border)${r.hit>0?';background:rgba(0,255,136,0.06)':''}">
+        <td style="padding:6px 4px;font-weight:700">${r.no}R</td>
+        <td style="padding:6px 4px">${asw_esc(r.raceName || (r.no + 'R'))}${passNote}</td>
+        <td style="padding:6px 4px;text-align:center">${fin}</td>
+        <td style="padding:6px 4px;text-align:right">${r.count}</td>
+        <td style="padding:6px 4px;text-align:right">${(r.bet||0).toLocaleString()}</td>
+        <td style="padding:6px 4px;text-align:right">${r.hasFinish ? (r.ret||0).toLocaleString() : '-'}</td>
+        <td style="padding:6px 4px;text-align:right;color:${profitColor}">${r.hasFinish ? ((r.profit||0)>=0?'+':'')+(r.profit||0).toLocaleString() : '-'}</td>
+        <td style="padding:6px 4px;text-align:right;color:${roiColor}">${r.hasFinish && (r.bet||0) ? r.roi.toFixed(0)+'%' : '-'}</td>
+      </tr>`;
+    });
+    h += `</tbody></table></div>`;
+    box.innerHTML = h;
+  }
+
+  // ── メイン：全レース一括シミュレーション ──
+  async function runAllRacesSimulation(){
+    const btn  = $('allSimBtn');
+    const prog = $('allSimProgress');
+    const kind = $('pickKind')?.value || 'JRA';
+    const venueCode = $('pickVenue')?.value || '';
+
+    asw_renderTarget();
+
+    if(!settings.proxyUrl){ alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。'); return; }
+    if(!venueCode){ alert('馬データタブで開催場を選択してください。'); return; }
+
+    if(btn){ btn.disabled = true; btn.textContent = '⏳ 実行中...'; }
+    if(prog) prog.innerHTML = '<div class="url-status">📅 レース一覧を取得中...</div>';
+    $('allSimSummary').innerHTML = '';
+    $('allSimTable').innerHTML = '';
+
+    // 元の global 状態を退避（バッチ後も最後のレースは残すが、念のため）
+    const rows = [];
+    try{
+      const races = await asw_collectRaces();
+      if(!races.length){
+        if(prog) prog.innerHTML = '<div class="url-status err">⚠️ 対象レースが見つかりませんでした。開催日・開催場を確認してください。</div>';
+        return;
+      }
+
+      for(let i = 0; i < races.length; i++){
+        const r = races[i];
+        if(prog) prog.innerHTML = `<div class="url-status">♞ ${i+1}/${races.length} … ${r.no}R を処理中</div>`;
+        const row = { no: r.no, rid: r.rid, raceName: r.name || (r.no + 'R'), status: 'pending',
+                      count: 0, bet: 0, ret: 0, profit: 0, roi: 0, hit: 0, hasFinish: false, finishTop: [] };
+        try{
+          // 1) 出走馬＋オッズ
+          const loaded = await asw_loadHorses(kind, r.rid);
+          // global を当該レースにセット（既存の判定/精算関数が参照するため）
+          horses = loaded.horses;
+          currentRaceId = r.rid;
+          currentRaceName = loaded.raceName || r.name || (r.no + 'R');
+          row.raceName = currentRaceName;
+
+          const valid = horses.filter(h => Number(h.num) > 0 && h.name);
+          if(valid.length < 2) throw new Error('有効な出走馬が2頭未満');
+
+          // 2) EV計算→買い目
+          const made = generateCandidates(valid);
+          lastRecs = made.recs.slice().sort((a, b) => b.ev - a.ev);
+          lastTickets = buildTickets(made.recs);
+          simTickets = lastTickets.map(t => ({ ...t, nums: [...t.nums] }));
+          row.count = lastTickets.length;
+
+          // 3) 結果取得（loadHorsesで掴んだ結果docを使い回す）
+          const { finish, payouts } = await asw_getResult(kind, r.rid, loaded.resultDoc);
+          row.hasFinish = finish && finish.length >= 2;
+          row.finishTop = row.hasFinish ? finish.slice(0, 3).map(x => x.horseNo) : [];
+
+          // 4) 精算
+          const s = asw_settle(simTickets, finish, payouts);
+          row.bet = s.bet; row.ret = s.ret; row.profit = s.profit; row.roi = s.roi; row.hit = s.hit;
+          row.status = 'ok';
+
+          // 5) 既存のシミュ収支グラフへ記録（race_id単位で上書き）
+          if(row.hasFinish){
+            try{ simRecordProfit(true, s.bet, s.ret, s.hit, s.count, currentRaceName); }catch(e){}
+          }
+        }catch(e){
+          row.status = 'error';
+          row.error = (e && e.message) || String(e);
+        }
+        rows.push(row);
+        asw_renderSummary(rows);
+        asw_renderTable(rows);
+      }
+
+      const okCount = rows.filter(x => x.status === 'ok').length;
+      if(prog) prog.innerHTML = `<div class="url-status ok">✅ 完了：${okCount}/${races.length}レースをシミュレーションしました。</div>`;
+    }catch(e){
+      console.error('[runAllRacesSimulation]', e);
+      if(prog) prog.innerHTML = `<div class="url-status err">❌ 一括シミュレーション失敗: ${asw_esc((e && e.message) || e)}</div>`;
+    }finally{
+      if(btn){ btn.disabled = false; btn.textContent = '🏟️ 全レースを一括シミュレーション'; }
+    }
+  }
+
+  // 公開
+  window.runAllRacesSimulation = runAllRacesSimulation;
+
+  // シミュレーションタブを開いた時に対象表示を更新
+  document.addEventListener('click', function(ev){
+    const t = ev.target.closest('[data-tab="sim"]');
+    if(t) setTimeout(asw_renderTarget, 0);
+  });
+  setTimeout(asw_renderTarget, 400);
 })();
 </script>
 

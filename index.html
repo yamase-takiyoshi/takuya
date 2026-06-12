@@ -398,6 +398,27 @@ body{
       <div id="allSimTable" style="margin-top:10px"></div>
     </div>
 
+    <!-- v5.18.110: 未確定レース 予想シミュレーションカード -->
+    <div class="card" style="margin-top:12px" id="predSimCard">
+      <div class="section-header">
+        <h2>🔮 未確定レース 予想シミュレーション</h2>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.5">
+        「馬データ」タブで選んだ <b>開催日・区分・開催場</b> の 1R〜最終レースのうち、
+        <b>結果が未確定のレースだけ</b>を対象に、現在の設定（モード・EV閾値・1点額・予算）で
+        買い目を自動生成し、レース別に「予想買い目・投資額・期待払戻・期待回収率」を一覧表示します。
+        確定済みレースは自動でスキップされます（精算はしません）。
+      </div>
+      <div id="predSimTarget" style="font-size:12px;color:var(--text);margin-bottom:10px"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-primary" id="predSimBtn" onclick="runUnsettledPredictionSimulation()">🔮 未確定レースを一括予想</button>
+        <button class="btn-sm" id="predSimCopyBtn" onclick="copyUnsettledPredictionText()" style="display:none">📋 予想をテキストコピー</button>
+      </div>
+      <div id="predSimProgress" style="margin-top:10px"></div>
+      <div id="predSimSummary" style="margin-top:10px"></div>
+      <div id="predSimTable" style="margin-top:10px"></div>
+    </div>
+
     <!-- 買い目編集カード -->
     <div class="card" style="margin-top:12px" id="simEditCard">
       <div class="section-header">
@@ -8706,6 +8727,350 @@ if(horses.length === 0){
     if(t) setTimeout(asw_renderTarget, 0);
   });
   setTimeout(asw_renderTarget, 400);
+})();
+</script>
+
+<!-- ============================================================
+     v5.18.110 UnsettledPredictSim
+     指定開催日・開催場の 1R〜最終R のうち「結果が未確定のレース」だけを
+     対象に、現在の設定で買い目を自動生成して予想シミュレーションする。
+     確定済みレースは結果ページの着順検出でスキップ（精算しない）。
+     既存の取得/オッズ/EV/買い目ロジック（グローバル関数）をそのまま
+     再利用するヘッドレス版。既存の単レース処理・一括精算には手を入れない。
+     ============================================================ -->
+<script>
+(function(){
+  'use strict';
+
+  const VERSION88 = 'v5.18.110 UnsettledPredictSim';
+
+  function $(id){ return document.getElementById(id); }
+  function ps_esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c])); }
+  function ps_host(kind){ return kind === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com'; }
+  function ps_yen(n){ return Number(n||0).toLocaleString(); }
+
+  // 直近の予想結果（テキストコピー用）
+  let ps_lastRows = [];
+  let ps_lastMeta = null;
+
+  // ── 確定済みかどうかを結果ページで判定する ──
+  // 戻り値: { confirmed, resultDoc(取得できた場合) }
+  async function ps_checkConfirmed(kind, rid){
+    try{
+      const url = `${ps_host(kind)}/race/result.html?race_id=${rid}&rf=race_submenu`;
+      const html = await fetchHtmlViaProxy(url);
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      // parseFinishFromResultDoc は global horses を参照するため、先に結果docの馬をセットする
+      const rHorses = parseHorsesFromDoc(doc, url);
+      const bak = horses;
+      if(rHorses && rHorses.length >= 2) horses = rHorses;
+      let finish = [];
+      try{ finish = parseFinishFromResultDoc(doc) || []; }
+      finally{ horses = bak; }
+      return { confirmed: finish.length >= 2, resultDoc: doc };
+    }catch(e){
+      // 結果ページが取れない＝未確定として扱う
+      return { confirmed: false, resultDoc: null };
+    }
+  }
+
+  // ── 未確定レースの出走馬＋予想用オッズ取得（既存fetchRace相当のヘッドレス版）──
+  async function ps_loadHorsesForPredict(kind, rid){
+    const host = ps_host(kind);
+    const parser = new DOMParser();
+    const url = `${host}/race/shutuba.html?race_id=${rid}&rf=race_submenu`;
+    const html = await fetchHtmlViaProxy(url);
+    const doc = parser.parseFromString(html, 'text/html');
+
+    let hs = parseHorsesFromDoc(doc, url);
+    if(hs.length < 2) throw new Error('出走馬を取得できませんでした');
+
+    const raceName = parseRaceTitleFromDoc(doc) || '';
+
+    if(kind === 'JRA'){
+      let oddsMap = await fetchWinOddsPopularity('JRA', rid, hs);
+      const shutubaOddsMap = (!oddsMap || oddsMap.size < hs.length)
+        ? parseWinOddsPopularityFromShutuba(doc)
+        : new Map();
+      hs = applyAuthoritativeJraOdds(hs, oddsMap, shutubaOddsMap);
+      hs = fillNarPopularityFromOdds(hs);
+      hs = fillProvisionalOddsPopularityForPrediction(hs);
+    } else {
+      const oddsMap = await fetchWinOddsPopularity(kind, rid, hs);
+      if(oddsMap.size >= 2){
+        hs = mergeOddsPopularityIntoHorses(hs, oddsMap);
+      } else {
+        const shutubaOddsMap = parseWinOddsPopularityFromDoc(doc);
+        if(shutubaOddsMap.size >= 2) hs = mergeOddsPopularityIntoHorses(hs, shutubaOddsMap);
+      }
+      hs = fillNarPopularityFromOdds(hs);
+      hs = fillProvisionalOddsPopularityForPrediction(hs);
+    }
+    return { horses: hs, raceName };
+  }
+
+  // ── 対象レース一覧（既存loadRaceListを使い、raceSelectから読む）──
+  async function ps_collectRaces(){
+    await loadRaceList();
+    const sel = $('raceSelect');
+    if(!sel) return [];
+    const out = [];
+    [...sel.querySelectorAll('option')].forEach(o => {
+      if(!o.value || !/race_id=/.test(o.value)) return;
+      const rid = o.dataset.raceId || (o.value.match(/race_id=(\d{10,14})/) || [])[1] || '';
+      if(!rid) return;
+      const no = Number(o.dataset.raceNo || String(rid).slice(-2)) || out.length + 1;
+      const name = o.dataset.raceName || '';
+      out.push({ rid, no, name });
+    });
+    const seen = new Set();
+    return out.filter(r => { if(seen.has(r.rid)) return false; seen.add(r.rid); return true; })
+              .sort((a, b) => a.no - b.no);
+  }
+
+  function ps_renderTarget(){
+    const box = $('predSimTarget');
+    if(!box) return;
+    const kind = $('pickKind')?.value || 'JRA';
+    const date = $('pickDate')?.value || (typeof todayYmd === 'function' ? todayYmd() : '');
+    const vc   = $('pickVenue')?.value || '';
+    const vn   = vc ? venueName(kind, vc) : '（未選択）';
+    const mode = (typeof settings !== 'undefined' && settings.mode) ? settings.mode : '';
+    box.innerHTML = `🎯 対象: <b>${ps_esc(date)}</b> / <b>${ps_esc(kind)}</b> / <b>${ps_esc(vn)}</b>`
+      + (mode ? ` ｜ モード: <b>${ps_esc(mode)}</b>` : '')
+      + (vc ? '' : ' <span style="color:var(--red)">← 馬データタブで開催場を選択してください</span>');
+  }
+
+  function ps_renderSummary(rows){
+    const sum = $('predSimSummary');
+    if(!sum) return;
+    const predicted = rows.filter(r => r.status === 'ok');
+    const withBets  = predicted.filter(r => r.count > 0);
+    const passed    = predicted.filter(r => r.count === 0);
+    const skipped   = rows.filter(r => r.status === 'confirmed');
+    const errors    = rows.filter(r => r.status === 'error');
+    const tickets   = predicted.reduce((s, r) => s + (r.count || 0), 0);
+    const bet       = predicted.reduce((s, r) => s + (r.bet || 0), 0);
+    const expRet    = predicted.reduce((s, r) => s + (r.expRet || 0), 0);
+    const expRoi    = bet ? expRet / bet * 100 : 0;
+
+    sum.innerHTML = `
+      <div class="sim-kpi-grid" style="margin-top:0">
+        <div class="sim-kpi"><div class="v">${withBets.length}</div><div class="l">予想R</div></div>
+        <div class="sim-kpi"><div class="v">${passed.length}</div><div class="l">見送りR</div></div>
+        <div class="sim-kpi"><div class="v">${skipped.length}</div><div class="l">確定スキップ</div></div>
+        <div class="sim-kpi"><div class="v">${tickets}</div><div class="l">総点数</div></div>
+        <div class="sim-kpi"><div class="v">${ps_yen(bet)}</div><div class="l">総投資円</div></div>
+        <div class="sim-kpi"><div class="v">${ps_yen(Math.round(expRet))}</div><div class="l">期待払戻円</div></div>
+        <div class="sim-kpi"><div class="v" style="color:${expRoi>=100?'var(--green)':'var(--yellow)'}">${expRoi.toFixed(1)}%</div><div class="l">期待回収率</div></div>
+        <div class="sim-kpi"><div class="v">${errors.length}</div><div class="l">取得失敗</div></div>
+      </div>`;
+  }
+
+  function ps_ticketDetailHtml(r){
+    if(!r.tickets || !r.tickets.length){
+      return `<div style="font-size:11px;color:var(--muted);padding:4px 0">条件を満たす買い目なし（見送り）</div>`;
+    }
+    let h = `<table style="width:100%;border-collapse:collapse;font-size:11px;margin-top:4px">
+      <thead><tr style="color:var(--muted);text-align:left">
+        <th style="padding:3px 4px">券種</th>
+        <th style="padding:3px 4px">買い目</th>
+        <th style="padding:3px 4px;text-align:right">想定オッズ</th>
+        <th style="padding:3px 4px;text-align:right">的中率</th>
+        <th style="padding:3px 4px;text-align:right">EV</th>
+        <th style="padding:3px 4px;text-align:right">金額</th>
+        <th style="padding:3px 4px;text-align:right">期待払戻</th>
+      </tr></thead><tbody>`;
+    r.tickets.forEach(t => {
+      const exp = Number(t.ev || 0) * Number(t.amount || 0);
+      h += `<tr style="border-top:1px solid var(--border)">
+        <td style="padding:3px 4px;font-weight:700">${ps_esc(t.type)}</td>
+        <td style="padding:3px 4px">${ps_esc((t.nums || []).join('-'))}</td>
+        <td style="padding:3px 4px;text-align:right">${Number(t.odds||0).toFixed(1)}</td>
+        <td style="padding:3px 4px;text-align:right">${(Number(t.p||0)*100).toFixed(1)}%</td>
+        <td style="padding:3px 4px;text-align:right;color:${Number(t.ev||0)>=1.2?'var(--green)':'var(--text)'}">${Number(t.ev||0).toFixed(2)}</td>
+        <td style="padding:3px 4px;text-align:right">${ps_yen(t.amount)}</td>
+        <td style="padding:3px 4px;text-align:right">${ps_yen(Math.round(exp))}</td>
+      </tr>`;
+    });
+    h += `</tbody></table>`;
+    return h;
+  }
+
+  function ps_renderTable(rows){
+    const box = $('predSimTable');
+    if(!box) return;
+    if(!rows.length){ box.innerHTML = ''; return; }
+    let h = '';
+    rows.forEach(r => {
+      if(r.status === 'confirmed'){
+        h += `<div style="border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:6px;opacity:.55">
+          <b>${r.no}R</b> ${ps_esc(r.raceName || '')} <span style="font-size:11px;color:var(--muted)">— ✅ 確定済みのためスキップ</span>
+        </div>`;
+        return;
+      }
+      if(r.status === 'error'){
+        h += `<div style="border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:6px">
+          <b>${r.no}R</b> <span style="color:var(--red)">⚠️ ${ps_esc(r.error || '取得失敗')}</span>
+        </div>`;
+        return;
+      }
+      const expRoi = r.bet ? r.expRet / r.bet * 100 : 0;
+      const roiColor = expRoi >= 100 ? 'var(--green)' : (r.bet ? 'var(--yellow)' : 'var(--muted)');
+      h += `<details style="border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:6px;background:rgba(15,23,42,0.35)" ${r.count>0?'open':''}>
+        <summary style="cursor:pointer;list-style:none;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <b>${r.no}R</b>
+          <span style="flex:1;min-width:120px">${ps_esc(r.raceName || (r.no + 'R'))}</span>
+          <span style="font-size:11px;color:var(--muted)">${r.count}点</span>
+          <span style="font-size:11px">投資 ${ps_yen(r.bet)}円</span>
+          <span style="font-size:11px">期待 ${ps_yen(Math.round(r.expRet))}円</span>
+          <span style="font-size:11px;font-weight:700;color:${roiColor}">${r.bet ? expRoi.toFixed(0) + '%' : '見送り'}</span>
+        </summary>
+        ${ps_ticketDetailHtml(r)}
+      </details>`;
+    });
+    box.innerHTML = h;
+  }
+
+  // ── テキストコピー（iPad向け・メモ/LINE共有用）──
+  function ps_buildText(){
+    if(!ps_lastMeta) return '';
+    const m = ps_lastMeta;
+    let out = `🔮 未確定レース予想 ${m.date} ${m.kind} ${m.venue}（モード:${m.mode}）\n`;
+    ps_lastRows.forEach(r => {
+      if(r.status !== 'ok') return;
+      out += `\n■ ${r.no}R ${r.raceName || ''}\n`;
+      if(!r.tickets || !r.tickets.length){ out += '  見送り\n'; return; }
+      r.tickets.forEach(t => {
+        out += `  ${t.type} ${(t.nums||[]).join('-')} ${ps_yen(t.amount)}円 (想定${Number(t.odds||0).toFixed(1)}倍 / EV${Number(t.ev||0).toFixed(2)})\n`;
+      });
+      out += `  投資${ps_yen(r.bet)}円 → 期待${ps_yen(Math.round(r.expRet))}円\n`;
+    });
+    return out;
+  }
+
+  async function copyUnsettledPredictionText(){
+    const text = ps_buildText();
+    if(!text){ alert('先に予想シミュレーションを実行してください。'); return; }
+    try{
+      await navigator.clipboard.writeText(text);
+      alert('📋 予想テキストをコピーしました。');
+    }catch(e){
+      // Safariでclipboardが使えない場合のフォールバック
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      let ok = false;
+      try{ ok = document.execCommand('copy'); }catch(e2){}
+      document.body.removeChild(ta);
+      alert(ok ? '📋 予想テキストをコピーしました。' : 'コピーできませんでした。');
+    }
+  }
+
+  // ── メイン：未確定レース 予想シミュレーション ──
+  async function runUnsettledPredictionSimulation(){
+    const btn  = $('predSimBtn');
+    const prog = $('predSimProgress');
+    const copyBtn = $('predSimCopyBtn');
+    const kind = $('pickKind')?.value || 'JRA';
+    const venueCode = $('pickVenue')?.value || '';
+    const date = $('pickDate')?.value || (typeof todayYmd === 'function' ? todayYmd() : '');
+
+    ps_renderTarget();
+
+    if(!settings.proxyUrl){ alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。'); return; }
+    if(!venueCode){ alert('馬データタブで開催場を選択してください。'); return; }
+
+    if(btn){ btn.disabled = true; btn.textContent = '⏳ 予想中...'; }
+    if(copyBtn) copyBtn.style.display = 'none';
+    if(prog) prog.innerHTML = '<div class="url-status">📅 レース一覧を取得中...</div>';
+    $('predSimSummary').innerHTML = '';
+    $('predSimTable').innerHTML = '';
+
+    const rows = [];
+    ps_lastRows = rows;
+    ps_lastMeta = { date, kind, venue: venueName(kind, venueCode) || venueCode, mode: settings.mode || '' };
+
+    try{
+      const races = await ps_collectRaces();
+      if(!races.length){
+        if(prog) prog.innerHTML = '<div class="url-status err">⚠️ 対象レースが見つかりませんでした。開催日・開催場を確認してください。</div>';
+        return;
+      }
+
+      for(let i = 0; i < races.length; i++){
+        const r = races[i];
+        if(prog) prog.innerHTML = `<div class="url-status">🔮 ${i+1}/${races.length} … ${r.no}R を判定・予想中</div>`;
+        const row = { no: r.no, rid: r.rid, raceName: r.name || (r.no + 'R'), status: 'pending',
+                      count: 0, bet: 0, expRet: 0, tickets: [] };
+        try{
+          // 1) 確定済み判定（確定ならスキップ）
+          const chk = await ps_checkConfirmed(kind, r.rid);
+          if(chk.confirmed){
+            row.status = 'confirmed';
+            rows.push(row);
+            ps_renderSummary(rows);
+            ps_renderTable(rows);
+            continue;
+          }
+
+          // 2) 出走馬＋予想用オッズ
+          const loaded = await ps_loadHorsesForPredict(kind, r.rid);
+          horses = loaded.horses;
+          currentRaceId = r.rid;
+          currentRaceName = loaded.raceName || r.name || (r.no + 'R');
+          row.raceName = currentRaceName;
+
+          const valid = horses.filter(h => Number(h.num) > 0 && h.name);
+          if(valid.length < 2) throw new Error('有効な出走馬が2頭未満');
+
+          // 3) EV計算→買い目（現在の設定モードをそのまま使用）
+          const made = generateCandidates(valid);
+          const tickets = buildTickets(made.recs);
+          row.tickets = tickets.map(t => ({ ...t, nums: [...t.nums] }));
+          row.count = tickets.length;
+          row.bet = tickets.reduce((s, t) => s + Number(t.amount || 0), 0);
+          row.expRet = tickets.reduce((s, t) => s + Number(t.ev || 0) * Number(t.amount || 0), 0);
+          row.status = 'ok';
+        }catch(e){
+          row.status = 'error';
+          row.error = (e && e.message) || String(e);
+        }
+        rows.push(row);
+        ps_renderSummary(rows);
+        ps_renderTable(rows);
+      }
+
+      const predCount = rows.filter(x => x.status === 'ok').length;
+      const skipCount = rows.filter(x => x.status === 'confirmed').length;
+      if(prog) prog.innerHTML = `<div class="url-status ok">✅ 完了：未確定 ${predCount}レースを予想しました（確定済み ${skipCount}レースはスキップ）。</div>`;
+      if(copyBtn && predCount > 0) copyBtn.style.display = '';
+    }catch(e){
+      console.error('[runUnsettledPredictionSimulation]', e);
+      if(prog) prog.innerHTML = `<div class="url-status err">❌ 予想シミュレーション失敗: ${ps_esc((e && e.message) || e)}</div>`;
+    }finally{
+      if(btn){ btn.disabled = false; btn.textContent = '🔮 未確定レースを一括予想'; }
+    }
+  }
+
+  // 公開
+  window.runUnsettledPredictionSimulation = runUnsettledPredictionSimulation;
+  window.copyUnsettledPredictionText = copyUnsettledPredictionText;
+
+  // シミュレーションタブを開いた時に対象表示を更新
+  document.addEventListener('click', function(ev){
+    const t = ev.target.closest('[data-tab="sim"]');
+    if(t) setTimeout(ps_renderTarget, 0);
+  });
+
+  // バージョン表記の更新（他ブロックの200ms更新より後に実行）
+  setTimeout(function(){
+    const ver = document.querySelector('.ver'); if(ver) ver.textContent = VERSION88;
+    document.title = 'The競馬 EV分析 ' + VERSION88;
+    ps_renderTarget();
+  }, 450);
 })();
 </script>
 

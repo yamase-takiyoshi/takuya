@@ -644,7 +644,7 @@ const MODE_OPTIONS = [
   ['roi_max','回収率最大（開催場別）'],
   ['hitroi','的中率最高&回収率100%超'],
   ['multi100','多点トータル回収率100%超'],
-  ['hitrate100','的中率100%'],
+  ['hitrate100','的中率100%（開催場別）'],
   ['hitrate80','的中率80%'],
   ['hitrate60','的中率60%'],
   ['hitrate33','的中率1/3'],
@@ -663,7 +663,7 @@ const MODE_EV = {
   roi_max:    {'単勝':1.50,'複勝':9.99,'枠連':9.99,'ワイド':9.99,'馬連':1.60,'馬単':1.80,'3連複':1.80,'3連単':2.20},
   hitroi:     {'単勝':9.99,'複勝':1.00,'枠連':9.99,'ワイド':1.00,'馬連':1.00,'馬単':9.99,'3連複':9.99,'3連単':9.99},
   multi100:   {'単勝':1.08,'複勝':1.05,'枠連':9.99,'ワイド':1.05,'馬連':1.10,'馬単':9.99,'3連複':1.20,'3連単':9.99},
-  hitrate100: {'単勝':9.99,'複勝':0.75,'枠連':9.99,'ワイド':0.80,'馬連':9.99,'馬単':9.99,'3連複':9.99,'3連単':9.99},
+  hitrate100: {'単勝':9.99,'複勝':0.72,'枠連':9.99,'ワイド':0.72,'馬連':9.99,'馬単':9.99,'3連複':9.99,'3連単':9.99},
   hitrate80:  {'単勝':0.95,'複勝':0.95,'枠連':1.00,'ワイド':0.98,'馬連':1.05,'馬単':1.10,'3連複':1.15,'3連単':1.25},
   hitrate60:  {'単勝':1.00,'複勝':1.00,'枠連':1.05,'ワイド':1.02,'馬連':1.08,'馬単':1.13,'3連複':1.18,'3連単':1.28},
   hitrate33:  {'単勝':1.05,'複勝':1.05,'枠連':1.10,'ワイド':1.08,'馬連':1.15,'馬単':1.22,'3連複':1.30,'3連単':1.45},
@@ -1179,6 +1179,44 @@ function roiMaxTuning(){
   return t;
 }
 
+// ─── 的中率最大モード（的中率100%）の開催場別自動最適化（v5.18.118） ───
+// 「的中率100%(hitrate100)」を、選択中の開催場に応じて自動チューニングする。モードは増やさない。
+// 的中率の上限は頭数規模と本命の強さで決まる：少頭数・本命偏重の地方/ばんえいほど上位馬の複勝率が高く近確に近い。
+//   → 少頭数場では複勝率の足切りを引き上げ（より純粋な鉄板のみ）、過剰人気で配当が低くても拾えるようEV下限は緩める。
+//   多頭数のJRA主場は上位馬でも複勝率が伸びにくいため足切りを緩め、買い目が出るようにする（的中率上限はやや下がる）。
+const HITMAX_VENUE_TUNING = (() => {
+  const P = {
+    // JRA主場：多頭数（〜18頭）で複勝が難しい。足切りを緩めて買い目を確保（的中率上限はやや低め）。
+    jra_major: { fukuPmin:0.68, widePmin:0.52, evMin:0.72, bias:{'複勝':2.50,'ワイド':1.55} },
+    // JRAローカル：中頭数。従来寄り。
+    jra_minor: { fukuPmin:0.70, widePmin:0.54, evMin:0.73, bias:{'複勝':2.50,'ワイド':1.55} },
+    // 南関東：中〜多頭数だが本命強め。複勝をやや厚く。
+    nar_nankan:{ fukuPmin:0.72, widePmin:0.55, evMin:0.72, bias:{'複勝':2.55,'ワイド':1.55} },
+    // 地方小規模：少頭数・本命偏重。上位馬の複勝率が高い→足切り引上げ、低配当でも拾うためEV下限を緩和。
+    nar_local: { fukuPmin:0.74, widePmin:0.58, evMin:0.68, bias:{'複勝':2.65,'ワイド':1.50} },
+    // ばんえい：少頭数・本命極端に強い→最も純粋な複勝鉄板に集中。EV下限を最も緩め、複勝比重最大。
+    nar_ban:   { fukuPmin:0.76, widePmin:0.60, evMin:0.65, bias:{'複勝':2.75,'ワイド':1.40} },
+  };
+  const assign = {
+    '05':'jra_major','06':'jra_major','07':'jra_major','08':'jra_major','09':'jra_major',
+    '01':'jra_minor','02':'jra_minor','03':'jra_minor','04':'jra_minor','10':'jra_minor',
+    '42':'nar_nankan','43':'nar_nankan','44':'nar_nankan','45':'nar_nankan',
+    '30':'nar_local','35':'nar_local','36':'nar_local','46':'nar_local','47':'nar_local',
+    '48':'nar_local','50':'nar_local','51':'nar_local','54':'nar_local','55':'nar_local',
+    '65':'nar_ban',
+  };
+  const map = {};
+  Object.keys(assign).forEach(code => { map[code] = { tier: assign[code], ...P[assign[code]] }; });
+  return { map, fallback: { tier:'jra_major', ...P.jra_major } };
+})();
+
+function hitMaxTuning(){
+  const code = currentVenueCodeForScore();
+  const t = (code && HITMAX_VENUE_TUNING.map[code]) || HITMAX_VENUE_TUNING.fallback;
+  try { window.__hitMaxTuning = { code: code || '(未判定)', tier: t.tier }; } catch(_){}
+  return t;
+}
+
 // ─── モードスコア（結合版.jsから移植） ─────────────
 function getModeScore(r, mode){
   const p = Number(r.p||0), ev = Number(r.ev||0), odds = Number(r.odds||0), k = Number(r.kelly||0);
@@ -1305,14 +1343,16 @@ function getModeScore(r, mode){
     return (p*16.0 + Math.max(ev-1.00,0)*2.5 + Math.sqrt(Math.max(k,0))*0.5)*typeBias;
   }
   if(mode==='hitrate100'){
-    // v5.18.108: 的中率最優先（限りなく100%を狙う）。
-    // 推定複勝率の極めて高い馬の複勝に集中。EVは多少譲歩（0.75まで許容）。
-    // ※100%の保証は理論上不可能。実態は「最高的中率追求」モード。
-    const typeBias = ({'複勝':2.50,'ワイド':1.55})[r.type]||0;
+    // v5.18.118: 的中率最大（開催場別自動最適化）。currentRaceId から開催場を判定し、
+    // 頭数規模・本命の強さに応じて複勝/ワイドの複勝率足切り・EV下限・券種比重を自動チューニングする（モードは増やさない）。
+    // 推定複勝率の極めて高い馬の複勝に集中。EVは的中率優先のため譲歩する。
+    // ※的中率100%の保証は理論上不可能。実態は「最高的中率追求」モード。
+    const T = hitMaxTuning();
+    const typeBias = (T.bias[r.type]!=null) ? T.bias[r.type] : 0;
     if(!['複勝','ワイド'].includes(r.type)) return -999;
-    if(r.type==='複勝'&&p<0.72) return -999;
-    if(r.type==='ワイド'&&p<0.55) return -999;
-    if(ev<0.75) return -999;
+    if(r.type==='複勝'&&p<T.fukuPmin) return -999;
+    if(r.type==='ワイド'&&p<T.widePmin) return -999;
+    if(ev<T.evMin) return -999;
     return (p*14.0+Math.max(ev-0.70,0)*0.6)*typeBias;
   }
   if(mode==='hitrate60'){
@@ -9293,7 +9333,7 @@ if(horses.length === 0){
 (function(){
   'use strict';
 
-  const VERSION89 = 'v5.18.117 ROIMaxByVenue';
+  const VERSION89 = 'v5.18.118 HitMaxByVenue';
 
   // 直近の精算結果（テキストコピー用）
   let pts_lastRows = [];

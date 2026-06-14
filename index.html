@@ -2559,7 +2559,9 @@ function narKaisaiId(date, venueCode){
 function raceListUrl(kind, date, venueCode){
   const p = ymdParts(date);
   if(kind === 'NAR'){
-    const base = `https://nar.netkeiba.com/top/race_list.html?kaisai_date=${p.yyyymmdd}`;
+    // v5.18.122: race_list.html はJS描画でrace_id/kaisai_idが静的HTMLに出ず0件になる。
+    // JRA同様、静的フラグメントの race_list_sub.html を正とする（kaisai_id/race_id入り）。
+    const base = `https://nar.netkeiba.com/top/race_list_sub.html?kaisai_date=${p.yyyymmdd}&rf=race_list`;
     return venueCode ? `${base}&kaisai_id=${narKaisaiId(date, venueCode)}` : base;
   }
   // JRAの通常 race_list.html は iPad/Safari + netkeiba側のタブ状態で空になることがある。
@@ -8375,7 +8377,7 @@ if(horses.length === 0){
 
     // 3) 公式一覧（?url= 素通し）
     await new Promise(r=>setTimeout(r, 1500));
-    const listUrl = (typeof raceListUrl==='function') ? raceListUrl('NAR', date, '') : `https://nar.netkeiba.com/top/race_list.html?kaisai_date=${ymd87(date)}`;
+    const listUrl = (typeof raceListUrl==='function') ? raceListUrl('NAR', date, '') : `https://nar.netkeiba.com/top/race_list_sub.html?kaisai_date=${ymd87(date)}&rf=race_list`;
     const listReq = (typeof buildWorkerRequestUrl==='function') ? buildWorkerRequestUrl(listUrl) : px+'?url='+encodeURIComponent(listUrl);
     const list = await probe('NAR 公式一覧', listReq, '');
 
@@ -8420,7 +8422,7 @@ if(horses.length === 0){
 
     if(status){
       status.innerHTML = `<div class="url-status">`
-        + `<b>🔍 NAR診断 ${esc(date)}（v5.18.97）</b><br>ブリッジ: ${bridgeReady?'🌉 検出':'未検出'}<br>${verdict}<br>`
+        + `<b>🔍 NAR診断 ${esc(date)}（v5.18.122）</b><br>ブリッジ: ${bridgeReady?'🌉 検出':'未検出'}<br>${verdict}<br>`
         + `<div style="margin-top:6px;">${row(jra)}${row(nar1)}${row(list)}${row(bridgeRow)}</div>`
         + `<div style="margin-top:6px;font-size:11px;opacity:.8;">プロキシ: ${esc(px||'未設定')}</div>`
         + `</div>`;
@@ -8517,7 +8519,7 @@ if(horses.length === 0){
       if(statusEl) statusEl.innerHTML = `<div class="url-status">📅 ${esc87(date)} NAR公式レース一覧から開催場を取得中...</div>`;
       listHtml = (typeof fetchNarOfficialRaceListHtml === 'function')
         ? await fetchNarOfficialRaceListHtml(date, '')
-        : await fetchHtmlViaProxy(`https://nar.netkeiba.com/top/race_list.html?kaisai_date=${ymd87(date)}`);
+        : await fetchHtmlViaProxy(`https://nar.netkeiba.com/top/race_list_sub.html?kaisai_date=${ymd87(date)}&rf=race_list`);
       codes = (typeof parseNarOfficialVenueCodesFromList === 'function')
         ? parseNarOfficialVenueCodesFromList(listHtml, date)
         : [];
@@ -8592,7 +8594,7 @@ if(horses.length === 0){
     try{
       const listUrl = (typeof raceListUrl==='function')
         ? raceListUrl('NAR', date, venueCode)
-        : `https://nar.netkeiba.com/top/race_list.html?kaisai_date=${ymd87(date)}`;
+        : `https://nar.netkeiba.com/top/race_list_sub.html?kaisai_date=${ymd87(date)}&rf=race_list`;
       const lr = await narGet87(listUrl);
       if(lr.ok){
         const nameMap = parseNarRaceNamesFromList87(await lr.text(), venueCode, date);
@@ -9448,7 +9450,7 @@ if(horses.length === 0){
 (function(){
   'use strict';
 
-  const VERSION89 = 'v5.18.121 OoiStrictTier';
+  const VERSION89 = 'v5.18.122 NARListSubFix';
 
   // 直近の精算結果（テキストコピー用）
   let pts_lastRows = [];

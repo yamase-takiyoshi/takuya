@@ -5805,34 +5805,47 @@ function parseHorsesFromDoc(doc, url){
 async function testProxy(){
   const url = document.getElementById('proxyUrl').value.trim();
   if(!url){ alert('Workers URLを入力してください。'); return; }
-  // 入力URLを即保存して以降の取得にも反映する
   if(settings) settings.proxyUrl = url;
   try{ saveSettings(); }catch(e){}
   const status = document.getElementById('proxyStatus');
-  status.innerHTML = '<div class="url-status">🔄 テスト中...</div>';
+  status.innerHTML = '<div class="url-status">🔄 テスト中（3経路を確認）...</div>';
   const base = url.replace(/\/$/, '');
   const ymd = (typeof todayYmd==='function' ? todayYmd() : '').replace(/-/g,'');
-  // 本文にHTMLが返っていれば netkeiba まで到達できている＝Worker正常とみなす。
   const probe = async (reqUrl)=>{
     try{
       const res = await fetch(reqUrl, { cache:'no-store' });
       let txt=''; try{ txt = await res.text(); }catch(e){}
       const ok = res.ok && /<(html|table|tr|li|a\s)/i.test(txt);
-      return { status: res.status, ok, len: txt.length };
+      return { status:String(res.status), ok, len:txt.length };
     }catch(e){ return { status:'ERR', ok:false, len:0, err:(e&&e.message)||String(e) }; }
   };
-  // 1) url= 経路：レース一覧などアプリが実際に多用する経路（旧/新Workerとも対応）。
-  const listUrl = `https://nar.netkeiba.com/top/race_list_sub.html?kaisai_date=${ymd}&rf=race_list`;
-  const r1 = await probe(`${base}?url=${encodeURIComponent(listUrl)}`);
-  // 2) type/race_id 経路：オッズ・結果の最適経路（新Workerのみ対応）。
-  const r2 = await probe(`${base}?type=shutuba&kind=JRA&race_id=202605020911`);
+  const jraList = `https://race.netkeiba.com/top/race_list_sub.html?kaisai_date=${ymd}&current_group=10${ymd}`;
+  const narList = `https://nar.netkeiba.com/top/race_list_sub.html?kaisai_date=${ymd}&rf=race_list`;
+  const a = await probe(`${base}?url=${encodeURIComponent(jraList)}`);          // url= / JRA
+  const b = await probe(`${base}?url=${encodeURIComponent(narList)}`);          // url= / NAR
+  const c = await probe(`${base}?type=shutuba&kind=JRA&race_id=202605020911`);  // type/race_id
 
-  if(r1.ok || r2.ok){
-    const routes = [r1.ok?'url=一覧':null, r2.ok?'type/race_id':null].filter(Boolean).join(' ／ ');
-    status.innerHTML = `<div class="url-status ok">✅ 接続成功（${routes} で取得OK）。Workerは正常です。</div>`;
+  // 旧版(url=のみ対応)は type/race_id を 400 で弾く。新版は 200 か 502(=netkeiba側エラー)を返す。
+  const newWorker = (c.status !== '400' && c.status !== 'ERR');
+  const reachable = [a,b,c].some(r => r.status !== 'ERR');
+  let verdict, cls;
+  if(!reachable){
+    cls='err'; verdict='🔴 Workerに到達できません。URLの誤り・未Deploy・Worker停止のいずれか。';
+  } else if(a.ok || b.ok || c.ok){
+    if(newWorker){
+      if(a.ok && b.ok){ cls='ok'; verdict='🟢 Worker正常（最新版）。JRA・NARとも取得OKです。'; }
+      else if(a.ok && !b.ok){ cls='ok'; verdict='🟠 Worker正常（最新版）。ただしNARはbot制限で弾かれています（JRAはOK）。NARはブリッジ経由か、時間をおいて再試行を。'; }
+      else { cls='ok'; verdict='🟠 Worker応答あり（最新版）。一部経路のみ取得できています。'; }
+    } else {
+      cls='ok'; verdict='🟡 旧Worker（url=のみ対応）が動作中。一覧は取れますが、オッズ・結果の最適取得は未対応です。下の「コードをコピー」→Cloudflareで貼り替えてDeploy推奨。';
+    }
   } else {
-    status.innerHTML = `<div class="url-status err">⚠️ url=: HTTP ${r1.status} ／ type/race_id: HTTP ${r2.status}。両経路とも取得できません。下の「コードをコピー」で最新worker.jsを貼り直し、Cloudflareで Deploy してください。</div>`;
+    if(newWorker){ cls='err'; verdict='🟠 最新Workerは応答していますが、netkeibaから取得できていません（bot制限の可能性）。時間をおくかブリッジ経由で。'; }
+    else { cls='err'; verdict='🟡 旧Worker（url=のみ）が応答していますが、netkeiba取得に失敗。下の「コードをコピー」で最新worker.jsを貼り直してDeployしてください。'; }
   }
+  const row = (label, r)=>`<div style="font-family:monospace;font-size:11px;opacity:.85">${label}: HTTP ${r.status}${r.ok?' ✅':''}${r.err?(' '+r.err):''}</div>`;
+  status.innerHTML = `<div class="url-status ${cls}">${verdict}`
+    + `<div style="margin-top:6px;">${row('url=（JRA一覧）',a)}${row('url=（NAR一覧）',b)}${row('type/race_id（JRA）',c)}</div></div>`;
 }
 
 function copyWorkerCode(){
@@ -9465,7 +9478,7 @@ if(horses.length === 0){
 (function(){
   'use strict';
 
-  const VERSION89 = 'v5.18.123 ProxyTestFix';
+  const VERSION89 = 'v5.18.124 ProxyDiag3';
 
   // 直近の精算結果（テキストコピー用）
   let pts_lastRows = [];

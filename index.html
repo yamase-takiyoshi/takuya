@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.29.2</title>
+<title>The競馬 EV分析 v5.29.3</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -224,7 +224,7 @@ button, select, input, textarea, .tab-btn, .btn, .btn-sm, .mode-btn, .sim-cand-r
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.29.2</span>
+    <span class="ver">v5.29.3</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -862,9 +862,41 @@ function probeNarRaceById(date, venueCode, venueName, raceNo) {
   }).catch(function () { return null; });
 }
 
+function fetchFirstOk(urls, idx) {
+  idx = idx || 0;
+  if (!urls || idx >= urls.length) return Promise.resolve('');
+  return fetchTextViaProxy(urls[idx]).then(function (html) {
+    if (html && html.length > 300) return html;
+    return fetchFirstOk(urls, idx + 1);
+  }).catch(function () {
+    return fetchFirstOk(urls, idx + 1);
+  });
+}
+
+// NAR: まず一覧フラグメントを1回だけ取得して race_id を抽出（総当たり回避）。
+// 取れなければ従来の shutuba 総当たりへフォールバック。
 function probeActiveNarRaces(date, filterVenue) {
-  return probeNarRacesFallback(date, filterVenue).then(function (races) {
+  var d = parseYmd(date).ymd;
+  var listUrls = [
+    'https://nar.netkeiba.com/top/race_list_sub.html?kaisai_date=' + d,
+    'https://nar.netkeiba.com/top/race_list.html?kaisai_date=' + d
+  ];
+  return fetchFirstOk(listUrls, 0).then(function (html) {
+    var fromList = parseRaceIdsFromHtml(html, 'NAR', date, filterVenue) || [];
+    if (fromList.length > 0) {
+      fromList.forEach(function (r) {
+        if (!r.formalName) r.formalName = r.nearName || (pad2(r.raceNo) + 'R');
+      });
+      return fromList;
+    }
+    // 一覧から取れなければ総当たり
+    return probeNarRacesFallback(date, filterVenue);
+  }).then(function (races) {
     return (races || []).filter(Boolean);
+  }).catch(function () {
+    return probeNarRacesFallback(date, filterVenue).then(function (races) {
+      return (races || []).filter(Boolean);
+    });
   });
 }
 

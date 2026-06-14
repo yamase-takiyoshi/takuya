@@ -638,12 +638,12 @@ const DEFAULT_MIN_EV = {
 };
 
 const MODE_OPTIONS = [
-  ['roi100','回収率100%超'],
+  ['roi100','回収率100%超（開催場別）'],
   ['roi120','回収率120%超'],
   ['roi150','回収率150%超'],
   ['roi_max','回収率最大（開催場別）'],
   ['hitroi','的中率最高&回収率100%超'],
-  ['multi100','多点トータル回収率100%超'],
+  ['multi100','多点トータル回収率100%超（開催場別）'],
   ['hitrate100','的中率100%（開催場別）'],
   ['hitrate80','的中率80%'],
   ['hitrate60','的中率60%'],
@@ -1217,44 +1217,141 @@ function hitMaxTuning(){
   return t;
 }
 
+// ─── 開催場コード→ティア割当（共通） ───
+// roi_max / hitrate100 と同じ割当規則をroi100 / multi100でも使う（モードは増やさない）。
+const VENUE_TIER_ASSIGN = {
+  '05':'jra_major','06':'jra_major','07':'jra_major','08':'jra_major','09':'jra_major',
+  '01':'jra_minor','02':'jra_minor','03':'jra_minor','04':'jra_minor','10':'jra_minor',
+  '42':'nar_nankan','43':'nar_nankan','44':'nar_nankan','45':'nar_nankan',
+  '30':'nar_local','35':'nar_local','36':'nar_local','46':'nar_local','47':'nar_local',
+  '48':'nar_local','50':'nar_local','51':'nar_local','54':'nar_local','55':'nar_local',
+  '65':'nar_ban',
+};
+
+// ─── 回収率100%超モードの開催場別自動最適化（v5.18.119） ───
+// 「回収率100%超(roi100)」を、選択中の開催場に応じて自動チューニングする。モードは増やさない。
+// 各場の頭数規模・本命党バイアス・最高オッズ帯の出やすさに合わせて、EV下限・各券種の的中率足切り・
+// オッズ帯重みを切替える。ベース(jra_major)は従来の全場共通パラメータと完全一致させ（既存JRA挙動の退行防止）、
+// 少頭数・本命偏重の地方/ばんえいほど大穴帯を強く抑制し、中〜低オッズ帯の歪み（過小評価馬）へ集中させる。
+const ROI100_BASE_BIAS = {'複勝':1.45,'ワイド':1.42,'馬連':1.28,'単勝':1.12,'枠連':1.05,'馬単':0.0,'3連複':0.65,'3連単':0.0};
+const ROI100_VENUE_TUNING = (() => {
+  const P = {
+    // JRA主場：多頭数・市場効率高。従来パラメータ＝基準（退行防止のため一切変更しない）。
+    jra_major: { evFloor:1.15, pMin:{'複勝':0.30,'ワイド':0.32,'馬連':0.12,'単勝':0.20,'3連複':0.06}, sanfukuEv:1.25,
+                 bands:[1.5,2.0,8,18,35,60],  w:[0.30,0.80,1.35,1.22,0.88,0.50,0.15], typeMul:{} },
+    // JRAローカル：やや少頭数・荒れやすい。中オッズ帯をわずかに厚く、大穴帯を少し抑制。
+    jra_minor: { evFloor:1.15, pMin:{'複勝':0.30,'ワイド':0.32,'馬連':0.12,'単勝':0.20,'3連複':0.06}, sanfukuEv:1.25,
+                 bands:[1.5,2.0,7,16,30,55],  w:[0.30,0.82,1.38,1.20,0.82,0.45,0.12], typeMul:{} },
+    // 南関東：多頭数で流動性あり、控除やや高。EV下限を微増し、中穴帯を重視・大穴帯を抑制。
+    nar_nankan:{ evFloor:1.16, pMin:{'複勝':0.31,'ワイド':0.33,'馬連':0.12,'単勝':0.20,'3連複':0.06}, sanfukuEv:1.26,
+                 bands:[1.5,2.0,7,16,32,55],  w:[0.25,0.78,1.38,1.20,0.80,0.42,0.12], typeMul:{} },
+    // 地方小規模：少頭数・本命偏重・最高オッズ低め。極端な大穴を強く抑制し中〜低オッズ帯へ集中。
+    nar_local: { evFloor:1.15, pMin:{'複勝':0.33,'ワイド':0.34,'馬連':0.13,'単勝':0.21,'3連複':0.07}, sanfukuEv:1.27,
+                 bands:[1.4,1.8,6,14,26,45],  w:[0.20,0.75,1.42,1.10,0.55,0.25,0.06], typeMul:{'3連複':0.90} },
+    // ばんえい：少頭数・本命極端に強い。最も大穴帯を抑制し、単勝・馬連の中オッズへ集中。
+    nar_ban:   { evFloor:1.15, pMin:{'複勝':0.34,'ワイド':0.35,'馬連':0.14,'単勝':0.22,'3連複':0.08}, sanfukuEv:1.28,
+                 bands:[1.4,1.8,5,12,22,40],  w:[0.18,0.72,1.45,1.00,0.45,0.18,0.05], typeMul:{'3連複':0.80} },
+  };
+  const map = {};
+  Object.keys(VENUE_TIER_ASSIGN).forEach(code => { map[code] = { tier: VENUE_TIER_ASSIGN[code], ...P[VENUE_TIER_ASSIGN[code]] }; });
+  return { map, fallback: { tier:'jra_major', ...P.jra_major } };
+})();
+function roi100Tuning(){
+  const code = currentVenueCodeForScore();
+  const t = (code && ROI100_VENUE_TUNING.map[code]) || ROI100_VENUE_TUNING.fallback;
+  try { window.__roi100Tuning = { code: code || '(未判定)', tier: t.tier }; } catch(_){}
+  return t;
+}
+
+// ─── 多点トータル回収率100%超モードの開催場別自動最適化（v5.18.119） ───
+// 「多点トータル回収率100%超(multi100)」を、選択中の開催場に応じて自動チューニングする。モードは増やさない。
+// トータル100%超の数学的担保＝「全買い目EV>=1.00」は全開催場で不変（このガード floor は1.00から動かさない）。
+// 各場では、その上に積む券種別の追加EVバッファ・的中率足切り・券種比重だけを切替える。
+// 少頭数・本命偏重の地方/ばんえいほど上位馬の複勝率が高い→足切りを引上げ複勝を厚く、低配当でも拾えるよう
+// 追加バッファは1.00寄りに緩める（ただし1.00は絶対に割らない）。ベース(jra_major)は従来値と完全一致（退行防止）。
+const MULTI100_BASE_BIAS = {'複勝':1.80,'ワイド':1.55,'単勝':1.15,'馬連':1.10,'3連複':0.70};
+const MULTI100_VENUE_TUNING = (() => {
+  const P = {
+    // JRA主場：従来パラメータ＝基準（退行防止のため一切変更しない）。
+    jra_major: { pMin:{'複勝':0.35,'ワイド':0.25,'単勝':0.15,'馬連':0.10,'3連複':0.05},
+                 evMin:{'複勝':1.05,'ワイド':1.05,'単勝':1.08,'馬連':1.10,'3連複':1.20}, typeMul:{} },
+    // JRAローカル：中頭数。従来寄り、複勝足切りをわずかに引上げ。
+    jra_minor: { pMin:{'複勝':0.36,'ワイド':0.26,'単勝':0.15,'馬連':0.10,'3連複':0.05},
+                 evMin:{'複勝':1.05,'ワイド':1.05,'単勝':1.08,'馬連':1.10,'3連複':1.20}, typeMul:{} },
+    // 南関東：中〜多頭数・本命強め。複勝/ワイドを厚く、3連複の追加バッファを微増。
+    nar_nankan:{ pMin:{'複勝':0.38,'ワイド':0.27,'単勝':0.16,'馬連':0.11,'3連複':0.05},
+                 evMin:{'複勝':1.04,'ワイド':1.04,'単勝':1.07,'馬連':1.09,'3連複':1.22}, typeMul:{'複勝':1.03} },
+    // 地方小規模：少頭数・本命偏重→上位馬の複勝率が高い。足切り引上げ＝より純粋な鉄板。低配当でも拾うため
+    //   追加バッファは1.00寄りに緩和（1.00は厳守）。複勝比重を増やし3連複を抑制。
+    nar_local: { pMin:{'複勝':0.42,'ワイド':0.30,'単勝':0.18,'馬連':0.12,'3連複':0.06},
+                 evMin:{'複勝':1.03,'ワイド':1.03,'単勝':1.05,'馬連':1.07,'3連複':1.18}, typeMul:{'複勝':1.06,'3連複':0.90} },
+    // ばんえい：少頭数・本命極端に強い→最も純粋な複勝鉄板に集中。複勝比重最大・3連複最も抑制。
+    nar_ban:   { pMin:{'複勝':0.45,'ワイド':0.32,'単勝':0.20,'馬連':0.13,'3連複':0.07},
+                 evMin:{'複勝':1.02,'ワイド':1.02,'単勝':1.04,'馬連':1.06,'3連複':1.16}, typeMul:{'複勝':1.10,'3連複':0.80} },
+  };
+  const map = {};
+  Object.keys(VENUE_TIER_ASSIGN).forEach(code => { map[code] = { tier: VENUE_TIER_ASSIGN[code], ...P[VENUE_TIER_ASSIGN[code]] }; });
+  return { map, fallback: { tier:'jra_major', ...P.jra_major } };
+})();
+function multi100Tuning(){
+  const code = currentVenueCodeForScore();
+  const t = (code && MULTI100_VENUE_TUNING.map[code]) || MULTI100_VENUE_TUNING.fallback;
+  try { window.__multi100Tuning = { code: code || '(未判定)', tier: t.tier }; } catch(_){}
+  return t;
+}
+
 // ─── モードスコア（結合版.jsから移植） ─────────────
 function getModeScore(r, mode){
   const p = Number(r.p||0), ev = Number(r.ev||0), odds = Number(r.odds||0), k = Number(r.kelly||0);
   if(mode==='roi100'){
-    const typeBias = ({'複勝':1.45,'ワイド':1.42,'馬連':1.28,'単勝':1.12,'枠連':1.05,'馬単':0.0,'3連複':0.65,'3連単':0.0})[r.type]||1;
+    // v5.18.119: 回収率100%超（開催場別自動最適化）。currentRaceId から開催場を判定し、
+    // 各場の頭数規模・本命党バイアス・最高オッズ帯の出やすさに応じてEV下限/的中率足切り/オッズ帯重みを切替える。
+    // ベース(jra_major)は従来パラメータと完全一致（既存JRA挙動の退行防止）。モードは増やさない。
+    const T = roi100Tuning();
+    const baseBias = ROI100_BASE_BIAS[r.type] != null ? ROI100_BASE_BIAS[r.type] : 1;
+    const typeBias = baseBias * ((T.typeMul && T.typeMul[r.type]!=null) ? T.typeMul[r.type] : 1);
+    const pm = T.pMin || {};
     if(['馬単','3連単'].includes(r.type)) return -999;
-    if(ev<1.15) return -999;
-    if(r.type==='複勝'&&p<0.30) return -999;
-    if(r.type==='ワイド'&&p<0.32) return -999;
-    if(r.type==='馬連'&&p<0.12) return -999;
-    if(r.type==='単勝'&&p<0.20) return -999;
-    if(r.type==='3連複'&&(p<0.06||ev<1.25)) return -999;
-    let oddsBand=1.0;
-    if(odds<1.5)oddsBand=0.30;
-    else if(odds<2.0)oddsBand=0.80;
-    else if(odds<=8)oddsBand=1.35;
-    else if(odds<=18)oddsBand=1.22;
-    else if(odds<=35)oddsBand=0.88;
-    else if(odds<=60)oddsBand=0.50;
-    else oddsBand=0.15;
+    if(ev<T.evFloor) return -999;
+    if(r.type==='複勝'&&p<(pm['複勝']!=null?pm['複勝']:0.30)) return -999;
+    if(r.type==='ワイド'&&p<(pm['ワイド']!=null?pm['ワイド']:0.32)) return -999;
+    if(r.type==='馬連'&&p<(pm['馬連']!=null?pm['馬連']:0.12)) return -999;
+    if(r.type==='単勝'&&p<(pm['単勝']!=null?pm['単勝']:0.20)) return -999;
+    if(r.type==='3連複'&&(p<(pm['3連複']!=null?pm['3連複']:0.06)||ev<T.sanfukuEv)) return -999;
+    // 開催場別のオッズ帯境界・重み（少頭数の地方/ばんえいは大穴帯を強く抑制、効率的なJRA主場は大穴帯を許容）
+    const B = T.bands, W = T.w;
+    let oddsBand;
+    if(odds<B[0])      oddsBand=W[0];
+    else if(odds<B[1]) oddsBand=W[1];
+    else if(odds<=B[2])oddsBand=W[2];
+    else if(odds<=B[3])oddsBand=W[3];
+    else if(odds<=B[4])oddsBand=W[4];
+    else if(odds<=B[5])oddsBand=W[5];
+    else               oddsBand=W[6];
     return (Math.max(ev-1.05,0)*5.5+Math.sqrt(Math.max(p,0))*3.5+Math.sqrt(Math.max(k,0))*1.8)*oddsBand*typeBias;
   }
   if(mode==='multi100'){
-    // v5.18.116: 多点トータル回収率100%超モード。
+    // v5.18.119: 多点トータル回収率100%超（開催場別自動最適化）。
     // 数学的根拠：各買い目の期待値EV_iがすべて1.00以上なら、どんな配分w_iで多点買いしても
     //   トータル期待回収率 = Σ(w_i·EV_i)/Σ(w_i)（＝EVの加重平均）が必ず1.00以上になる（期待値の線形性）。
     //   よって本モードは「EV>=1.00を厳守した買い目だけ」を多点で拾うことでトータル100%超を狙う。
+    //   ※この EV>=1.00 ガードは全開催場で不変（1.00から動かさない＝トータル100%超の絶対担保）。
+    // currentRaceId から開催場を判定し、その上に積む券種別の追加EVバッファ・的中率足切り・券種比重だけを切替える。
+    //   少頭数・本命偏重の地方/ばんえいほど上位馬の複勝率が高い→足切りを引上げ複勝を厚く、低配当でも拾えるよう
+    //   追加バッファは1.00寄りに緩める（ただし1.00は厳守）。ベース(jra_major)は従来値と完全一致（退行防止）。
     // 多点で的中率を確保するため複勝・ワイドを主軸、単勝・馬連を補助、3連複を少量。馬単・3連単・枠連は除外。
-    // 推定誤差のバッファとして券種ごとに1.00より少し高いEV下限を要求（MODE_EVと二重ガード）。
     // ※「100%超」は推定EV・推定確率が正しい前提での期待値。実回収率はその精度に依存し、保証ではない。
-    const typeBias = ({'複勝':1.80,'ワイド':1.55,'単勝':1.15,'馬連':1.10,'3連複':0.70})[r.type]||0;
+    const T = multi100Tuning();
+    const baseBias = MULTI100_BASE_BIAS[r.type] != null ? MULTI100_BASE_BIAS[r.type] : 0;
+    const typeBias = baseBias * ((T.typeMul && T.typeMul[r.type]!=null) ? T.typeMul[r.type] : 1);
+    const pm = T.pMin || {}, em = T.evMin || {};
     if(!['複勝','ワイド','単勝','馬連','3連複'].includes(r.type)) return -999;
-    if(ev<1.00) return -999;                          // 全買い目EV>=1.00の絶対条件（トータル100%超の数学的担保）
-    if(r.type==='複勝'&&(p<0.35||ev<1.05)) return -999;
-    if(r.type==='ワイド'&&(p<0.25||ev<1.05)) return -999;
-    if(r.type==='単勝'&&(p<0.15||ev<1.08)) return -999;
-    if(r.type==='馬連'&&(p<0.10||ev<1.10)) return -999;
-    if(r.type==='3連複'&&(p<0.05||ev<1.20)) return -999;
+    if(ev<1.00) return -999;                          // 全買い目EV>=1.00の絶対条件（トータル100%超の数学的担保／全場不変）
+    if(r.type==='複勝'&&(p<(pm['複勝']!=null?pm['複勝']:0.35)||ev<(em['複勝']!=null?em['複勝']:1.05))) return -999;
+    if(r.type==='ワイド'&&(p<(pm['ワイド']!=null?pm['ワイド']:0.25)||ev<(em['ワイド']!=null?em['ワイド']:1.05))) return -999;
+    if(r.type==='単勝'&&(p<(pm['単勝']!=null?pm['単勝']:0.15)||ev<(em['単勝']!=null?em['単勝']:1.08))) return -999;
+    if(r.type==='馬連'&&(p<(pm['馬連']!=null?pm['馬連']:0.10)||ev<(em['馬連']!=null?em['馬連']:1.10))) return -999;
+    if(r.type==='3連複'&&(p<(pm['3連複']!=null?pm['3連複']:0.05)||ev<(em['3連複']!=null?em['3連複']:1.20))) return -999;
     // EVの100%超過分と的中率pをバランスよく評価（多点でも安定して当たり、合成で負けない並びにする）
     return (Math.max(ev-1.00,0)*4.0+Math.sqrt(Math.max(p,0))*4.0+Math.sqrt(Math.max(k,0))*1.0)*typeBias;
   }
@@ -9333,7 +9430,7 @@ if(horses.length === 0){
 (function(){
   'use strict';
 
-  const VERSION89 = 'v5.18.118 HitMaxByVenue';
+  const VERSION89 = 'v5.18.119 ROI100Multi100ByVenue';
 
   // 直近の精算結果（テキストコピー用）
   let pts_lastRows = [];

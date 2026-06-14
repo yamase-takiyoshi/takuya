@@ -5808,7 +5808,7 @@ async function testProxy(){
   if(settings) settings.proxyUrl = url;
   try{ saveSettings(); }catch(e){}
   const status = document.getElementById('proxyStatus');
-  status.innerHTML = '<div class="url-status">🔄 テスト中（3経路を確認）...</div>';
+  status.innerHTML = '<div class="url-status">🔄 テスト中（Worker3経路＋ブリッジを確認）...</div>';
   const base = url.replace(/\/$/, '');
   const ymd = (typeof todayYmd==='function' ? todayYmd() : '').replace(/-/g,'');
   const probe = async (reqUrl)=>{
@@ -5825,27 +5825,42 @@ async function testProxy(){
   const b = await probe(`${base}?url=${encodeURIComponent(narList)}`);          // url= / NAR
   const c = await probe(`${base}?type=shutuba&kind=JRA&race_id=202605020911`);  // type/race_id
 
+  // 4) ブリッジ経由（住宅IP）：Userscript(nar_bridge.user.js)が入っていれば、Akamai遮断を回避できる。
+  let bridge;
+  if(typeof window.__narBridgeFetch === 'function' && window.__NAR_BRIDGE_READY__){
+    try{
+      const r = await window.__narBridgeFetch(narList);
+      const txt = (r && r.text) || '';
+      bridge = { status:String(r ? r.status : '0'), ok:(r && String(r.status)==='200' && /<(html|table|tr|li|a\s)/i.test(txt)), len:txt.length, err:(r&&r.error)||'' };
+    }catch(e){ bridge = { status:'ERR', ok:false, len:0, err:(e&&e.message)||String(e) }; }
+  } else {
+    bridge = { status:'未検出', ok:false, len:0, err:'Userscriptブリッジ未検出' };
+  }
+
   // 旧版(url=のみ対応)は type/race_id を 400 で弾く。新版は 200 か 502(=netkeiba側エラー)を返す。
   const newWorker = (c.status !== '400' && c.status !== 'ERR');
   const reachable = [a,b,c].some(r => r.status !== 'ERR');
   let verdict, cls;
-  if(!reachable){
+  if(a.ok && b.ok && newWorker){
+    cls='ok'; verdict='🟢 Worker正常（最新版）。JRA・NARともWorker経由で取得OKです。';
+  } else if(bridge.ok){
+    cls='ok'; verdict='🟢 ブリッジ（住宅IP）でNAR取得OK。WorkerがAkamaiに弾かれていても、NARはブリッジ経由で回せます。' + ((a.ok||c.ok)?'JRAはWorkerでOK。':'JRAはWorker回復待ち。');
+  } else if(!reachable){
     cls='err'; verdict='🔴 Workerに到達できません。URLの誤り・未Deploy・Worker停止のいずれか。';
   } else if(a.ok || b.ok || c.ok){
     if(newWorker){
-      if(a.ok && b.ok){ cls='ok'; verdict='🟢 Worker正常（最新版）。JRA・NARとも取得OKです。'; }
-      else if(a.ok && !b.ok){ cls='ok'; verdict='🟠 Worker正常（最新版）。ただしNARはbot制限で弾かれています（JRAはOK）。NARはブリッジ経由か、時間をおいて再試行を。'; }
+      if(a.ok && !b.ok){ cls='ok'; verdict='🟠 Worker正常（最新版）。NARだけbot制限で弾かれています（JRAはOK）。NARはブリッジ経由が必要。'; }
       else { cls='ok'; verdict='🟠 Worker応答あり（最新版）。一部経路のみ取得できています。'; }
     } else {
-      cls='ok'; verdict='🟡 旧Worker（url=のみ対応）が動作中。一覧は取れますが、オッズ・結果の最適取得は未対応です。下の「コードをコピー」→Cloudflareで貼り替えてDeploy推奨。';
+      cls='ok'; verdict='🟡 旧Worker（url=のみ対応）が動作中。下の「コードをコピー」→Cloudflareで最新版に貼り替えてDeploy推奨。';
     }
   } else {
-    if(newWorker){ cls='err'; verdict='🟠 最新Workerは応答していますが、netkeibaから取得できていません（bot制限の可能性）。時間をおくかブリッジ経由で。'; }
-    else { cls='err'; verdict='🟡 旧Worker（url=のみ）が応答していますが、netkeiba取得に失敗。下の「コードをコピー」で最新worker.jsを貼り直してDeployしてください。'; }
+    if(newWorker){ cls='err'; verdict='🟠 最新WorkerはあるがAkamaiがIP遮断中（全経路502）。時間をおくか、ブリッジ（住宅IP）でNARを取得してください。'; }
+    else { cls='err'; verdict='🟡 旧Worker（url=のみ）が応答していますが取得失敗。最新worker.jsを貼り直してDeployしてください。'; }
   }
   const row = (label, r)=>`<div style="font-family:monospace;font-size:11px;opacity:.85">${label}: HTTP ${r.status}${r.ok?' ✅':''}${r.err?(' '+r.err):''}</div>`;
   status.innerHTML = `<div class="url-status ${cls}">${verdict}`
-    + `<div style="margin-top:6px;">${row('url=（JRA一覧）',a)}${row('url=（NAR一覧）',b)}${row('type/race_id（JRA）',c)}</div></div>`;
+    + `<div style="margin-top:6px;">${row('url=（JRA一覧）',a)}${row('url=（NAR一覧）',b)}${row('type/race_id（JRA）',c)}${row('ブリッジ（NAR/住宅IP）',bridge)}</div></div>`;
 }
 
 function copyWorkerCode(){
@@ -9478,7 +9493,7 @@ if(horses.length === 0){
 (function(){
   'use strict';
 
-  const VERSION89 = 'v5.18.124 ProxyDiag3';
+  const VERSION89 = 'v5.18.125 ProxyDiag4';
 
   // 直近の精算結果（テキストコピー用）
   let pts_lastRows = [];

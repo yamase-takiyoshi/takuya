@@ -5805,18 +5805,33 @@ function parseHorsesFromDoc(doc, url){
 async function testProxy(){
   const url = document.getElementById('proxyUrl').value.trim();
   if(!url){ alert('Workers URLを入力してください。'); return; }
+  // 入力URLを即保存して以降の取得にも反映する
+  if(settings) settings.proxyUrl = url;
+  try{ saveSettings(); }catch(e){}
   const status = document.getElementById('proxyStatus');
   status.innerHTML = '<div class="url-status">🔄 テスト中...</div>';
-  try {
-    const testUrl = url.replace(/\/$/, '') + '?type=shutuba&kind=JRA&race_id=202605020911';
-    const res = await fetch(testUrl, { cache:'no-store' });
-    if(res.ok){
-      status.innerHTML = '<div class="url-status ok">✅ 接続成功！</div>';
-    } else {
-      status.innerHTML = `<div class="url-status err">⚠️ HTTP ${res.status}</div>`;
-    }
-  } catch(e) {
-    status.innerHTML = `<div class="url-status err">❌ 接続失敗: ${e.message}</div>`;
+  const base = url.replace(/\/$/, '');
+  const ymd = (typeof todayYmd==='function' ? todayYmd() : '').replace(/-/g,'');
+  // 本文にHTMLが返っていれば netkeiba まで到達できている＝Worker正常とみなす。
+  const probe = async (reqUrl)=>{
+    try{
+      const res = await fetch(reqUrl, { cache:'no-store' });
+      let txt=''; try{ txt = await res.text(); }catch(e){}
+      const ok = res.ok && /<(html|table|tr|li|a\s)/i.test(txt);
+      return { status: res.status, ok, len: txt.length };
+    }catch(e){ return { status:'ERR', ok:false, len:0, err:(e&&e.message)||String(e) }; }
+  };
+  // 1) url= 経路：レース一覧などアプリが実際に多用する経路（旧/新Workerとも対応）。
+  const listUrl = `https://nar.netkeiba.com/top/race_list_sub.html?kaisai_date=${ymd}&rf=race_list`;
+  const r1 = await probe(`${base}?url=${encodeURIComponent(listUrl)}`);
+  // 2) type/race_id 経路：オッズ・結果の最適経路（新Workerのみ対応）。
+  const r2 = await probe(`${base}?type=shutuba&kind=JRA&race_id=202605020911`);
+
+  if(r1.ok || r2.ok){
+    const routes = [r1.ok?'url=一覧':null, r2.ok?'type/race_id':null].filter(Boolean).join(' ／ ');
+    status.innerHTML = `<div class="url-status ok">✅ 接続成功（${routes} で取得OK）。Workerは正常です。</div>`;
+  } else {
+    status.innerHTML = `<div class="url-status err">⚠️ url=: HTTP ${r1.status} ／ type/race_id: HTTP ${r2.status}。両経路とも取得できません。下の「コードをコピー」で最新worker.jsを貼り直し、Cloudflareで Deploy してください。</div>`;
   }
 }
 
@@ -9450,7 +9465,7 @@ if(horses.length === 0){
 (function(){
   'use strict';
 
-  const VERSION89 = 'v5.18.122 NARListSubFix';
+  const VERSION89 = 'v5.18.123 ProxyTestFix';
 
   // 直近の精算結果（テキストコピー用）
   let pts_lastRows = [];

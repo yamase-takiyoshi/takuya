@@ -641,7 +641,7 @@ const MODE_OPTIONS = [
   ['roi100','回収率100%超'],
   ['roi120','回収率120%超'],
   ['roi150','回収率150%超'],
-  ['roi_max','回収率最大'],
+  ['roi_max','回収率最大（開催場別）'],
   ['hitroi','的中率最高&回収率100%超'],
   ['multi100','多点トータル回収率100%超'],
   ['hitrate100','的中率100%'],
@@ -1123,6 +1123,62 @@ function generateCandidates(allHorses){
   return { recs, rated };
 }
 
+// ─── 回収率最大モードの開催場別自動最適化（v5.18.117） ───
+// 「回収率最大(roi_max)」を、選択中の開催場に応じて自動チューニングする。モードは増やさない。
+// currentRaceId（YYYY+場コード2桁+…）から開催場を判定し、各場の標準的な頭数規模・市場特性
+// （控除率・本命党バイアス・最高オッズ帯の出やすさ）に合わせて、EV下限・オッズ帯重み・券種比重を切替える。
+// ベース(jra_major)は従来の全場共通パラメータと完全一致させ、他ティアのみ差分を持たせる（既存JRA挙動の退行防止）。
+const ROIMAX_VENUE_TUNING = (() => {
+  // ティア別プロファイル（各開催場コードへ個別に割当：各場ごとに解決可能）
+  const P = {
+    // JRA主場（東京・中山・京都・阪神・中京）：多頭数・市場効率高。従来パラメータ＝基準。
+    jra_major: { evFloor:1.50, tanOddsMin:5.0,
+                 evAdd:{'単勝':0.05,'馬連':0.15,'馬単':0.35,'3連複':0.35,'3連単':0.80},
+                 bands:[5,25,80,200],   w:[0.05,1.50,1.60,1.10,0.40], typeMul:{} },
+    // JRAローカル（札幌・函館・福島・新潟・小倉）：やや少頭数・荒れやすい。中オッズ帯を厚め、大穴をやや抑制。
+    jra_minor: { evFloor:1.50, tanOddsMin:4.0,
+                 evAdd:{'単勝':0.05,'馬連':0.15,'馬単':0.35,'3連複':0.35,'3連単':0.80},
+                 bands:[4,20,60,150],   w:[0.06,1.55,1.55,1.00,0.30], typeMul:{'3連単':0.90} },
+    // 南関東（浦和・船橋・大井・川崎）：多頭数で流動性あり、控除やや高。中穴帯重視・EV下限を微増。
+    nar_nankan:{ evFloor:1.52, tanOddsMin:4.5,
+                 evAdd:{'単勝':0.06,'馬連':0.16,'馬単':0.36,'3連複':0.36,'3連単':0.82},
+                 bands:[4,22,70,180],   w:[0.05,1.50,1.58,1.05,0.35], typeMul:{} },
+    // 地方小規模（門別・盛岡・水沢・金沢・笠松・名古屋・園田・姫路・高知・佐賀）：少頭数・本命偏重・最高オッズ低め。
+    //   極端な大穴を強く抑制し中オッズ帯へ集中。少頭数ゆえ単勝の許容オッズ下限を緩和。3連単をやや抑制。
+    nar_local: { evFloor:1.55, tanOddsMin:3.5,
+                 evAdd:{'単勝':0.05,'馬連':0.14,'馬単':0.32,'3連複':0.34,'3連単':0.78},
+                 bands:[3.5,18,55,140], w:[0.08,1.55,1.45,0.80,0.20], typeMul:{'馬単':0.95,'3連単':0.70} },
+    // ばんえい（帯広）：少頭数・本命極端に強い・特殊。単勝/馬連の中オッズを最重視、3連系大穴を大幅抑制。
+    nar_ban:   { evFloor:1.55, tanOddsMin:3.0,
+                 evAdd:{'単勝':0.05,'馬連':0.12,'馬単':0.30,'3連複':0.32,'3連単':0.75},
+                 bands:[3,15,45,120],   w:[0.10,1.60,1.35,0.65,0.15], typeMul:{'3連複':0.80,'3連単':0.55} },
+  };
+  const assign = {
+    '05':'jra_major','06':'jra_major','07':'jra_major','08':'jra_major','09':'jra_major',
+    '01':'jra_minor','02':'jra_minor','03':'jra_minor','04':'jra_minor','10':'jra_minor',
+    '42':'nar_nankan','43':'nar_nankan','44':'nar_nankan','45':'nar_nankan',
+    '30':'nar_local','35':'nar_local','36':'nar_local','46':'nar_local','47':'nar_local',
+    '48':'nar_local','50':'nar_local','51':'nar_local','54':'nar_local','55':'nar_local',
+    '65':'nar_ban',
+  };
+  const map = {};
+  Object.keys(assign).forEach(code => { map[code] = { tier: assign[code], ...P[assign[code]] }; });
+  return { map, fallback: { tier:'jra_major', ...P.jra_major } };
+})();
+
+function currentVenueCodeForScore(){
+  const id = String((typeof currentRaceId !== 'undefined' && currentRaceId)
+    || (typeof window !== 'undefined' && window.currentRaceId) || '');
+  return id.length >= 6 ? id.slice(4,6) : '';
+}
+function roiMaxTuning(){
+  const code = currentVenueCodeForScore();
+  const t = (code && ROIMAX_VENUE_TUNING.map[code]) || ROIMAX_VENUE_TUNING.fallback;
+  // 直近に適用した開催場別チューニングをiPad画面診断用に保持
+  try { window.__roiMaxTuning = { code: code || '(未判定)', tier: t.tier }; } catch(_){}
+  return t;
+}
+
 // ─── モードスコア（結合版.jsから移植） ─────────────
 function getModeScore(r, mode){
   const p = Number(r.p||0), ev = Number(r.ev||0), odds = Number(r.odds||0), k = Number(r.kelly||0);
@@ -1205,24 +1261,30 @@ function getModeScore(r, mode){
     return (Math.max(ev-1.25,0)*8.0+Math.sqrt(Math.max(p,0))*2.0+Math.sqrt(Math.max(k,0))*2.2)*oddsBand*typeBias;
   }
   if(mode==='roi_max'){
-    // v5.18.115: 回収率最大（再チューニング）。的中率pの寄与をほぼ捨て（係数0.2）、
-    // EVの突出度だけをスコアの支配項にした純粋EV特化型。EVが極めて高ければ馬単・3連単・3連複も許容。
+    // v5.18.117: 回収率最大（開催場別自動最適化）。currentRaceId から開催場を判定し、
+    // 各場の頭数規模・市場特性に応じてEV下限/オッズ帯重み/券種比重を自動チューニングする（モードは増やさない）。
+    // ベースは純粋EV特化型：的中率pの寄与をほぼ捨て（係数0.2）、EVの突出度をスコアの支配項にする。
     // 低オッズ帯は控除構造上EVが伸びないため切り捨て、歪みの大きい中穴〜大穴帯に最少点数で集中投下する。
     // ※分散が非常に大きく長期の不的中を前提とするモード。高EVでも回収率向上は推定EVの精度次第で、保証ではない。
-    const typeBias = ({'単勝':1.60,'馬連':1.45,'馬単':1.30,'3連複':1.40,'3連単':1.25,'ワイド':0.0,'複勝':0.0,'枠連':0.0})[r.type]||0;
+    const T = roiMaxTuning();
+    const baseBias = ({'単勝':1.60,'馬連':1.45,'馬単':1.30,'3連複':1.40,'3連単':1.25,'ワイド':0.0,'複勝':0.0,'枠連':0.0})[r.type]||0;
+    const typeBias = baseBias * ((T.typeMul && T.typeMul[r.type]!=null) ? T.typeMul[r.type] : 1);
     if(['複勝','ワイド','枠連'].includes(r.type)) return -999;
-    if(ev<1.50) return -999;
-    if(r.type==='単勝'&&(odds<5.0||ev<1.55)) return -999;
-    if(r.type==='馬連'&&(p<0.03||ev<1.65)) return -999;
-    if(r.type==='馬単'&&(p<0.02||ev<1.85)) return -999;
-    if(r.type==='3連複'&&(p<0.015||ev<1.85)) return -999;
-    if(r.type==='3連単'&&(p<0.005||ev<2.30)) return -999; // 3連単の足切りを2.30に厳格化
-    let oddsBand=1.0;
-    if(odds<5.0)oddsBand=0.05;        // 本命党が群がる低オッズの期待値偽装を完全シャットアウト
-    else if(odds<=25.0)oddsBand=1.50; // 単勝・馬連の中穴帯
-    else if(odds<=80.0)oddsBand=1.60; // 3連複・3連単の、大衆が見落とす特大の歪み帯
-    else if(odds<=200.0)oddsBand=1.10;
-    else oddsBand=0.40;
+    const floor = T.evFloor, add = T.evAdd || {};
+    if(ev<floor) return -999;
+    if(r.type==='単勝'&&(odds<T.tanOddsMin||ev<floor+(add['単勝']||0.05))) return -999;
+    if(r.type==='馬連'&&(p<0.03||ev<floor+(add['馬連']||0.15))) return -999;
+    if(r.type==='馬単'&&(p<0.02||ev<floor+(add['馬単']||0.35))) return -999;
+    if(r.type==='3連複'&&(p<0.015||ev<floor+(add['3連複']||0.35))) return -999;
+    if(r.type==='3連単'&&(p<0.005||ev<floor+(add['3連単']||0.80))) return -999;
+    // 開催場別のオッズ帯境界・重み（少頭数の地方/ばんえいは大穴帯を強く抑制、効率的なJRA主場は大穴帯を許容）
+    const B = T.bands, W = T.w;
+    let oddsBand;
+    if(odds<B[0])      oddsBand=W[0]; // 本命党が群がる低オッズの期待値偽装をシャットアウト
+    else if(odds<=B[1])oddsBand=W[1]; // 単勝・馬連の中穴帯
+    else if(odds<=B[2])oddsBand=W[2]; // 3連複・3連単の、大衆が見落とす歪み帯
+    else if(odds<=B[3])oddsBand=W[3];
+    else               oddsBand=W[4];
     // EVの超過分を最優先（係数18.0）。的中率pの寄与は0.2まで圧縮した純粋期待値特化スコア。
     return (Math.max(ev-1.45,0)*18.0+Math.sqrt(Math.max(p,0))*0.2+Math.sqrt(Math.max(k,0))*2.0)*oddsBand*typeBias;
   }
@@ -9231,7 +9293,7 @@ if(horses.length === 0){
 (function(){
   'use strict';
 
-  const VERSION89 = 'v5.18.116 Multi100Mode';
+  const VERSION89 = 'v5.18.117 ROIMaxByVenue';
 
   // 直近の精算結果（テキストコピー用）
   let pts_lastRows = [];

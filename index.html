@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.29.3</title>
+<title>The競馬 EV分析 v5.29.4</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -224,7 +224,7 @@ button, select, input, textarea, .tab-btn, .btn, .btn-sm, .mode-btn, .sim-cand-r
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.29.3</span>
+    <span class="ver">v5.29.4</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1039,7 +1039,10 @@ function loadActiveVenues() {
   if (kind === 'NAR') {
     racePromise = probeActiveNarRaces(date, '');
   } else {
-    racePromise = fetchTextViaProxy(getNetkeibaUrl(kind, date)).then(function (html) {
+    racePromise = fetchFirstOk([
+      'https://race.netkeiba.com/top/race_list_sub.html?kaisai_date=' + parseYmd(date).ymd,
+      getNetkeibaUrl(kind, date)
+    ], 0).then(function (html) {
       return parseRaceIdsFromHtml(html, kind, date, '');
     });
   }
@@ -1048,18 +1051,9 @@ function loadActiveVenues() {
     currentActiveRaces = (currentActiveRaces || []).filter(Boolean);
 
     if (currentActiveRaces.length === 0) {
-      var jstToday = getLocalDateString();
-      if (date !== jstToday && !loadActiveVenues._retryToday) {
-        loadActiveVenues._retryToday = true;
-        var pd = document.getElementById('pickDate');
-        if (pd) pd.value = jstToday;
-        setStatus('選択日が古いため、本日の日付 ' + jstToday + ' で再参照中...', 'info');
-        loadActiveVenues();
-        return;
-      }
       loadActiveVenues._retryToday = false;
       updateControlsState(false);
-      setStatus('この日は自動リスト化可能な' + kind + '開催がありません。URLから直接取得可能です。', 'info');
+      setStatus('この日は自動リスト化可能な' + kind + '開催がありません。日付を確認するか、URLから直接取得してください。', 'info');
       
       var pv = document.getElementById('pickVenue');
       if (pv) pv.innerHTML = '<option value="">開催なし</option>';
@@ -1134,7 +1128,10 @@ function loadRaceList() {
   if (kind === 'NAR') {
     racePromise = probeActiveNarRaces(date, venue);
   } else {
-    racePromise = fetchTextViaProxy(getNetkeibaUrl(kind, date)).then(function (html) {
+    racePromise = fetchFirstOk([
+      'https://race.netkeiba.com/top/race_list_sub.html?kaisai_date=' + parseYmd(date).ymd,
+      getNetkeibaUrl(kind, date)
+    ], 0).then(function (html) {
       return parseRaceIdsFromHtml(html, kind, date, venue);
     });
   }

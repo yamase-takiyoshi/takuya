@@ -5136,6 +5136,27 @@ function fillNarPopularityFromOdds(hs){
   }));
 }
 
+// v5.18.126: 取得オッズが「馬番=人気=オッズ昇順」に完全一致する誤キー検知。
+// netkeibaの単勝オッズ表は人気順で並ぶため、行位置を馬番として拾うと
+// 馬番1=最低オッズ=1番人気…と全馬がズレる。実レースでは馬番昇順にオッズが
+// 完全単調増加することはまず無いので、これを汚染データとして検出する。
+// 暫定値(provisionalOdds)は対象外（意図的な合成値なので除外）。
+function oddsLookMisKeyedByUmaban(hs){
+  const v = (Array.isArray(hs) ? hs : [])
+    .filter(h => Number(h.odds) >= 1 && Number(h.num) >= 1 && !h.provisionalOdds)
+    .map(h => ({ num: Number(h.num), odds: Number(h.odds) }))
+    .sort((a, b) => a.num - b.num);
+  if(v.length < 6) return false; // 少頭数は偶然の単調があり得るため除外
+  let asc = 0, desc = 0;
+  for(let i = 1; i < v.length; i++){
+    const d = v[i].odds - v[i - 1].odds;
+    if(d > 0) asc++; else if(d < 0) desc++;
+  }
+  const pairs = v.length - 1;
+  // 降順ゼロ（=完全に右肩上がり）かつ昇順が大半 → 誤キー確定とみなす
+  return desc === 0 && asc >= pairs - 1;
+}
+
 // v5.18.14: JRAはodds/index.htmlを単勝オッズの唯一の正ソースにする。
 // oddsMapに無い馬は、shutuba側で拾った55.0等を残さず空欄にする。
 function applyAuthoritativeJraOdds(baseHorses, oddsMap, safeFallbackMap){
@@ -5391,6 +5412,14 @@ async function fetchRace(){
       }
     }
 
+    // v5.18.126: オッズが「馬番=人気=オッズ昇順」と完全一致＝取得元(人気順テーブル)を
+    // 馬番にそのまま貼った誤キーの疑い。汚染データをEV計算へ流さないよう破棄して警告する。
+    let oddsMisKeyed = false;
+    if(oddsLookMisKeyedByUmaban(horses)){
+      oddsMisKeyed = true;
+      horses = horses.map(h => ({ ...h, odds: 0, pop: 0, provisionalOdds: false }));
+    }
+
     renderHorseRows();
 
     const oddsCount = horses.filter(h => Number(h.odds) >= 1).length;
@@ -5399,7 +5428,11 @@ async function fetchRace(){
     const frameCount = horses.filter(h => Number(h.frame) >= 1 && Number(h.frame) <= 8).length;
     const oddsNote = provisionalCount > 0 ? ` / ※${provisionalCount}件は未取得のため予想用暫定値` : '';
     const pageNote = /\/race\/result\.html/i.test(activeUrl) ? ' / result.html最終値' : '';
-    status.innerHTML = `<div class="url-status ok">✅ ${escapeHtml(currentRaceName || '')} ${horses.length}頭 取得しました${pageNote} / 単勝オッズ ${oddsCount}件 / 人気 ${popCount}件 / 枠番 ${frameCount}件${oddsNote}</div>`;
+    if(oddsMisKeyed){
+      status.innerHTML = `<div class="url-status err">⚠️ 単勝オッズが「馬番=人気=オッズ昇順」と完全一致しました（取得元の人気順テーブルを馬番にそのまま割り当てた誤キーの疑い）。本物の値ではないため、汚染防止にオッズ・人気を破棄しました。<br>馬名・枠・馬番（${horses.length}頭）は取得済みです。時間をおいて再取得するか、各馬のオッズ/人気を手入力してください。</div>`;
+    }else{
+      status.innerHTML = `<div class="url-status ok">✅ ${escapeHtml(currentRaceName || '')} ${horses.length}頭 取得しました${pageNote} / 単勝オッズ ${oddsCount}件 / 人気 ${popCount}件 / 枠番 ${frameCount}件${oddsNote}</div>`;
+    }
 
     // 取得後すぐにタブを馬データへ
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -8465,7 +8498,7 @@ if(horses.length === 0){
 
     if(status){
       status.innerHTML = `<div class="url-status">`
-        + `<b>🔍 NAR診断 ${esc(date)}（v5.18.122）</b><br>ブリッジ: ${bridgeReady?'🌉 検出':'未検出'}<br>${verdict}<br>`
+        + `<b>🔍 NAR診断 ${esc(date)}（v5.18.126）</b><br>ブリッジ: ${bridgeReady?'🌉 検出':'未検出'}<br>${verdict}<br>`
         + `<div style="margin-top:6px;">${row(jra)}${row(nar1)}${row(list)}${row(bridgeRow)}</div>`
         + `<div style="margin-top:6px;font-size:11px;opacity:.8;">プロキシ: ${esc(px||'未設定')}</div>`
         + `</div>`;
@@ -9493,7 +9526,7 @@ if(horses.length === 0){
 (function(){
   'use strict';
 
-  const VERSION89 = 'v5.18.125 ProxyDiag4';
+  const VERSION89 = 'v5.18.126 OddsMisKeyGuard';
 
   // 直近の精算結果（テキストコピー用）
   let pts_lastRows = [];

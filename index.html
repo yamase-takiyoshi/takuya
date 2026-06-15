@@ -398,6 +398,59 @@ body{
       <div id="allSimTable" style="margin-top:10px"></div>
     </div>
 
+    <!-- v5.18.130: 期間×開催場 横断一括シミュレーションカード -->
+    <div class="card" style="margin-top:12px" id="rangeSimCard">
+      <div class="section-header">
+        <h2>📆 期間×開催場 横断シミュレーション</h2>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.5">
+        指定した <b>期間（開始日〜終了日）</b> と <b>区分（JRA / NAR）</b> について、
+        その期間に開催された <b>全開催場（または選んだ開催場だけ）</b> の 1R〜最終Rを順番に取得し、
+        現在の設定（モード・EV閾値・1点額・予算）で買い目を自動生成 → 着順・払戻で精算します。
+        <b>開催場別・日別の集計</b>と<b>全期間トータル回収率</b>を表示します。確定済みレースのみ精算対象です。
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+        <div class="field" style="flex:1;min-width:120px">
+          <label>区分</label>
+          <select id="rsKind" onchange="rsRenderVenueChecks()">
+            <option value="JRA">JRA（中央）</option>
+            <option value="NAR">NAR（地方）</option>
+          </select>
+        </div>
+        <div class="field" style="flex:1;min-width:120px">
+          <label>開始日</label>
+          <input type="date" id="rsStart">
+        </div>
+        <div class="field" style="flex:1;min-width:120px">
+          <label>終了日</label>
+          <input type="date" id="rsEnd">
+        </div>
+      </div>
+      <div class="field" style="margin-bottom:10px">
+        <label>開催場（未チェック＝その日の全開催場を自動対象）</label>
+        <div id="rsVenueBox" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px"></div>
+        <div style="display:flex;gap:8px;margin-top:6px">
+          <button class="btn-sm" type="button" onclick="rsToggleAllVenues(true)">全選択</button>
+          <button class="btn-sm" type="button" onclick="rsToggleAllVenues(false)">全解除</button>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.5">
+          ※チェックした場だけを対象にします。1つもチェックしなければ、各日に実際に開催されている全場を自動対象にします。<br>
+          ※期間が長いと通信回数が非常に多くなり時間がかかります。まずは2〜3日で試すことを推奨します。
+        </div>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:10px;cursor:pointer;user-select:none">
+        <input type="checkbox" id="rsRecord" style="width:18px;height:18px;accent-color:var(--green)">
+        <span>📉 精算結果を収支グラフへ記録する（race_id単位で上書き）</span>
+      </label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-primary" id="rsRunBtn" onclick="runRangeVenueSimulation()">📆 期間横断シミュレーション実行</button>
+        <button class="btn-sm" id="rsStopBtn" onclick="stopRangeVenueSimulation()" style="display:none">⏹ 中断</button>
+      </div>
+      <div id="rsProgress" style="margin-top:10px"></div>
+      <div id="rsSummary" style="margin-top:10px"></div>
+      <div id="rsTable" style="margin-top:10px"></div>
+    </div>
+
     <!-- v5.18.111: 予想シミュレーションカード（スイッチで確定済みも予想可） -->
     <div class="card" style="margin-top:12px" id="predSimCard">
       <div class="section-header">
@@ -9164,8 +9217,361 @@ if(horses.length === 0){
     }
   }
 
+  // ============================================================
+  //  v5.18.130: 期間×開催場 横断シミュレーション
+  //  指定期間（開始〜終了日）について、各日に開催されている全場
+  //  （またはユーザーが選んだ場だけ）の全レースを、既存の堅牢な
+  //  取得/EV/買い目/精算ロジックをそのまま使ってヘッドレスで回す。
+  //  既存の単日・単場シミュレーションには一切手を入れない。
+  // ============================================================
+  let rsAbort = false;
+
+  function rsVenuesForKind(kind){ return (kind === 'NAR') ? NAR_VENUES : JRA_VENUES; }
+
+  function rsRenderVenueChecks(){
+    const kind = $('rsKind')?.value || 'JRA';
+    const box = $('rsVenueBox');
+    if(!box) return;
+    const list = rsVenuesForKind(kind);
+    box.innerHTML = list.map(([code, name]) =>
+      `<label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;background:rgba(15,23,42,0.5);border:1px solid var(--border);border-radius:6px;padding:4px 8px;cursor:pointer;user-select:none">
+        <input type="checkbox" class="rs-venue" value="${code}" style="width:15px;height:15px;accent-color:var(--green)"> ${asw_esc(name)}
+      </label>`).join('');
+  }
+
+  function rsToggleAllVenues(on){
+    document.querySelectorAll('#rsVenueBox .rs-venue').forEach(c => { c.checked = !!on; });
+  }
+
+  function rsSelectedVenueCodes(){
+    return [...document.querySelectorAll('#rsVenueBox .rs-venue:checked')].map(c => c.value);
+  }
+
+  // ── 指定日に実際に開催されている開催場コード一覧 ──
+  async function rsOpenVenues(kind, date){
+    try{
+      if(kind === 'JRA'){
+        const vs = await loadActiveJraVenuesByRaceId(date); // [[code,name,count,kd],...]
+        return (vs || []).map(v => v[0]);
+      }else{
+        const vs = await loadActiveNarVenuesFromOfficialList(date); // [[code,name,count],...]
+        return (vs || []).map(v => v[0]);
+      }
+    }catch(e){ return []; }
+  }
+
+  // ── 任意の (kind,date,venue) のレース一覧を取得 ──
+  // 既存 loadRaceList の堅牢ロジックをそのまま流用するため、馬データタブの
+  // 選択を一時的に切り替えてから呼び、raceSelect から race_id を読む。
+  async function rsCollectRaces(kind, date, venueCode){
+    const kEl = $('pickKind'), dEl = $('pickDate'), vEl = $('pickVenue');
+    if(kEl) kEl.value = kind;
+    if(dEl) dEl.value = date;
+    if(vEl){
+      // select.value はオプションが無いと空になるため、その場で1件用意してから選択する。
+      if(![...vEl.options].some(o => o.value === venueCode)){
+        const o = document.createElement('option');
+        o.value = venueCode; o.textContent = venueName(kind, venueCode);
+        vEl.appendChild(o);
+      }
+      vEl.value = venueCode;
+    }
+    await loadRaceList();
+    const sel = $('raceSelect');
+    if(!sel) return [];
+    const out = [];
+    [...sel.querySelectorAll('option')].forEach(o => {
+      if(!o.value || !/race_id=/.test(o.value)) return;
+      const rid = o.dataset.raceId || (o.value.match(/race_id=(\d{10,14})/) || [])[1] || '';
+      if(!rid) return;
+      const no = Number(o.dataset.raceNo || String(rid).slice(-2)) || out.length + 1;
+      out.push({ rid, no, name: o.dataset.raceName || '' });
+    });
+    const seen = new Set();
+    return out.filter(r => { if(seen.has(r.rid)) return false; seen.add(r.rid); return true; })
+              .sort((a, b) => a.no - b.no);
+  }
+
+  // ── 開催場・日別の集計 ──
+  function rsAggregate(rows){
+    const map = new Map();
+    rows.forEach(r => {
+      if(!r || r.header) return;
+      if(!r.date || !r.venueCode) return;
+      const key = r.date + '|' + r.venueCode;
+      if(!map.has(key)) map.set(key, { date: r.date, venueCode: r.venueCode, venueName: r.venueName,
+        races: 0, settled: 0, hitRaces: 0, bet: 0, ret: 0, settledBet: 0, errors: 0 });
+      const g = map.get(key);
+      if(r.status === 'ok'){
+        g.races++;
+        g.bet += r.bet || 0;
+        if(r.hasFinish){ g.settled++; g.settledBet += r.bet || 0; g.ret += r.ret || 0; if(r.hit > 0) g.hitRaces++; }
+      }else if(r.status === 'error'){ g.errors++; }
+    });
+    return [...map.values()].sort((a, b) =>
+      (a.date + a.venueCode).localeCompare(b.date + b.venueCode));
+  }
+
+  function rsRenderSummary(rows){
+    const box = $('rsSummary');
+    if(!box) return;
+    const ok = rows.filter(r => r && r.status === 'ok');
+    const settled = ok.filter(r => r.hasFinish);
+    const days = new Set(ok.map(r => r.date)).size;
+    const venues = new Set(ok.map(r => r.date + '|' + r.venueCode)).size;
+    const settledBet = settled.reduce((s, r) => s + (r.bet || 0), 0);
+    const ret = settled.reduce((s, r) => s + (r.ret || 0), 0);
+    const profit = ret - settledBet;
+    const roi = settledBet ? ret / settledBet * 100 : 0;
+    const hitRaces = settled.filter(r => r.hit > 0).length;
+    box.innerHTML = `
+      <div class="sim-kpi-grid" style="margin-top:0">
+        <div class="sim-kpi"><div class="v">${days}</div><div class="l">日数</div></div>
+        <div class="sim-kpi"><div class="v">${venues}</div><div class="l">延べ開催場</div></div>
+        <div class="sim-kpi"><div class="v">${ok.length}</div><div class="l">処理R</div></div>
+        <div class="sim-kpi"><div class="v">${settled.length}</div><div class="l">確定R</div></div>
+        <div class="sim-kpi"><div class="v">${hitRaces}</div><div class="l">的中R</div></div>
+        <div class="sim-kpi"><div class="v">${settledBet.toLocaleString()}</div><div class="l">投資円(確定)</div></div>
+        <div class="sim-kpi"><div class="v">${ret.toLocaleString()}</div><div class="l">払戻円</div></div>
+        <div class="sim-kpi"><div class="v" style="color:${profit>=0?'var(--green)':'var(--red)'}">${profit>=0?'+':''}${profit.toLocaleString()}</div><div class="l">収支円</div></div>
+        <div class="sim-kpi"><div class="v" style="color:${roi>=100?'var(--green)':'var(--yellow)'}">${roi.toFixed(1)}%</div><div class="l">回収率</div></div>
+      </div>`;
+  }
+
+  function rsRenderTable(rows){
+    const box = $('rsTable');
+    if(!box) return;
+    const agg = rsAggregate(rows);
+    if(!agg.length){ box.innerHTML = ''; return; }
+
+    let h = `<div style="font-size:12px;color:var(--muted);margin-bottom:4px">📊 開催場・日別集計</div>`;
+    h += `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="color:var(--muted);text-align:left">
+        <th style="padding:6px 4px">日付</th>
+        <th style="padding:6px 4px">場</th>
+        <th style="padding:6px 4px;text-align:right">R</th>
+        <th style="padding:6px 4px;text-align:right">確定</th>
+        <th style="padding:6px 4px;text-align:right">的中</th>
+        <th style="padding:6px 4px;text-align:right">投資</th>
+        <th style="padding:6px 4px;text-align:right">払戻</th>
+        <th style="padding:6px 4px;text-align:right">収支</th>
+        <th style="padding:6px 4px;text-align:right">ROI</th>
+      </tr></thead><tbody>`;
+    let gBet = 0, gRet = 0, gSettledBet = 0;
+    agg.forEach(g => {
+      const profit = g.ret - g.settledBet;
+      const roi = g.settledBet ? g.ret / g.settledBet * 100 : 0;
+      gBet += g.bet; gRet += g.ret; gSettledBet += g.settledBet;
+      const pc = profit >= 0 ? 'var(--green)' : 'var(--red)';
+      const rc = roi >= 100 ? 'var(--green)' : (g.settledBet ? 'var(--yellow)' : 'var(--muted)');
+      h += `<tr style="border-top:1px solid var(--border)">
+        <td style="padding:6px 4px">${asw_esc(g.date)}</td>
+        <td style="padding:6px 4px;font-weight:700">${asw_esc(g.venueName || g.venueCode)}</td>
+        <td style="padding:6px 4px;text-align:right">${g.races}</td>
+        <td style="padding:6px 4px;text-align:right">${g.settled}</td>
+        <td style="padding:6px 4px;text-align:right">${g.hitRaces}</td>
+        <td style="padding:6px 4px;text-align:right">${g.bet.toLocaleString()}</td>
+        <td style="padding:6px 4px;text-align:right">${g.ret.toLocaleString()}</td>
+        <td style="padding:6px 4px;text-align:right;color:${pc}">${profit>=0?'+':''}${profit.toLocaleString()}</td>
+        <td style="padding:6px 4px;text-align:right;color:${rc}">${g.settledBet ? roi.toFixed(0)+'%' : '-'}</td>
+      </tr>`;
+    });
+    const gProfit = gRet - gSettledBet;
+    const gRoi = gSettledBet ? gRet / gSettledBet * 100 : 0;
+    h += `<tr style="border-top:2px solid var(--border);font-weight:700">
+      <td style="padding:6px 4px" colspan="5">全期間トータル</td>
+      <td style="padding:6px 4px;text-align:right">${gBet.toLocaleString()}</td>
+      <td style="padding:6px 4px;text-align:right">${gRet.toLocaleString()}</td>
+      <td style="padding:6px 4px;text-align:right;color:${gProfit>=0?'var(--green)':'var(--red)'}">${gProfit>=0?'+':''}${gProfit.toLocaleString()}</td>
+      <td style="padding:6px 4px;text-align:right;color:${gRoi>=100?'var(--green)':'var(--yellow)'}">${gSettledBet ? gRoi.toFixed(0)+'%' : '-'}</td>
+    </tr>`;
+    h += `</tbody></table></div>`;
+
+    // レース別明細（折りたたみ）
+    const raceRows = rows.filter(r => r && (r.status === 'ok' || r.status === 'error'));
+    if(raceRows.length){
+      h += `<details style="margin-top:10px"><summary style="cursor:pointer;font-size:12px;color:var(--muted)">🔎 レース別明細（${raceRows.length}件）</summary>`;
+      h += `<div style="overflow-x:auto;margin-top:6px"><table style="width:100%;border-collapse:collapse;font-size:11px">
+        <thead><tr style="color:var(--muted);text-align:left">
+          <th style="padding:4px">日付</th><th style="padding:4px">場</th><th style="padding:4px">R</th><th style="padding:4px">レース名</th>
+          <th style="padding:4px;text-align:center">着順</th><th style="padding:4px;text-align:right">点</th>
+          <th style="padding:4px;text-align:right">投資</th><th style="padding:4px;text-align:right">払戻</th>
+          <th style="padding:4px;text-align:right">収支</th><th style="padding:4px;text-align:right">ROI</th>
+        </tr></thead><tbody>`;
+      raceRows.forEach(r => {
+        if(r.status === 'error'){
+          h += `<tr style="border-top:1px solid var(--border)">
+            <td style="padding:4px">${asw_esc(r.date)}</td>
+            <td style="padding:4px">${asw_esc(r.venueName || '')}</td>
+            <td style="padding:4px;font-weight:700">${r.no}R</td>
+            <td style="padding:4px" colspan="7"><span style="color:var(--red)">⚠️ ${asw_esc(r.error || '取得失敗')}</span></td>
+          </tr>`;
+          return;
+        }
+        const fin = r.hasFinish ? r.finishTop.join('-') : '<span style="color:var(--muted)">未確定</span>';
+        const pc = (r.profit || 0) >= 0 ? 'var(--green)' : 'var(--red)';
+        const rc = (r.roi || 0) >= 100 ? 'var(--green)' : ((r.bet || 0) ? 'var(--yellow)' : 'var(--muted)');
+        const passNote = (r.count === 0) ? ' <span style="color:var(--muted);font-size:9px">(見送り)</span>' : '';
+        h += `<tr style="border-top:1px solid var(--border)${r.hit>0?';background:rgba(0,255,136,0.06)':''}">
+          <td style="padding:4px">${asw_esc(r.date)}</td>
+          <td style="padding:4px">${asw_esc(r.venueName || '')}</td>
+          <td style="padding:4px;font-weight:700">${r.no}R</td>
+          <td style="padding:4px">${asw_esc(r.raceName || (r.no + 'R'))}${passNote}</td>
+          <td style="padding:4px;text-align:center">${fin}</td>
+          <td style="padding:4px;text-align:right">${r.count}</td>
+          <td style="padding:4px;text-align:right">${(r.bet||0).toLocaleString()}</td>
+          <td style="padding:4px;text-align:right">${r.hasFinish ? (r.ret||0).toLocaleString() : '-'}</td>
+          <td style="padding:4px;text-align:right;color:${pc}">${r.hasFinish ? ((r.profit||0)>=0?'+':'')+(r.profit||0).toLocaleString() : '-'}</td>
+          <td style="padding:4px;text-align:right;color:${rc}">${r.hasFinish && (r.bet||0) ? r.roi.toFixed(0)+'%' : '-'}</td>
+        </tr>`;
+      });
+      h += `</tbody></table></div></details>`;
+    }
+    box.innerHTML = h;
+  }
+
+  // ── メイン：期間×開催場 横断シミュレーション ──
+  async function runRangeVenueSimulation(){
+    const btn = $('rsRunBtn'), stopBtn = $('rsStopBtn'), prog = $('rsProgress');
+    const kind = $('rsKind')?.value || 'JRA';
+    const start = $('rsStart')?.value || '';
+    const end = $('rsEnd')?.value || '';
+
+    if(!settings.proxyUrl){ alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。'); return; }
+    if(!start || !end){ alert('開始日と終了日を選択してください。'); return; }
+    if(start > end){ alert('開始日は終了日より前（または同日）にしてください。'); return; }
+
+    // 日付列挙（安全上限 70日）
+    const dates = [];
+    let cur = start, guard = 0;
+    while(cur <= end && guard < 70){ dates.push(cur); cur = addLocalDaysYmd(cur, 1); guard++; }
+    const truncated = (cur <= end);
+
+    const selVenues = rsSelectedVenueCodes(); // 空なら全場
+    const recordToChart = $('rsRecord')?.checked;
+
+    // 馬データタブの選択を退避
+    const save = { kind: $('pickKind')?.value, date: $('pickDate')?.value, venue: $('pickVenue')?.value };
+
+    rsAbort = false;
+    if(btn){ btn.disabled = true; btn.textContent = '⏳ 実行中...'; }
+    if(stopBtn) stopBtn.style.display = '';
+    $('rsSummary').innerHTML = '';
+    $('rsTable').innerHTML = '';
+    if(truncated && prog) prog.innerHTML = '<div class="url-status err">⚠️ 期間が70日を超えるため先頭70日のみ対象にします。</div>';
+
+    const rows = [];
+    try{
+      for(const date of dates){
+        if(rsAbort) break;
+        if(prog) prog.innerHTML = `<div class="url-status">📅 ${date} の開催場を確認中...</div>`;
+
+        let venues = await rsOpenVenues(kind, date);
+        if(selVenues.length) venues = venues.filter(c => selVenues.includes(c));
+        // 開催場の自動検出に失敗しても、ユーザーが場を明示指定していれば直接試す（公式一覧落ち対策）。
+        if(selVenues.length && !venues.length) venues = selVenues.slice();
+
+        if(!venues.length){
+          rows.push({ date, header: true, note: `${date}：${kind}は開催なし` });
+          continue;
+        }
+
+        for(const vc of venues){
+          if(rsAbort) break;
+          const vn = venueName(kind, vc);
+          if(prog) prog.innerHTML = `<div class="url-status">📅 ${date} ${vn} のレース一覧を取得中...</div>`;
+
+          let races = [];
+          try{ races = await rsCollectRaces(kind, date, vc); }
+          catch(e){ races = []; }
+
+          if(!races.length){
+            rows.push({ date, venueCode: vc, venueName: vn, no: 0, status: 'error', error: 'レース一覧を取得できませんでした' });
+            rsRenderTable(rows);
+            continue;
+          }
+
+          for(let i = 0; i < races.length; i++){
+            if(rsAbort) break;
+            const r = races[i];
+            if(prog) prog.innerHTML = `<div class="url-status">♞ ${date} ${vn} ${r.no}R を処理中（${i+1}/${races.length}）</div>`;
+            const row = { date, venueCode: vc, venueName: vn, no: r.no, rid: r.rid,
+                          raceName: r.name || (r.no + 'R'), status: 'pending',
+                          count: 0, bet: 0, ret: 0, profit: 0, roi: 0, hit: 0, hasFinish: false, finishTop: [] };
+            try{
+              const loaded = await asw_loadHorses(kind, r.rid);
+              horses = loaded.horses;
+              currentRaceId = r.rid;
+              currentRaceName = loaded.raceName || r.name || (r.no + 'R');
+              row.raceName = currentRaceName;
+
+              const valid = horses.filter(h => Number(h.num) > 0 && h.name);
+              if(valid.length < 2) throw new Error('有効な出走馬が2頭未満');
+
+              const made = generateCandidates(valid);
+              lastRecs = made.recs.slice().sort((a, b) => b.ev - a.ev);
+              lastTickets = buildTickets(made.recs);
+              simTickets = lastTickets.map(t => ({ ...t, nums: [...t.nums] }));
+              row.count = lastTickets.length;
+
+              const { finish, payouts } = await asw_getResult(kind, r.rid, loaded.resultDoc);
+              row.hasFinish = finish && finish.length >= 2;
+              row.finishTop = row.hasFinish ? finish.slice(0, 3).map(x => x.horseNo) : [];
+
+              const s = asw_settle(simTickets, finish, payouts);
+              row.bet = s.bet; row.ret = s.ret; row.profit = s.profit; row.roi = s.roi; row.hit = s.hit;
+              row.status = 'ok';
+
+              if(row.hasFinish && recordToChart){
+                try{ simRecordProfit(true, s.bet, s.ret, s.hit, s.count, `${date} ${vn} ${currentRaceName}`); }catch(e){}
+              }
+            }catch(e){
+              row.status = 'error';
+              row.error = (e && e.message) || String(e);
+            }
+            rows.push(row);
+            rsRenderSummary(rows);
+            rsRenderTable(rows);
+          }
+        }
+      }
+
+      const okCount = rows.filter(x => x.status === 'ok').length;
+      if(prog) prog.innerHTML = `<div class="url-status ok">✅ 完了：${okCount}レースをシミュレーションしました${rsAbort ? '（中断）' : ''}。</div>`;
+    }catch(e){
+      console.error('[runRangeVenueSimulation]', e);
+      if(prog) prog.innerHTML = `<div class="url-status err">❌ 期間横断シミュレーション失敗: ${asw_esc((e && e.message) || e)}</div>`;
+    }finally{
+      // 馬データタブの選択を元に戻す
+      if(save.kind != null && $('pickKind')) $('pickKind').value = save.kind;
+      if(save.date != null && $('pickDate')) $('pickDate').value = save.date;
+      try{ if(typeof loadActiveVenuesForDate === 'function') await loadActiveVenuesForDate(); }catch(e){}
+      const vEl = $('pickVenue');
+      if(vEl && save.venue && [...vEl.options].some(o => o.value === save.venue)) vEl.value = save.venue;
+
+      if(btn){ btn.disabled = false; btn.textContent = '📆 期間横断シミュレーション実行'; }
+      if(stopBtn) stopBtn.style.display = 'none';
+    }
+  }
+
+  function stopRangeVenueSimulation(){ rsAbort = true; }
+
+  // 初期化：日付デフォルト・開催場チェックボックス生成
+  function rsInit(){
+    const today = (typeof todayYmd === 'function') ? todayYmd() : '';
+    const s = $('rsStart'), e = $('rsEnd'), k = $('rsKind');
+    if(k) k.value = (typeof settings !== 'undefined' && settings.nar) ? 'NAR' : 'JRA';
+    if(s && !s.value) s.value = today;
+    if(e && !e.value) e.value = today;
+    rsRenderVenueChecks();
+  }
+
   // 公開
   window.runAllRacesSimulation = runAllRacesSimulation;
+  window.runRangeVenueSimulation = runRangeVenueSimulation;
+  window.stopRangeVenueSimulation = stopRangeVenueSimulation;
+  window.rsRenderVenueChecks = rsRenderVenueChecks;
+  window.rsToggleAllVenues = rsToggleAllVenues;
 
   // シミュレーションタブを開いた時に対象表示を更新
   document.addEventListener('click', function(ev){
@@ -9173,6 +9579,7 @@ if(horses.length === 0){
     if(t) setTimeout(asw_renderTarget, 0);
   });
   setTimeout(asw_renderTarget, 400);
+  setTimeout(rsInit, 450);
 })();
 </script>
 
@@ -9610,7 +10017,7 @@ if(horses.length === 0){
 (function(){
   'use strict';
 
-  const VERSION89 = 'v5.18.128 BatchMisKeyGuard';
+  const VERSION89 = 'v5.18.130 RangeVenueSim';
 
   // 直近の精算結果（テキストコピー用）
   let pts_lastRows = [];

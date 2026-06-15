@@ -5032,6 +5032,56 @@ function parseFinalOddsPopularityFromResultDoc(doc, expectedHorses){
 }
 
 
+// v5.18.127: オッズ表は「人気|馬番|印|馬名|オッズ」の列順かつ人気順並びのことが多く、
+// 1列目(人気)を馬番と誤読すると全馬がズレる。馬番列に頼らず、行内の馬名セルと
+// 「純粋な小数1個＝単勝オッズ」のセルだけを読み、馬名→オッズのMapを返す。
+function normalizeNameForJoin(name){
+  return String(name || '')
+    .replace(/\u00a0/g, '')
+    .replace(/[\s　]+/g, '')
+    .replace(/[（）()]/g, '')
+    .trim();
+}
+function parseOddsByNameFromOddsDoc(doc){
+  const out = new Map();
+  if(!doc) return out;
+  const rows = Array.from(doc.querySelectorAll('table tr'));
+  rows.forEach(tr => {
+    const cells = Array.from(tr.querySelectorAll('td,th'));
+    if(cells.length < 3) return;
+    const rowText = normCellText(tr);
+    if(/払戻|馬連|馬単|ワイド|3連|枠連|複勝|着順|結果/.test(rowText)) return; // 単勝以外/払戻/結果行を除外
+
+    // 馬名: horseリンク優先、無ければカタカナ最長セル
+    let name = '';
+    const link = tr.querySelector('a[href*="/horse/"]');
+    if(link) name = normalizeNameForJoin(link.textContent);
+    if(!name){
+      let best = '';
+      cells.forEach(c => {
+        const t = normalizeNameForJoin(c.textContent);
+        if(/^[ァ-ヶー・]{2,}$/.test(t) && t.length > best.length) best = t;
+      });
+      name = best;
+    }
+    if(!name) return;
+
+    // 単勝オッズ: セル単位で「純粋な小数1個」を採用（斤量/馬体重/複勝レンジ等を排除）
+    let odds = 0;
+    for(const c of cells){
+      const t = toHalfNumberText(normCellText(c)).replace(/[倍\s,]/g, '');
+      const m = t.match(/^(\d{1,3}\.\d+)$/);
+      if(m){
+        const v = sanitizeWinOddsValue(Number(m[1]), m[1]);
+        if(v >= 1 && v <= 999.9){ odds = Math.round(v * 10) / 10; break; }
+      }
+    }
+    if(odds >= 1 && !out.has(name)) out.set(name, odds);
+  });
+  return out;
+}
+
+
 async function fetchWinOddsPopularity(kind, raceId, expectedHorses){
   if(!settings.proxyUrl || !raceId) return new Map();
   // v5.18.58 Debug: ステータス欄にオッズ取得ログを表示
@@ -5053,6 +5103,26 @@ async function fetchWinOddsPopularity(kind, raceId, expectedHorses){
       let map = url.includes('result.html')
         ? parseFinalOddsPopularityFromResultDoc(doc, expectedHorses)
         : parseWinOddsPopularityFromDoc(doc);
+
+      // v5.18.127: 馬名JOINを最優先（オッズ表の馬番列誤読・人気順並びを回避）。
+      // 出馬表で確定済みの「馬名→馬番」に、オッズ表の「馬名→オッズ」を貼り直す。
+      if(!url.includes('result.html') && Array.isArray(expectedHorses) && expectedHorses.length){
+        const byName2 = parseOddsByNameFromOddsDoc(doc);
+        if(byName2.size >= 2){
+          const nameKeyed = new Map();
+          expectedHorses.forEach(h => {
+            const nm = normalizeNameForJoin(h && h.name);
+            const num = Number(h && h.num);
+            if(nm && byName2.has(nm) && num >= 1) nameKeyed.set(num, { odds: byName2.get(nm), pop: 0 });
+          });
+          if(nameKeyed.size >= 2){
+            // 大半をカバーできたら名前JOINを正として位置ベースを破棄。不足分のみ位置ベースで補完。
+            map = (nameKeyed.size >= expectedHorses.length - 1)
+              ? nameKeyed
+              : mergeOddsMaps(nameKeyed, map);
+          }
+        }
+      }
 
       if(url.includes('result.html')){
         dbgAppend(`📄 result.html → ${map.size}件取得`);
@@ -8498,7 +8568,7 @@ if(horses.length === 0){
 
     if(status){
       status.innerHTML = `<div class="url-status">`
-        + `<b>🔍 NAR診断 ${esc(date)}（v5.18.126）</b><br>ブリッジ: ${bridgeReady?'🌉 検出':'未検出'}<br>${verdict}<br>`
+        + `<b>🔍 NAR診断 ${esc(date)}（v5.18.127）</b><br>ブリッジ: ${bridgeReady?'🌉 検出':'未検出'}<br>${verdict}<br>`
         + `<div style="margin-top:6px;">${row(jra)}${row(nar1)}${row(list)}${row(bridgeRow)}</div>`
         + `<div style="margin-top:6px;font-size:11px;opacity:.8;">プロキシ: ${esc(px||'未設定')}</div>`
         + `</div>`;
@@ -9526,7 +9596,7 @@ if(horses.length === 0){
 (function(){
   'use strict';
 
-  const VERSION89 = 'v5.18.126 OddsMisKeyGuard';
+  const VERSION89 = 'v5.18.127 OddsNameJoin';
 
   // 直近の精算結果（テキストコピー用）
   let pts_lastRows = [];

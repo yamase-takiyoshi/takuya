@@ -448,6 +448,13 @@ body{
       </div>
       <div id="rsProgress" style="margin-top:10px"></div>
       <div id="rsSummary" style="margin-top:10px"></div>
+      <div id="rsChartWrap" style="margin-top:12px;display:none">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:6px">
+          <div style="font-size:12px;color:var(--muted)">📈 期間内 累計収支グラフ（確定レースを日付・場・R順に集計）</div>
+          <button class="btn-sm" type="button" id="rsToGlobalBtn" onclick="rsExportToGlobalChart()">📤 シミュレーション収支グラフへ転記</button>
+        </div>
+        <div class="chart-box"><canvas id="rsChart" width="560" height="220"></canvas></div>
+      </div>
       <div id="rsTable" style="margin-top:10px"></div>
     </div>
 
@@ -9225,6 +9232,7 @@ if(horses.length === 0){
   //  既存の単日・単場シミュレーションには一切手を入れない。
   // ============================================================
   let rsAbort = false;
+  let rsLastRows = [];   // 直近の実行結果（収支グラフ転記用）
 
   function rsVenuesForKind(kind){ return (kind === 'NAR') ? NAR_VENUES : JRA_VENUES; }
 
@@ -9430,6 +9438,114 @@ if(horses.length === 0){
     box.innerHTML = h;
   }
 
+  // ── 期間内 累計収支グラフ（rsChart）──
+  // 確定レースを日付・場・R順に並べ、累計収支の折れ線を描く。
+  // 既存のシミュレーション収支グラフ(renderSimProfitChart)と同じ見た目に合わせる。
+  function rsSettledSeries(rows){
+    return rows
+      .filter(r => r && r.status === 'ok' && r.hasFinish)
+      .slice()
+      .sort((a, b) => (a.date + (a.venueCode||'') + String(a.no).padStart(2,'0'))
+                       .localeCompare(b.date + (b.venueCode||'') + String(b.no).padStart(2,'0')));
+  }
+
+  function rsRenderChart(rows){
+    const wrap = $('rsChartWrap');
+    const canvas = $('rsChart');
+    if(!wrap || !canvas) return;
+    const series = rsSettledSeries(rows);
+    if(!series.length){ wrap.style.display = 'none'; return; }
+    wrap.style.display = '';
+
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = '#0d1b2a';
+    ctx.fillRect(0, 0, w, h);
+
+    // 累計収支ポイント列（index0 = 0）
+    let c = 0;
+    const pts = [0, ...series.map(x => { c += Number(x.profit || 0); return c; })];
+    const minY = Math.min(...pts), maxY = Math.max(...pts);
+    const pad = Math.max(200, (maxY - minY) * 0.15);
+    const lo = minY - pad, hi = maxY + pad;
+    const N = pts.length;
+    const xOf = i => 36 + (N <= 1 ? 0 : i * (w - 50) / (N - 1));
+    const yOf = v => 16 + (hi - v) * (h - 38) / (hi - lo || 1);
+
+    ctx.strokeStyle = 'rgba(51,65,85,0.5)';
+    ctx.lineWidth = 1;
+    for(let i = 0; i <= 4; i++){
+      const gy = 16 + i * (h - 38) / 4;
+      ctx.beginPath(); ctx.moveTo(36, gy); ctx.lineTo(w - 8, gy); ctx.stroke();
+    }
+    const zeroY = yOf(0);
+    ctx.strokeStyle = 'rgba(100,116,139,0.8)';
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath(); ctx.moveTo(36, zeroY); ctx.lineTo(w - 8, zeroY); ctx.stroke();
+    ctx.setLineDash([]);
+
+    const finalProfit = pts[pts.length - 1];
+    const grad = ctx.createLinearGradient(0, 16, 0, h - 22);
+    grad.addColorStop(0, finalProfit >= 0 ? 'rgba(0,230,118,0.22)' : 'rgba(248,113,113,0.18)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(xOf(0), yOf(0));
+    pts.forEach((v, i) => ctx.lineTo(xOf(i), yOf(v)));
+    ctx.lineTo(xOf(N - 1), yOf(0));
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = finalProfit >= 0 ? '#00e676' : '#f87171';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    pts.forEach((v, i) => { const x = xOf(i), y = yOf(v); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+    ctx.stroke();
+
+    pts.forEach((v, i) => {
+      const x = xOf(i), y = yOf(v);
+      const isLast = (i === N - 1);
+      ctx.beginPath();
+      ctx.arc(x, y, isLast ? 5 : 2, 0, Math.PI * 2);
+      ctx.fillStyle = isLast ? (finalProfit >= 0 ? '#00e676' : '#f87171') : 'rgba(148,163,184,0.55)';
+      ctx.fill();
+    });
+
+    ctx.fillStyle = '#64748b';
+    ctx.font = '10px -apple-system,sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText((hi - pad).toLocaleString(), 34, 22);
+    ctx.fillText((lo + pad).toLocaleString(), 34, h - 6);
+    ctx.fillText('0', 34, zeroY - 3);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#475569';
+    ctx.fillText(`累計収支(円) ${finalProfit>=0?'+':''}${finalProfit.toLocaleString()}`, 40, 14);
+  }
+
+  // ── 期間内の確定レースを、既存のシミュレーション収支グラフ(simHistory)へ転記 ──
+  function rsExportToGlobalChart(){
+    const series = rsSettledSeries(rsLastRows);
+    if(!series.length){ alert('転記できる確定レースがありません。先に期間横断シミュレーションを実行してください。'); return; }
+    if(typeof simHistory === 'undefined'){ alert('収支グラフが初期化されていません。'); return; }
+    // race_id単位で上書き（重複race_idは最新で置換）
+    series.forEach(r => {
+      const entry = {
+        raceId: r.rid || '',
+        raceName: `${r.date} ${r.venueName||r.venueCode||''} ${r.raceName||(r.no+'R')}`,
+        bet: r.bet || 0, ret: r.ret || 0, profit: r.profit || 0, roi: r.roi || 0,
+        hitCount: r.hit || 0, total: r.count || 0,
+        date: new Date().toISOString(), source: '期間横断シミュレーション'
+      };
+      const idx = r.rid ? simHistory.findIndex(x => x.raceId === r.rid) : -1;
+      if(idx >= 0) simHistory[idx] = entry; else simHistory.push(entry);
+    });
+    if(typeof saveSimHistory === 'function') saveSimHistory();
+    if(typeof renderSimProfitChart === 'function') renderSimProfitChart();
+    const btn = $('rsToGlobalBtn');
+    if(btn){ const o = btn.textContent; btn.textContent = `✅ ${series.length}件を転記しました`; setTimeout(()=>{ btn.textContent = o; }, 2500); }
+  }
+
   // ── メイン：期間×開催場 横断シミュレーション ──
   async function runRangeVenueSimulation(){
     const btn = $('rsRunBtn'), stopBtn = $('rsStopBtn'), prog = $('rsProgress');
@@ -9454,10 +9570,12 @@ if(horses.length === 0){
     const save = { kind: $('pickKind')?.value, date: $('pickDate')?.value, venue: $('pickVenue')?.value };
 
     rsAbort = false;
+    rsLastRows = [];
     if(btn){ btn.disabled = true; btn.textContent = '⏳ 実行中...'; }
     if(stopBtn) stopBtn.style.display = '';
     $('rsSummary').innerHTML = '';
     $('rsTable').innerHTML = '';
+    { const cw = $('rsChartWrap'); if(cw) cw.style.display = 'none'; }
     if(truncated && prog) prog.innerHTML = '<div class="url-status err">⚠️ 期間が70日を超えるため先頭70日のみ対象にします。</div>';
 
     const rows = [];
@@ -9530,8 +9648,10 @@ if(horses.length === 0){
               row.error = (e && e.message) || String(e);
             }
             rows.push(row);
+            rsLastRows = rows;
             rsRenderSummary(rows);
             rsRenderTable(rows);
+            rsRenderChart(rows);
           }
         }
       }
@@ -9572,6 +9692,7 @@ if(horses.length === 0){
   window.stopRangeVenueSimulation = stopRangeVenueSimulation;
   window.rsRenderVenueChecks = rsRenderVenueChecks;
   window.rsToggleAllVenues = rsToggleAllVenues;
+  window.rsExportToGlobalChart = rsExportToGlobalChart;
 
   // シミュレーションタブを開いた時に対象表示を更新
   document.addEventListener('click', function(ev){
@@ -10017,7 +10138,7 @@ if(horses.length === 0){
 (function(){
   'use strict';
 
-  const VERSION89 = 'v5.18.130 RangeVenueSim';
+  const VERSION89 = 'v5.18.131 RangeVenueSimChart';
 
   // 直近の精算結果（テキストコピー用）
   let pts_lastRows = [];

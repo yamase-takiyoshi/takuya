@@ -3573,15 +3573,31 @@ function looksBlockedHtml(text){
   return /Access Denied|Reference\s*#|don't have permission to access|errors\.edgesuite\.net|Pardon Our Interruption|Incapsula|Just a moment|cf-browser-verification|bm-verify|akamai/i.test(text);
 }
 
-// ブリッジ（iPad住宅IP）でURLを取得。準備未完/失敗なら null を返す。
+// v5.18.132: ブリッジ準備フラグ(🌉)を立てる共通処理。'ready' を取りこぼしても実取得成功で立てる。
+function markBridgeReady87(){
+  if(window.__NAR_BRIDGE_READY__) return;
+  window.__NAR_BRIDGE_READY__ = true;
+  try{ const v = document.querySelector('.ver'); if(v && !/🌉/.test(v.textContent)) v.textContent = v.textContent + ' 🌉'; }catch(e){}
+  console.log('[narBridge] ready (実取得で確認)');
+}
+
+// ブリッジ（住宅IP）でURLを取得。準備未完/失敗なら null を返す。
+// v5.18.132: iPhone等で 'ready' ブロードキャストを取りこぼしても、Userscriptが居れば
+//   実リクエストで存在を確認して使う。本当に無い時だけ1回タイムアウト→以後スキップ。
 async function fetchViaBridge(url){
-  if(typeof window.__narBridgeFetch !== 'function' || !window.__NAR_BRIDGE_READY__){ window.__bridgeLastError = 'ブリッジ未準備'; return null; }
+  if(typeof window.__narBridgeFetch !== 'function'){ window.__bridgeLastError = 'ブリッジ未検出'; return null; }
+  // 'ready' 未受信かつ、過去に応答ゼロ(=Userscript不在)と判定済みならスキップ
+  if(!window.__NAR_BRIDGE_READY__ && window.__bridgeAbsent === true){ window.__bridgeLastError = 'ブリッジ未検出'; return null; }
   try{
     const r = await window.__narBridgeFetch(url);
+    // 何らかの応答が返った時点で Userscript は存在する → 🌉 を立てる（IP/クッキーで弾かれてもブリッジ扱い）
+    if(r && (r.status || r.text)) markBridgeReady87();
     if(r && r.status >= 200 && r.status < 300 && r.text){ window.__bridgeLastError = ''; window.__fetchPath = 'bridge'; return r.text; }
     if(r && r.status){ window.__bridgeLastError = 'ブリッジHTTP ' + r.status; console.warn('[bridge] HTTP ' + r.status); }
   }catch(e){
     window.__bridgeLastError = (e && e.message) ? e.message : String(e);
+    // 'ready' 未受信のままタイムアウト=Userscriptが応答しない=不在とみなし、以後はWorker直行
+    if(!window.__NAR_BRIDGE_READY__ && /timeout/i.test(window.__bridgeLastError)){ window.__bridgeAbsent = true; }
     console.warn('[bridge] fetch failed:', window.__bridgeLastError);
   }
   return null;
@@ -5989,11 +6005,13 @@ async function testProxy(){
   const c = await probe(`${base}?type=shutuba&kind=JRA&race_id=202605020911`);  // type/race_id
 
   // 4) ブリッジ経由（住宅IP）：Userscript(nar_bridge.user.js)が入っていれば、Akamai遮断を回避できる。
+  // v5.18.132: 'ready'未受信でも __narBridgeFetch があれば実取得で確認（取りこぼし対策）。
   let bridge;
-  if(typeof window.__narBridgeFetch === 'function' && window.__NAR_BRIDGE_READY__){
+  if(typeof window.__narBridgeFetch === 'function' && window.__bridgeAbsent !== true){
     try{
       const r = await window.__narBridgeFetch(narList);
       const txt = (r && r.text) || '';
+      if(r && (r.status || txt) && typeof markBridgeReady87 === 'function') markBridgeReady87();
       bridge = { status:String(r ? r.status : '0'), ok:(r && String(r.status)==='200' && /<(html|table|tr|li|a\s)/i.test(txt)), len:txt.length, err:(r&&r.error)||'' };
     }catch(e){ bridge = { status:'ERR', ok:false, len:0, err:(e&&e.message)||String(e) }; }
   } else {
@@ -8419,13 +8437,22 @@ if(horses.length === 0){
   })();
 
   // NAR用の低レベル取得：ブリッジ優先、無ければワーカー。{ok,status,text()} を返す。
+  // v5.18.132: 'ready'未受信でもUserscriptが居れば実取得で試す（不在判定済みのみスキップ）。
   async function narGet87(targetUrl){
-    if(typeof window.__narBridgeFetch === 'function' && window.__NAR_BRIDGE_READY__ && /\/\/nar\.netkeiba\.com\//.test(String(targetUrl))){
+    const bridgeUsable = (typeof window.__narBridgeFetch === 'function') && (window.__NAR_BRIDGE_READY__ || window.__bridgeAbsent !== true);
+    if(bridgeUsable && /\/\/nar\.netkeiba\.com\//.test(String(targetUrl))){
       try{
         const r = await window.__narBridgeFetch(targetUrl);
+        if(r && (r.status || r.text) && typeof markBridgeReady87 === 'function') markBridgeReady87();
         const html = r && r.text || '';
-        return { ok: !!(r && r.status >= 200 && r.status < 300), status: (r && r.status) || 0, text: async()=>html };
-      }catch(e){ /* フォールバック */ }
+        if(r && r.status >= 200 && r.status < 300){
+          return { ok: true, status: r.status, text: async()=>html };
+        }
+        // 非2xxはワーカーにフォールバック（下へ）
+      }catch(e){
+        if(!window.__NAR_BRIDGE_READY__ && /timeout/i.test((e&&e.message)||'')){ window.__bridgeAbsent = true; }
+        /* フォールバック */
+      }
     }
     const px = (settings && settings.proxyUrl) ? settings.proxyUrl.replace(/\/$/,'') : '';
     const proxyReq = (typeof buildWorkerRequestUrl === 'function') ? buildWorkerRequestUrl(targetUrl) : (px + '?url=' + encodeURIComponent(targetUrl));
@@ -10138,7 +10165,7 @@ if(horses.length === 0){
 (function(){
   'use strict';
 
-  const VERSION89 = 'v5.18.131 RangeVenueSimChart';
+  const VERSION89 = 'v5.18.132 BridgeReadyProbe';
 
   // 直近の精算結果（テキストコピー用）
   let pts_lastRows = [];

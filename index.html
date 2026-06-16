@@ -3629,7 +3629,7 @@ async function fetchViaBridge(url){
 }
 
 async function fetchHtmlViaProxy(url){
-  const isNetkeiba = /\/\/(nar|race)\.netkeiba\.com\//.test(String(url));
+  const isNetkeiba = /\/\/(nar|race|db)\.netkeiba\.com\//.test(String(url));
   const isRaceData = /\/race\/(shutuba|result)\.html|\/odds\//.test(String(url));
 
   // v5.18.97/102: netkeibaは Userscriptブリッジ（iPad回線IP・Akamai回避）を最優先。
@@ -5514,12 +5514,13 @@ async function fetchRace(){
 
     horses = parseHorsesFromDoc(doc, activeUrl);
 
-    // v5.18.134 DbFallback: result.html が SP/JS描画版で出走馬テーブルを含まない
+    // v5.18.135 DbBridge: result.html が SP/JS描画版で出走馬テーブルを含まない
     // （馬リンク0）場合、db.netkeiba.com/race/{race_id}/ の静的結果ページに切替える。
     // db版は UA 非依存で確定の着順/枠/馬番/単勝/人気を静的HTMLで返す。
     if(horses.length < 2){
       const ridForDb = (activeUrl.match(/race_id=(\d{10,14})/) || [])[1] || validation.raceId || '';
       if(ridForDb){
+        window.__dbFallbackError = '';
         try{
           status.innerHTML = `<div class="url-status">🔄 結果ページが空のため db.netkeiba で再取得中...</div>`;
           const dbUrl = `https://db.netkeiba.com/race/${ridForDb}/`;
@@ -5537,7 +5538,8 @@ async function fetchRace(){
             status.innerHTML = `<div class="url-status">🏁 db.netkeiba の確定結果を反映しました（${dbHorses.length}頭）</div>`;
           }
         }catch(dbErr){
-          console.warn('[db fallback] failed:', dbErr?.message || dbErr);
+          window.__dbFallbackError = (dbErr && dbErr.message) ? dbErr.message : String(dbErr);
+          console.warn('[db fallback] failed:', window.__dbFallbackError);
         }
       }
     }
@@ -5547,8 +5549,9 @@ async function fetchRace(){
       const hl = (String(html).match(/\/horse\//g) || []).length;
       const path = window.__fetchPath || '?';
       const be = window.__bridgeLastError || '';
+      const dbe = window.__dbFallbackError || '';
       const blocked = (typeof looksBlockedHtml === 'function') ? looksBlockedHtml(html) : false;
-      throw new Error(`出走馬を十分に取得できませんでした（経路:${path} / HTML${String(html).length}字 / 馬リンク${hl} / ブロック判定:${blocked?'有':'無'}${be?' / ブリッジ:'+be:''}）`);
+      throw new Error(`出走馬を十分に取得できませんでした（経路:${path} / HTML${String(html).length}字 / 馬リンク${hl} / ブロック判定:${blocked?'有':'無'}${be?' / ブリッジ:'+be:''}${dbe?' / db:'+dbe:''}）`);
     }
 
     // ── 単勝オッズ・人気取得（v5.18.9 RaceIdCheckFix） ──────────────────────────
@@ -6035,7 +6038,7 @@ function parseHorsesFromDoc(doc, url){
   return list.sort((a,b)=>a.num-b.num);
 }
 
-// ─── db.netkeiba.com 結果ページ専用パーサ（v5.18.134 DbFallback） ──────────────
+// ─── db.netkeiba.com 結果ページ専用パーサ（v5.18.135 DbBridge） ──────────────
 // race.netkeiba.com/race/result.html が SP/JS描画版で出走馬テーブルを含まない場合の保険。
 // db版テーブル（race_table_01）は UA に依存せず静的HTMLで確定結果を返す。
 // 列構成が result.html と異なり先頭が「着順」のため、左から数字を拾うと馬番が着順に化ける。
@@ -10311,7 +10314,7 @@ if(horses.length === 0){
 (function(){
   'use strict';
 
-  const VERSION89 = 'v5.18.134 DbFallback';
+  const VERSION89 = 'v5.18.135 DbBridge';
 
   // 直近の精算結果（テキストコピー用）
   let pts_lastRows = [];

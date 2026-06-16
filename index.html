@@ -5513,6 +5513,35 @@ async function fetchRace(){
     }
 
     horses = parseHorsesFromDoc(doc, activeUrl);
+
+    // v5.18.134 DbFallback: result.html が SP/JS描画版で出走馬テーブルを含まない
+    // （馬リンク0）場合、db.netkeiba.com/race/{race_id}/ の静的結果ページに切替える。
+    // db版は UA 非依存で確定の着順/枠/馬番/単勝/人気を静的HTMLで返す。
+    if(horses.length < 2){
+      const ridForDb = (activeUrl.match(/race_id=(\d{10,14})/) || [])[1] || validation.raceId || '';
+      if(ridForDb){
+        try{
+          status.innerHTML = `<div class="url-status">🔄 結果ページが空のため db.netkeiba で再取得中...</div>`;
+          const dbUrl = `https://db.netkeiba.com/race/${ridForDb}/`;
+          const dbHtml = await fetchHtmlViaProxy(dbUrl);
+          const dbDoc = parser.parseFromString(dbHtml, 'text/html');
+          const dbHorses = parseHorsesFromDbDoc(dbDoc);
+          if(dbHorses.length >= 2){
+            horses = dbHorses;
+            activeUrl = dbUrl;
+            html = dbHtml;
+            doc = dbDoc;
+            const dbTitle = parseRaceTitleFromDoc(dbDoc);
+            if(dbTitle) currentRaceName = dbTitle;
+            document.getElementById('raceUrl').value = dbUrl;
+            status.innerHTML = `<div class="url-status">🏁 db.netkeiba の確定結果を反映しました（${dbHorses.length}頭）</div>`;
+          }
+        }catch(dbErr){
+          console.warn('[db fallback] failed:', dbErr?.message || dbErr);
+        }
+      }
+    }
+
     if(horses.length < 2){
       // v5.18.103: iPadはSafariコンソールが使えないため、失敗理由をステータス欄に直接出す。
       const hl = (String(html).match(/\/horse\//g) || []).length;
@@ -6001,6 +6030,98 @@ function parseHorsesFromDoc(doc, url){
       frame
     });
 
+  });
+
+  return list.sort((a,b)=>a.num-b.num);
+}
+
+// ─── db.netkeiba.com 結果ページ専用パーサ（v5.18.134 DbFallback） ──────────────
+// race.netkeiba.com/race/result.html が SP/JS描画版で出走馬テーブルを含まない場合の保険。
+// db版テーブル（race_table_01）は UA に依存せず静的HTMLで確定結果を返す。
+// 列構成が result.html と異なり先頭が「着順」のため、左から数字を拾うと馬番が着順に化ける。
+// → ヘッダ行から列indexを引いて確実に馬番/枠/単勝/人気を特定する。db のヘッダは
+//   「着 順」「馬 番」のようにスペース入りなので、空白を潰してから一致させる。
+function parseHorsesFromDbDoc(doc){
+  const list = [];
+  const seen = new Set();
+
+  // 結果テーブルを特定。class が取れない版もあるので /horse/ 最多テーブルを保険採用。
+  let table = doc.querySelector('table.race_table_01, table.RaceTable01, table[class*="race_table"], table.nk_tb_common');
+  if(!table){
+    let best = null, bestCount = 0;
+    doc.querySelectorAll('table').forEach(t => {
+      const c = t.querySelectorAll('a[href*="/horse/"]').length;
+      if(c > bestCount){ bestCount = c; best = t; }
+    });
+    table = best;
+  }
+  if(!table) return list;
+
+  // ヘッダ行から列index（空白除去して一致）。
+  const headerRow = Array.from(table.querySelectorAll('tr')).find(r => r.querySelector('th'));
+  const colIndex = (re) => {
+    if(!headerRow) return -1;
+    const cells = Array.from(headerRow.children);
+    for(let i=0;i<cells.length;i++){
+      if(re.test(normCellText(cells[i]).replace(/\s+/g,''))) return i;
+    }
+    return -1;
+  };
+  const iFrame = colIndex(/^枠番?$/);
+  const iNum   = colIndex(/^馬番$/);
+  const iOdds  = colIndex(/^(単勝|単勝オッズ|オッズ)$/);
+  const iPop   = colIndex(/^(人気|人気順)$/);
+
+  Array.from(table.querySelectorAll('tr')).forEach(tr => {
+    const horseLink = tr.querySelector('a[href*="/horse/"]');
+    if(!horseLink) return;
+    const cells = Array.from(tr.children);
+
+    const name = normCellText(horseLink).replace(/のデータベース/g,'').replace(/データベース/g,'').replace(/\s+/g,'').trim();
+    if(!name) return;
+
+    // 馬番：ヘッダ列優先 → 無ければ馬名セルの直前の独立数字（枠の右隣＝馬番）。
+    let num = 0;
+    if(iNum >= 0 && cells[iNum]){
+      const t = toHalfNumberText(normCellText(cells[iNum])).trim();
+      if(/^([1-9]|1[0-8])$/.test(t)) num = Number(t);
+    }
+    if(!num){
+      const hi = cells.findIndex(c => c.contains(horseLink));
+      for(let i=hi-1; i>=0; i--){
+        const t = toHalfNumberText(normCellText(cells[i])).trim();
+        if(/^([1-9]|1[0-8])$/.test(t)){ num = Number(t); break; }
+      }
+    }
+    if(!num || num < 1 || num > 18) return;
+    if(seen.has(num)) return;
+
+    // 枠番
+    let frame = 0;
+    if(iFrame >= 0 && cells[iFrame]){
+      const t = toHalfNumberText(normCellText(cells[iFrame])).trim();
+      if(/^[1-8]$/.test(t)) frame = Number(t);
+    }
+    if(!frame) frame = extractFrameFromRow(tr, num);
+
+    // 単勝オッズ（確定値）。取消・除外馬は空欄→0。
+    let odds = 0;
+    if(iOdds >= 0 && cells[iOdds]){
+      const t = toHalfNumberText(normCellText(cells[iOdds])).replace(/,/g,'').trim();
+      const m = t.match(/^(\d{1,4}(?:\.\d+)?)$/);
+      if(m) odds = sanitizeWinOddsValue(Number(m[1]), t);
+    }
+
+    // 人気（確定値）
+    let pop = 0;
+    if(iPop >= 0 && cells[iPop]){
+      const t = toHalfNumberText(normCellText(cells[iPop])).trim();
+      const m = t.match(/^(\d{1,2})$/);
+      if(m){ const v = Number(m[1]); if(v >= 1 && v <= 18) pop = v; }
+    }
+
+    seen.add(num);
+    list.push({ num, name, odds, pop, frame });
   });
 
   return list.sort((a,b)=>a.num-b.num);
@@ -10190,7 +10311,7 @@ if(horses.length === 0){
 (function(){
   'use strict';
 
-  const VERSION89 = 'v5.18.133 ROI200Mode';
+  const VERSION89 = 'v5.18.134 DbFallback';
 
   // 直近の精算結果（テキストコピー用）
   let pts_lastRows = [];

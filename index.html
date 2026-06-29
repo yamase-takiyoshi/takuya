@@ -9516,8 +9516,12 @@ if(horses.length === 0){
         const vs = await loadActiveJraVenuesByRaceId(date); // [[code,name,count,kd],...]
         return (vs || []).map(v => v[0]);
       }else{
-        const vs = await loadActiveNarVenuesFromOfficialList(date); // [[code,name,count],...]
-        return (vs || []).map(v => v[0]);
+        // v5.18.138: NARは公式開催一覧を1回だけ取得し、開催場コードのみ抽出する。
+        // 開催の無い日は空配列を返し、上位ループの「開催なし」スキップに乗せる。
+        // 従来の loadActiveNarVenuesFromOfficialList は場ごとにレース数を数える追加通信を
+        // していたが、横断シミュレーションでは場コードしか使わないため省略して高速化する。
+        const html = await fetchNarOfficialRaceListHtml(date, '');
+        return parseNarOfficialVenueCodesFromList(html, date);
       }
     }catch(e){ return []; }
   }
@@ -10401,7 +10405,7 @@ if(horses.length === 0){
 (function(){
   'use strict';
 
-  const VERSION89 = 'v5.18.137 JRAWeekdaySkip2';
+  const VERSION89 = 'v5.18.138 NARFastVenueScan';
 
   // 直近の精算結果（テキストコピー用）
   let pts_lastRows = [];

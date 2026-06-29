@@ -780,6 +780,84 @@ function ymdCompactLocal(ymd){
   return String(ymd || '').replace(/[^\d]/g, '').slice(0, 8);
 }
 
+// ─── 日本の祝日（JRA期間横断の平日スキップ判定用） v5.18.136 ───
+// JRAは原則 土曜・日曜・祝日（振替休日含む）のみ開催する。
+// 期間×開催場 横断シミュレーションで平日を1日ずつネット探索すると無駄が多いため、
+// 平日（祝日でない月〜金）は通信せずスキップして高速化する。
+// ※NARは平日も開催されるため、この判定はJRAにのみ使う。
+function jpNationalHolidays(year){
+  const set = new Set();
+  const pad = n => String(n).padStart(2, '0');
+  const add = (m, d) => set.add(`${year}-${pad(m)}-${pad(d)}`);
+  // 第n月曜日の日付（ハッピーマンデー）
+  const nthMonday = (month, nth) => {
+    const first = new Date(year, month - 1, 1);
+    const offset = (8 - first.getDay()) % 7; // 1日から最初の月曜までの日数
+    return 1 + offset + (nth - 1) * 7;
+  };
+  // 固定祝日
+  add(1, 1);                       // 元日
+  add(2, 11);                      // 建国記念の日
+  add(4, 29);                      // 昭和の日
+  add(5, 3); add(5, 4); add(5, 5); // 憲法記念日・みどりの日・こどもの日
+  add(11, 3); add(11, 23);         // 文化の日・勤労感謝の日
+  // 天皇誕生日（2020年〜2/23、〜2018年は12/23、2019年は無し）
+  if(year >= 2020) add(2, 23);
+  else if(year <= 2018) add(12, 23);
+  // ハッピーマンデー
+  add(1, nthMonday(1, 2));   // 成人の日
+  add(7, nthMonday(7, 3));   // 海の日
+  add(9, nthMonday(9, 3));   // 敬老の日
+  add(10, nthMonday(10, 2)); // スポーツの日
+  // 山の日（2016年〜）
+  if(year >= 2016) add(8, 11);
+  // 春分の日・秋分の日（1980〜2099で妥当な近似式）
+  const vernal = Math.floor(20.8431 + 0.242194 * (year - 1980) - Math.floor((year - 1980) / 4));
+  const autumn = Math.floor(23.2488 + 0.242194 * (year - 1980) - Math.floor((year - 1980) / 4));
+  add(3, vernal);
+  add(9, autumn);
+  return set;
+}
+
+const _jpHolidayCache = {};
+function jpHolidaysWithSubstitute(year){
+  if(_jpHolidayCache[year]) return _jpHolidayCache[year];
+  // 振替休日・国民の休日が年をまたぐ可能性に備え前後年も含めて評価する
+  const base = new Set([
+    ...jpNationalHolidays(year - 1),
+    ...jpNationalHolidays(year),
+    ...jpNationalHolidays(year + 1)
+  ]);
+  const isHol = ymd => base.has(ymd);
+  const result = new Set(base);
+  // 振替休日：祝日が日曜に当たったら、その後の最初の非祝日を休日にする
+  base.forEach(ymd => {
+    if(parseLocalDateYMD(ymd).getDay() === 0){ // 日曜
+      let cand = addLocalDaysYmd(ymd, 1);
+      while(isHol(cand)) cand = addLocalDaysYmd(cand, 1);
+      result.add(cand);
+    }
+  });
+  // 国民の休日：祝日に挟まれた平日（日曜・祝日でない日）を休日にする
+  base.forEach(ymd => {
+    const mid = addLocalDaysYmd(ymd, 1);
+    const next = addLocalDaysYmd(ymd, 2);
+    if(isHol(ymd) && isHol(next) && !isHol(mid) && parseLocalDateYMD(mid).getDay() !== 0){
+      result.add(mid);
+    }
+  });
+  _jpHolidayCache[year] = result;
+  return result;
+}
+
+// JRAの開催候補日かどうか（土・日・祝日なら true）。平日（祝日除く）は false。
+function isJraPossibleRaceDay(ymd){
+  const d = parseLocalDateYMD(ymd);
+  const wd = d.getDay(); // 0=日, 6=土
+  if(wd === 0 || wd === 6) return true;
+  return jpHolidaysWithSubstitute(d.getFullYear()).has(ymd);
+}
+
 
 // ─── 設定ロード ────────────────────────────────
 function loadSettings(){
@@ -9758,6 +9836,15 @@ if(horses.length === 0){
     try{
       for(const date of dates){
         if(rsAbort) break;
+
+        // v5.18.136: JRAは土日・祝日のみ開催。場の自動検出（未チェック）時は、
+        // 平日を通信なしでスキップして大幅に高速化する。NARや場の明示指定時は従来通り。
+        if(kind === 'JRA' && !selVenues.length && !isJraPossibleRaceDay(date)){
+          rows.push({ date, header: true, note: `${date}：JRAは開催なし（平日のためスキップ）` });
+          if(prog) prog.innerHTML = `<div class="url-status">📅 ${date} は平日のためスキップ（JRA非開催）</div>`;
+          continue;
+        }
+
         if(prog) prog.innerHTML = `<div class="url-status">📅 ${date} の開催場を確認中...</div>`;
 
         let venues = await rsOpenVenues(kind, date);
@@ -10314,7 +10401,7 @@ if(horses.length === 0){
 (function(){
   'use strict';
 
-  const VERSION89 = 'v5.18.135 DbBridge';
+  const VERSION89 = 'v5.18.136 JRAWeekdaySkip';
 
   // 直近の精算結果（テキストコピー用）
   let pts_lastRows = [];

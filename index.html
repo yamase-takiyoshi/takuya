@@ -9851,10 +9851,17 @@ if(horses.length === 0){
 
         if(prog) prog.innerHTML = `<div class="url-status">📅 ${date} の開催場を確認中...</div>`;
 
-        let venues = await rsOpenVenues(kind, date);
-        if(selVenues.length) venues = venues.filter(c => selVenues.includes(c));
-        // 開催場の自動検出に失敗しても、ユーザーが場を明示指定していれば直接試す（公式一覧落ち対策）。
-        if(selVenues.length && !venues.length) venues = selVenues.slice();
+        const openVenues = await rsOpenVenues(kind, date);
+        let venues;
+        if(selVenues.length){
+          venues = openVenues.filter(c => selVenues.includes(c));
+          // v5.18.139: その日に開催場が1つも検出できなかった場合のみ、公式一覧落ち対策として
+          // 明示指定の場を直接試す。「他場は開催しているが選択場は非開催」の日は、その場は
+          // 走っていないので強制せずスキップする（選択場を毎日プローブして遅くなる問題の修正）。
+          if(!venues.length && !openVenues.length) venues = selVenues.slice();
+        }else{
+          venues = openVenues;
+        }
 
         if(!venues.length){
           rows.push({ date, header: true, note: `${date}：${kind}は開催なし` });
@@ -10405,7 +10412,7 @@ if(horses.length === 0){
 (function(){
   'use strict';
 
-  const VERSION89 = 'v5.18.138 NARFastVenueScan';
+  const VERSION89 = 'v5.18.139 SkipNonRaceVenue';
 
   // 直近の精算結果（テキストコピー用）
   let pts_lastRows = [];

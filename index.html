@@ -9815,10 +9815,11 @@ if(horses.length === 0){
     if(!start || !end){ alert('開始日と終了日を選択してください。'); return; }
     if(start > end){ alert('開始日は終了日より前（または同日）にしてください。'); return; }
 
-    // 日付列挙（安全上限 70日）
+    // 日付列挙（安全上限）v5.18.140: 1年（うるう年366日）+αを許容。以前は70日で打ち切っていた
+    const RS_MAX_DAYS = 400;
     const dates = [];
     let cur = start, guard = 0;
-    while(cur <= end && guard < 70){ dates.push(cur); cur = addLocalDaysYmd(cur, 1); guard++; }
+    while(cur <= end && guard < RS_MAX_DAYS){ dates.push(cur); cur = addLocalDaysYmd(cur, 1); guard++; }
     const truncated = (cur <= end);
 
     const selVenues = rsSelectedVenueCodes(); // 空なら全場
@@ -9834,7 +9835,7 @@ if(horses.length === 0){
     $('rsSummary').innerHTML = '';
     $('rsTable').innerHTML = '';
     { const cw = $('rsChartWrap'); if(cw) cw.style.display = 'none'; }
-    if(truncated && prog) prog.innerHTML = '<div class="url-status err">⚠️ 期間が70日を超えるため先頭70日のみ対象にします。</div>';
+    if(truncated && prog) prog.innerHTML = `<div class="url-status err">⚠️ 期間が${RS_MAX_DAYS}日を超えるため先頭${RS_MAX_DAYS}日のみ対象にします。</div>`;
 
     const rows = [];
     try{
@@ -9931,7 +9932,7 @@ if(horses.length === 0){
       }
 
       const okCount = rows.filter(x => x.status === 'ok').length;
-      if(prog) prog.innerHTML = `<div class="url-status ok">✅ 完了：${okCount}レースをシミュレーションしました${rsAbort ? '（中断）' : ''}。</div>`;
+      if(prog) prog.innerHTML = `<div class="url-status ok">✅ 完了：${okCount}レースをシミュレーションしました${rsAbort ? '（中断）' : ''}${truncated ? `（⚠️期間が${RS_MAX_DAYS}日を超えたため先頭${RS_MAX_DAYS}日のみ）` : ''}。</div>`;
     }catch(e){
       console.error('[runRangeVenueSimulation]', e);
       if(prog) prog.innerHTML = `<div class="url-status err">❌ 期間横断シミュレーション失敗: ${asw_esc((e && e.message) || e)}</div>`;
@@ -10412,7 +10413,7 @@ if(horses.length === 0){
 (function(){
   'use strict';
 
-  const VERSION89 = 'v5.18.139 SkipNonRaceVenue';
+  const VERSION89 = 'v5.18.140 RangeMaxDays400';
 
   // 直近の精算結果（テキストコピー用）
   let pts_lastRows = [];

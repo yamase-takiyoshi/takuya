@@ -6248,11 +6248,19 @@ async function testProxy(){
   // 旧版(url=のみ対応)は type/race_id を 400 で弾く。新版は 200 か 502(=netkeiba側エラー)を返す。
   const newWorker = (c.status !== '400' && c.status !== 'ERR');
   const reachable = [a,b,c].some(r => r.status !== 'ERR');
+  // v5.18.141: ブリッジが3桁HTTPを返した時点で「住宅IPからnetkeibaに到達」できている。
+  // NARの400=該当一覧なし/開催なしの正常応答で、ブリッジ自体は生きている（403=実ブロックのみ失敗扱い）。
+  const bridgeReachable = /^\d{3}$/.test(String(bridge.status)) && String(bridge.status) !== '403';
   let verdict, cls;
   if(a.ok && b.ok && newWorker){
     cls='ok'; verdict='🟢 Worker正常（最新版）。JRA・NARともWorker経由で取得OKです。';
   } else if(bridge.ok){
     cls='ok'; verdict='🟢 ブリッジ（住宅IP）でNAR取得OK。WorkerがAkamaiに弾かれていても、NARはブリッジ経由で回せます。' + ((a.ok||c.ok)?'JRAはWorkerでOK。':'JRAはWorker回復待ち。');
+  } else if(bridgeReachable){
+    cls='ok'; verdict='🟢 ブリッジ（住宅IP）はnetkeibaに到達OK（HTTP ' + bridge.status + '）。'
+      + (String(bridge.status)==='400' ? 'この400は「該当一覧なし＝開催なし」の正常応答で、ブリッジ自体は生きています。' : '')
+      + 'NARは通常フロー（馬データ→NARの日付・開催場を選択）でブリッジ経由取得できます。'
+      + (newWorker ? 'WorkerはAkamai遮断中（502）で回復待ち。' : '');
   } else if(!reachable){
     cls='err'; verdict='🔴 Workerに到達できません。URLの誤り・未Deploy・Worker停止のいずれか。';
   } else if(a.ok || b.ok || c.ok){
@@ -6267,8 +6275,13 @@ async function testProxy(){
     else { cls='err'; verdict='🟡 旧Worker（url=のみ）が応答していますが取得失敗。最新worker.jsを貼り直してDeployしてください。'; }
   }
   const row = (label, r)=>`<div style="font-family:monospace;font-size:11px;opacity:.85">${label}: HTTP ${r.status}${r.ok?' ✅':''}${r.err?(' '+r.err):''}</div>`;
+  // v5.18.141: ブリッジ400は「到達OK・該当一覧なし」の正常応答であることを行内に明示。
+  const bridgeNote = (bridgeReachable && !bridge.ok)
+    ? (String(bridge.status)==='400' ? ' 🌉到達OK（該当一覧なし=正常）' : ' 🌉到達OK')
+    : '';
+  const bridgeRow = `<div style="font-family:monospace;font-size:11px;opacity:.85">ブリッジ（NAR/住宅IP）: HTTP ${bridge.status}${bridge.ok?' ✅':''}${bridgeNote}${bridge.err?(' '+bridge.err):''}</div>`;
   status.innerHTML = `<div class="url-status ${cls}">${verdict}`
-    + `<div style="margin-top:6px;">${row('url=（JRA一覧）',a)}${row('url=（NAR一覧）',b)}${row('type/race_id（JRA）',c)}${row('ブリッジ（NAR/住宅IP）',bridge)}</div></div>`;
+    + `<div style="margin-top:6px;">${row('url=（JRA一覧）',a)}${row('url=（NAR一覧）',b)}${row('type/race_id（JRA）',c)}${bridgeRow}</div></div>`;
 }
 
 function copyWorkerCode(){
@@ -10521,7 +10534,7 @@ if(horses.length === 0){
 (function(){
   'use strict';
 
-  const VERSION89 = 'v5.18.140 RangeMaxDays400';
+  const VERSION89 = 'v5.18.141 BridgeReach400';
 
   // 直近の精算結果（テキストコピー用）
   let pts_lastRows = [];

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.89 NAROfficialListStrict</title>
+<title>The競馬 EV分析 v5.18.131 CopyAggDetail</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.89 NAROfficialListStrict</span>
+    <span class="ver">v5.18.131 CopyAggDetail</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -8120,8 +8120,8 @@ if(horses.length === 0){
 
   setTimeout(() => {
     const ver = document.querySelector('.ver');
-    if(ver) ver.textContent = 'v5.18.89 NAROfficialListStrict';
-    document.title = 'The競馬 EV分析 v5.18.89 NAROfficialListStrict';
+    if(ver) ver.textContent = 'v5.18.131 CopyAggDetail';
+    document.title = 'The競馬 EV分析 v5.18.131 CopyAggDetail';
   }, 0);
 })();
 </script>
@@ -8293,8 +8293,8 @@ if(horses.length === 0){
 
   setTimeout(() => {
     const ver = document.querySelector('.ver');
-    if(ver) ver.textContent = 'v5.18.89 NAROfficialListStrict';
-    document.title = 'The競馬 EV分析 v5.18.89 NAROfficialListStrict';
+    if(ver) ver.textContent = 'v5.18.131 CopyAggDetail';
+    document.title = 'The競馬 EV分析 v5.18.131 CopyAggDetail';
   }, 0);
 })();
 </script>
@@ -8303,14 +8303,14 @@ if(horses.length === 0){
 
 <script>
 /* ============================================================
-   v5.18.89 NAROfficialListStrict
+   v5.18.131 CopyAggDetail
    ・ユーザーがカレンダーで選んだ日付を絶対に尊重する。
    ・今日へ強制補正しない。昨日・過去日のシミュレーションを妨げない。
    ・NARの過去日レースは result.html を優先して、最終オッズ/人気/結果を拾いやすくする。
    ・レース名が空欄/1Rだけの場合は、既存の簡易名補完を維持する。
    ============================================================ */
 (function(){
-  const VERSION85 = 'v5.18.89 NAROfficialListStrict';
+  const VERSION85 = 'v5.18.131 CopyAggDetail';
 
   function nar85Esc(s){
     return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -8434,7 +8434,7 @@ if(horses.length === 0){
    ・過去日は result.html 優先でシミュレーション向けにする。
    ============================================================ */
 (function(){
-  const VERSION86 = 'v5.18.89 NAROfficialListStrict';
+  const VERSION86 = 'v5.18.131 CopyAggDetail';
   function esc86(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
   function ymd86(date){return String(date||'').replace(/[^0-9]/g,'').slice(0,8);}
   function dateLabel86(date){const d=String(date||'').replace(/-/g,'/');return d||date;}
@@ -9578,6 +9578,108 @@ if(horses.length === 0){
       (a.date + a.venueCode).localeCompare(b.date + b.venueCode));
   }
 
+  // ── テキストコピー用：集計／明細をタブ区切りテキスト化（v5.18.131 CopyAggDetail）──
+  // 表示中の表と同じ並び・同じ数値でTSV化する。Excel/メモ/LINEへ貼り付け可能。
+  function rsFmtNum(n){ return (Number(n) || 0).toLocaleString(); }
+
+  function rsBuildAggText(rows){
+    const agg = rsAggregate(rows || []);
+    if(!agg.length) return '';
+    const lines = [];
+    lines.push('📊 開催場・日別集計');
+    lines.push(['日付','場','R','確定','的中','投資','払戻','収支','ROI'].join('\t'));
+    let gBet = 0, gRet = 0, gSettledBet = 0;
+    agg.forEach(g => {
+      const profit = g.ret - g.settledBet;
+      const roi = g.settledBet ? g.ret / g.settledBet * 100 : 0;
+      gBet += g.bet; gRet += g.ret; gSettledBet += g.settledBet;
+      lines.push([
+        g.date,
+        g.venueName || g.venueCode,
+        g.races,
+        g.settled,
+        g.hitRaces,
+        rsFmtNum(g.bet),
+        rsFmtNum(g.ret),
+        (profit >= 0 ? '+' : '') + rsFmtNum(profit),
+        g.settledBet ? roi.toFixed(0) + '%' : '-'
+      ].join('\t'));
+    });
+    const gProfit = gRet - gSettledBet;
+    const gRoi = gSettledBet ? gRet / gSettledBet * 100 : 0;
+    lines.push([
+      '全期間トータル', '', '', '', '',
+      rsFmtNum(gBet),
+      rsFmtNum(gRet),
+      (gProfit >= 0 ? '+' : '') + rsFmtNum(gProfit),
+      gSettledBet ? gRoi.toFixed(0) + '%' : '-'
+    ].join('\t'));
+    return lines.join('\n');
+  }
+
+  function rsBuildDetailText(rows){
+    const raceRows = (rows || []).filter(r => r && (r.status === 'ok' || r.status === 'error'));
+    if(!raceRows.length) return '';
+    const lines = [];
+    lines.push('🔎 レース別明細');
+    lines.push(['日付','場','R','レース名','着順','点','投資','払戻','収支','ROI'].join('\t'));
+    raceRows.forEach(r => {
+      if(r.status === 'error'){
+        lines.push([
+          r.date, r.venueName || '', r.no + 'R',
+          '⚠️ ' + (r.error || '取得失敗'),
+          '', '', '', '', '', ''
+        ].join('\t'));
+        return;
+      }
+      const fin = r.hasFinish ? (r.finishTop || []).join('-') : '未確定';
+      const name = (r.raceName || (r.no + 'R')) + (r.count === 0 ? '（見送り）' : '');
+      lines.push([
+        r.date,
+        r.venueName || '',
+        r.no + 'R',
+        name,
+        fin,
+        r.count,
+        rsFmtNum(r.bet || 0),
+        r.hasFinish ? rsFmtNum(r.ret || 0) : '-',
+        r.hasFinish ? ((r.profit || 0) >= 0 ? '+' : '') + rsFmtNum(r.profit || 0) : '-',
+        (r.hasFinish && (r.bet || 0)) ? r.roi.toFixed(0) + '%' : '-'
+      ].join('\t'));
+    });
+    return lines.join('\n');
+  }
+
+  async function rsCopyText(text, btn){
+    if(!text){
+      alert('コピーできるデータがありません。先に「期間横断シミュレーション実行」を押してください。');
+      return;
+    }
+    let ok = false;
+    try{
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    }catch(e){
+      // iPad/Safariでclipboardが使えない場合のフォールバック
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      try{ ok = document.execCommand('copy'); }catch(e2){}
+      document.body.removeChild(ta);
+    }
+    if(btn){
+      const orig = btn.textContent;
+      btn.textContent = ok ? '✅ コピーしました' : '⚠️ 失敗';
+      setTimeout(() => { btn.textContent = orig; }, 1800);
+    }
+    if(!ok) alert('コピーできませんでした。');
+  }
+
+  function rsCopyAggText(ev){ rsCopyText(rsBuildAggText(rsLastRows), ev && ev.currentTarget); }
+  function rsCopyDetailText(ev){ rsCopyText(rsBuildDetailText(rsLastRows), ev && ev.currentTarget); }
+
   function rsRenderSummary(rows){
     const box = $('rsSummary');
     if(!box) return;
@@ -9610,7 +9712,10 @@ if(horses.length === 0){
     const agg = rsAggregate(rows);
     if(!agg.length){ box.innerHTML = ''; return; }
 
-    let h = `<div style="font-size:12px;color:var(--muted);margin-bottom:4px">📊 開催場・日別集計</div>`;
+    let h = `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px">
+      <div style="font-size:12px;color:var(--muted)">📊 開催場・日別集計</div>
+      <button class="btn-sm" type="button" onclick="rsCopyAggText(event)">📋 集計をコピー</button>
+    </div>`;
     h += `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
       <thead><tr style="color:var(--muted);text-align:left">
         <th style="padding:6px 4px">日付</th>
@@ -9657,6 +9762,7 @@ if(horses.length === 0){
     const raceRows = rows.filter(r => r && (r.status === 'ok' || r.status === 'error'));
     if(raceRows.length){
       h += `<details style="margin-top:10px"><summary style="cursor:pointer;font-size:12px;color:var(--muted)">🔎 レース別明細（${raceRows.length}件）</summary>`;
+      h += `<div style="margin:8px 0"><button class="btn-sm" type="button" onclick="rsCopyDetailText(event)">📋 明細をコピー</button></div>`;
       h += `<div style="overflow-x:auto;margin-top:6px"><table style="width:100%;border-collapse:collapse;font-size:11px">
         <thead><tr style="color:var(--muted);text-align:left">
           <th style="padding:4px">日付</th><th style="padding:4px">場</th><th style="padding:4px">R</th><th style="padding:4px">レース名</th>
@@ -9968,6 +10074,8 @@ if(horses.length === 0){
   window.rsRenderVenueChecks = rsRenderVenueChecks;
   window.rsToggleAllVenues = rsToggleAllVenues;
   window.rsExportToGlobalChart = rsExportToGlobalChart;
+  window.rsCopyAggText = rsCopyAggText;
+  window.rsCopyDetailText = rsCopyDetailText;
 
   // シミュレーションタブを開いた時に対象表示を更新
   document.addEventListener('click', function(ev){

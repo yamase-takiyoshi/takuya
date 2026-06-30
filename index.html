@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.162 JraVenueResetFix</title>
+<title>The競馬 EV分析 v5.18.163 JraDeadChainFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.162 JraVenueResetFix</span>
+    <span class="ver">v5.18.163 JraDeadChainFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -693,7 +693,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.162 JraVenueResetFix';
+window.APP_VERSION = 'v5.18.163 JraDeadChainFix';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -3326,6 +3326,9 @@ async function onRaceDateKindChanged(){
   const venueEl = document.getElementById('pickVenue');
   if(venueEl) venueEl.innerHTML = '<option value="">開催場を選んでレース一覧を取得</option>';
 
+  // v5.18.163: ここでは「これから取得する」状態なので、まだ完了扱いにしない。
+  window.__jraVenueFetchDone = false;
+
   try{ renderVenueOptions([]); }catch(e){ console.warn('renderVenueOptions failed on kind change', e); }
   await loadActiveVenuesForDate();
 }
@@ -3487,6 +3490,10 @@ async function loadActiveVenuesForDate(){
   const status = document.getElementById('urlStatus');
   const raceSelect = document.getElementById('raceSelect');
   if(raceSelect) raceSelect.innerHTML = '<option value="">開催場を選んでレース一覧を取得</option>';
+  // v5.18.163: このフラグが false の間だけ「開催確認中...」表示を許可する。
+  // 取得が完了（成功/開催なし/エラーいずれも）したら必ず true にし、
+  // 最終結果が空配列でも「開催確認中...」のまま固まらないようにする。
+  if(kind === 'JRA') window.__jraVenueFetchDone = false;
 
   const stillCurrent = () => {
     const d = document.getElementById('pickDate')?.value || todayYmd();
@@ -3496,6 +3503,7 @@ async function loadActiveVenuesForDate(){
   const setStatus = (html) => { if(stillCurrent() && status) status.innerHTML = html; };
 
   if(!settings.proxyUrl){
+    window.__jraVenueFetchDone = true;
     renderVenueOptions([]);
     setStatus('<div class="url-status err">⚠️ プロキシURL未設定のため、開催場を自動取得できません</div>');
     return;
@@ -3520,6 +3528,7 @@ async function loadActiveVenuesForDate(){
     }
 
     if(!stillCurrent()) return;
+    window.__jraVenueFetchDone = true;
     renderVenueOptions(venues);
     if(venues.length){
       setStatus(`<div class="url-status ok">✅ ${date} の${kind}開催場だけを表示しました：${venues.map(v => v[1] + '（' + v[2] + 'R）').join('、')}</div>`);
@@ -3529,6 +3538,7 @@ async function loadActiveVenuesForDate(){
     }
   }catch(e){
     if(!stillCurrent()) return;
+    window.__jraVenueFetchDone = true;
     console.error(e);
     renderVenueOptions([]);
     setStatus(`<div class="url-status err">⚠️ 開催場の自動取得に失敗: ${e.message}</div>`);
@@ -12182,9 +12192,13 @@ if(horses.length === 0){
     if(statusEl) statusEl.innerHTML = `<div class="url-status ok">✅ ${esc(date)} ${esc(vname)} ${races.length}R を地方競馬公式(PC)から取得。netkeibaはSP URLを使用します。</div>`;
   }
 
+  const prevLoadActiveVenues154 = window.loadActiveVenuesForDate;
   window.loadActiveVenuesForDate = async function(){
     const kind = document.getElementById('pickKind')?.value || 'JRA';
-    if(kind !== 'NAR') return;
+    // v5.18.163: 修正前はJRAの場合ここで何もせず return していたため、
+    // それ以降の上書きチェーン経由で呼ばれるはずのJRA処理が永久に実行されず、
+    // 「開催確認中...」のまま固まる致命バグになっていた。前段へ委譲する。
+    if(kind !== 'NAR') return prevLoadActiveVenues154 ? prevLoadActiveVenues154.apply(this, arguments) : undefined;
     const date = document.getElementById('pickDate')?.value || (typeof todayYmd==='function' ? todayYmd() : '');
     const status = document.getElementById('urlStatus');
     const raceSel = document.getElementById('raceSelect');
@@ -12211,9 +12225,10 @@ if(horses.length === 0){
     }
   };
 
+  const prevLoadRaceList154 = window.loadRaceList;
   window.loadRaceList = async function(){
     const kind = document.getElementById('pickKind')?.value || 'JRA';
-    if(kind !== 'NAR') return;
+    if(kind !== 'NAR') return prevLoadRaceList154 ? prevLoadRaceList154.apply(this, arguments) : undefined;
     const date = document.getElementById('pickDate')?.value || (typeof todayYmd==='function' ? todayYmd() : '');
     const code = document.getElementById('pickVenue')?.value || '';
     const status = document.getElementById('urlStatus');
@@ -12251,7 +12266,7 @@ if(horses.length === 0){
 
 <script>
 /* ============================================================
-   v5.18.162 JraVenueResetFix
+   v5.18.163 JraDeadChainFix
    ・表示用バージョンを window.APP_VERSION / setAppVersionLabel() に一本化。
    ・旧パッチブロックが遅延実行されても .ver / document.title は必ず同一値へ同期。
    ・診断ログ内の過去バージョン表記は履歴として温存。
@@ -12263,7 +12278,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 
 <script>
 /* ============================================================
-   v5.18.162 JraVenueResetFix / OneFile Integrated
+   v5.18.163 JraDeadChainFix / OneFile Integrated
    ・Worker 502 / 上流遮断 / 取得失敗を「開催なし」に変換しない。
    ・NAR開催場判定は keiba.go.jp PC RaceList の実取得結果のみ採用。
    ・公式ページ本文で明確に「該当データなし」の場合だけ開催なしにする。
@@ -12274,7 +12289,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.162 JraVenueResetFix';
+  window.APP_VERSION = 'v5.18.163 JraDeadChainFix';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -12696,14 +12711,14 @@ function json(obj, status = 200) {
 
 
 /* ============================================================
-   v5.18.162 JraVenueResetFix / OneFile Integrated
+   v5.18.163 JraDeadChainFix / OneFile Integrated
    ・地方競馬公式 RaceList の「オッズ・映像・成績」列から「映像」を拾わない。
    ・DebaTableリンクまたは行テキストの「競走名・出馬表」列を優先して正式レース名にする。
    ・例: 1R 映像 → 1R ２歳 未勝利
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.162 JraVenueResetFix';
+  window.APP_VERSION = 'v5.18.163 JraDeadChainFix';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -12979,7 +12994,7 @@ function json(obj, status = 200) {
 
 <script>
 /* ============================================================
-   v5.18.162 JraVenueResetFix / OneFile Integrated
+   v5.18.163 JraDeadChainFix / OneFile Integrated
    ・JRA側にも「映像・オッズ・結果・払戻・出馬表」リンク名をレース名にしない保護を追加。
    ・NAR v5.18.159 の正式レース名ガードは維持。
    ・一覧HTML、出馬表タイトル、プルダウン最終表示の3段でリンク文言を除外する。
@@ -12987,7 +13002,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.162 JraVenueResetFix';
+  window.APP_VERSION = 'v5.18.163 JraDeadChainFix';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -13205,7 +13220,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.162 JraVenueResetFix';
+    window.APP_VERSION = 'v5.18.163 JraDeadChainFix';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -13220,7 +13235,7 @@ function json(obj, status = 200) {
    - 「取得中」に一度空配列を描いても、JRA土日を即「開催なし」に見せない。
    ============================================================ */
 (function(){
-  const V = 'v5.18.162 JraVenueResetFix';
+  const V = 'v5.18.163 JraDeadChainFix';
   try{
     window.APP_VERSION = V;
     document.title = 'The競馬 EV分析 ' + V;
@@ -13408,12 +13423,15 @@ function json(obj, status = 200) {
   // renderVenueOptions([]) 呼び出し（区分変更時の初期化）が常に失敗 → プルダウンが
   // NAR選択時の残骸（例：門別）のまま固まる致命バグになっていた。isJraPossibleRaceDay
   // （既存の土日祝判定）に差し替え、かつ例外で初期化が止まらないようtry/catchで保護する。
+  // v5.18.163: __jraVenueFetchDone が true（取得が完了済み）の場合は、結果が空配列でも
+  // 「開催確認中...」へすり替えず、本来の最終結果（開催なし/エラー）をそのまま表示する。
   var __renderVenueOptions_v160 = renderVenueOptions;
   renderVenueOptions = function(listOverride){
     try{
       const kind = document.getElementById('pickKind')?.value || 'JRA';
       const date = document.getElementById('pickDate')?.value || todayYmd();
       if(kind === 'JRA' && Array.isArray(listOverride) && !listOverride.length
+         && !window.__jraVenueFetchDone
          && typeof isJraPossibleRaceDay === 'function' && isJraPossibleRaceDay(date)){
         const venueEl = document.getElementById('pickVenue');
         if(venueEl){

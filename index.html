@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.157 HeaderVerSync</title>
+<title>The競馬 EV分析 v5.18.158 NarFetchFailureNotNoRace</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.157 HeaderVerSync</span>
+    <span class="ver">v5.18.158 NarFetchFailureNotNoRace</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -693,7 +693,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.157 HeaderVerSync';
+window.APP_VERSION = 'v5.18.158 NarFetchFailureNotNoRace';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -12246,12 +12246,448 @@ if(horses.length === 0){
 
 <script>
 /* ============================================================
-   v5.18.157 HeaderVerSync
+   v5.18.158 NarFetchFailureNotNoRace
    ・表示用バージョンを window.APP_VERSION / setAppVersionLabel() に一本化。
    ・旧パッチブロックが遅延実行されても .ver / document.title は必ず同一値へ同期。
    ・診断ログ内の過去バージョン表記は履歴として温存。
    ============================================================ */
 if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
+</script>
+
+
+
+<script>
+/* ============================================================
+   v5.18.158 NarFetchFailureNotNoRace / OneFile Integrated
+   ・Worker 502 / 上流遮断 / 取得失敗を「開催なし」に変換しない。
+   ・NAR開催場判定は keiba.go.jp PC RaceList の実取得結果のみ採用。
+   ・公式ページ本文で明確に「該当データなし」の場合だけ開催なしにする。
+   ・取得失敗時は全NAR場を暫定表示し、ユーザーが再試行できる状態を保つ。
+   ・プロキシ診断に地方競馬公式PCのHTTP状態を追加。
+   ・「コードをコピー」は同梱Worker v4を返す。
+   ============================================================ */
+(function(){
+  'use strict';
+
+  window.APP_VERSION = 'v5.18.158 NarFetchFailureNotNoRace';
+  if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
+
+  const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+  const ymd158 = date => String(date || '').replace(/[^0-9]/g, '').slice(0,8);
+  const fmt158 = date => { const d = ymd158(date); return d ? `${d.slice(0,4)}/${d.slice(4,6)}/${d.slice(6,8)}` : ''; };
+  const sleep158 = ms => new Promise(r=>setTimeout(r, ms));
+  const VENUES158 = [
+    ['30','門別','36'],['35','盛岡','10'],['36','水沢','11'],['42','浦和','18'],['43','船橋','19'],['44','大井','20'],
+    ['45','川崎','21'],['46','金沢','22'],['47','笠松','23'],['48','名古屋','24'],['50','園田','27'],['51','姫路','28'],
+    ['54','高知','31'],['55','佐賀','32'],['65','帯広','3']
+  ];
+  const venueName158 = code => (VENUES158.find(v=>v[0]===String(code).padStart(2,'0'))||[])[1] || String(code||'');
+  const baba158 = code => (VENUES158.find(v=>v[0]===String(code).padStart(2,'0'))||[])[2] || '';
+  const raceId158 = (date, code, no) => { const d=ymd158(date); return `${d.slice(0,4)}${String(code).padStart(2,'0')}${d.slice(4,8)}${String(no).padStart(2,'0')}`; };
+
+  const prevLoadActiveVenues158 = window.loadActiveVenuesForDate;
+  const prevLoadRaceList158 = window.loadRaceList;
+
+  function proxyBase158(){
+    const input = document.getElementById('proxyUrl');
+    const fromInput = input && input.value ? input.value.trim() : '';
+    const fromSettings = String((window.settings && window.settings.proxyUrl) || '').trim();
+    return (fromInput || fromSettings).replace(/\/$/, '');
+  }
+  function officialPcUrl158(date, code){
+    const d = ymd158(date);
+    const ds = `${d.slice(0,4)}%2F${d.slice(4,6)}%2F${d.slice(6,8)}`;
+    return `https://www.keiba.go.jp/KeibaWeb/TodayRaceInfo/RaceList?k_raceDate=${ds}&k_babaCode=${encodeURIComponent(baba158(code))}`;
+  }
+  function blocked158(text){
+    return !text || /Access Denied|Reference\s*#|don't have permission|Just a moment|Incapsula|cf-browser|akamai|Pardon Our Interruption|errors\.edgesuite\.net/i.test(String(text));
+  }
+  function plain158(html){
+    return String(html || '')
+      .replace(/<script[\s\S]*?<\/script>/gi,' ')
+      .replace(/<style[\s\S]*?<\/style>/gi,' ')
+      .replace(/<[^>]+>/g,' ')
+      .replace(/&nbsp;|&#160;/g,' ')
+      .replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#039;/g,"'")
+      .replace(/[\t\r\n]+/g,' ').replace(/\s+/g,' ').trim();
+  }
+  function explicitNoRace158(text){
+    return /該当データなし|開催がありません|本日の開催はありません|レースはありません|データがありません|対象のレースはありません/i.test(String(text || ''));
+  }
+  function cleanName158(s){
+    return String(s || '')
+      .replace(/&amp;/g,'&').replace(/&nbsp;|&#160;/g,' ')
+      .replace(/出馬表|オッズ|競走成績|払戻金/g,' ')
+      .replace(/[\s　]+/g,' ').trim() || '';
+  }
+  function parseOfficialRaces158(html, date, code){
+    const out = [];
+    const seen = new Set();
+    const add = (no, name) => {
+      no = Number(no);
+      if(!(no >= 1 && no <= 12) || seen.has(no)) return;
+      seen.add(no);
+      out.push({
+        raceNo:no,
+        raceName: cleanName158(name) || `${no}R`,
+        raceId: raceId158(date, code, no),
+        venueCode:String(code).padStart(2,'0'),
+        src:'keiba.go.jp(pc)'
+      });
+    };
+
+    // 正規PC RaceList: DebaTableリンクのk_raceNo + アンカーテキスト
+    let m;
+    const re1 = /href=["'][^"']*DebaTable[^"']*?k_raceNo=(\d{1,2})[^"']*["'][^>]*>\s*([\s\S]*?)\s*<\/a>/gi;
+    while((m = re1.exec(html))){ add(m[1], String(m[2]).replace(/<[^>]+>/g,' ')); }
+
+    // 予備: k_raceNo= と近傍のレース名
+    if(!out.length){
+      const re2 = /k_raceNo=(\d{1,2})[\s\S]{0,240}?<a[^>]*>([\s\S]{1,80}?)<\/a>/gi;
+      while((m = re2.exec(html))){ add(m[1], String(m[2]).replace(/<[^>]+>/g,' ')); }
+    }
+
+    // さらに予備: テキストから 1R 名称 の並びを拾う。ただし明確な番号がある時だけ。
+    if(!out.length){
+      const text = plain158(html);
+      const re3 = /(?:^|\s)([1-9]|1[0-2])R\s+(.{1,80}?)(?=\s+(?:出馬表|オッズ|競走成績|払戻金|[1-9]R|1[0-2]R|$))/g;
+      while((m = re3.exec(text))){ add(m[1], m[2]); }
+    }
+    return out.sort((a,b)=>a.raceNo-b.raceNo);
+  }
+
+  async function fetchOfficialDetail158(date, code){
+    const target = officialPcUrl158(date, code);
+    const base = proxyBase158();
+    if(!base) return { ok:false, failure:true, status:'NO_PROXY', target, error:'Workers URL未設定' };
+    const req = `${base}?url=${encodeURIComponent(target)}`;
+    try{
+      const res = await fetch(req, { cache:'no-store' });
+      const text = await res.text().catch(()=> '');
+      let parsed = null;
+      try{ parsed = JSON.parse(text); }catch(e){}
+      if(!res.ok){
+        return {
+          ok:false, failure:true, status:String(res.status), upstreamStatus: parsed && parsed.upstreamStatus,
+          target, error: (parsed && (parsed.error || parsed.message)) || `Worker HTTP ${res.status}`,
+          body:text.slice(0,160)
+        };
+      }
+      if(blocked158(text)){
+        return { ok:false, failure:true, status:String(res.status), target, error:'上流サイト遮断/空応答', body:text.slice(0,160) };
+      }
+      const txt = plain158(text);
+      if(explicitNoRace158(txt)) return { ok:true, noRace:true, status:String(res.status), target, races:[] };
+      const races = parseOfficialRaces158(text, date, code);
+      if(races.length) return { ok:true, status:String(res.status), target, races };
+      // HTMLは取れたがパースできない場合は「開催なし」ではなく解析失敗。
+      return { ok:false, failure:true, status:String(res.status), target, error:'公式HTML取得OKだがRaceListを解析できません', body:txt.slice(0,160) };
+    }catch(e){
+      return { ok:false, failure:true, status:'ERR', target, error:(e && e.message) || String(e) };
+    }
+  }
+
+  function renderVenueOptions158(found, provisional){
+    const sel = document.getElementById('pickVenue');
+    if(!sel) return;
+    if(found && found.length){
+      sel.innerHTML = found.map(v=>`<option value="${esc158(v.code)}">${esc158(v.name)}（${v.races.length}R）</option>`).join('');
+    }else if(provisional){
+      sel.innerHTML = VENUES158.map(v=>`<option value="${esc158(v[0])}">${esc158(v[1])}（再試行）</option>`).join('');
+    }else{
+      sel.innerHTML = '<option value="">開催なし</option>';
+    }
+    const setNar = document.getElementById('setNar');
+    if(setNar){ try{ setNar.value = '1'; if(typeof saveSettings === 'function') saveSettings(); }catch(e){} }
+  }
+
+  function renderRaceOptions158(races, date, code, statusEl){
+    const sel = document.getElementById('raceSelect');
+    const urlIn = document.getElementById('raceUrl');
+    const box = document.getElementById('raceTitleBox');
+    if(!sel) return;
+    const vname = venueName158(code);
+    sel.innerHTML = races.map(r => {
+      const url = `https://nar.sp.netkeiba.com/race/shutuba.html?race_id=${r.raceId}`;
+      const label = `${fmt158(date)} ${vname} ${r.raceNo}R ${r.raceName || (r.raceNo+'R')} / ${r.raceId}`;
+      return `<option value="${esc158(url)}" data-race-id="${esc158(r.raceId)}" data-race-name="${esc158(r.raceName || '')}">${esc158(label)}</option>`;
+    }).join('');
+    const opt = sel.options[0];
+    if(opt){
+      if(urlIn) urlIn.value = opt.value;
+      window.currentRaceId = opt.dataset.raceId || '';
+      window.currentRaceName = opt.dataset.raceName || '';
+      if(box){ box.style.display='block'; box.textContent = opt.textContent || ''; }
+    }
+    if(statusEl) statusEl.innerHTML = `<div class="url-status ok">✅ ${esc158(date)} ${esc158(vname)} ${races.length}R を地方競馬公式PCから取得。実データは nar.sp.netkeiba.com を優先します。<br><span style="font-size:11px;opacity:.85">${esc158(window.APP_VERSION)}</span></div>`;
+  }
+
+  function failureLine158(d){
+    const up = d.upstreamStatus ? ` / upstream ${esc158(d.upstreamStatus)}` : '';
+    return `${esc158(venueName158((d.code || '')))}: Worker ${esc158(d.status || '')}${up} ${esc158(d.error || '')}`;
+  }
+
+  window.loadActiveVenuesForDate = async function(){
+    const kind = document.getElementById('pickKind')?.value || 'JRA';
+    if(kind !== 'NAR'){
+      if(prevLoadActiveVenues158) return prevLoadActiveVenues158.apply(this, arguments);
+      return;
+    }
+    const date = document.getElementById('pickDate')?.value || (typeof todayYmd==='function' ? todayYmd() : '');
+    const status = document.getElementById('urlStatus');
+    const raceSel = document.getElementById('raceSelect');
+    const urlIn = document.getElementById('raceUrl');
+    const box = document.getElementById('raceTitleBox');
+    if(raceSel) raceSel.innerHTML = '<option value="">開催場を選んでレース一覧を取得</option>';
+    if(urlIn) urlIn.value = '';
+    if(box){ box.style.display='none'; box.textContent=''; }
+
+    window.__nar158RaceCache = window.__nar158RaceCache || {};
+    const found = [];
+    const failures = [];
+    let confirmedNoRace = 0;
+    for(let i=0;i<VENUES158.length;i++){
+      const [code, name] = VENUES158[i];
+      if(status) status.innerHTML = `<div class="url-status">📡 NAR ${i+1}/${VENUES158.length} ${esc158(name)}：地方競馬公式PC RaceListを確認中...</div>`;
+      const d = await fetchOfficialDetail158(date, code);
+      d.code = code; d.name = name;
+      if(d.ok && d.races && d.races.length){
+        found.push({ code, name, races:d.races });
+        window.__nar158RaceCache[ymd158(date)+'-'+code] = d.races;
+      }else if(d.ok && d.noRace){
+        confirmedNoRace++;
+      }else{
+        failures.push(d);
+      }
+      await sleep158(25);
+    }
+
+    if(found.length){
+      renderVenueOptions158(found, false);
+      if(status) status.innerHTML = `<div class="url-status ok">✅ ${esc158(date)} のNAR開催場：${found.map(v=>esc158(v.name+'（'+v.races.length+'R）')).join('、')}<br><span style="font-size:11px;opacity:.85">${esc158(window.APP_VERSION)}：Worker失敗は開催なし扱いにしません</span></div>`;
+      setTimeout(()=>{ try{ window.loadRaceList(); }catch(e){ console.error(e); } }, 80);
+      return;
+    }
+
+    if(failures.length){
+      renderVenueOptions158([], true);
+      const lines = failures.slice(0,5).map(failureLine158).join('<br>');
+      if(status) status.innerHTML = `<div class="url-status err">⚠️ ${esc158(date)} のNAR開催場を確認できませんでした。これは「開催なし」ではなく取得失敗です。開催場は暫定表示のまま残しました。<br><span style="font-size:11px;opacity:.9">${lines}${failures.length>5?'<br>…':''}</span></div>`;
+      return;
+    }
+
+    // 全場が公式本文で明確に「該当データなし」の場合だけ開催なし。
+    renderVenueOptions158([], false);
+    if(status) status.innerHTML = `<div class="url-status">${esc158(date)} のNARは開催なし（地方競馬公式PCで確認済み）</div>`;
+    console.log('開催なし日', date, confirmedNoRace);
+  };
+
+  window.loadRaceList = async function(){
+    const kind = document.getElementById('pickKind')?.value || 'JRA';
+    if(kind !== 'NAR'){
+      if(prevLoadRaceList158) return prevLoadRaceList158.apply(this, arguments);
+      return;
+    }
+    const date = document.getElementById('pickDate')?.value || (typeof todayYmd==='function' ? todayYmd() : '');
+    const code = document.getElementById('pickVenue')?.value || '';
+    const status = document.getElementById('urlStatus');
+    const sel = document.getElementById('raceSelect');
+    if(!code){ if(status) status.innerHTML = '<div class="url-status">開催場を選択してください</div>'; return; }
+    window.__nar158RaceCache = window.__nar158RaceCache || {};
+    let races = window.__nar158RaceCache[ymd158(date)+'-'+code] || [];
+    if(races.length) return renderRaceOptions158(races, date, code, status);
+    if(status) status.innerHTML = `<div class="url-status">📡 ${esc158(date)} ${esc158(venueName158(code))}：地方競馬公式PC RaceListを取得中...</div>`;
+    const d = await fetchOfficialDetail158(date, code);
+    if(d.ok && d.races && d.races.length){
+      races = d.races;
+      window.__nar158RaceCache[ymd158(date)+'-'+code] = races;
+      return renderRaceOptions158(races, date, code, status);
+    }
+    if(d.ok && d.noRace){
+      if(sel) sel.innerHTML = '<option value="">この日は開催がありません</option>';
+      if(status) status.innerHTML = `<div class="url-status">${esc158(date)} ${esc158(venueName158(code))} は開催なし（地方競馬公式PCで確認済み）</div>`;
+      return;
+    }
+    if(sel) sel.innerHTML = '<option value="">取得失敗：開催なし扱いにはしていません</option>';
+    const up = d.upstreamStatus ? ` / upstream ${esc158(d.upstreamStatus)}` : '';
+    if(status) status.innerHTML = `<div class="url-status err">⚠️ ${esc158(date)} ${esc158(venueName158(code))} のレース一覧取得に失敗しました。開催なしではありません。<br><span style="font-size:11px;opacity:.9">Worker ${esc158(d.status || '')}${up} ${esc158(d.error || '')}</span></div>`;
+  };
+
+  // JRA側の既存関数を保持しておく。既に上書き済みの関数がある場合は、このパッチ読込直前の実体を使う。
+  // NARだけを安全に差し替える目的。
+  if(!window.__loadActiveVenuesForDateJra158 && typeof window.loadActiveJraVenuesFromRaceListSub === 'function'){
+    window.__loadActiveVenuesForDateJra158 = async function(){
+      const date = document.getElementById('pickDate')?.value || (typeof todayYmd==='function' ? todayYmd() : '');
+      const status = document.getElementById('urlStatus');
+      const venues = await window.loadActiveJraVenuesFromRaceListSub(date);
+      if(typeof renderVenueOptions === 'function') renderVenueOptions(venues);
+      if(status) status.innerHTML = venues.length ? `<div class="url-status ok">✅ ${esc158(date)} のJRA開催場を取得しました</div>` : `<div class="url-status">開催なし日</div>`;
+    };
+  }
+
+  const prevTest158 = window.testProxy;
+  window.testProxy = async function(){
+    const url = document.getElementById('proxyUrl')?.value.trim();
+    if(!url){ alert('Workers URLを入力してください。'); return; }
+    if(window.settings) window.settings.proxyUrl = url;
+    try{ if(typeof saveSettings === 'function') saveSettings(); }catch(e){}
+    const status = document.getElementById('proxyStatus');
+    if(status) status.innerHTML = '<div class="url-status">🔄 テスト中（Worker + 地方競馬公式PC + ブリッジ確認）...</div>';
+    const base = url.replace(/\/$/, '');
+    const ymd = (typeof todayYmd==='function' ? todayYmd() : '').replace(/-/g,'');
+    const pickDate = document.getElementById('pickDate')?.value || (typeof todayYmd==='function' ? todayYmd() : '');
+    const probe = async (reqUrl)=>{
+      try{
+        const res = await fetch(reqUrl, { cache:'no-store' });
+        let txt=''; try{ txt = await res.text(); }catch(e){}
+        let j=null; try{ j=JSON.parse(txt); }catch(e){}
+        const ok = res.ok && /<(html|table|tr|li|a\s)/i.test(txt) && !blocked158(txt);
+        return { status:String(res.status), ok, len:txt.length, upstreamStatus:j&&j.upstreamStatus, err:j&&(j.error||j.message) };
+      }catch(e){ return { status:'ERR', ok:false, len:0, err:(e&&e.message)||String(e) }; }
+    };
+    const jraList = `https://race.netkeiba.com/top/race_list_sub.html?kaisai_date=${ymd}&current_group=10${ymd}`;
+    const narList = `https://nar.netkeiba.com/top/race_list.html?kaisai_date=${ymd}&rf=race_list`;
+    const official = officialPcUrl158(pickDate, '30');
+    const a = await probe(`${base}?url=${encodeURIComponent(jraList)}`);
+    const b = await probe(`${base}?url=${encodeURIComponent(narList)}`);
+    const c = await probe(`${base}?type=shutuba&kind=JRA&race_id=202605020911`);
+    const d = await probe(`${base}?url=${encodeURIComponent(official)}`);
+    let bridge = { status:'未検出', ok:false, len:0, err:'Userscriptブリッジ未検出' };
+    if(typeof window.__narBridgeFetch === 'function' && window.__bridgeAbsent !== true){
+      try{
+        const r = await window.__narBridgeFetch(narList);
+        const txt = (r && r.text) || '';
+        bridge = { status:String(r ? r.status : '0'), ok:(r && String(r.status)==='200' && /<(html|table|tr|li|a\s)/i.test(txt)), len:txt.length, err:(r&&r.error)||'' };
+      }catch(e){ bridge = { status:'ERR', ok:false, len:0, err:(e&&e.message)||String(e) }; }
+    }
+    const row = (label, r)=>`<div style="font-family:monospace;font-size:11px;opacity:.88">${label}: HTTP ${esc158(r.status)}${r.upstreamStatus?(' / upstream '+esc158(r.upstreamStatus)):''}${r.ok?' ✅':''}${r.err?(' '+esc158(r.err)):''}</div>`;
+    let cls='ok', verdict='🟢 Worker応答あり。';
+    if(d.ok) verdict += ' 地方競馬公式PCも取得OKです。NAR開催判定に使えます。';
+    else verdict += ' 地方競馬公式PCが取得失敗中です。この場合は「開催なし」ではなく「取得失敗」と表示します。';
+    if(![a,b,c,d].some(x=>x.status!=='ERR')){ cls='err'; verdict='🔴 Workerに到達できません。URL・Deploy状態を確認してください。'; }
+    else if(!d.ok && !bridge.ok){ cls='err'; }
+    if(status){
+      status.innerHTML = `<div class="url-status ${cls}">${verdict}`
+        + `<div style="margin-top:6px;">${row('url=（JRA一覧）',a)}${row('url=（NAR一覧）',b)}${row('type/race_id（JRA）',c)}${row('公式PC（門別RaceList）',d)}${row('ブリッジ（NAR/住宅IP）',bridge)}</div>`
+        + `<div style="margin-top:6px;font-family:monospace;font-size:11px;opacity:.9">${esc158(window.APP_VERSION)}確認: 502/ERRは開催なし扱いにしません</div></div>`;
+    }
+  };
+
+  window.copyWorkerCode = function(){
+    const code = `// The競馬 EV分析 Cloudflare Worker v4 (NAR official PC + nar.sp + detailed errors)
+// EUC-JP/Shift-JIS自動検出 → UTF-8変換対応
+export default {
+  async fetch(request) {
+    const url = new URL(request.url);
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: corsHeaders('text/plain; charset=UTF-8') });
+    }
+
+    const raceId = String(url.searchParams.get('race_id') || '').replace(/[^\\d]/g, '');
+    const type = String(url.searchParams.get('type') || '').toLowerCase();
+    const kind = String(url.searchParams.get('kind') || 'JRA').toUpperCase();
+    const directUrl = url.searchParams.get('url');
+    let target = '';
+
+    if (raceId && /^(shutuba|odds|result)$/.test(type)) {
+      if (kind === 'NAR') {
+        if (type === 'odds') target = 'https://nar.sp.netkeiba.com/odds/?race_id=' + raceId + '&type=b1';
+        else if (type === 'result') target = 'https://nar.sp.netkeiba.com/race/race_result.html?race_id=' + raceId;
+        else target = 'https://nar.sp.netkeiba.com/race/shutuba.html?race_id=' + raceId;
+      } else {
+        if (type === 'odds') target = 'https://race.netkeiba.com/odds/index.html?race_id=' + raceId + '&type=b1';
+        else if (type === 'result') target = 'https://race.netkeiba.com/race/result.html?race_id=' + raceId + '&rf=race_submenu';
+        else target = 'https://race.netkeiba.com/race/shutuba.html?race_id=' + raceId + '&rf=race_submenu';
+      }
+    } else if (directUrl) {
+      target = directUrl;
+    } else {
+      return json({ ok:false, error:'race_id/type or url required' }, 400);
+    }
+
+    if (!/^https:\\/\\/((race|nar)\\.netkeiba\\.com|nar\\.sp\\.netkeiba\\.com|(www2?\\.)?keiba\\.go\\.jp|sp\\.keiba\\.go\\.jp)\\//.test(target)) {
+      return json({ ok:false, error:'allowlist: netkeiba / nar.sp.netkeiba.com / keiba.go.jp only', target }, 400);
+    }
+
+    const isKeibaGo = /^https:\\/\\/(www2?\\.|sp\\.)?keiba\\.go\\.jp\\//.test(target);
+    const isNarSp = /^https:\\/\\/nar\\.sp\\.netkeiba\\.com\\//.test(target);
+    const reqUA = isKeibaGo
+      ? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+      : (isNarSp
+          ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
+          : 'Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1');
+    const reqReferer = isKeibaGo ? 'https://www.keiba.go.jp/' : (isNarSp ? 'https://nar.sp.netkeiba.com/' : (kind === 'NAR' ? 'https://nar.netkeiba.com/' : 'https://race.netkeiba.com/'));
+
+    try {
+      const res = await fetch(target, {
+        method: 'GET',
+        headers: {
+          'User-Agent': reqUA,
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7',
+          'Referer': reqReferer,
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache'
+        }
+      });
+      const buf = await res.arrayBuffer();
+      const contentType = res.headers.get('content-type') || '';
+      const charset = detectCharset(contentType, buf);
+      const html = new TextDecoder(charset, { fatal: false }).decode(buf);
+
+      if (!res.ok) {
+        return json({ ok:false, error:'upstream returned HTTP ' + res.status, upstreamStatus:res.status, target, body:html.slice(0,300) }, 502);
+      }
+      return new Response(html, { status:200, headers:corsHeaders('text/html; charset=UTF-8') });
+    } catch (e) {
+      return json({ ok:false, error:String(e && e.message ? e.message : e), target }, 500);
+    }
+  }
+};
+
+function detectCharset(contentType, buf) {
+  const ctMatch = contentType.match(/charset=([\\w\\-]+)/i);
+  if (ctMatch) { const cs = normalizeCharset(ctMatch[1]); if (cs) return cs; }
+  const head = new TextDecoder('ascii', { fatal:false }).decode(buf.slice(0, 4096));
+  const metaMatch = head.match(/charset=[\\'"\\s]*([\\w\\-]+)/i);
+  if (metaMatch) { const cs = normalizeCharset(metaMatch[1]); if (cs) return cs; }
+  const bytes = new Uint8Array(buf.slice(0, 2048));
+  let eucScore = 0;
+  for (let i=0; i<bytes.length-1; i++) {
+    if (bytes[i] >= 0xa1 && bytes[i] <= 0xfe && bytes[i+1] >= 0xa1 && bytes[i+1] <= 0xfe) eucScore++;
+  }
+  if (eucScore > 5) return 'euc-jp';
+  return 'utf-8';
+}
+function normalizeCharset(cs) {
+  const s = String(cs || '').toLowerCase().replace(/[-_]/g, '');
+  if (s === 'eucjp' || s === 'euc') return 'euc-jp';
+  if (s === 'shiftjis' || s === 'sjis' || s === 'xsjis') return 'shift-jis';
+  if (s === 'utf8') return 'utf-8';
+  return null;
+}
+function corsHeaders(contentType) {
+  return {
+    'Content-Type': contentType,
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'Access-Control-Allow-Headers': '*',
+    'Cache-Control': 'no-store'
+  };
+}
+function json(obj, status = 200) {
+  return new Response(JSON.stringify(obj, null, 2), { status, headers:corsHeaders('application/json; charset=UTF-8') });
+}
+`;
+    navigator.clipboard.writeText(code).then(() => {
+      const btn = (typeof event !== 'undefined' && event && event.target) ? event.target : null;
+      if(btn){ const orig = btn.textContent; btn.textContent = '✅ コピーしました'; setTimeout(()=>btn.textContent = orig, 2000); }
+    }).catch(() => alert(code));
+  };
+
+  // 古い遅延ブロックが最後に走っても表示だけは戻さない。
+  [0, 200, 800, 1600, 3000].forEach(ms => setTimeout(()=>{ if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel(); }, ms));
+})();
 </script>
 
 </body>

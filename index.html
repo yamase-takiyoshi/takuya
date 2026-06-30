@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.163 JraDeadChainFix</title>
+<title>The競馬 EV分析 v5.18.164 RsOneByOne</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.163 JraDeadChainFix</span>
+    <span class="ver">v5.18.164 RsOneByOne</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -693,7 +693,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.163 JraDeadChainFix';
+window.APP_VERSION = 'v5.18.164 RsOneByOne';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -10255,68 +10255,53 @@ if(horses.length === 0){
             continue;
           }
 
-          // v5.18.150 NarRaceListHtmlFix: 取得（サーチ）だけを「4〜5件ずつ一塊り」で並列化し、
-          // その塊を連続実行する。結果パース(parseFinishFromResultDoc)と精算(asw_settle)は
-          // global horses を参照するため、並列にすると別レースのデータがクロスして収支が壊れる。
-          // よってネット取得だけ並列・計算/精算は1件ずつ順番に行う。
-          // 502やAkamaiブロックが増える場合は RS_FETCH_CHUNK を 3 に下げる。
-          const RS_FETCH_CHUNK = 5;
-          for(let i = 0; i < races.length; i += RS_FETCH_CHUNK){
+          // v5.18.151 RsOneByOne: 並列チャンク取得をやめ、1レースずつ「取得→計算→精算」を
+          // 完全に順番に行う（全レース一括シミュレーションと同じ方式）。並列取得は通信が重なる分
+          // Akamaiブロック等のリスクが上がるため、安定性を優先して1件ずつに統一する。
+          for(let i = 0; i < races.length; i++){
             if(rsAbort) break;
-            const chunk = races.slice(i, i + RS_FETCH_CHUNK);
-            const from = i + 1, to = Math.min(i + RS_FETCH_CHUNK, races.length);
-            if(prog) prog.innerHTML = `<div class="url-status">♞ ${date} ${vn} ${from}〜${to}R を一括取得中（全${races.length}R・${RS_FETCH_CHUNK}件ずつ）</div>`;
+            const r = races[i];
+            if(prog) prog.innerHTML = `<div class="url-status">♞ ${date} ${vn} ${r.no}R を処理中（${i + 1}/${races.length}R）</div>`;
 
-            // ── 一塊り：ネット取得だけを並列（出馬表・オッズ・結果HTML）。計算はしない ──
-            const loadedArr = await Promise.all(chunk.map(r =>
-              asw_loadHorses(kind, r.rid)
-                .then(loaded => ({ r, loaded, err: null }))
-                .catch(e => ({ r, loaded: null, err: (e && e.message) || String(e) }))
-            ));
+            const row = { date, venueCode: vc, venueName: vn, no: r.no, rid: r.rid,
+                          raceName: r.name || (r.no + 'R'), status: 'pending',
+                          count: 0, bet: 0, ret: 0, profit: 0, roi: 0, hit: 0, hasFinish: false, finishTop: [] };
+            try{
+              const loaded = await asw_loadHorses(kind, r.rid);
+              horses = loaded.horses;
+              currentRaceId = r.rid;
+              currentRaceName = loaded.raceName || r.name || (r.no + 'R');
+              row.raceName = currentRaceName;
 
-            // ── 計算・精算は1件ずつ順番に（global horses 依存のため並列不可）──
-            for(const { r, loaded, err } of loadedArr){
-              if(rsAbort) break;
-              const row = { date, venueCode: vc, venueName: vn, no: r.no, rid: r.rid,
-                            raceName: r.name || (r.no + 'R'), status: 'pending',
-                            count: 0, bet: 0, ret: 0, profit: 0, roi: 0, hit: 0, hasFinish: false, finishTop: [] };
-              try{
-                if(err || !loaded) throw new Error(err || '出馬表を取得できませんでした');
-                horses = loaded.horses;
-                currentRaceId = r.rid;
-                currentRaceName = loaded.raceName || r.name || (r.no + 'R');
-                row.raceName = currentRaceName;
+              const valid = horses.filter(h => Number(h.num) > 0 && h.name);
+              if(valid.length < 2) throw new Error('有効な出走馬が2頭未満');
 
-                const valid = horses.filter(h => Number(h.num) > 0 && h.name);
-                if(valid.length < 2) throw new Error('有効な出走馬が2頭未満');
+              const made = generateCandidates(valid);
+              lastRecs = made.recs.slice().sort((a, b) => b.ev - a.ev);
+              lastTickets = buildTickets(made.recs);
+              simTickets = lastTickets.map(t => ({ ...t, nums: [...t.nums] }));
+              row.count = lastTickets.length;
 
-                const made = generateCandidates(valid);
-                lastRecs = made.recs.slice().sort((a, b) => b.ev - a.ev);
-                lastTickets = buildTickets(made.recs);
-                simTickets = lastTickets.map(t => ({ ...t, nums: [...t.nums] }));
-                row.count = lastTickets.length;
+              const { finish, payouts } = await asw_getResult(kind, r.rid, loaded.resultDoc);
+              row.hasFinish = finish && finish.length >= 2;
+              row.finishTop = row.hasFinish ? finish.slice(0, 3).map(x => x.horseNo) : [];
 
-                const { finish, payouts } = await asw_getResult(kind, r.rid, loaded.resultDoc);
-                row.hasFinish = finish && finish.length >= 2;
-                row.finishTop = row.hasFinish ? finish.slice(0, 3).map(x => x.horseNo) : [];
+              const s = asw_settle(simTickets, finish, payouts);
+              row.bet = s.bet; row.ret = s.ret; row.profit = s.profit; row.roi = s.roi; row.hit = s.hit;
+              row.status = 'ok';
 
-                const s = asw_settle(simTickets, finish, payouts);
-                row.bet = s.bet; row.ret = s.ret; row.profit = s.profit; row.roi = s.roi; row.hit = s.hit;
-                row.status = 'ok';
-
-                if(row.hasFinish && recordToChart){
-                  try{ simRecordProfit(true, s.bet, s.ret, s.hit, s.count, `${date} ${vn} ${currentRaceName}`); }catch(e){}
-                }
-              }catch(e){
-                row.status = 'error';
-                row.error = (e && e.message) || String(e);
+              if(row.hasFinish && recordToChart){
+                try{ simRecordProfit(true, s.bet, s.ret, s.hit, s.count, `${date} ${vn} ${currentRaceName}`); }catch(e){}
               }
-              rows.push(row);
-              rsLastRows = rows;
-              rsRenderSummary(rows);
-              rsRenderTable(rows);
-              rsRenderChart(rows);
+            }catch(e){
+              row.status = 'error';
+              row.error = (e && e.message) || String(e);
             }
+            rows.push(row);
+            rsLastRows = rows;
+            rsRenderSummary(rows);
+            rsRenderTable(rows);
+            rsRenderChart(rows);
           }
         }
       }
@@ -12266,7 +12251,7 @@ if(horses.length === 0){
 
 <script>
 /* ============================================================
-   v5.18.163 JraDeadChainFix
+   v5.18.164 RsOneByOne
    ・表示用バージョンを window.APP_VERSION / setAppVersionLabel() に一本化。
    ・旧パッチブロックが遅延実行されても .ver / document.title は必ず同一値へ同期。
    ・診断ログ内の過去バージョン表記は履歴として温存。
@@ -12278,7 +12263,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 
 <script>
 /* ============================================================
-   v5.18.163 JraDeadChainFix / OneFile Integrated
+   v5.18.164 RsOneByOne / OneFile Integrated
    ・Worker 502 / 上流遮断 / 取得失敗を「開催なし」に変換しない。
    ・NAR開催場判定は keiba.go.jp PC RaceList の実取得結果のみ採用。
    ・公式ページ本文で明確に「該当データなし」の場合だけ開催なしにする。
@@ -12289,7 +12274,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.163 JraDeadChainFix';
+  window.APP_VERSION = 'v5.18.164 RsOneByOne';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -12711,14 +12696,14 @@ function json(obj, status = 200) {
 
 
 /* ============================================================
-   v5.18.163 JraDeadChainFix / OneFile Integrated
+   v5.18.164 RsOneByOne / OneFile Integrated
    ・地方競馬公式 RaceList の「オッズ・映像・成績」列から「映像」を拾わない。
    ・DebaTableリンクまたは行テキストの「競走名・出馬表」列を優先して正式レース名にする。
    ・例: 1R 映像 → 1R ２歳 未勝利
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.163 JraDeadChainFix';
+  window.APP_VERSION = 'v5.18.164 RsOneByOne';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -12994,7 +12979,7 @@ function json(obj, status = 200) {
 
 <script>
 /* ============================================================
-   v5.18.163 JraDeadChainFix / OneFile Integrated
+   v5.18.164 RsOneByOne / OneFile Integrated
    ・JRA側にも「映像・オッズ・結果・払戻・出馬表」リンク名をレース名にしない保護を追加。
    ・NAR v5.18.159 の正式レース名ガードは維持。
    ・一覧HTML、出馬表タイトル、プルダウン最終表示の3段でリンク文言を除外する。
@@ -13002,7 +12987,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.163 JraDeadChainFix';
+  window.APP_VERSION = 'v5.18.164 RsOneByOne';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -13220,7 +13205,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.163 JraDeadChainFix';
+    window.APP_VERSION = 'v5.18.164 RsOneByOne';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -13235,7 +13220,7 @@ function json(obj, status = 200) {
    - 「取得中」に一度空配列を描いても、JRA土日を即「開催なし」に見せない。
    ============================================================ */
 (function(){
-  const V = 'v5.18.163 JraDeadChainFix';
+  const V = 'v5.18.164 RsOneByOne';
   try{
     window.APP_VERSION = V;
     document.title = 'The競馬 EV分析 ' + V;

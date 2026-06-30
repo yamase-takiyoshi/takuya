@@ -6293,7 +6293,7 @@ async function testProxy(){
 }
 
 function copyWorkerCode(){
-  const code = `// The競馬 EV分析 Cloudflare Worker v2
+  const code = `// The競馬 EV分析 Cloudflare Worker v3 (keiba.go.jp desktop-UA fix)
 // EUC-JP/Shift-JIS自動検出 → UTF-8変換対応（レース名文字化け修正）
 export default {
   async fetch(request) {
@@ -6332,14 +6332,23 @@ export default {
       return json({ ok:false, error:'allowlist: netkeiba / nar.sp.netkeiba.com / keiba.go.jp only' }, 400);
     }
 
+    // v5.18.156: keiba.go.jp のPC版RaceListはMobile UAだとレース一覧テーブルを返さない。
+    // 公式サイトへはデスクトップUA＋自サイトReferer、netkeibaへは従来のMobile UA（Akamai回避）。
+    const isKeibaGo = /^https:\\/\\/(www2?\\.|sp\\.)?keiba\\.go\\.jp\\//.test(target);
+    const reqUA = isKeibaGo
+      ? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+      : 'Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+    const reqReferer = isKeibaGo
+      ? 'https://www.keiba.go.jp/'
+      : (kind === 'NAR' ? 'https://nar.netkeiba.com/' : 'https://race.netkeiba.com/');
     try {
       const res = await fetch(target, {
         method: 'GET',
         headers: {
-          'User-Agent': 'Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+          'User-Agent': reqUA,
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
           'Accept-Language': 'ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7',
-          'Referer': kind === 'NAR' ? 'https://nar.netkeiba.com/' : 'https://race.netkeiba.com/',
+          'Referer': reqReferer,
           'Cache-Control': 'no-cache',
           'Pragma': 'no-cache'
         }

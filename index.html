@@ -9571,6 +9571,110 @@ if(horses.length === 0){
               .sort((a, b) => a.no - b.no);
   }
 
+  // ── v5.18.143: JRA「回ベース」開催日プランナー ─────────────────────
+  // JRA race_id = YYYY[場2][回2][日2][R2]。MMDDを持たないため日付→開催回の逆探索は
+  // 最大12×12=144プローブ/場と高コスト。ここでは開催回を起点に 日=1,2,3… を順に進めて
+  // race_id を直接列挙し、各日の実日付は出馬表本文（title/RaceData）から読む。
+  // 公式一覧(race_list_sub)に一切依存しないため Worker 502 でもブリッジだけで完結する。
+
+  // 出馬表HTMLから実日付(YYYY-MM-DD)を読む。日付タブ/カレンダーの誤検出を避けるため
+  // title/og/description/RaceData 周辺だけを対象にする（jraHtmlMatchesSelectedDateと同方針）。
+  function rsExtractJraDate(html, yyyy){
+    try{
+      const doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
+      const parts = [
+        doc.querySelector('title')?.textContent || '',
+        doc.querySelector('meta[property="og:title"],meta[name="twitter:title"]')?.getAttribute('content') || '',
+        doc.querySelector('meta[name="description"],meta[property="og:description"]')?.getAttribute('content') || ''
+      ];
+      ['.RaceData01','[class*="RaceData"]','.RaceList_Item02','h1'].forEach(sel => {
+        doc.querySelectorAll(sel).forEach(el => parts.push(el.textContent || ''));
+      });
+      const t = normalizeJapaneseSpaces(parts.join(' '));
+      let m = t.match(/(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
+      if(m) return `${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}`;
+      m = t.match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+      if(m) return `${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}`;
+      m = t.match(/(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
+      if(m) return `${yyyy}-${String(m[1]).padStart(2,'0')}-${String(m[2]).padStart(2,'0')}`;
+    }catch(e){}
+    return null;
+  }
+
+  // (回,日)の1Rを取得して実日付を返す。開催が無ければ null、取得失敗(ブロック/通信)は 'ERR'。
+  async function rsJraProbeDay(yyyy, venueCode, kai, day){
+    const rid = `${yyyy}${venueCode}${String(kai).padStart(2,'0')}${String(day).padStart(2,'0')}01`;
+    const url = shutubaUrl('JRA', rid);
+    let html = '';
+    for(let attempt = 0; attempt < 2; attempt++){
+      try{ html = await fetchHtmlViaProxy(url); break; }
+      catch(e){ if(attempt === 1) return 'ERR'; }
+    }
+    if(!html || (typeof looksBlockedHtml === 'function' && looksBlockedHtml(html))) return 'ERR';
+    if(!html.includes(rid)) return null;            // 別IDへ差し替え/存在しない
+    let horses = 0;
+    try{ horses = parseHorsesFromDoc(new DOMParser().parseFromString(html, 'text/html'), url).length; }catch(e){}
+    if(horses < 2) return null;                      // 出走馬が無い＝この開催日は無い
+    const date = rsExtractJraDate(html, yyyy);
+    return date ? { date } : null;
+  }
+
+  // 指定年・指定場について [start,end] 内の開催日を回ベースで sweep し plan に積む。
+  async function rsSweepJraVenueYear(plan, yyyy, code, start, end){
+    const MAXKAI = 6, MAXDAY = 12;
+    const vn = venueName('JRA', code);
+    for(let kai = 1; kai <= MAXKAI; kai++){
+      if(rsAbort) return;
+      const d1 = await rsJraProbeDay(yyyy, code, kai, 1);
+      if(d1 === 'ERR') continue;        // 通信不良はこの回を確定できない→次の回を試す（早期打ち切り回避）
+      if(!d1) break;                    // 回は連番。day1が無い＝以降の回も無い。
+      if(d1.date > end) break;          // この回頭が範囲より後＝以降すべて後。終了。
+
+      // 回全体が start より前なら内側を舐めずスキップ（末尾付近を1プローブで粗判定）。
+      if(d1.date < start){
+        const last = await rsJraProbeDay(yyyy, code, kai, MAXDAY);
+        if(last && last !== 'ERR' && last.date < start) continue;
+      }
+
+      for(let day = 1; day <= MAXDAY; day++){
+        if(rsAbort) return;
+        const r = (day === 1) ? d1 : await rsJraProbeDay(yyyy, code, kai, day);
+        if(r === 'ERR') continue;       // 当日の通信不良→その日だけ飛ばす
+        if(!r) break;                   // 開催回の末尾＝この回終わり
+        if(r.date > end) return;        // 範囲超過＝以降すべて後。全停止。
+        if(r.date >= start){
+          const races = [];
+          for(let no = 1; no <= 12; no++){
+            races.push({ rid: `${yyyy}${code}${String(kai).padStart(2,'0')}${String(day).padStart(2,'0')}${String(no).padStart(2,'0')}`, no, name: '' });
+          }
+          const arr = plan.get(r.date) || [];
+          arr.push({ venueCode: code, venueName: vn, kai, day, races });
+          plan.set(r.date, arr);
+        }
+        // r.date < start は record しないが、回をまたぐので継続して舐める
+      }
+    }
+  }
+
+  // 選択場（空なら全JRA場）× [start,end] の開催日プランを構築。date -> [{venueCode,races,...}]
+  async function buildJraRangePlanByKaisai(venueCodes, start, end, prog){
+    const codes = (venueCodes && venueCodes.length) ? venueCodes : JRA_VENUES.map(v => v[0]);
+    const plan = new Map();
+    const sY = Number(start.slice(0, 4)), eY = Number(end.slice(0, 4));
+    for(const code of codes){
+      if(rsAbort) break;
+      const vn = venueName('JRA', code);
+      for(let yyyy = sY; yyyy <= eY; yyyy++){
+        if(rsAbort) break;
+        const yStart = (yyyy === sY) ? start : `${yyyy}-01-01`;
+        const yEnd   = (yyyy === eY) ? end   : `${yyyy}-12-31`;
+        if(prog) prog.innerHTML = `<div class="url-status">🧭 ${vn} ${yyyy}年の開催回をrace_idで探索中（回ベース）...</div>`;
+        await rsSweepJraVenueYear(plan, yyyy, code, yStart, yEnd);
+      }
+    }
+    return plan;
+  }
+
   // ── 開催場・日別の集計 ──
   function rsAggregate(rows){
     const map = new Map();
@@ -9958,20 +10062,36 @@ if(horses.length === 0){
 
     const rows = [];
     try{
+      // v5.18.143: JRAは「回ベース」で選択場の開催日をrace_id直接列挙して事前計画化する。
+      // 日付ごとの全場プローブ／公式一覧依存を排し、Worker 502下でもブリッジだけで完結。
+      let rsJraPlan = null;
+      if(kind === 'JRA'){
+        if(prog) prog.innerHTML = `<div class="url-status">🧭 JRA開催回をrace_idで探索中（回ベース）...</div>`;
+        try{ rsJraPlan = await buildJraRangePlanByKaisai(selVenues, start, end, prog); }
+        catch(e){ rsJraPlan = null; console.warn('[rsJraPlan] failed', e); }
+      }
+
       for(const date of dates){
         if(rsAbort) break;
 
-        // v5.18.137: JRAは土日・祝日のみ開催。場をチェックしていても平日は構造的に
-        // 開催が無いため、通信せずスキップして高速化する（NARは平日も開催のため対象外）。
-        if(kind === 'JRA' && !isJraPossibleRaceDay(date)){
-          rows.push({ date, header: true, note: `${date}：JRAは開催なし（平日のためスキップ）` });
-          if(prog) prog.innerHTML = `<div class="url-status">📅 ${date} は平日のためスキップ（JRA非開催）</div>`;
-          continue;
+        // v5.18.137/143: JRAは土日・祝日のみ開催。回ベースplanがあればそれを唯一の真実とし、
+        // planに無い日は通信せずスキップ。planが無い場合のみ従来の平日ヒューリスティックを使う。
+        if(kind === 'JRA'){
+          if(rsJraPlan){
+            const pv = rsJraPlan.get(date);
+            if(!(pv && pv.length)) continue; // 非開催日（planが網羅済みのためnote不要）
+          } else if(!isJraPossibleRaceDay(date)){
+            rows.push({ date, header: true, note: `${date}：JRAは開催なし（平日のためスキップ）` });
+            if(prog) prog.innerHTML = `<div class="url-status">📅 ${date} は平日のためスキップ（JRA非開催）</div>`;
+            continue;
+          }
         }
 
         if(prog) prog.innerHTML = `<div class="url-status">📅 ${date} の開催場を確認中...</div>`;
 
-        const openVenues = await rsOpenVenues(kind, date);
+        const openVenues = (rsJraPlan)
+          ? (rsJraPlan.get(date) || []).map(v => v.venueCode)
+          : await rsOpenVenues(kind, date);
         let venues;
         if(selVenues.length){
           venues = openVenues.filter(c => selVenues.includes(c));
@@ -9993,8 +10113,13 @@ if(horses.length === 0){
           if(prog) prog.innerHTML = `<div class="url-status">📅 ${date} ${vn} のレース一覧を取得中...</div>`;
 
           let races = [];
-          try{ races = await rsCollectRaces(kind, date, vc); }
-          catch(e){ races = []; }
+          if(rsJraPlan){
+            const v = (rsJraPlan.get(date) || []).find(x => x.venueCode === vc);
+            races = v ? v.races.slice() : [];
+          }else{
+            try{ races = await rsCollectRaces(kind, date, vc); }
+            catch(e){ races = []; }
+          }
 
           if(!races.length){
             rows.push({ date, venueCode: vc, venueName: vn, no: 0, status: 'error', error: 'レース一覧を取得できませんでした' });
@@ -10533,7 +10658,7 @@ if(horses.length === 0){
 (function(){
   'use strict';
 
-  const VERSION89 = 'v5.18.142 OpenVenueOnly';
+  const VERSION89 = 'v5.18.143 JraKaisaiSweep';
 
   // 直近の精算結果（テキストコピー用）
   let pts_lastRows = [];

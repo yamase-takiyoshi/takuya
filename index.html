@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.145 KaisaiProbeResultFix</title>
+<title>The競馬 EV分析 v5.18.146 JraEmptyPlanNoFallback</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.145 KaisaiProbeResultFix</span>
+    <span class="ver">v5.18.146 JraEmptyPlanNoFallback</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -8133,8 +8133,8 @@ if(horses.length === 0){
 
   setTimeout(() => {
     const ver = document.querySelector('.ver');
-    if(ver) ver.textContent = 'v5.18.145 KaisaiProbeResultFix';
-    document.title = 'The競馬 EV分析 v5.18.145 KaisaiProbeResultFix';
+    if(ver) ver.textContent = 'v5.18.146 JraEmptyPlanNoFallback';
+    document.title = 'The競馬 EV分析 v5.18.146 JraEmptyPlanNoFallback';
   }, 0);
 })();
 </script>
@@ -8306,8 +8306,8 @@ if(horses.length === 0){
 
   setTimeout(() => {
     const ver = document.querySelector('.ver');
-    if(ver) ver.textContent = 'v5.18.145 KaisaiProbeResultFix';
-    document.title = 'The競馬 EV分析 v5.18.145 KaisaiProbeResultFix';
+    if(ver) ver.textContent = 'v5.18.146 JraEmptyPlanNoFallback';
+    document.title = 'The競馬 EV分析 v5.18.146 JraEmptyPlanNoFallback';
   }, 0);
 })();
 </script>
@@ -8316,14 +8316,14 @@ if(horses.length === 0){
 
 <script>
 /* ============================================================
-   v5.18.145 KaisaiProbeResultFix
+   v5.18.146 JraEmptyPlanNoFallback
    ・ユーザーがカレンダーで選んだ日付を絶対に尊重する。
    ・今日へ強制補正しない。昨日・過去日のシミュレーションを妨げない。
    ・NARの過去日レースは result.html を優先して、最終オッズ/人気/結果を拾いやすくする。
    ・レース名が空欄/1Rだけの場合は、既存の簡易名補完を維持する。
    ============================================================ */
 (function(){
-  const VERSION85 = 'v5.18.145 KaisaiProbeResultFix';
+  const VERSION85 = 'v5.18.146 JraEmptyPlanNoFallback';
 
   function nar85Esc(s){
     return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -8447,7 +8447,7 @@ if(horses.length === 0){
    ・過去日は result.html 優先でシミュレーション向けにする。
    ============================================================ */
 (function(){
-  const VERSION86 = 'v5.18.145 KaisaiProbeResultFix';
+  const VERSION86 = 'v5.18.146 JraEmptyPlanNoFallback';
   function esc86(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
   function ymd86(date){return String(date||'').replace(/[^0-9]/g,'').slice(0,8);}
   function dateLabel86(date){const d=String(date||'').replace(/-/g,'/');return d||date;}
@@ -9645,25 +9645,33 @@ if(horses.length === 0){
   }
 
   // 指定年・指定場について [start,end] 内の開催日を回ベースで sweep し plan に積む。
-  async function rsSweepJraVenueYear(plan, yyyy, code, start, end){
+  // v5.18.146: ctx.reachable — netkeibaに1度でも到達できたか（=null/開催日が取れたか）を記録。
+  // 「選択場がこの期間に開催なし(0件)」と「全プローブが通信不良で0件」を呼び出し側で区別するため。
+  async function rsSweepJraVenueYear(plan, yyyy, code, start, end, ctx){
     const MAXKAI = 6, MAXDAY = 12;
     const vn = venueName('JRA', code);
+    // probe ラッパー：ERR(通信不良/日付不明)以外＝null(開催なし)・{date}(開催あり)は到達できた証拠。
+    const probe = async (k, d) => {
+      const r = await rsJraProbeDay(yyyy, code, k, d);
+      if(ctx && r !== 'ERR') ctx.reachable = true;
+      return r;
+    };
     for(let kai = 1; kai <= MAXKAI; kai++){
       if(rsAbort) return;
-      const d1 = await rsJraProbeDay(yyyy, code, kai, 1);
+      const d1 = await probe(kai, 1);
       if(d1 === 'ERR') continue;        // 通信不良はこの回を確定できない→次の回を試す（早期打ち切り回避）
       if(!d1) break;                    // 回は連番。day1が無い＝以降の回も無い。
       if(d1.date > end) break;          // この回頭が範囲より後＝以降すべて後。終了。
 
       // 回全体が start より前なら内側を舐めずスキップ（末尾付近を1プローブで粗判定）。
       if(d1.date < start){
-        const last = await rsJraProbeDay(yyyy, code, kai, MAXDAY);
+        const last = await probe(kai, MAXDAY);
         if(last && last !== 'ERR' && last.date < start) continue;
       }
 
       for(let day = 1; day <= MAXDAY; day++){
         if(rsAbort) return;
-        const r = (day === 1) ? d1 : await rsJraProbeDay(yyyy, code, kai, day);
+        const r = (day === 1) ? d1 : await probe(kai, day);
         if(r === 'ERR') continue;       // 当日の通信不良→その日だけ飛ばす
         if(!r) break;                   // 開催回の末尾＝この回終わり
         if(r.date > end) return;        // 範囲超過＝以降すべて後。全停止。
@@ -9685,6 +9693,7 @@ if(horses.length === 0){
   async function buildJraRangePlanByKaisai(venueCodes, start, end, prog){
     const codes = (venueCodes && venueCodes.length) ? venueCodes : JRA_VENUES.map(v => v[0]);
     const plan = new Map();
+    const ctx = { reachable: false }; // v5.18.146: netkeibaに到達できたか
     const sY = Number(start.slice(0, 4)), eY = Number(end.slice(0, 4));
     for(const code of codes){
       if(rsAbort) break;
@@ -9694,9 +9703,12 @@ if(horses.length === 0){
         const yStart = (yyyy === sY) ? start : `${yyyy}-01-01`;
         const yEnd   = (yyyy === eY) ? end   : `${yyyy}-12-31`;
         if(prog) prog.innerHTML = `<div class="url-status">🧭 ${vn} ${yyyy}年の開催回をrace_idで探索中（回ベース）...</div>`;
-        await rsSweepJraVenueYear(plan, yyyy, code, yStart, yEnd);
+        await rsSweepJraVenueYear(plan, yyyy, code, yStart, yEnd, ctx);
       }
     }
+    // v5.18.146: 0件時に「本当に開催なし」か「通信不良で取れなかった」かを呼び出し側が判定できるよう
+    // 到達フラグを Map に添える（Mapはオブジェクトなのでプロパティを持てる）。
+    plan.reachable = ctx.reachable;
     return plan;
   }
 
@@ -10094,11 +10106,20 @@ if(horses.length === 0){
         if(prog) prog.innerHTML = `<div class="url-status">🧭 JRA開催回をrace_idで探索中（回ベース）...</div>`;
         try{ rsJraPlan = await buildJraRangePlanByKaisai(selVenues, start, end, prog); }
         catch(e){ rsJraPlan = null; console.warn('[rsJraPlan] failed', e); }
-        // v5.18.145: 回ベースplanが空（プローブ全ERR/スケルトン/ブロック等）なら、
-        // 全日を無言skipして「0レース」にせず、従来の日別検出へ自動フォールバックする。
+        // v5.18.146: 回ベースplanが空(0件)のときの分岐を「到達できたか」で切り分ける。
+        //  ・到達OKで0件 ＝ 選択場はこの期間に開催なし。空planを保持→全日スキップ。
+        //    （nullにして従来フォールバックすると、東京等の非開催期間でも毎週末「全場プローブ」が
+        //      走り「選んでない場の確認サーチ」が発生する。これを止めるのが今回の修正。）
+        //  ・全プローブが通信不良/ブロックで0件 ＝ 探索失敗。従来の日別検出へフォールバック。
         if(rsJraPlan && rsJraPlan.size === 0){
-          rsJraPlan = null;
-          if(prog) prog.innerHTML = `<div class="url-status err">⚠️ 回ベース探索で開催日0件。従来の日別検出へ切替えます（出馬表スケルトン/ブロックの可能性）。</div>`;
+          if(rsJraPlan.reachable){
+            // 空Mapのまま保持（nullにしない）。ループ内のplan分岐がそのまま全日スキップになる。
+            const venLabel = selVenues.length ? selVenues.map(c => venueName('JRA', c)).join('・') : 'JRA';
+            if(prog) prog.innerHTML = `<div class="url-status ok">🧭 回ベース探索：${venLabel} はこの期間に開催がありません（非開催日は確認サーチもスキップ）。</div>`;
+          }else{
+            rsJraPlan = null;
+            if(prog) prog.innerHTML = `<div class="url-status err">⚠️ 回ベース探索が通信不良で0件。従来の日別検出へ切替えます（出馬表スケルトン/ブロックの可能性）。</div>`;
+          }
         }else if(rsJraPlan){
           if(prog) prog.innerHTML = `<div class="url-status ok">🧭 回ベース探索：${rsJraPlan.size}開催日を検出。精算を開始します。</div>`;
         }
@@ -10160,7 +10181,7 @@ if(horses.length === 0){
             continue;
           }
 
-          // v5.18.145 KaisaiProbeResultFix: 取得（サーチ）だけを「4〜5件ずつ一塊り」で並列化し、
+          // v5.18.146 JraEmptyPlanNoFallback: 取得（サーチ）だけを「4〜5件ずつ一塊り」で並列化し、
           // その塊を連続実行する。結果パース(parseFinishFromResultDoc)と精算(asw_settle)は
           // global horses を参照するため、並列にすると別レースのデータがクロスして収支が壊れる。
           // よってネット取得だけ並列・計算/精算は1件ずつ順番に行う。
@@ -10227,7 +10248,13 @@ if(horses.length === 0){
       }
 
       const okCount = rows.filter(x => x.status === 'ok').length;
-      if(prog) prog.innerHTML = `<div class="url-status ok">✅ 完了：${okCount}レースをシミュレーションしました${rsAbort ? '（中断）' : ''}${truncated ? `（⚠️期間が${RS_MAX_DAYS}日を超えたため先頭${RS_MAX_DAYS}日のみ）` : ''}。</div>`;
+      // v5.18.146: JRAで到達OK・plan空(選択場が期間内に開催なし)＝全日スキップ。0レースの理由を明示する。
+      if(kind === 'JRA' && rsJraPlan && rsJraPlan.size === 0 && okCount === 0 && !rsAbort){
+        const venLabel = selVenues.length ? selVenues.map(c => venueName('JRA', c)).join('・') : 'JRA';
+        if(prog) prog.innerHTML = `<div class="url-status ok">✅ 完了：${venLabel} はこの期間に開催がありませんでした（非開催日はサーチせずスキップ）。</div>`;
+      }else if(prog){
+        prog.innerHTML = `<div class="url-status ok">✅ 完了：${okCount}レースをシミュレーションしました${rsAbort ? '（中断）' : ''}${truncated ? `（⚠️期間が${RS_MAX_DAYS}日を超えたため先頭${RS_MAX_DAYS}日のみ）` : ''}。</div>`;
+      }
     }catch(e){
       console.error('[runRangeVenueSimulation]', e);
       if(prog) prog.innerHTML = `<div class="url-status err">❌ 期間横断シミュレーション失敗: ${asw_esc((e && e.message) || e)}</div>`;

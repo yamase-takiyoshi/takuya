@@ -12063,5 +12063,174 @@ if(horses.length === 0){
 })();
 </script>
 
+<!-- ============================================================
+     v5.18.154 NarOfficialPcRaceListFix
+     ・開催判定/レース一覧を sp.keiba.go.jp(KeibaWebSP/S_RaceList) ではなく
+       www.keiba.go.jp の正規 RaceList(PC) から取得する。
+       SP版 S_RaceList は応答せず全場0R＝「開催なし」になっていた。
+     ・パースは DebaTable リンク（k_raceNo + 競走名テキスト）を直接抽出。
+     ・帯広ばの babaCode は '3'（先頭ゼロなし）に修正。
+     ・実データ(出馬表/結果/オッズ)取得は v5.18.153 の nar.sp 経路を温存。
+     ============================================================ -->
+<script>
+(function(){
+  'use strict';
+  const VERSION154 = 'v5.18.154 NarOfficialPcRaceListFix';
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+  const ymd = date => String(date || '').replace(/[^0-9]/g, '').slice(0,8);
+  const fmt = date => { const d=ymd(date); return d ? `${d.slice(0,4)}/${d.slice(4,6)}/${d.slice(6,8)}` : ''; };
+  const rid = (date, code, no) => { const d=ymd(date); return `${d.slice(0,4)}${String(code).padStart(2,'0')}${d.slice(4,8)}${String(no).padStart(2,'0')}`; };
+  const sleep = ms => new Promise(r=>setTimeout(r, ms));
+  // [netkeiba jyo_cd, 表示名, keiba.go.jp babaCode]
+  const VENUES = [
+    ['30','門別','36'],['35','盛岡','10'],['36','水沢','11'],['42','浦和','18'],['43','船橋','19'],['44','大井','20'],
+    ['45','川崎','21'],['46','金沢','22'],['47','笠松','23'],['48','名古屋','24'],['50','園田','27'],['51','姫路','28'],
+    ['54','高知','31'],['55','佐賀','32'],['65','帯広','3']
+  ];
+  const venueName = code => (VENUES.find(v=>v[0]===String(code).padStart(2,'0'))||[])[1] || String(code||'');
+  const baba = code => (VENUES.find(v=>v[0]===String(code).padStart(2,'0'))||[])[2] || '';
+  function proxyUrl(target){
+    const b = String((window.settings && settings.proxyUrl) || '').replace(/\/$/, '');
+    return b + '?url=' + encodeURIComponent(String(target || ''));
+  }
+  // 公式PC版 RaceList（UTF-8）。babaCode は先頭ゼロなし。
+  function officialUrl(date, code){
+    const d = ymd(date);
+    const ds = `${d.slice(0,4)}%2F${d.slice(4,6)}%2F${d.slice(6,8)}`;
+    return `https://www.keiba.go.jp/KeibaWeb/TodayRaceInfo/RaceList?k_raceDate=${ds}&k_babaCode=${baba(code)}`;
+  }
+  function blocked(text){
+    return !text || /Access Denied|Reference\s*#|don't have permission|Just a moment|Incapsula|cf-browser/i.test(String(text));
+  }
+  async function fetchOfficial(url){
+    try{
+      const res = await fetch(proxyUrl(url), {cache:'no-store'});
+      const text = await res.text().catch(()=> '');
+      if(res.ok && text && !blocked(text)) return text;
+    }catch(e){}
+    return '';
+  }
+  function cleanName(s){
+    return String(s || '')
+      .replace(/&amp;/g,'&').replace(/&nbsp;|&#160;/g,' ')
+      .replace(/[\s　]+/g,' ').trim();
+  }
+  // DebaTable リンク（href内 k_raceNo + アンカーテキスト＝競走名）から抽出
+  function parseOfficialRaces(html, date, code){
+    const out = [];
+    const seen = new Set();
+    const re = /href="[^"]*DebaTable[^"]*?k_raceNo=(\d{1,2})[^"]*"[^>]*>\s*([^<]+?)\s*<\/a>/gi;
+    let m;
+    while((m = re.exec(html))){
+      const no = Number(m[1]);
+      if(!no || seen.has(no)) continue;
+      const name = cleanName(m[2]) || `${no}R`;
+      out.push({raceNo:no, raceName:name, raceId:rid(date, code, no), venueCode:String(code).padStart(2,'0'), src:'keiba.go.jp(pc)'});
+      seen.add(no);
+    }
+    return out.sort((a,b)=>a.raceNo-b.raceNo);
+  }
+  async function officialRacesForVenue(date, code){
+    const html = await fetchOfficial(officialUrl(date, code));
+    if(!html) return [];
+    return parseOfficialRaces(html, date, code);
+  }
+
+  function renderVenueOptions154(found){
+    if(typeof renderVenueOptions === 'function'){
+      renderVenueOptions(found.map(v => [v.code, v.name, v.races.length]));
+    }else{
+      const sel = document.getElementById('pickVenue');
+      if(sel) sel.innerHTML = found.map(v=>`<option value="${esc(v.code)}">${esc(v.name)}（${v.races.length}R）</option>`).join('') || '<option value="">開催なし</option>';
+    }
+  }
+  function renderRaceOptions154(races, date, code, statusEl){
+    const sel = document.getElementById('raceSelect');
+    const urlIn = document.getElementById('raceUrl');
+    const box = document.getElementById('raceTitleBox');
+    if(!sel) return;
+    const vname = venueName(code);
+    sel.innerHTML = races.map(r => {
+      const url = `https://nar.sp.netkeiba.com/race/shutuba.html?race_id=${r.raceId}`;
+      const label = `${fmt(date)} ${vname} ${r.raceNo}R ${r.raceName || (r.raceNo+'R')} / ${r.raceId}`;
+      return `<option value="${esc(url)}" data-race-id="${esc(r.raceId)}" data-race-name="${esc(r.raceName || '')}">${esc(label)}</option>`;
+    }).join('');
+    const opt = sel.options[0];
+    if(opt){
+      if(urlIn) urlIn.value = opt.value;
+      window.currentRaceId = opt.dataset.raceId || '';
+      window.currentRaceName = opt.dataset.raceName || '';
+      if(box){ box.style.display='block'; box.textContent = opt.textContent || ''; }
+    }
+    if(statusEl) statusEl.innerHTML = `<div class="url-status ok">✅ ${esc(date)} ${esc(vname)} ${races.length}R を地方競馬公式(PC)から取得。netkeibaはSP URLを使用します。</div>`;
+  }
+
+  window.loadActiveVenuesForDate = async function(){
+    const kind = document.getElementById('pickKind')?.value || 'JRA';
+    if(kind !== 'NAR') return;
+    const date = document.getElementById('pickDate')?.value || (typeof todayYmd==='function' ? todayYmd() : '');
+    const status = document.getElementById('urlStatus');
+    const raceSel = document.getElementById('raceSelect');
+    if(raceSel) raceSel.innerHTML = '<option value="">開催場を選んでレース一覧を取得</option>';
+    window.__nar154RaceCache = window.__nar154RaceCache || {};
+    const found = [];
+    for(let i=0;i<VENUES.length;i++){
+      const [code, name] = VENUES[i];
+      if(status) status.innerHTML = `<div class="url-status">📡 NAR ${i+1}/${VENUES.length} ${esc(name)}：地方競馬公式(PC)レース一覧を確認中...</div>`;
+      const races = await officialRacesForVenue(date, code);
+      if(races.length){
+        found.push({code, name, races});
+        window.__nar154RaceCache[ymd(date)+'-'+code] = races;
+      }
+      await sleep(25);
+    }
+    if(found.length){
+      renderVenueOptions154(found);
+      if(status) status.innerHTML = `<div class="url-status ok">✅ ${esc(date)} のNAR開催場：${found.map(v=>esc(v.name+'（'+v.races.length+'R）')).join('、')}<br><span style="font-size:11px;opacity:.85">${esc(VERSION154)}：開催判定は地方競馬公式PC RaceList、netkeiba取得は nar.sp 優先</span></div>`;
+      setTimeout(()=>{ try{ window.loadRaceList(); }catch(e){} }, 80);
+    }else{
+      if(typeof renderVenueOptions === 'function') renderVenueOptions([]);
+      if(status) status.innerHTML = `<div class="url-status err">⚠️ ${esc(date)} のNAR開催場を地方競馬公式(PC)から確認できませんでした。Workerが www.keiba.go.jp を url= 転送できているか、日付をご確認ください。</div>`;
+    }
+  };
+
+  window.loadRaceList = async function(){
+    const kind = document.getElementById('pickKind')?.value || 'JRA';
+    if(kind !== 'NAR') return;
+    const date = document.getElementById('pickDate')?.value || (typeof todayYmd==='function' ? todayYmd() : '');
+    const code = document.getElementById('pickVenue')?.value || '';
+    const status = document.getElementById('urlStatus');
+    if(!code){ if(status) status.innerHTML = '<div class="url-status">開催場を選択してください</div>'; return; }
+    window.__nar154RaceCache = window.__nar154RaceCache || {};
+    let races = window.__nar154RaceCache[ymd(date)+'-'+code] || [];
+    if(!races.length){
+      if(status) status.innerHTML = `<div class="url-status">📡 ${esc(date)} ${esc(venueName(code))}：地方競馬公式(PC)レース一覧を取得中...</div>`;
+      races = await officialRacesForVenue(date, code);
+      window.__nar154RaceCache[ymd(date)+'-'+code] = races;
+    }
+    if(races.length) return renderRaceOptions154(races, date, code, status);
+    if(status) status.innerHTML = `<div class="url-status err">⚠️ ${esc(date)} ${esc(venueName(code))} のレース一覧を取得できませんでした。</div>`;
+  };
+
+  const prevTest154 = window.testProxy;
+  window.testProxy = async function(){
+    if(prevTest154) await prevTest154.apply(this, arguments);
+    const status = document.getElementById('proxyStatus');
+    const date = document.getElementById('pickDate')?.value || (typeof todayYmd==='function' ? todayYmd() : '');
+    const races = await officialRacesForVenue(date, '30');
+    const add = `<div style="margin-top:6px;font-family:monospace;font-size:11px;opacity:.9">${esc(VERSION154)}確認: 公式PC 門別 ${races.length ? '✅ '+races.length+'R' : '0R'}（${esc(officialUrl(date,'30'))}）</div>`;
+    const box = status?.querySelector('.url-status'); if(box) box.innerHTML += add;
+  };
+
+  setTimeout(function(){
+    const ver=document.querySelector('.ver'); if(ver) ver.textContent=VERSION154;
+    document.title='The競馬 EV分析 '+VERSION154;
+    if((document.getElementById('pickKind')?.value || '') === 'NAR'){
+      try{ window.loadActiveVenuesForDate(); }catch(e){}
+    }
+  }, 700);
+})();
+</script>
+
 </body>
 </html>

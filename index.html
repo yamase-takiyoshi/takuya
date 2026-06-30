@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.146 JraEmptyPlanNoFallback</title>
+<title>The競馬 EV分析 v5.18.147 NarDiagBridgeReach</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.146 JraEmptyPlanNoFallback</span>
+    <span class="ver">v5.18.147 NarDiagBridgeReach</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -8133,8 +8133,8 @@ if(horses.length === 0){
 
   setTimeout(() => {
     const ver = document.querySelector('.ver');
-    if(ver) ver.textContent = 'v5.18.146 JraEmptyPlanNoFallback';
-    document.title = 'The競馬 EV分析 v5.18.146 JraEmptyPlanNoFallback';
+    if(ver) ver.textContent = 'v5.18.147 NarDiagBridgeReach';
+    document.title = 'The競馬 EV分析 v5.18.147 NarDiagBridgeReach';
   }, 0);
 })();
 </script>
@@ -8306,8 +8306,8 @@ if(horses.length === 0){
 
   setTimeout(() => {
     const ver = document.querySelector('.ver');
-    if(ver) ver.textContent = 'v5.18.146 JraEmptyPlanNoFallback';
-    document.title = 'The競馬 EV分析 v5.18.146 JraEmptyPlanNoFallback';
+    if(ver) ver.textContent = 'v5.18.147 NarDiagBridgeReach';
+    document.title = 'The競馬 EV分析 v5.18.147 NarDiagBridgeReach';
   }, 0);
 })();
 </script>
@@ -8316,14 +8316,14 @@ if(horses.length === 0){
 
 <script>
 /* ============================================================
-   v5.18.146 JraEmptyPlanNoFallback
+   v5.18.147 NarDiagBridgeReach
    ・ユーザーがカレンダーで選んだ日付を絶対に尊重する。
    ・今日へ強制補正しない。昨日・過去日のシミュレーションを妨げない。
    ・NARの過去日レースは result.html を優先して、最終オッズ/人気/結果を拾いやすくする。
    ・レース名が空欄/1Rだけの場合は、既存の簡易名補完を維持する。
    ============================================================ */
 (function(){
-  const VERSION85 = 'v5.18.146 JraEmptyPlanNoFallback';
+  const VERSION85 = 'v5.18.147 NarDiagBridgeReach';
 
   function nar85Esc(s){
     return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -8447,7 +8447,7 @@ if(horses.length === 0){
    ・過去日は result.html 優先でシミュレーション向けにする。
    ============================================================ */
 (function(){
-  const VERSION86 = 'v5.18.146 JraEmptyPlanNoFallback';
+  const VERSION86 = 'v5.18.147 NarDiagBridgeReach';
   function esc86(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
   function ymd86(date){return String(date||'').replace(/[^0-9]/g,'').slice(0,8);}
   function dateLabel86(date){const d=String(date||'').replace(/-/g,'/');return d||date;}
@@ -8855,53 +8855,87 @@ if(horses.length === 0){
     const list = await probe('NAR 公式一覧', listReq, '');
 
     // 4) NAR をブリッジ経由で取得（Userscriptが入っていれば住宅IPで取れるはず）
+    // v5.18.147: 'ready'未受信でも __narBridgeFetch があれば実取得で確認（接続テストと同条件・v5.18.132/141準拠）。
     await new Promise(r=>setTimeout(r, 800));
-    const bridgeRow = {label:'NAR 出馬表（ブリッジ経由）', status:'-', len:0, raceIdCount:0, horses:0, head:'', err:''};
-    if(typeof window.__narBridgeFetch === 'function' && window.__NAR_BRIDGE_READY__){
+    const bridgeUsable = (typeof window.__narBridgeFetch === 'function') && (window.__bridgeAbsent !== true);
+    const bridgeFetch = async (label, url)=>{
+      const r0 = {label, status:'-', len:0, raceIdCount:0, horses:0, head:'', err:''};
+      if(!bridgeUsable){ r0.err = 'ブリッジ未検出（Userscript未導入 or GM.xmlHttpRequest非対応）'; return r0; }
       try{
-        const r = await window.__narBridgeFetch(narUrl);
-        bridgeRow.status = r.status;
-        const html = r.text || '';
-        bridgeRow.len = html.length;
-        bridgeRow.raceIdCount = (html.match(/race_id=\d{12}/g)||[]).length;
-        try{ bridgeRow.horses = parseHorsesFromDoc(new DOMParser().parseFromString(html,'text/html'), narUrl).length; }catch(e){}
-        bridgeRow.head = html.replace(/\s+/g,' ').slice(0,300);
-      }catch(e){ bridgeRow.err = (e && e.message) || String(e); }
-    } else {
-      bridgeRow.err = 'ブリッジ未検出（Userscript未導入 or GM.xmlHttpRequest非対応）';
+        const r = await window.__narBridgeFetch(url);
+        const html = (r && r.text) || '';
+        if(r && (r.status || html) && typeof markBridgeReady87 === 'function') markBridgeReady87();
+        r0.status = String(r ? r.status : '0');
+        r0.len = html.length;
+        r0.raceIdCount = (html.match(/race_id=\d{12}/g)||[]).length;
+        try{ r0.horses = parseHorsesFromDoc(new DOMParser().parseFromString(html,'text/html'), url).length; }catch(e){}
+        r0.head = html.replace(/\s+/g,' ').slice(0,300);
+        if(r && r.error) r0.err = r.error;
+      }catch(e){ r0.err = (e && e.message) || String(e); }
+      return r0;
+    };
+    // 単発レース（probe用の場・日付は実在しないこともある → 400/404は「該当なし＝正常」）
+    const bridgeRow = await bridgeFetch('NAR 出馬表（ブリッジ経由）', narUrl);
+    // v5.18.147: その日のNAR開催が「本当に無い」のか「通信失敗」かを切り分けるため公式一覧もブリッジで取る。
+    let bridgeListRow = null;
+    if(bridgeUsable){
+      await new Promise(r=>setTimeout(r, 800));
+      bridgeListRow = await bridgeFetch('NAR 公式一覧（ブリッジ経由）', listUrl);
     }
 
     const esc = esc87;
+    // v5.18.147: 3桁HTTP かつ 403でない ＝ 住宅IPからnetkeibaに到達できている（400=該当なしの正常応答含む）。
+    const reached87 = s => /^\d{3}$/.test(String(s)) && String(s) !== '403';
+    const bridgeNote87 = r => {
+      if(!/ブリッジ経由/.test(r.label)) return '';
+      if(reached87(r.status) && !(String(r.status)==='200' && r.raceIdCount>0)){
+        return String(r.status)==='400' ? ' 🌉到達OK（該当なし=正常）' : ' 🌉到達OK';
+      }
+      return '';
+    };
     const row = r => `<div style="font-family:monospace;font-size:11px;line-height:1.5;border-bottom:1px solid rgba(255,255,255,.08);padding:3px 0;">`
-      + `<b>${esc(r.label)}</b> | HTTP ${esc(r.status)} | len=${r.len} | race_id件数=${r.raceIdCount} | 馬=${r.horses}${r.err?` | ERR:${esc(r.err)}`:''}<br>`
+      + `<b>${esc(r.label)}</b> | HTTP ${esc(r.status)} | len=${r.len} | race_id件数=${r.raceIdCount} | 馬=${r.horses}${bridgeNote87(r)}${r.err?` | ERR:${esc(r.err)}`:''}<br>`
       + `<span style="opacity:.75">本文先頭: ${esc(r.head || '(空)')}</span></div>`;
 
-    const bridgeReady = !!window.__NAR_BRIDGE_READY__;
-    const bridgeOk = String(bridgeRow.status)==='200' && (bridgeRow.raceIdCount>0 || bridgeRow.horses>=2);
+    // v5.18.147: 接続テスト（プロキシタブ）と判定基準を統一。
+    //  - ブリッジが3桁HTTP（403以外）を返した＝住宅IPで到達OK＝ブリッジは健全。
+    //  - 単発レースは場/日次第で 400/404（該当なし）になるのが正常。これを「取得に失敗」とは呼ばない。
+    const bridgeReachable = reached87(bridgeRow.status) || (bridgeListRow && reached87(bridgeListRow.status));
+    const bridgeReady = !!window.__NAR_BRIDGE_READY__ || bridgeReachable;
+    const bridgeGotRaces = (String(bridgeRow.status)==='200' && (bridgeRow.raceIdCount>0 || bridgeRow.horses>=2))
+      || (bridgeListRow && String(bridgeListRow.status)==='200' && bridgeListRow.raceIdCount>0);
     const jraOk = String(jra.status)==='200' && (jra.raceIdCount>0 || jra.horses>=2);
-    const narBlocked = String(nar1.status)==='403' || String(list.status)==='403';
+    const narBlocked = String(nar1.status)==='403' || String(list.status)==='403'
+      || String(bridgeRow.status)==='403' || (bridgeListRow && String(bridgeListRow.status)==='403');
+    const bridge400 = String(bridgeRow.status)==='400' || (bridgeListRow && String(bridgeListRow.status)==='400');
     let verdict;
-    if(bridgeOk){
+    if(bridgeGotRaces){
       verdict = '🟢 ブリッジ経由でNARが取れています（住宅IP）。これでNARは安定取得できます。';
-    } else if(bridgeReady && !bridgeOk){
-      verdict = '🟡 ブリッジは検出されましたが取得に失敗。@connect nar.netkeiba.com とGM.xmlHttpRequest対応を確認してください。';
-    } else if(jraOk && narBlocked){
-      verdict = '🟠 ブリッジ未検出。ワーカー経由はNARだけAkamaiに403で弾かれています。Userscriptブリッジを入れると住宅IPで取れます。';
-    } else if(jraOk && !narBlocked){
-      verdict = '🟢 ワーカー経由でもNARが取れています（Akamaiが空いている時間帯）。';
+    } else if(bridgeReachable){
+      verdict = '🟢 ブリッジ（住宅IP）はnetkeibaに到達OK'
+        + (bridge400 ? '（HTTP 400＝該当一覧なし＝開催なしの正常応答）。ブリッジ自体は生きています。' : '。ブリッジ自体は生きています。')
+        + 'NARは通常フロー（馬データ→NARの日付・開催場を選択）でブリッジ経由取得できます。'
+        + (jraOk ? 'JRAはWorkerでOK。' : 'WorkerはAkamai遮断中（502）で回復待ち。');
+    } else if(narBlocked){
+      verdict = '🟠 NARが403で弾かれています。住宅IPブリッジ(@connect nar.netkeiba.com)とGM.xmlHttpRequest対応を確認してください。';
+    } else if(bridgeUsable){
+      verdict = '🟡 ブリッジは検出されましたが応答なし（3桁HTTPが返っていません）。@connect nar.netkeiba.com とGM.xmlHttpRequest対応を確認してください。';
+    } else if(jraOk){
+      verdict = '🟠 ブリッジ未検出。Worker経由はNARだけAkamaiに弾かれます。Userscriptブリッジを入れると住宅IPで取れます。';
     } else {
       verdict = '⚪ 各行のHTTPと本文先頭を確認してください。';
     }
 
+    const rows = [jra, nar1, list, bridgeRow].concat(bridgeListRow ? [bridgeListRow] : []);
     if(status){
       status.innerHTML = `<div class="url-status">`
-        + `<b>🔍 NAR診断 ${esc(date)}（v5.18.127）</b><br>ブリッジ: ${bridgeReady?'🌉 検出':'未検出'}<br>${verdict}<br>`
-        + `<div style="margin-top:6px;">${row(jra)}${row(nar1)}${row(list)}${row(bridgeRow)}</div>`
+        + `<b>🔍 NAR診断 ${esc(date)}（v5.18.147）</b><br>ブリッジ: ${bridgeReady?'🌉 検出':'未検出'}<br>${verdict}<br>`
+        + `<div style="margin-top:6px;">${rows.map(row).join('')}</div>`
         + `<div style="margin-top:6px;font-size:11px;opacity:.8;">プロキシ: ${esc(px||'未設定')}</div>`
         + `</div>`;
     }
-    console.log('[narDiag94]', {jra, nar1, list, verdict});
-    return {jra, nar1, list, verdict};
+    console.log('[narDiag147]', {jra, nar1, list, bridgeRow, bridgeListRow, verdict});
+    return {jra, nar1, list, bridgeRow, bridgeListRow, verdict};
   }
   window.narDiag93 = narDiag93;
 
@@ -10181,7 +10215,7 @@ if(horses.length === 0){
             continue;
           }
 
-          // v5.18.146 JraEmptyPlanNoFallback: 取得（サーチ）だけを「4〜5件ずつ一塊り」で並列化し、
+          // v5.18.147 NarDiagBridgeReach: 取得（サーチ）だけを「4〜5件ずつ一塊り」で並列化し、
           // その塊を連続実行する。結果パース(parseFinishFromResultDoc)と精算(asw_settle)は
           // global horses を参照するため、並列にすると別レースのデータがクロスして収支が壊れる。
           // よってネット取得だけ並列・計算/精算は1件ずつ順番に行う。

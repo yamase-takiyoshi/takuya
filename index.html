@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.144 RangeChunkFetch</title>
+<title>The競馬 EV分析 v5.18.145 KaisaiProbeResultFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.144 RangeChunkFetch</span>
+    <span class="ver">v5.18.145 KaisaiProbeResultFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -8133,8 +8133,8 @@ if(horses.length === 0){
 
   setTimeout(() => {
     const ver = document.querySelector('.ver');
-    if(ver) ver.textContent = 'v5.18.144 RangeChunkFetch';
-    document.title = 'The競馬 EV分析 v5.18.144 RangeChunkFetch';
+    if(ver) ver.textContent = 'v5.18.145 KaisaiProbeResultFix';
+    document.title = 'The競馬 EV分析 v5.18.145 KaisaiProbeResultFix';
   }, 0);
 })();
 </script>
@@ -8306,8 +8306,8 @@ if(horses.length === 0){
 
   setTimeout(() => {
     const ver = document.querySelector('.ver');
-    if(ver) ver.textContent = 'v5.18.144 RangeChunkFetch';
-    document.title = 'The競馬 EV分析 v5.18.144 RangeChunkFetch';
+    if(ver) ver.textContent = 'v5.18.145 KaisaiProbeResultFix';
+    document.title = 'The競馬 EV分析 v5.18.145 KaisaiProbeResultFix';
   }, 0);
 })();
 </script>
@@ -8316,14 +8316,14 @@ if(horses.length === 0){
 
 <script>
 /* ============================================================
-   v5.18.144 RangeChunkFetch
+   v5.18.145 KaisaiProbeResultFix
    ・ユーザーがカレンダーで選んだ日付を絶対に尊重する。
    ・今日へ強制補正しない。昨日・過去日のシミュレーションを妨げない。
    ・NARの過去日レースは result.html を優先して、最終オッズ/人気/結果を拾いやすくする。
    ・レース名が空欄/1Rだけの場合は、既存の簡易名補完を維持する。
    ============================================================ */
 (function(){
-  const VERSION85 = 'v5.18.144 RangeChunkFetch';
+  const VERSION85 = 'v5.18.145 KaisaiProbeResultFix';
 
   function nar85Esc(s){
     return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -8447,7 +8447,7 @@ if(horses.length === 0){
    ・過去日は result.html 優先でシミュレーション向けにする。
    ============================================================ */
 (function(){
-  const VERSION86 = 'v5.18.144 RangeChunkFetch';
+  const VERSION86 = 'v5.18.145 KaisaiProbeResultFix';
   function esc86(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
   function ymd86(date){return String(date||'').replace(/[^0-9]/g,'').slice(0,8);}
   function dateLabel86(date){const d=String(date||'').replace(/-/g,'/');return d||date;}
@@ -9602,21 +9602,46 @@ if(horses.length === 0){
   }
 
   // (回,日)の1Rを取得して実日付を返す。開催が無ければ null、取得失敗(ブロック/通信)は 'ERR'。
+  // v5.18.145: 過去レースの出馬表は race.netkeiba がスケルトン(空)を返すことが多い。
+  // 出馬表だけで判定すると開催日を「無し」と誤判定し回探索が即break→plan空→全日skip→0件になる。
+  // そのため出馬表が空/ブロックなら result.html で開催日の存在を再確認してから判定する。
   async function rsJraProbeDay(yyyy, venueCode, kai, day){
     const rid = `${yyyy}${venueCode}${String(kai).padStart(2,'0')}${String(day).padStart(2,'0')}01`;
-    const url = shutubaUrl('JRA', rid);
-    let html = '';
+
+    // 1) 出馬表（公開中の未確定レース・最新開催はここで取れる）
+    let sHtml = '';
     for(let attempt = 0; attempt < 2; attempt++){
-      try{ html = await fetchHtmlViaProxy(url); break; }
-      catch(e){ if(attempt === 1) return 'ERR'; }
+      try{ sHtml = await fetchHtmlViaProxy(shutubaUrl('JRA', rid)); break; }
+      catch(e){ sHtml = ''; }
     }
-    if(!html || (typeof looksBlockedHtml === 'function' && looksBlockedHtml(html))) return 'ERR';
-    if(!html.includes(rid)) return null;            // 別IDへ差し替え/存在しない
-    let horses = 0;
-    try{ horses = parseHorsesFromDoc(new DOMParser().parseFromString(html, 'text/html'), url).length; }catch(e){}
-    if(horses < 2) return null;                      // 出走馬が無い＝この開催日は無い
-    const date = rsExtractJraDate(html, yyyy);
-    return date ? { date } : null;
+    const sBlocked = !!(typeof looksBlockedHtml === 'function' && sHtml && looksBlockedHtml(sHtml));
+    if(sHtml && !sBlocked && sHtml.includes(rid)){
+      let horses = 0;
+      try{ horses = parseHorsesFromDoc(new DOMParser().parseFromString(sHtml, 'text/html'), shutubaUrl('JRA', rid)).length; }catch(e){}
+      if(horses >= 2){
+        const date = rsExtractJraDate(sHtml, yyyy);
+        if(date) return { date };
+      }
+    }
+
+    // 2) 出馬表が空/スケルトン/ブロック → 結果ページで「この開催日が実在するか」を確認（過去レース経路）
+    let rHtml = '';
+    for(let attempt = 0; attempt < 2; attempt++){
+      try{ rHtml = await fetchHtmlViaProxy(resultUrl('JRA', rid)); break; }
+      catch(e){ rHtml = ''; }
+    }
+    const rBlocked = !!(typeof looksBlockedHtml === 'function' && rHtml && looksBlockedHtml(rHtml));
+    if(!rHtml || rBlocked){
+      // 出馬表も結果も取れない＝通信不良。回確定を妨げないようERR（早期breakさせない）。
+      return 'ERR';
+    }
+    if(!rHtml.includes(rid)) return null;            // 別IDへ差し替え/存在しない＝この開催日は無い
+    let fin = [];
+    try{ fin = parseFinishFromResultDoc(new DOMParser().parseFromString(rHtml, 'text/html')); }catch(e){}
+    if(!fin || fin.length < 2) return null;          // 結果表が無い＝この開催日は無い
+    const date = rsExtractJraDate(rHtml, yyyy);
+    if(date) return { date };
+    return 'ERR';                                    // 実在は確定だが日付未取得→breakさせずERR扱い
   }
 
   // 指定年・指定場について [start,end] 内の開催日を回ベースで sweep し plan に積む。
@@ -10069,6 +10094,14 @@ if(horses.length === 0){
         if(prog) prog.innerHTML = `<div class="url-status">🧭 JRA開催回をrace_idで探索中（回ベース）...</div>`;
         try{ rsJraPlan = await buildJraRangePlanByKaisai(selVenues, start, end, prog); }
         catch(e){ rsJraPlan = null; console.warn('[rsJraPlan] failed', e); }
+        // v5.18.145: 回ベースplanが空（プローブ全ERR/スケルトン/ブロック等）なら、
+        // 全日を無言skipして「0レース」にせず、従来の日別検出へ自動フォールバックする。
+        if(rsJraPlan && rsJraPlan.size === 0){
+          rsJraPlan = null;
+          if(prog) prog.innerHTML = `<div class="url-status err">⚠️ 回ベース探索で開催日0件。従来の日別検出へ切替えます（出馬表スケルトン/ブロックの可能性）。</div>`;
+        }else if(rsJraPlan){
+          if(prog) prog.innerHTML = `<div class="url-status ok">🧭 回ベース探索：${rsJraPlan.size}開催日を検出。精算を開始します。</div>`;
+        }
       }
 
       for(const date of dates){
@@ -10127,7 +10160,7 @@ if(horses.length === 0){
             continue;
           }
 
-          // v5.18.144 RangeChunkFetch: 取得（サーチ）だけを「4〜5件ずつ一塊り」で並列化し、
+          // v5.18.145 KaisaiProbeResultFix: 取得（サーチ）だけを「4〜5件ずつ一塊り」で並列化し、
           // その塊を連続実行する。結果パース(parseFinishFromResultDoc)と精算(asw_settle)は
           // global horses を参照するため、並列にすると別レースのデータがクロスして収支が壊れる。
           // よってネット取得だけ並列・計算/精算は1件ずつ順番に行う。

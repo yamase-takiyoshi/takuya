@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.167 WorkerFallbackPriority</title>
+<title>The競馬 EV分析 v5.18.168 SelectedVenueDirect</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.167 WorkerFallbackPriority</span>
+    <span class="ver">v5.18.168 SelectedVenueDirect</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -693,7 +693,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.167 WorkerFallbackPriority';
+window.APP_VERSION = 'v5.18.168 SelectedVenueDirect';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -10155,19 +10155,32 @@ if(horses.length === 0){
           }
         }
 
-        if(prog) prog.innerHTML = `<div class="url-status">📅 ${date} の開催場を確認中...</div>`;
-
-        const openVenues = (rsJraPlan)
-          ? (rsJraPlan.get(date) || []).map(v => v.venueCode)
-          : await rsOpenVenues(kind, date);
+        // v5.18.168 SelectedVenueDirect:
+        // NARで開催場チェックがある場合は、日付ごとの「全開催場確認」を挟まず、
+        // チェックした場だけを直接レース一覧取得に進める。
+        // これで「盛岡にチェックしているのに毎日“開催場を確認中...”で止まる」挙動を避ける。
         let venues;
-        if(selVenues.length){
-          venues = openVenues.filter(c => selVenues.includes(c));
-          // v5.18.142: 「その日に開催場として検出された場」だけを対象にする。
-          // 検出が空でも選択場を強制プローブしない（非開催日に東京等の0行が量産され、
-          // 毎日無駄に通信して遅くなる問題の修正）。確実に開催が確認できた日だけ取得する。
+        const directSelectedNar = (kind === 'NAR' && selVenues.length > 0);
+        if(directSelectedNar){
+          venues = selVenues.slice();
+          if(prog){
+            const vnList = venues.map(c => venueName(kind, c)).join('・');
+            prog.innerHTML = `<div class="url-status">📅 ${date} ${vnList} のレース一覧を直接確認中...</div>`;
+          }
         }else{
-          venues = openVenues;
+          if(prog) prog.innerHTML = `<div class="url-status">📅 ${date} の開催場を確認中...</div>`;
+
+          const openVenues = (rsJraPlan)
+            ? (rsJraPlan.get(date) || []).map(v => v.venueCode)
+            : await rsOpenVenues(kind, date);
+          if(selVenues.length){
+            venues = openVenues.filter(c => selVenues.includes(c));
+            // v5.18.142: 「その日に開催場として検出された場」だけを対象にする。
+            // 検出が空でも選択場を強制プローブしない（非開催日に東京等の0行が量産され、
+            // 毎日無駄に通信して遅くなる問題の修正）。確実に開催が確認できた日だけ取得する。
+          }else{
+            venues = openVenues;
+          }
         }
 
         if(!venues.length){
@@ -10190,6 +10203,13 @@ if(horses.length === 0){
           }
 
           if(!races.length){
+            // v5.18.168: NARのチェック済み開催場を直接確認している場合、
+            // その日その場にレースが無いのは通常の「非開催日」として静かにスキップする。
+            // エラー行を量産せず、次の日へ進める。
+            if(kind === 'NAR' && selVenues.length){
+              if(prog) prog.innerHTML = `<div class="url-status">📅 ${date} ${vn} は開催なし（次の日へ）</div>`;
+              continue;
+            }
             rows.push({ date, venueCode: vc, venueName: vn, no: 0, status: 'error', error: 'レース一覧を取得できませんでした' });
             rsRenderTable(rows);
             continue;
@@ -12195,7 +12215,7 @@ if(horses.length === 0){
 
 <script>
 /* ============================================================
-   v5.18.167 WorkerFallbackPriority
+   v5.18.168 SelectedVenueDirect
    ・表示用バージョンを window.APP_VERSION / setAppVersionLabel() に一本化。
    ・旧パッチブロックが遅延実行されても .ver / document.title は必ず同一値へ同期。
    ・診断ログ内の過去バージョン表記は履歴として温存。
@@ -12207,7 +12227,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 
 <script>
 /* ============================================================
-   v5.18.167 WorkerFallbackPriority / OneFile Integrated
+   v5.18.168 SelectedVenueDirect / OneFile Integrated
    ・Worker 502 / 上流遮断 / 取得失敗を「開催なし」に変換しない。
    ・NAR開催場判定は keiba.go.jp PC RaceList の実取得結果のみ採用。
    ・公式ページ本文で明確に「該当データなし」の場合だけ開催なしにする。
@@ -12218,7 +12238,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.167 WorkerFallbackPriority';
+  window.APP_VERSION = 'v5.18.168 SelectedVenueDirect';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -12640,14 +12660,14 @@ function json(obj, status = 200) {
 
 
 /* ============================================================
-   v5.18.167 WorkerFallbackPriority / OneFile Integrated
+   v5.18.168 SelectedVenueDirect / OneFile Integrated
    ・地方競馬公式 RaceList の「オッズ・映像・成績」列から「映像」を拾わない。
    ・DebaTableリンクまたは行テキストの「競走名・出馬表」列を優先して正式レース名にする。
    ・例: 1R 映像 → 1R ２歳 未勝利
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.167 WorkerFallbackPriority';
+  window.APP_VERSION = 'v5.18.168 SelectedVenueDirect';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -12936,7 +12956,7 @@ function json(obj, status = 200) {
 
 <script>
 /* ============================================================
-   v5.18.167 WorkerFallbackPriority / OneFile Integrated
+   v5.18.168 SelectedVenueDirect / OneFile Integrated
    ・JRA側にも「映像・オッズ・結果・払戻・出馬表」リンク名をレース名にしない保護を追加。
    ・NAR v5.18.159 の正式レース名ガードは維持。
    ・一覧HTML、出馬表タイトル、プルダウン最終表示の3段でリンク文言を除外する。
@@ -12944,7 +12964,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.167 WorkerFallbackPriority';
+  window.APP_VERSION = 'v5.18.168 SelectedVenueDirect';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -13162,7 +13182,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.167 WorkerFallbackPriority';
+    window.APP_VERSION = 'v5.18.168 SelectedVenueDirect';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -13177,7 +13197,7 @@ function json(obj, status = 200) {
    - 「取得中」に一度空配列を描いても、JRA土日を即「開催なし」に見せない。
    ============================================================ */
 (function(){
-  const V = 'v5.18.167 WorkerFallbackPriority';
+  const V = 'v5.18.168 SelectedVenueDirect';
   try{
     window.APP_VERSION = V;
     document.title = 'The競馬 EV分析 ' + V;
@@ -13453,7 +13473,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script>
 /* ============================================================
-   v5.18.167 WorkerFallbackPriority
+   v5.18.168 SelectedVenueDirect
    ・NAR実取得はまず従来のWorker経由を優先する。
    ・Workerが 502 / upstream 400 / ブロックHTML / 空HTML の場合だけ、
      Userscriptブリッジへフォールバックする。
@@ -13462,7 +13482,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.167 WorkerFallbackPriority';
+  window.APP_VERSION = 'v5.18.168 SelectedVenueDirect';
   try{
     const ver = document.querySelector('.ver');
     if(ver){

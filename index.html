@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.164 RsOneByOne</title>
+<title>The競馬 EV分析 v5.18.165 SeqGuardFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.164 RsOneByOne</span>
+    <span class="ver">v5.18.165 SeqGuardFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -693,7 +693,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.164 RsOneByOne';
+window.APP_VERSION = 'v5.18.165 SeqGuardFix';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -7961,87 +7961,13 @@ loadRaceList = async function(){
     }, 260);
   };
 
-  function nar77_debugLine(date, venueCode){
-    const p = ymdParts(date);
-    const kid = narKaisaiId(date, venueCode || '36');
-    const sampleUrl = `https://nar.netkeiba.com/top/race_list.html?kaisai_id=${kid}&kaisai_date=${p.yyyymmdd}&rf=race_list`;
-    return `date=${date} / yyyymmdd=${p.yyyymmdd} / venue=${venueCode || '36'} / kaisai_id=${kid}<br>URL: ${escapeHtml(sampleUrl)}`;
-  }
-
-  async function nar77_fetchActiveVenues(date, statusEl){
-    const found = [];
-    const dbg = [];
-    for(const [code, name] of NAR_VENUES){
-      const kid = narKaisaiId(date, code);
-      const urls = (typeof nar74_masterUrls === 'function') ? nar74_masterUrls(date, code) : [raceListUrl('NAR', date, code)];
-      let count = 0;
-      let last = '';
-      for(const url of urls){
-        try{
-          const html = await fetchHtmlViaProxy(url);
-          last = String(html || '').slice(0, 220).replace(/</g,'&lt;').replace(/>/g,'&gt;');
-          let races = [];
-          try{
-            if(typeof nar74_parseRaces === 'function') races = nar74_parseRaces(html, date, code) || [];
-            if(!races.length && typeof nar73_parseRacesFromMasterHtml === 'function') races = nar73_parseRacesFromMasterHtml(html, date, code) || [];
-            if(!races.length) races = parseRaceIdsFromList(html, 'NAR', code, date) || [];
-          }catch(e){}
-          count = races.length;
-          if(count) break;
-        }catch(e){
-          last = e.message;
-        }
-      }
-      if(count) found.push([code, name, count]);
-      if(['36','43','46','48'].includes(code)) dbg.push(`${name}:${kid}:${count || 0}`);
-    }
-    // v5.18.78: 0件時の途中エラー表示を削除。seqミスマッチで古いエラーが残る問題を回避。
-    // 上位の loadActiveVenuesForDate が seq チェック後に最終結果（開催なし）を表示する。
-    return found;
-  }
-
-  const prevLoadActiveVenuesForDate77 = loadActiveVenuesForDate;
-  loadActiveVenuesForDate = async function(){
-    const date = document.getElementById('pickDate')?.value || todayYmd();
-    const kind = document.getElementById('pickKind')?.value || 'JRA';
-    if(kind !== 'NAR') return prevLoadActiveVenuesForDate77();
-    const seq = ++activeVenueLoadSeq;
-    const status = document.getElementById('urlStatus');
-    const raceSelect = document.getElementById('raceSelect');
-    if(raceSelect) raceSelect.innerHTML = '<option value="">開催場を選んでレース一覧を取得</option>';
-    if(!settings.proxyUrl){
-      renderVenueOptions([]);
-      if(status) status.innerHTML = '<div class="url-status err">⚠️ プロキシURL未設定のため、開催場を自動取得できません</div>';
-      return;
-    }
-    try{
-      if(status) status.innerHTML = `<div class="url-status">📡 ${date} のNAR開催場を取得中...<br>${nar77_debugLine(date, '36')}</div>`;
-      let venues = await nar77_fetchActiveVenues(date, status);
-      if(!venues.length && typeof nar73_fetchActiveVenues === 'function'){
-        try{ venues = await nar73_fetchActiveVenues(date); }catch(e){}
-      }
-      if(!venues.length){
-        try{ venues = await loadActiveNarVenuesByRaceId(date); }catch(e){}
-      }
-      // v5.18.78: seqが変わっていても status だけは「開催なし日」に更新してエラー表示を消す。
-      // renderVenueOptions は古いseqでは行わない（UI競合防止）。
-      if(seq === activeVenueLoadSeq){
-        renderVenueOptions(venues);
-      }
-      if(status) status.innerHTML = venues.length
-        ? `<div class="url-status ok">✅ ${date} のNAR開催場を取得：${venues.map(v=>v[1]+'（'+v[2]+'R）').join('、')}<br>${nar77_debugLine(date, venues[0][0])}</div>`
-        : `<div class="url-status">開催なし日<br>${nar77_debugLine(date, '36')}</div>`;
-      // 開催場が取れたら、そのまま最初の場のレース一覧まで入れる。
-      if(venues.length){
-        setTimeout(() => { try{ loadRaceList(); }catch(e){ console.error(e); } }, 80);
-      }
-    }catch(e){
-      if(seq !== activeVenueLoadSeq) return;
-      console.error(e);
-      renderVenueOptions([]);
-      if(status) status.innerHTML = `<div class="url-status err">⚠️ NAR開催場取得失敗: ${escapeHtml(e.message)}<br>${nar77_debugLine(date, '36')}</div>`;
-    }
-  };
+  // v5.18.165: ここにあった nar77_debugLine / nar77_fetchActiveVenues と
+  // loadActiveVenuesForDate の再代入は、v5.18.150〜164 で完全に上書きされて
+  // 実行されない死んだコードだったため削除した。
+  // 「開催なし日 / date=... / kaisai_id=...」という古いデバッグ文言が
+  // 画面に残留して見える場合は、この旧コードが原因だったので、
+  // 削除後は表示されなくなる（もし表示され続ける場合はページの再デプロイ/
+  // 強制リロードが必要）。
 })();
 
 // ─── 起動 ────────────────────────────────────────
@@ -12269,7 +12195,7 @@ if(horses.length === 0){
 
 <script>
 /* ============================================================
-   v5.18.164 RsOneByOne
+   v5.18.165 SeqGuardFix
    ・表示用バージョンを window.APP_VERSION / setAppVersionLabel() に一本化。
    ・旧パッチブロックが遅延実行されても .ver / document.title は必ず同一値へ同期。
    ・診断ログ内の過去バージョン表記は履歴として温存。
@@ -12281,7 +12207,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 
 <script>
 /* ============================================================
-   v5.18.164 RsOneByOne / OneFile Integrated
+   v5.18.165 SeqGuardFix / OneFile Integrated
    ・Worker 502 / 上流遮断 / 取得失敗を「開催なし」に変換しない。
    ・NAR開催場判定は keiba.go.jp PC RaceList の実取得結果のみ採用。
    ・公式ページ本文で明確に「該当データなし」の場合だけ開催なしにする。
@@ -12292,7 +12218,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.164 RsOneByOne';
+  window.APP_VERSION = 'v5.18.165 SeqGuardFix';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -12714,14 +12640,14 @@ function json(obj, status = 200) {
 
 
 /* ============================================================
-   v5.18.164 RsOneByOne / OneFile Integrated
+   v5.18.165 SeqGuardFix / OneFile Integrated
    ・地方競馬公式 RaceList の「オッズ・映像・成績」列から「映像」を拾わない。
    ・DebaTableリンクまたは行テキストの「競走名・出馬表」列を優先して正式レース名にする。
    ・例: 1R 映像 → 1R ２歳 未勝利
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.164 RsOneByOne';
+  window.APP_VERSION = 'v5.18.165 SeqGuardFix';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -12916,6 +12842,16 @@ function json(obj, status = 200) {
       if(prevLoadActiveVenues159) return prevLoadActiveVenues159.apply(this, arguments);
       return;
     }
+    // v5.18.165: 世代(seq)チェックを追加。
+    // このスキャンは15場を順番に問い合わせるため数秒〜十数秒かかることがある。
+    // 従来はガードが無く、スキャン中にユーザーが手動で日付/場/レースを変更しても
+    // 古いスキャンが後から完了して #urlStatus やレース選択を勝手に上書きしていた
+    // （「開催なし日」等の古い結果が、既に取得済みの正しいレースデータの上に
+    // 表示されてしまう不具合の主因）。以後は開始時のseqと最新seqが一致する
+    // 場合のみ画面を更新する。
+    const seq = ++activeVenueLoadSeq;
+    const stale = () => seq !== activeVenueLoadSeq;
+
     const date = document.getElementById('pickDate')?.value || (typeof todayYmd==='function' ? todayYmd() : '');
     const status = document.getElementById('urlStatus');
     const raceSel = document.getElementById('raceSelect');
@@ -12929,9 +12865,11 @@ function json(obj, status = 200) {
     const found = [], failures = [];
     let confirmedNoRace = 0;
     for(let i=0;i<VENUES159.length;i++){
+      if(stale()) return; // 新しいスキャン/操作が始まっていたら即中断
       const [code, name] = VENUES159[i];
       if(status) status.innerHTML = `<div class="url-status">📡 NAR ${i+1}/${VENUES159.length} ${esc159(name)}：地方競馬公式PC RaceListを確認中...</div>`;
       const d = await fetchOfficialDetail159(date, code);
+      if(stale()) return;
       d.code = code; d.name = name;
       if(d.ok && d.races && d.races.length){
         found.push({ code, name, races:d.races });
@@ -12940,10 +12878,11 @@ function json(obj, status = 200) {
       else failures.push(d);
       await sleep159(25);
     }
+    if(stale()) return;
     if(found.length){
       renderVenueOptions159(found, false);
       if(status) status.innerHTML = `<div class="url-status ok">✅ ${esc159(date)} のNAR開催場：${found.map(v=>esc159(v.name+'（'+v.races.length+'R）')).join('、')}<br><span style="font-size:11px;opacity:.85">${esc159(window.APP_VERSION)}：映像リンクではなく正式レース名を表示</span></div>`;
-      setTimeout(()=>{ try{ window.loadRaceList(); }catch(e){ console.error(e); } }, 80);
+      setTimeout(()=>{ if(stale()) return; try{ window.loadRaceList(); }catch(e){ console.error(e); } }, 80);
       return;
     }
     if(failures.length){
@@ -12997,7 +12936,7 @@ function json(obj, status = 200) {
 
 <script>
 /* ============================================================
-   v5.18.164 RsOneByOne / OneFile Integrated
+   v5.18.165 SeqGuardFix / OneFile Integrated
    ・JRA側にも「映像・オッズ・結果・払戻・出馬表」リンク名をレース名にしない保護を追加。
    ・NAR v5.18.159 の正式レース名ガードは維持。
    ・一覧HTML、出馬表タイトル、プルダウン最終表示の3段でリンク文言を除外する。
@@ -13005,7 +12944,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.164 RsOneByOne';
+  window.APP_VERSION = 'v5.18.165 SeqGuardFix';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -13223,7 +13162,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.164 RsOneByOne';
+    window.APP_VERSION = 'v5.18.165 SeqGuardFix';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -13238,7 +13177,7 @@ function json(obj, status = 200) {
    - 「取得中」に一度空配列を描いても、JRA土日を即「開催なし」に見せない。
    ============================================================ */
 (function(){
-  const V = 'v5.18.164 RsOneByOne';
+  const V = 'v5.18.165 SeqGuardFix';
   try{
     window.APP_VERSION = V;
     document.title = 'The競馬 EV分析 ' + V;

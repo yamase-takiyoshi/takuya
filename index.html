@@ -9597,10 +9597,16 @@ if(horses.length === 0){
   }
 
   // ── 指定日に実際に開催されている開催場コード一覧 ──
+  // v5.18.165: NARの通信失敗（ブリッジ未検出/403等）を「開催なし」と区別するため、
+  // 直近のエラーを rsLastOpenVenuesError に記録する。0件が続いた場合の原因表示に使う。
+  let rsLastOpenVenuesError = null;
+  let rsOpenVenuesFailCount = 0;
+  let rsOpenVenuesOkCount = 0;
   async function rsOpenVenues(kind, date){
     try{
       if(kind === 'JRA'){
         const vs = await loadActiveJraVenuesByRaceId(date); // [[code,name,count,kd],...]
+        rsOpenVenuesOkCount++;
         return (vs || []).map(v => v[0]);
       }else{
         // v5.18.138: NARは公式開催一覧を1回だけ取得し、開催場コードのみ抽出する。
@@ -9608,9 +9614,14 @@ if(horses.length === 0){
         // 従来の loadActiveNarVenuesFromOfficialList は場ごとにレース数を数える追加通信を
         // していたが、横断シミュレーションでは場コードしか使わないため省略して高速化する。
         const html = await fetchNarOfficialRaceListHtml(date, '');
+        rsOpenVenuesOkCount++;
         return parseNarOfficialVenueCodesFromList(html, date);
       }
-    }catch(e){ return []; }
+    }catch(e){
+      rsOpenVenuesFailCount++;
+      rsLastOpenVenuesError = (e && e.message) || String(e);
+      return [];
+    }
   }
 
   // ── 任意の (kind,date,venue) のレース一覧を取得 ──
@@ -10164,6 +10175,9 @@ if(horses.length === 0){
 
     rsAbort = false;
     rsLastRows = [];
+    rsLastOpenVenuesError = null;
+    rsOpenVenuesFailCount = 0;
+    rsOpenVenuesOkCount = 0;
     if(btn){ btn.disabled = true; btn.textContent = '⏳ 実行中...'; }
     if(stopBtn) stopBtn.style.display = '';
     $('rsSummary').innerHTML = '';
@@ -10311,6 +10325,10 @@ if(horses.length === 0){
       if(kind === 'JRA' && rsJraPlan && rsJraPlan.size === 0 && okCount === 0 && !rsAbort){
         const venLabel = selVenues.length ? selVenues.map(c => venueName('JRA', c)).join('・') : 'JRA';
         if(prog) prog.innerHTML = `<div class="url-status ok">✅ 完了：${venLabel} はこの期間に開催がありませんでした（非開催日はサーチせずスキップ）。</div>`;
+      }else if(kind === 'NAR' && okCount === 0 && rsOpenVenuesOkCount === 0 && rsOpenVenuesFailCount > 0 && !rsAbort){
+        // v5.18.165: NARで全日程が通信失敗（ブリッジ未検出/403等）だった場合、
+        // 「開催なし」と誤認させず実際のエラー内容を表示する。
+        if(prog) prog.innerHTML = `<div class="url-status err">❌ 完了：0レース（${rsOpenVenuesFailCount}日すべてで開催場一覧の取得に失敗）。原因: ${asw_esc(rsLastOpenVenuesError || '不明')}<br><span style="font-size:11px;opacity:.85">🌉Userscriptブリッジが未接続の可能性があります。バッジに🌉マークが出ているか確認してください。</span></div>`;
       }else if(prog){
         prog.innerHTML = `<div class="url-status ok">✅ 完了：${okCount}レースをシミュレーションしました${rsAbort ? '（中断）' : ''}${truncated ? `（⚠️期間が${RS_MAX_DAYS}日を超えたため先頭${RS_MAX_DAYS}日のみ）` : ''}。</div>`;
       }

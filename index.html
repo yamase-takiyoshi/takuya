@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.168 SelectedVenueDirect</title>
+<title>The競馬 EV分析 v5.18.169 BetOnlyChartRecord</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.168 SelectedVenueDirect</span>
+    <span class="ver">v5.18.169 BetOnlyChartRecord</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -440,7 +440,7 @@ body{
       </div>
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:10px;cursor:pointer;user-select:none">
         <input type="checkbox" id="rsRecord" style="width:18px;height:18px;accent-color:var(--green)">
-        <span>📉 精算結果を収支グラフへ記録する（race_id単位で上書き）</span>
+        <span>📉 投資した精算結果だけを収支グラフへ記録する（race_id単位で上書き）</span>
       </label>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-primary" id="rsRunBtn" onclick="runRangeVenueSimulation()">📆 期間横断シミュレーション実行</button>
@@ -450,7 +450,7 @@ body{
       <div id="rsSummary" style="margin-top:10px"></div>
       <div id="rsChartWrap" style="margin-top:12px;display:none">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:6px">
-          <div style="font-size:12px;color:var(--muted)">📈 期間内 累計収支グラフ（確定レースを日付・場・R順に集計）</div>
+          <div style="font-size:12px;color:var(--muted)">📈 期間内 累計収支グラフ（投資あり確定レースのみ）</div>
           <button class="btn-sm" type="button" id="rsToGlobalBtn" onclick="rsExportToGlobalChart()">📤 シミュレーション収支グラフへ転記</button>
         </div>
         <div class="chart-box"><canvas id="rsChart" width="560" height="220"></canvas></div>
@@ -499,7 +499,7 @@ body{
         style="width:100%;box-sizing:border-box;background:rgba(15,23,42,0.55);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px;font-size:12px;font-family:monospace;line-height:1.5;resize:vertical"></textarea>
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:10px 0;cursor:pointer;user-select:none">
         <input type="checkbox" id="ptsRecord" checked style="width:18px;height:18px;accent-color:var(--green)">
-        <span>📉 精算結果を収支グラフへ記録する（race_id単位で上書き）</span>
+        <span>📉 投資した精算結果だけを収支グラフへ記録する（race_id単位で上書き）</span>
       </label>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn-sm" id="ptsParseBtn" onclick="ptsParsePreview()">📥 テキスト読み込み（プレビュー）</button>
@@ -693,7 +693,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.168 SelectedVenueDirect';
+window.APP_VERSION = 'v5.18.169 BetOnlyChartRecord';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -2203,6 +2203,10 @@ function loadSimHistory(){
   try {
     simHistory = JSON.parse(localStorage.getItem('tk-sim-history') || '[]');
     if(!Array.isArray(simHistory)) simHistory = [];
+    // v5.18.169: グラフ履歴は「実際に投資したレース」だけ残す。
+    // 旧版で入った見送り/投資0円レースはここで自動除外する。
+    simHistory = simHistory.filter(x => Number(x && x.bet || 0) > 0);
+    localStorage.setItem('tk-sim-history', JSON.stringify(simHistory.slice(-300)));
   } catch(e){ simHistory = []; }
 }
 
@@ -2212,14 +2216,32 @@ function saveSimHistory(){
 
 // 精算結果を simHistory に記録（race_id が同じなら上書き）
 function simRecordProfit(autoRecord, bet, ret, hitCount, total, sourceLabel){
+  bet = Number(bet || 0);
+  ret = Number(ret || 0);
   const raceId  = currentRaceId || '';
   const raceName = currentRaceName || sourceLabel || raceId || new Date().toLocaleTimeString('ja-JP');
+  const statusEl = document.getElementById('simAutoRecordStatus');
+
+  // v5.18.169: 投資0円（見送り）はグラフ履歴へ記録しない。
+  // race_id単位の上書き運用なので、過去に同じrace_idの記録があれば削除して幽霊記録も防ぐ。
+  if(bet <= 0){
+    if(raceId){
+      const before = simHistory.length;
+      simHistory = simHistory.filter(x => x.raceId !== raceId);
+      if(simHistory.length !== before) saveSimHistory();
+    }
+    if(statusEl){
+      statusEl.textContent = '↪️ 投資0円のためグラフには記録しません';
+      setTimeout(()=>{ statusEl.textContent=''; }, 3000);
+    }
+    if(typeof renderSimProfitChart === 'function') renderSimProfitChart();
+    return false;
+  }
+
   const profit  = ret - bet;
   const roi     = bet ? ret / bet * 100 : 0;
   const entry   = { raceId, raceName, bet, ret, profit, roi, hitCount, total,
                     date: new Date().toISOString(), source: sourceLabel || '手入力' };
-
-  const statusEl = document.getElementById('simAutoRecordStatus');
   if(raceId){
     const idx = simHistory.findIndex(x => x.raceId === raceId);
     if(idx >= 0){
@@ -9972,7 +9994,9 @@ if(horses.length === 0){
   // 既存のシミュレーション収支グラフ(renderSimProfitChart)と同じ見た目に合わせる。
   function rsSettledSeries(rows){
     return rows
-      .filter(r => r && r.status === 'ok' && r.hasFinish)
+      // v5.18.169: 期間内グラフ/転記は、確定済みかつ投資額があるレースだけ対象。
+      // 見送り（投資0円）は集計表には残すが、グラフには点として記録しない。
+      .filter(r => r && r.status === 'ok' && r.hasFinish && Number(r.bet || 0) > 0)
       .slice()
       .sort((a, b) => (a.date + (a.venueCode||'') + String(a.no).padStart(2,'0'))
                        .localeCompare(b.date + (b.venueCode||'') + String(b.no).padStart(2,'0')));
@@ -10155,7 +10179,7 @@ if(horses.length === 0){
           }
         }
 
-        // v5.18.168 SelectedVenueDirect:
+        // v5.18.169 BetOnlyChartRecord:
         // NARで開催場チェックがある場合は、日付ごとの「全開催場確認」を挟まず、
         // チェックした場だけを直接レース一覧取得に進める。
         // これで「盛岡にチェックしているのに毎日“開催場を確認中...”で止まる」挙動を避ける。
@@ -12215,7 +12239,7 @@ if(horses.length === 0){
 
 <script>
 /* ============================================================
-   v5.18.168 SelectedVenueDirect
+   v5.18.169 BetOnlyChartRecord
    ・表示用バージョンを window.APP_VERSION / setAppVersionLabel() に一本化。
    ・旧パッチブロックが遅延実行されても .ver / document.title は必ず同一値へ同期。
    ・診断ログ内の過去バージョン表記は履歴として温存。
@@ -12227,7 +12251,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 
 <script>
 /* ============================================================
-   v5.18.168 SelectedVenueDirect / OneFile Integrated
+   v5.18.169 BetOnlyChartRecord / OneFile Integrated
    ・Worker 502 / 上流遮断 / 取得失敗を「開催なし」に変換しない。
    ・NAR開催場判定は keiba.go.jp PC RaceList の実取得結果のみ採用。
    ・公式ページ本文で明確に「該当データなし」の場合だけ開催なしにする。
@@ -12238,7 +12262,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.168 SelectedVenueDirect';
+  window.APP_VERSION = 'v5.18.169 BetOnlyChartRecord';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -12660,14 +12684,14 @@ function json(obj, status = 200) {
 
 
 /* ============================================================
-   v5.18.168 SelectedVenueDirect / OneFile Integrated
+   v5.18.169 BetOnlyChartRecord / OneFile Integrated
    ・地方競馬公式 RaceList の「オッズ・映像・成績」列から「映像」を拾わない。
    ・DebaTableリンクまたは行テキストの「競走名・出馬表」列を優先して正式レース名にする。
    ・例: 1R 映像 → 1R ２歳 未勝利
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.168 SelectedVenueDirect';
+  window.APP_VERSION = 'v5.18.169 BetOnlyChartRecord';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -12956,7 +12980,7 @@ function json(obj, status = 200) {
 
 <script>
 /* ============================================================
-   v5.18.168 SelectedVenueDirect / OneFile Integrated
+   v5.18.169 BetOnlyChartRecord / OneFile Integrated
    ・JRA側にも「映像・オッズ・結果・払戻・出馬表」リンク名をレース名にしない保護を追加。
    ・NAR v5.18.159 の正式レース名ガードは維持。
    ・一覧HTML、出馬表タイトル、プルダウン最終表示の3段でリンク文言を除外する。
@@ -12964,7 +12988,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.168 SelectedVenueDirect';
+  window.APP_VERSION = 'v5.18.169 BetOnlyChartRecord';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -13182,7 +13206,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.168 SelectedVenueDirect';
+    window.APP_VERSION = 'v5.18.169 BetOnlyChartRecord';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -13197,7 +13221,7 @@ function json(obj, status = 200) {
    - 「取得中」に一度空配列を描いても、JRA土日を即「開催なし」に見せない。
    ============================================================ */
 (function(){
-  const V = 'v5.18.168 SelectedVenueDirect';
+  const V = 'v5.18.169 BetOnlyChartRecord';
   try{
     window.APP_VERSION = V;
     document.title = 'The競馬 EV分析 ' + V;
@@ -13473,7 +13497,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script>
 /* ============================================================
-   v5.18.168 SelectedVenueDirect
+   v5.18.169 BetOnlyChartRecord
    ・NAR実取得はまず従来のWorker経由を優先する。
    ・Workerが 502 / upstream 400 / ブロックHTML / 空HTML の場合だけ、
      Userscriptブリッジへフォールバックする。
@@ -13482,7 +13506,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.168 SelectedVenueDirect';
+  window.APP_VERSION = 'v5.18.169 BetOnlyChartRecord';
   try{
     const ver = document.querySelector('.ver');
     if(ver){
@@ -13620,7 +13644,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     return prevResult ? prevResult.apply(this, arguments) : 'https://race.netkeiba.com/race/result.html?race_id=' + raceId + '&rf=race_submenu';
   };
 
-  console.log('[v5.18.167] NAR worker-first / bridge-fallback route enabled');
+  console.log('[v5.18.169] NAR worker-first / bridge-fallback + bet-only chart record enabled');
 })();
 </script>
 

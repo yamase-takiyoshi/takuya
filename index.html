@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.173 NarPastPredSim</title>
+<title>The競馬 EV分析 v5.18.174 PayoutMaxMode</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.173 NarPastPredSim</span>
+    <span class="ver">v5.18.174 PayoutMaxMode</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -703,7 +703,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.173 NarPastPredSim';
+window.APP_VERSION = 'v5.18.174 PayoutMaxMode';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -726,6 +726,7 @@ const MODE_OPTIONS = [
   ['roi150','回収率150%超'],
   ['roi200','回収率200%超'],
   ['roi_max','回収率最大（開催場別）'],
+  ['payout_max','期待払戻最大（確率×オッズ）'],
   ['hitroi','的中率最高&回収率100%超'],
   ['multi100','多点トータル回収率100%超（開催場別）'],
   ['hitrate100','的中率100%（開催場別）'],
@@ -746,6 +747,7 @@ const MODE_EV = {
   roi150:     {'単勝':1.35,'複勝':9.99,'枠連':9.99,'ワイド':1.30,'馬連':1.40,'馬単':9.99,'3連複':1.55,'3連単':9.99},
   roi200:     {'単勝':2.00,'複勝':9.99,'枠連':9.99,'ワイド':2.00,'馬連':2.00,'馬単':2.00,'3連複':2.00,'3連単':2.00},
   roi_max:    {'単勝':1.50,'複勝':9.99,'枠連':9.99,'ワイド':9.99,'馬連':1.60,'馬単':1.80,'3連複':1.80,'3連単':2.20},
+  payout_max: {'単勝':1.00,'複勝':1.00,'枠連':1.00,'ワイド':1.00,'馬連':1.00,'馬単':1.00,'3連複':1.00,'3連単':1.00},
   hitroi:     {'単勝':9.99,'複勝':1.00,'枠連':9.99,'ワイド':1.00,'馬連':1.00,'馬単':9.99,'3連複':9.99,'3連単':9.99},
   multi100:   {'単勝':1.08,'複勝':1.05,'枠連':9.99,'ワイド':1.05,'馬連':1.10,'馬単':9.99,'3連複':1.20,'3連単':9.99},
   hitrate100: {'単勝':9.99,'複勝':0.72,'枠連':9.99,'ワイド':0.72,'馬連':9.99,'馬単':9.99,'3連複':9.99,'3連単':9.99},
@@ -1598,6 +1600,16 @@ function getModeScore(r, mode){
     else oddsBand=0.10;
     return (Math.max(ev-1.80,0)*7.0+Math.sqrt(Math.max(p,0))*1.5+Math.sqrt(Math.max(k,0))*2.0)*oddsBand*typeBias;
   }
+  if(mode==='payout_max'){
+    // v5.18.174: 期待払戻最大（確率×オッズ）。
+    // 想定確率p × 想定オッズ ＝ 期待払戻(EV)そのものをスコアとし、
+    // 券種比重・オッズ帯重み・的中率足切りを一切かけずに、EVが最も高い買い目から順に採用する純粋モード。
+    // 唯一の条件は EV>=1.00（期待払戻が賭け金以上）。EV<1.00 は「掛けるほど期待損」なので除外する。
+    // 同EVの場合のみ的中率pの高い方を僅かに優先（タイブレーク）。
+    // ※EV＝p×オッズは推定値であり、実際の払い戻し最大を保証するものではない。
+    if(ev<1.00) return -999;
+    return ev*10 + Math.min(p,1)*0.5;
+  }
   if(mode==='roi_max'){
     // v5.18.117: 回収率最大（開催場別自動最適化）。currentRaceId から開催場を判定し、
     // 各場の頭数規模・市場特性に応じてEV下限/オッズ帯重み/券種比重を自動チューニングする（モードは増やさない）。
@@ -1701,6 +1713,13 @@ function getModeScore(r, mode){
 }
 
 function getTypeQuota(mode, max){
+  // v5.18.174: 期待払戻最大モードは券種の割当制限を設けない。
+  // 全券種にmaxを割り当て、getModeScore（EV＝確率×オッズ）の降順どおりに上位max点をそのまま採用する。
+  if(mode==='payout_max'){
+    const out = {};
+    TICKET_TYPES.forEach(t => out[t] = max);
+    return out;
+  }
   const table = {
     roi100:   {'単勝':1,'複勝':2,'枠連':0,'ワイド':2,'馬連':1,'馬単':0,'3連複':1,'3連単':0},
     roi120:   {'単勝':2,'複勝':1,'枠連':0,'ワイド':1,'馬連':2,'馬単':0,'3連複':1,'3連単':0},
@@ -12278,7 +12297,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.173 NarPastPredSim';
+  window.APP_VERSION = 'v5.18.174 PayoutMaxMode';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -12707,7 +12726,7 @@ function json(obj, status = 200) {
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.173 NarPastPredSim';
+  window.APP_VERSION = 'v5.18.174 PayoutMaxMode';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -13004,7 +13023,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.173 NarPastPredSim';
+  window.APP_VERSION = 'v5.18.174 PayoutMaxMode';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -13222,7 +13241,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.173 NarPastPredSim';
+    window.APP_VERSION = 'v5.18.174 PayoutMaxMode';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -13237,7 +13256,7 @@ function json(obj, status = 200) {
    - 「取得中」に一度空配列を描いても、JRA土日を即「開催なし」に見せない。
    ============================================================ */
 (function(){
-  const V = 'v5.18.173 NarPastPredSim';
+  const V = 'v5.18.174 PayoutMaxMode';
   try{
     window.APP_VERSION = V;
     document.title = 'The競馬 EV分析 ' + V;
@@ -13522,7 +13541,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.173 NarPastPredSim';
+  window.APP_VERSION = 'v5.18.174 PayoutMaxMode';
   try{
     const ver = document.querySelector('.ver');
     if(ver){
@@ -13681,7 +13700,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  const V171 = 'v5.18.173 NarPastPredSim';
+  const V171 = 'v5.18.174 PayoutMaxMode';
   // 旧パッチ（v5.18.160系）の遅延バージョン上書きより後に走らせて確実に勝つ
   [0, 200, 800, 1600, 3000, 5000, 6500].forEach(ms => setTimeout(() => {
     window.APP_VERSION = V171;
@@ -14107,7 +14126,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  const V172 = 'v5.18.173 NarPastPredSim';
+  const V172 = 'v5.18.174 PayoutMaxMode';
   [0, 200, 800, 1600, 3000, 5000, 7000].forEach(ms => setTimeout(() => {
     window.APP_VERSION = V172;
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();

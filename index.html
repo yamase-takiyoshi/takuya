@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.169 BetOnlyChartRecord</title>
+<title>The競馬 EV分析 v5.18.171 NarPastProbe</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.169 BetOnlyChartRecord</span>
+    <span class="ver">v5.18.171 NarPastProbe</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -693,7 +693,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.169 BetOnlyChartRecord';
+window.APP_VERSION = 'v5.18.171 NarPastProbe';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -2203,7 +2203,7 @@ function loadSimHistory(){
   try {
     simHistory = JSON.parse(localStorage.getItem('tk-sim-history') || '[]');
     if(!Array.isArray(simHistory)) simHistory = [];
-    // v5.18.169: グラフ履歴は「実際に投資したレース」だけ残す。
+    // v5.18.170: グラフ履歴は「実際に投資したレース」だけ残す。
     // 旧版で入った見送り/投資0円レースはここで自動除外する。
     simHistory = simHistory.filter(x => Number(x && x.bet || 0) > 0);
     localStorage.setItem('tk-sim-history', JSON.stringify(simHistory.slice(-300)));
@@ -2222,7 +2222,7 @@ function simRecordProfit(autoRecord, bet, ret, hitCount, total, sourceLabel){
   const raceName = currentRaceName || sourceLabel || raceId || new Date().toLocaleTimeString('ja-JP');
   const statusEl = document.getElementById('simAutoRecordStatus');
 
-  // v5.18.169: 投資0円（見送り）はグラフ履歴へ記録しない。
+  // v5.18.170: 投資0円（見送り）はグラフ履歴へ記録しない。
   // race_id単位の上書き運用なので、過去に同じrace_idの記録があれば削除して幽霊記録も防ぐ。
   if(bet <= 0){
     if(raceId){
@@ -9373,6 +9373,7 @@ if(horses.length === 0){
     const settledBet = settled.reduce((s, r) => s + (r.bet || 0), 0);
     const roi     = settledBet ? ret / settledBet * 100 : 0;
     const hitRaces = settled.filter(r => r.hit > 0).length;
+    const hitRate  = settled.length ? (hitRaces / settled.length * 100) : 0;
     const pending  = done.filter(r => !r.hasFinish).length;
 
     sum.innerHTML = `
@@ -9380,6 +9381,7 @@ if(horses.length === 0){
         <div class="sim-kpi"><div class="v">${done.length}</div><div class="l">処理R</div></div>
         <div class="sim-kpi"><div class="v">${settled.length}</div><div class="l">確定R</div></div>
         <div class="sim-kpi"><div class="v">${hitRaces}</div><div class="l">的中R</div></div>
+        <div class="sim-kpi"><div class="v">${hitRate.toFixed(1)}%</div><div class="l">的中率</div></div>
         <div class="sim-kpi"><div class="v">${settledBet.toLocaleString()}</div><div class="l">投資円(確定)</div></div>
         <div class="sim-kpi"><div class="v">${ret.toLocaleString()}</div><div class="l">払戻円</div></div>
         <div class="sim-kpi"><div class="v" style="color:${profit>=0?'var(--green)':'var(--red)'}">${profit>=0?'+':''}${profit.toLocaleString()}</div><div class="l">収支円</div></div>
@@ -9879,6 +9881,7 @@ if(horses.length === 0){
     const profit = ret - settledBet;
     const roi = settledBet ? ret / settledBet * 100 : 0;
     const hitRaces = settled.filter(r => r.hit > 0).length;
+    const hitRate  = settled.length ? (hitRaces / settled.length * 100) : 0;
     box.innerHTML = `
       <div class="sim-kpi-grid" style="margin-top:0">
         <div class="sim-kpi"><div class="v">${days}</div><div class="l">日数</div></div>
@@ -9886,6 +9889,7 @@ if(horses.length === 0){
         <div class="sim-kpi"><div class="v">${ok.length}</div><div class="l">処理R</div></div>
         <div class="sim-kpi"><div class="v">${settled.length}</div><div class="l">確定R</div></div>
         <div class="sim-kpi"><div class="v">${hitRaces}</div><div class="l">的中R</div></div>
+        <div class="sim-kpi"><div class="v">${hitRate.toFixed(1)}%</div><div class="l">的中率</div></div>
         <div class="sim-kpi"><div class="v">${settledBet.toLocaleString()}</div><div class="l">投資円(確定)</div></div>
         <div class="sim-kpi"><div class="v">${ret.toLocaleString()}</div><div class="l">払戻円</div></div>
         <div class="sim-kpi"><div class="v" style="color:${profit>=0?'var(--green)':'var(--red)'}">${profit>=0?'+':''}${profit.toLocaleString()}</div><div class="l">収支円</div></div>
@@ -9994,7 +9998,7 @@ if(horses.length === 0){
   // 既存のシミュレーション収支グラフ(renderSimProfitChart)と同じ見た目に合わせる。
   function rsSettledSeries(rows){
     return rows
-      // v5.18.169: 期間内グラフ/転記は、確定済みかつ投資額があるレースだけ対象。
+      // v5.18.170: 期間内グラフ/転記は、確定済みかつ投資額があるレースだけ対象。
       // 見送り（投資0円）は集計表には残すが、グラフには点として記録しない。
       .filter(r => r && r.status === 'ok' && r.hasFinish && Number(r.bet || 0) > 0)
       .slice()
@@ -10179,7 +10183,7 @@ if(horses.length === 0){
           }
         }
 
-        // v5.18.169 BetOnlyChartRecord:
+        // v5.18.170 BetOnlyChartRecord:
         // NARで開催場チェックがある場合は、日付ごとの「全開催場確認」を挟まず、
         // チェックした場だけを直接レース一覧取得に進める。
         // これで「盛岡にチェックしているのに毎日“開催場を確認中...”で止まる」挙動を避ける。
@@ -10968,11 +10972,13 @@ if(horses.length === 0){
     const profit  = ret - settledBet;
     const roi     = settledBet ? ret / settledBet * 100 : 0;
     const hitRaces = settled.filter(r => r.hit > 0).length;
+    const hitRate  = settled.length ? (hitRaces / settled.length * 100) : 0;
 
     sum.innerHTML = `
       <div class="sim-kpi-grid" style="margin-top:0">
         <div class="sim-kpi"><div class="v">${settled.length}</div><div class="l">精算R</div></div>
         <div class="sim-kpi"><div class="v">${hitRaces}</div><div class="l">的中R</div></div>
+        <div class="sim-kpi"><div class="v">${hitRate.toFixed(1)}%</div><div class="l">的中率</div></div>
         <div class="sim-kpi"><div class="v">${pts_yen(settledBet)}</div><div class="l">投資円(確定)</div></div>
         <div class="sim-kpi"><div class="v">${pts_yen(ret)}</div><div class="l">払戻円</div></div>
         <div class="sim-kpi"><div class="v" style="color:${profit>=0?'var(--green)':'var(--red)'}">${profit>=0?'+':''}${pts_yen(profit)}</div><div class="l">収支円</div></div>
@@ -12239,7 +12245,7 @@ if(horses.length === 0){
 
 <script>
 /* ============================================================
-   v5.18.169 BetOnlyChartRecord
+   v5.18.170 BetOnlyChartRecord
    ・表示用バージョンを window.APP_VERSION / setAppVersionLabel() に一本化。
    ・旧パッチブロックが遅延実行されても .ver / document.title は必ず同一値へ同期。
    ・診断ログ内の過去バージョン表記は履歴として温存。
@@ -12251,7 +12257,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 
 <script>
 /* ============================================================
-   v5.18.169 BetOnlyChartRecord / OneFile Integrated
+   v5.18.170 BetOnlyChartRecord / OneFile Integrated
    ・Worker 502 / 上流遮断 / 取得失敗を「開催なし」に変換しない。
    ・NAR開催場判定は keiba.go.jp PC RaceList の実取得結果のみ採用。
    ・公式ページ本文で明確に「該当データなし」の場合だけ開催なしにする。
@@ -12262,7 +12268,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.169 BetOnlyChartRecord';
+  window.APP_VERSION = 'v5.18.171 NarPastProbe';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -12684,14 +12690,14 @@ function json(obj, status = 200) {
 
 
 /* ============================================================
-   v5.18.169 BetOnlyChartRecord / OneFile Integrated
+   v5.18.170 BetOnlyChartRecord / OneFile Integrated
    ・地方競馬公式 RaceList の「オッズ・映像・成績」列から「映像」を拾わない。
    ・DebaTableリンクまたは行テキストの「競走名・出馬表」列を優先して正式レース名にする。
    ・例: 1R 映像 → 1R ２歳 未勝利
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.169 BetOnlyChartRecord';
+  window.APP_VERSION = 'v5.18.171 NarPastProbe';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -12980,7 +12986,7 @@ function json(obj, status = 200) {
 
 <script>
 /* ============================================================
-   v5.18.169 BetOnlyChartRecord / OneFile Integrated
+   v5.18.170 BetOnlyChartRecord / OneFile Integrated
    ・JRA側にも「映像・オッズ・結果・払戻・出馬表」リンク名をレース名にしない保護を追加。
    ・NAR v5.18.159 の正式レース名ガードは維持。
    ・一覧HTML、出馬表タイトル、プルダウン最終表示の3段でリンク文言を除外する。
@@ -12988,7 +12994,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.169 BetOnlyChartRecord';
+  window.APP_VERSION = 'v5.18.171 NarPastProbe';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -13206,7 +13212,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.169 BetOnlyChartRecord';
+    window.APP_VERSION = 'v5.18.171 NarPastProbe';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -13221,7 +13227,7 @@ function json(obj, status = 200) {
    - 「取得中」に一度空配列を描いても、JRA土日を即「開催なし」に見せない。
    ============================================================ */
 (function(){
-  const V = 'v5.18.169 BetOnlyChartRecord';
+  const V = 'v5.18.171 NarPastProbe';
   try{
     window.APP_VERSION = V;
     document.title = 'The競馬 EV分析 ' + V;
@@ -13497,7 +13503,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script>
 /* ============================================================
-   v5.18.169 BetOnlyChartRecord
+   v5.18.170 BetOnlyChartRecord
    ・NAR実取得はまず従来のWorker経由を優先する。
    ・Workerが 502 / upstream 400 / ブロックHTML / 空HTML の場合だけ、
      Userscriptブリッジへフォールバックする。
@@ -13506,7 +13512,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.169 BetOnlyChartRecord';
+  window.APP_VERSION = 'v5.18.171 NarPastProbe';
   try{
     const ver = document.querySelector('.ver');
     if(ver){
@@ -13644,7 +13650,427 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     return prevResult ? prevResult.apply(this, arguments) : 'https://race.netkeiba.com/race/result.html?race_id=' + raceId + '&rf=race_submenu';
   };
 
-  console.log('[v5.18.169] NAR worker-first / bridge-fallback + bet-only chart record enabled');
+  console.log('[v5.18.170] NAR worker-first / bridge-fallback + bet-only chart record enabled');
+})();
+</script>
+
+<script>
+/* ============================================================
+   v5.18.171 NarPastProbe（全地方対応・馬柱構造診断）
+   ・目的: NAR全15場（門別/盛岡/水沢/浦和/船橋/大井/川崎/金沢/笠松/
+     名古屋/園田/姫路/高知/佐賀/帯広）の shutuba_past.html（馬柱）が
+     静的HTMLで取得・解析できるかを iPad 画面上だけで確認する診断。
+   ・解析: 各馬の直近5走から 日付/場/クラス表記(組)/距離/着順 を抽出し、
+     派生指標（転入区分・転入後戦数・同地区内の場替わり・組替わり）を試算。
+   ・EV計算・買い目・シミュレーションのロジックには一切影響しない。
+   ・fetch はボタン1押しにつき最大2回（ブリッジ優先→Worker）。
+     ループ取得はしないため Akamai 負荷は増やさない。
+   ・構造ダンプ（Pastセルのclass名とinnerHTML断片）を必ず出す：
+     場ごとにHTML構造や級表記が違っても、この出力を見て次版でパーサを詰める。
+   ============================================================ */
+(function(){
+  'use strict';
+
+  const V171 = 'v5.18.171 NarPastProbe';
+  // 旧パッチ（v5.18.160系）の遅延バージョン上書きより後に走らせて確実に勝つ
+  [0, 200, 800, 1600, 3000, 5000, 6500].forEach(ms => setTimeout(() => {
+    window.APP_VERSION = V171;
+    if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
+  }, ms));
+
+  // ── 全地方の場→地区（主催圏）マップ。転入判定の基準。 ──
+  const CIRCUIT171 = {
+    '門別':'北海道', '帯広':'ばんえい',
+    '盛岡':'岩手', '水沢':'岩手',
+    '浦和':'南関東', '船橋':'南関東', '大井':'南関東', '川崎':'南関東',
+    '金沢':'金沢', '笠松':'笠松', '名古屋':'名古屋',
+    '園田':'兵庫', '姫路':'兵庫',
+    '高知':'高知', '佐賀':'佐賀',
+    '札幌':'JRA', '函館':'JRA', '福島':'JRA', '新潟':'JRA', '東京':'JRA',
+    '中山':'JRA', '中京':'JRA', '京都':'JRA', '阪神':'JRA', '小倉':'JRA'
+  };
+  const VNAMES171 = Object.keys(CIRCUIT171);
+  const NAR_CODES171 = {
+    '30':'門別','35':'盛岡','36':'水沢','42':'浦和','43':'船橋','44':'大井','45':'川崎',
+    '46':'金沢','47':'笠松','48':'名古屋','50':'園田','51':'姫路','54':'高知','55':'佐賀','65':'帯広'
+  };
+
+  const esc171 = s => String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+  function toHalf171(s){
+    return String(s || '').replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
+  }
+
+  // 漢数字（一〜二十）→ 数値。南関「C2六」・岩手「C1十一組」対応。
+  function kanNum171(s){
+    if(!s) return 0;
+    if(/^[0-9]+$/.test(s)) return Number(s);
+    const d = {'一':1,'二':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9};
+    if(s === '十') return 10;
+    const m = String(s).match(/^([一二三四五六七八九])?十([一二三四五六七八九])?$/);
+    if(m) return (m[1] ? d[m[1]] : 1) * 10 + (m[2] ? d[m[2]] : 0);
+    return d[s] || 0;
+  }
+
+  // ── クラス表記パーサ（全地方の表記ゆれ対応・診断用） ──
+  //   南関: C2六 / B3二     岩手: C1一組 / C2十一組
+  //   名古屋・笠松: C12組系   兵庫: C1一 / B2二
+  //   高知・佐賀: C3-11 / C2-19組   北海道: C4-5 等
+  //   ※「C15組」が C1・5組 か C15・組 かは表記だけでは曖昧 → raw を必ず残す
+  function parseClass171(rawText){
+    const t = toHalf171(rawText).replace(/\s+/g, '');
+    if(!t) return null;
+    const grade = (t.match(/Jpn[I1２ⅠⅡⅢ23]{0,3}|JpnＩ|Ｇ?[GＧ][I1２ⅠⅡⅢ23]{1,3}|重賞/) || [])[0] || '';
+    let m =
+      t.match(/(?:^|[^A-Za-z0-9])([ABCD])([0-9]{0,2})(?:級)?[-‐－ーｰ・]?([0-9]{1,2}|[一二三四五六七八九十]{1,3})?組/) ||
+      t.match(/(?:^|[^A-Za-z0-9])([ABCD])([0-9]{1,2})[-‐－ーｰ]([0-9]{1,2})/) ||
+      t.match(/(?:^|[^A-Za-z0-9])([ABCD])([0-9]{0,2})([一二三四五六七八九十]{1,3})/) ||
+      t.match(/(?:^|[^A-Za-z0-9])([ABCD])([0-9]{1,2})/);
+    if(!m && !grade) return null;
+    if(!m) return { cls:'', group:0, raw:grade, grade };
+    return {
+      cls: m[1] + (m[2] || ''),
+      group: kanNum171(m[3] || ''),
+      raw: m[0].replace(/^[^A-Za-z0-9]/, ''),
+      grade
+    };
+  }
+
+  function parseDist171(text){
+    const t = toHalf171(text);
+    let m = t.match(/(芝|ダ|障)\s*([0-9]{3,4})/);
+    if(m) return m[1] + m[2];
+    m = t.match(/(?:^|[^0-9])((?:8|9)[0-9]{2}|[12][0-9]{3}|3[0-6][0-9]{2})m/);
+    if(m) return m[1] + 'm';
+    return '';
+  }
+
+  function parseDate171(text){
+    const t = toHalf171(text);
+    let m = t.match(/(20[0-9]{2})[.\/年]\s*([0-9]{1,2})[.\/月]\s*([0-9]{1,2})/);
+    if(m) return m[1].slice(2) + '.' + m[2].padStart(2,'0') + '.' + m[3].padStart(2,'0');
+    m = t.match(/([0-9]{2})\.([0-9]{1,2})\.([0-9]{1,2})/);
+    if(m) return m[1] + '.' + m[2].padStart(2,'0') + '.' + m[3].padStart(2,'0');
+    return '';
+  }
+
+  function parseFinish171(cell){
+    try{
+      const els = cell.querySelectorAll('[class*="Rank"],[class*="Num"],[class*="Chaku"]');
+      for(const el of els){
+        const t = toHalf171(el.textContent).replace(/[^0-9]/g, '');
+        if(t && t.length <= 2){
+          const n = Number(t);
+          if(n >= 1 && n <= 18) return n;
+        }
+      }
+    }catch(e){}
+    const m = toHalf171(cell.textContent).match(/([0-9]{1,2})着/);
+    if(m) return Number(m[1]);
+    return 0;
+  }
+
+  // セル内を子div単位の断片に割り、日付を含む断片から場名を探す（レース名中の「東京湾C」等の誤検出を抑制）
+  function parsePastCell171(cell){
+    const segs = Array.from(cell.querySelectorAll('div,span,li'))
+      .map(el => (el.textContent || '').trim()).filter(s => s && s.length <= 80);
+    const whole = (cell.textContent || '').trim();
+    const dateSeg = segs.find(s => parseDate171(s)) || whole;
+    const date = parseDate171(dateSeg) || parseDate171(whole);
+    let venue = '';
+    for(const v of VNAMES171){ if(dateSeg.includes(v)){ venue = v; break; } }
+    let venueLow = false;
+    if(!venue){
+      for(const v of VNAMES171){ if(whole.includes(v)){ venue = v; venueLow = true; break; } }
+    }
+    // レース名: /race/ へのリンクtext優先、なければクラス表記を含む断片
+    const link = cell.querySelector('a[href*="/race/"]');
+    const rname = link ? (link.textContent || '').trim()
+      : (segs.find(s => parseClass171(s)) || '');
+    const cls = parseClass171(rname) || parseClass171(whole);
+    return {
+      date, venue, venueLow,
+      circuit: venue ? (CIRCUIT171[venue] || '') : '',
+      raceName: rname.slice(0, 24),
+      cls,
+      dist: parseDist171(whole),
+      finish: parseFinish171(cell),
+      empty: !date && !venue && whole.replace(/\s/g,'').length < 4
+    };
+  }
+
+  function findUmaban171(tr){
+    const el = tr.querySelector('[class*="Umaban"]');
+    if(el){
+      const t = toHalf171(el.textContent).replace(/[^0-9]/g, '');
+      const n = Number(t);
+      if(n >= 1 && n <= 18) return n;
+    }
+    const cells = Array.from(tr.querySelectorAll('td,th')).slice(0, 4);
+    for(const c of cells){
+      const t = toHalf171(c.textContent).trim();
+      if(/^([1-9]|1[0-8])$/.test(t)) return Number(t);
+    }
+    return 0;
+  }
+
+  // ── 取得: ブリッジ優先 → Worker。経路の成否をすべて記録して画面に出す ──
+  async function fetch171(url, tried){
+    if(typeof window.fetchViaBridge === 'function'){
+      try{
+        const t = await window.fetchViaBridge(url);
+        const blocked = t && typeof window.looksBlockedHtml === 'function' && window.looksBlockedHtml(t);
+        if(t && !blocked){ tried.push('bridge ✅ ' + t.length + '字'); return { html: t, path: 'bridge' }; }
+        tried.push('bridge ❌ ' + (blocked ? 'ブロックHTML' : (window.__bridgeLastError || '空応答')));
+      }catch(e){ tried.push('bridge ❌ ' + (e && e.message || e)); }
+    }else{
+      tried.push('bridge ─ 関数なし');
+    }
+    try{
+      const req = (typeof window.buildWorkerRequestUrl === 'function') ? window.buildWorkerRequestUrl(url) : url;
+      const res = await fetch(req, { cache: 'no-store' });
+      const t = await res.text();
+      const blocked = typeof window.looksBlockedHtml === 'function' && window.looksBlockedHtml(t);
+      if(res.ok && t && !blocked){ tried.push('worker ✅ HTTP' + res.status + ' ' + t.length + '字'); return { html: t, path: 'worker' }; }
+      tried.push('worker ❌ HTTP' + res.status + ' ' + (t ? t.length + '字' : '空') + (blocked ? ' ブロックHTML' : ''));
+    }catch(e){ tried.push('worker ❌ ' + (e && e.message || e)); }
+    return { html: '', path: '' };
+  }
+
+  // ── 派生指標 ──
+  function deriveFactors171(pasts, curVenue, curCircuit, curCls){
+    const valid = pasts.filter(p => !p.empty);
+    const last = valid[0] || null;
+    let kubun = '前走情報なし';
+    if(last){
+      if(!last.venue) kubun = '前走場 不明';
+      else if(last.venue === curVenue) kubun = '同場（' + last.venue + '）';
+      else if(last.circuit === curCircuit) kubun = '同地区の場替わり（' + last.venue + '→' + curVenue + '）';
+      else if(last.circuit === 'JRA') kubun = '中央から転入（前走' + last.venue + '）';
+      else if(last.circuit) kubun = '他地区から転入（前走' + last.venue + '/' + last.circuit + '）';
+      else kubun = '前走場 判定不能';
+    }
+    // 転入後戦数: 直近から現地区が何走連続しているか
+    let streak = 0;
+    for(const p of valid){
+      if(p.circuit && p.circuit === curCircuit) streak++;
+      else break;
+    }
+    let tennyu = '';
+    if(valid.length){
+      if(streak === 0) tennyu = '転入初戦（今走が当地区1戦目）';
+      else if(streak < valid.length) tennyu = '転入後 ' + (streak + 1) + '戦目';
+      else tennyu = '当地区 ' + streak + '走以上継続';
+    }
+    // 組替わり（前走クラス vs 今走クラス）
+    let kumi = '';
+    if(last && last.cls && curCls && last.cls.cls && curCls.cls){
+      if(last.cls.cls !== curCls.cls){
+        kumi = 'クラス替わり ' + last.cls.raw + '→' + curCls.raw;
+      }else if(last.cls.group && curCls.group){
+        const d = curCls.group - last.cls.group;
+        kumi = d === 0 ? '同組（' + curCls.raw + '）'
+          : (d < 0 ? '昇組 ' : '降組 ') + last.cls.raw + '→' + curCls.raw;
+      }else{
+        kumi = '同クラス ' + curCls.raw + '（組不明）';
+      }
+    }else if(curCls && curCls.raw){
+      kumi = '今走 ' + curCls.raw + '（前走クラス不明）';
+    }
+    return { kubun, tennyu, kumi };
+  }
+
+  // ── 本体 ──
+  async function runNarPastProbe171(){
+    const btn = document.getElementById('narPastProbeBtn');
+    const out = document.getElementById('narPastProbeOut');
+    const copyBtn = document.getElementById('narPastProbeCopy');
+    if(!out) return;
+    out.style.display = 'block';
+
+    const rid = String((typeof window.currentRaceId !== 'undefined' && window.currentRaceId) || (typeof currentRaceId !== 'undefined' && currentRaceId) || '');
+    if(!/^\d{12}$/.test(rid)){
+      out.innerHTML = '<span style="color:var(--red)">⚠️ レース未選択です。先に開催取得→レース選択をしてください。（currentRaceId: ' + esc171(rid || 'なし') + '）</span>';
+      return;
+    }
+    const vcode = rid.slice(4, 6);
+    const curVenue = NAR_CODES171[vcode] || '';
+    if(!curVenue){
+      out.innerHTML = '<span style="color:var(--red)">⚠️ 選択中はJRAレース（場コード' + esc171(vcode) + '）です。この診断はNAR全15場専用です。</span>';
+      return;
+    }
+    const curCircuit = CIRCUIT171[curVenue] || '';
+
+    if(btn) btn.disabled = true;
+    out.textContent = '🔄 ' + curVenue + '（' + curCircuit + '地区）の馬柱 shutuba_past.html を取得中...（1回のみ・ブリッジ優先）';
+
+    const tried = [];
+    const urls = [
+      'https://nar.netkeiba.com/race/shutuba_past.html?race_id=' + rid + '&rf=shutuba_submenu',
+      'https://nar.sp.netkeiba.com/race/shutuba_past.html?race_id=' + rid
+    ];
+    let got = { html: '', path: '' }, usedUrl = '';
+    for(const u of urls){
+      tried.push('── ' + u);
+      got = await fetch171(u, tried);
+      if(got.html){ usedUrl = u; break; }
+    }
+    if(btn) btn.disabled = false;
+
+    const plainLines = [];
+    const push = s => plainLines.push(s);
+    push('🐴 NAR馬柱診断 ' + V171);
+    push('対象: ' + rid + ' / ' + curVenue + '（' + curCircuit + '地区）');
+    push('取得経路:');
+    tried.forEach(t => push('  ' + t));
+
+    if(!got.html){
+      push('');
+      push('❌ 馬柱ページを取得できませんでした。ブリッジ🌉が有効か確認してください。');
+      out.innerHTML = esc171(plainLines.join('\n'));
+      window.__narPastProbe = { rid, venue: curVenue, ok: false, tried };
+      return;
+    }
+    push('採用: ' + got.path + ' / ' + usedUrl + ' / ' + got.html.length + '字');
+
+    let doc;
+    try{ doc = new DOMParser().parseFromString(got.html, 'text/html'); }
+    catch(e){
+      out.innerHTML = esc171(plainLines.join('\n') + '\nDOM解析失敗: ' + (e.message || e));
+      return;
+    }
+
+    // 今走のレース名・クラス（ページ側のタイトルから）
+    const raceNameEl = doc.querySelector('.RaceName, [class*="RaceName"], h1');
+    const curRaceName = ((raceNameEl && raceNameEl.textContent) || doc.title || '').trim().slice(0, 40);
+    const curCls = parseClass171(curRaceName);
+    push('今走: ' + (curRaceName || '(レース名取得不可)') + ' → クラス解析: ' + (curCls ? curCls.raw + (curCls.group ? '（組=' + curCls.group + '）' : '') : '不能'));
+
+    // 馬行の抽出
+    const rows = Array.from(doc.querySelectorAll('tr')).filter(tr => tr.querySelector('a[href*="/horse/"]'));
+    // Pastセル戦略: ①class*=Past → ②/race/リンクを含むtd
+    let strategy = 'td[class*="Past"]';
+    let sampleCell = null;
+    const horses = [];
+    const seen = new Set();
+    rows.forEach(tr => {
+      let cells = Array.from(tr.querySelectorAll('td')).filter(td => /past/i.test(td.className || ''));
+      if(!cells.length){
+        strategy = 'td内/race/リンク（フォールバック）';
+        cells = Array.from(tr.querySelectorAll('td')).filter(td => td.querySelector('a[href*="/race/"]'));
+      }
+      const num = findUmaban171(tr);
+      const link = tr.querySelector('a[href*="/horse/"]');
+      const name = ((link && link.textContent) || '').replace(/\s+/g, '').slice(0, 12);
+      if(!name) return;
+      const key = num ? String(num) : name;
+      if(seen.has(key)) return;
+      seen.add(key);
+      if(!sampleCell && cells.length) sampleCell = cells[0];
+      const pasts = cells.slice(0, 5).map(parsePastCell171);
+      horses.push({ num, name, pasts, cellCount: cells.length });
+    });
+    horses.sort((a, b) => (a.num || 99) - (b.num || 99));
+
+    push('');
+    push('馬行: ' + horses.length + '頭 / Pastセル戦略: ' + strategy);
+    if(!horses.length){
+      push('❌ 出走馬行が見つかりません。取得HTMLが馬柱ページでない可能性（下の構造ダンプ参照）。');
+    }
+
+    // 各馬の解析結果
+    horses.forEach(h => {
+      const f = deriveFactors171(h.pasts, curVenue, curCircuit, curCls);
+      push('');
+      push('━ ' + (h.num || '?') + ' ' + h.name + '（過去走セル' + h.cellCount + '）');
+      push('   ' + f.kubun + (f.tennyu ? ' / ' + f.tennyu : '') + (f.kumi ? ' / ' + f.kumi : ''));
+      h.pasts.forEach((p, i) => {
+        if(p.empty){ push('   ' + '①②③④⑤'[i] + ' （出走間隔/空欄）'); return; }
+        push('   ' + '①②③④⑤'[i] + ' '
+          + (p.date || '日付?') + ' '
+          + (p.venue ? p.venue + (p.venueLow ? '(低確度)' : '') : '場?') + ' '
+          + (p.dist || '距離?') + ' '
+          + (p.cls ? p.cls.raw : (p.raceName || 'クラス?')) + ' '
+          + (p.finish ? p.finish + '着' : '着順?'));
+      });
+    });
+
+    // 解析成功率サマリ（次版のパーサ改良の指標）
+    const allP = horses.flatMap(h => h.pasts).filter(p => !p.empty);
+    if(allP.length){
+      const pct = k => Math.round(100 * allP.filter(k).length / allP.length) + '%';
+      push('');
+      push('📊 抽出成功率（全' + allP.length + '走）: 日付' + pct(p => p.date)
+        + ' 場名' + pct(p => p.venue) + ' クラス' + pct(p => p.cls)
+        + ' 距離' + pct(p => p.dist) + ' 着順' + pct(p => p.finish));
+    }
+
+    let html = esc171(plainLines.join('\n'));
+
+    // 構造ダンプ（折りたたみ）: 場ごとの表記差をここで確認して次版へ反映する
+    const pastTdCount = doc.querySelectorAll('td[class*="Past"]').length;
+    let dump = 'td[class*=Past] 総数: ' + pastTdCount + '\n';
+    if(sampleCell){
+      dump += 'サンプルセル class="' + (sampleCell.className || '') + '"\n';
+      dump += 'innerHTML先頭800字:\n' + String(sampleCell.innerHTML || '').slice(0, 800);
+    }else{
+      dump += 'サンプルセルなし。HTML先頭1200字:\n' + got.html.slice(0, 1200);
+    }
+    html += '\n\n<details><summary>🔬 構造ダンプ（次版パーサ調整用・タップで展開）</summary><div style="margin-top:6px;opacity:.85">'
+      + esc171(dump) + '</div></details>';
+
+    out.innerHTML = html;
+    window.__narPastProbe = { rid, venue: curVenue, circuit: curCircuit, ok: true, path: got.path, url: usedUrl, horses, tried };
+    window.__narPastProbeText = plainLines.join('\n') + '\n\n[構造ダンプ]\n' + dump;
+    if(copyBtn) copyBtn.style.display = 'inline-block';
+  }
+
+  async function copyProbe171(){
+    const text = window.__narPastProbeText || '';
+    if(!text) return;
+    const btn = document.getElementById('narPastProbeCopy');
+    let ok = false;
+    try{ await navigator.clipboard.writeText(text); ok = true; }
+    catch(e){
+      try{
+        const ta = document.createElement('textarea');
+        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+      }catch(e2){}
+    }
+    if(btn){ btn.textContent = ok ? '✅ コピー済' : '❌ 失敗'; setTimeout(() => { btn.textContent = '📋 コピー'; }, 1600); }
+  }
+
+  // ── UI注入: 「EV計算・買い目推奨」ボタン直下 ──
+  function injectUi171(){
+    if(document.getElementById('narPastProbeBtn')) return;
+    const anchor = document.querySelector('button[onclick="runPredict()"]');
+    if(!anchor){ setTimeout(injectUi171, 800); return; }
+    const wrap = document.createElement('div');
+    wrap.innerHTML =
+      '<div style="display:flex;gap:8px;margin-top:8px">'
+      + '<button id="narPastProbeBtn" class="btn" style="flex:1">🐴 NAR馬柱診断（全地方）</button>'
+      + '<button id="narPastProbeCopy" class="btn" style="width:96px;display:none">📋 コピー</button>'
+      + '</div>'
+      + '<div id="narPastProbeOut" style="display:none;margin-top:8px;padding:10px;border:1px solid rgba(148,163,184,.3);border-radius:8px;'
+      + 'font-size:11px;line-height:1.65;white-space:pre-wrap;word-break:break-all;'
+      + 'font-family:ui-monospace,Menlo,Consolas,monospace;max-height:62vh;overflow:auto"></div>';
+    anchor.insertAdjacentElement('afterend', wrap);
+    document.getElementById('narPastProbeBtn').addEventListener('click', () => {
+      runNarPastProbe171().catch(e => {
+        const out = document.getElementById('narPastProbeOut');
+        if(out){ out.style.display = 'block'; out.innerHTML = '<span style="color:var(--red)">診断エラー: ' + esc171(e && e.message || e) + '</span>'; }
+        const b = document.getElementById('narPastProbeBtn'); if(b) b.disabled = false;
+      });
+    });
+    document.getElementById('narPastProbeCopy').addEventListener('click', copyProbe171);
+  }
+  injectUi171();
+
+  console.log('[v5.18.171] NAR past-performance probe (all 15 NAR venues) ready');
 })();
 </script>
 

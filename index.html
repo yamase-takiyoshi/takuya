@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.190 RangeSimJsonImport</title>
+<title>The競馬 EV分析 v5.18.195 RangeSimFastMode</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.190 RangeSimJsonImport</span>
+    <span class="ver">v5.18.195 RangeSimFastMode</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -447,6 +447,13 @@ body{
         <span>🐴 馬柱補正を使って予想する（NAR実験：転入・組替わり・場替わりで勝率を補正。レース毎に馬柱を1回追加取得）</span>
       </label>
       <div id="rsPastAdjStat" style="display:none;font-size:11px;color:var(--muted);margin:0 0 10px 26px"></div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:10px;cursor:pointer;user-select:none">
+        <input type="checkbox" id="rsFast" checked style="width:18px;height:18px;accent-color:var(--green)">
+        <span>⚡ 高速モード（過去JRAは結果ページ優先・画面描画を間引く）</span>
+      </label>
+      <div style="font-size:11px;color:var(--muted);margin:-4px 0 10px 26px;line-height:1.5">
+        ※通常より通信と再描画を減らします。大量の開催月×開催場横断シミュレーション向けです。精算ロジック・JSON出力形式は同じです。
+      </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-primary" id="rsRunBtn" onclick="runRangeVenueSimulation()">📆 期間横断シミュレーション実行</button>
         <button class="btn-sm" id="rsStopBtn" onclick="stopRangeVenueSimulation()" style="display:none">⏹ 中断</button>
@@ -738,7 +745,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.194 DisabledTypeActionSelect';
+window.APP_VERSION = 'v5.18.195 RangeSimFastMode';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -9645,6 +9652,49 @@ if(horses.length === 0){
     return { horses: hs, raceName, isResultPage, resultDoc };
   }
 
+
+  // ── v5.18.195 高速モード用：過去JRAは result.html を先に読む ──
+  // 通常経路は shutuba → result → odds の順で堅牢だが、過去確定レースでは
+  // result.html だけで出走馬・最終単勝オッズ・払戻を同時に使えるケースが多い。
+  // 失敗・不足時は必ず通常の asw_loadHorses にフォールバックする。
+  async function asw_loadHorsesFast(kind, rid){
+    try{
+      const host = asw_host(kind);
+      const url = `${host}/race/result.html?race_id=${rid}&rf=race_submenu`;
+      const html = await fetchHtmlViaProxy(url);
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      let hs = parseHorsesFromDoc(doc, url);
+      if(!hs || hs.length < 2) throw new Error('result page horses not enough');
+      const raceName = parseRaceTitleFromDoc(doc) || '';
+
+      if(kind === 'JRA'){
+        const oddsMap = (typeof parseFinalOddsPopularityFromResultDoc === 'function')
+          ? parseFinalOddsPopularityFromResultDoc(doc, hs) : new Map();
+        if(!oddsMap || oddsMap.size < 2) throw new Error('final odds not enough');
+        hs = applyAuthoritativeJraOdds(hs, oddsMap, new Map());
+        if(typeof oddsLookMisKeyedByUmaban === 'function' && oddsLookMisKeyedByUmaban(hs)){
+          throw new Error('mis-keyed odds suspected');
+        }
+        return { horses: hs, raceName, isResultPage: true, resultDoc: doc, fast: true };
+      }
+
+      // NARはページ差が大きいので、result先読みで足りる場合だけ使う。
+      let oddsMap = (typeof parseFinalOddsPopularityFromResultDoc === 'function')
+        ? parseFinalOddsPopularityFromResultDoc(doc, hs) : new Map();
+      if((!oddsMap || oddsMap.size < 2) && typeof parseWinOddsPopularityFromDoc === 'function'){
+        oddsMap = parseWinOddsPopularityFromDoc(doc);
+      }
+      if(oddsMap && oddsMap.size >= 2){
+        hs = mergeOddsPopularityIntoHorses(hs, oddsMap);
+        hs = fillNarPopularityFromOdds(hs);
+        return { horses: hs, raceName, isResultPage: true, resultDoc: doc, fast: true };
+      }
+      throw new Error('NAR result odds not enough');
+    }catch(e){
+      return await asw_loadHorses(kind, rid);
+    }
+  }
+
   // ── 着順・払戻の取得（結果docを使い回せれば再フェッチしない）──
   async function asw_getResult(kind, rid, resultDoc){
     let doc = resultDoc;
@@ -9674,7 +9724,7 @@ if(horses.length === 0){
     return { bet, ret, hit, profit: ret - bet, roi: bet ? ret / bet * 100 : 0, count: tickets.length, hasFinish };
   }
 
-  // v5.18.190 RangeSimJsonImport:
+  // v5.18.195 RangeSimFastMode:
   // 精算直後に「実際に買った券種の内訳」を行データへ記録する。
   // 期間横断/一括シミュレーションのJSON出力で、券種別・買い目単位の詳細集計に使う。
   // 内訳のキー名は解析ツール(Profit Graph Switcher)の明細判定キー(投資/払戻/収支)と
@@ -9876,6 +9926,8 @@ if(horses.length === 0){
         asw_renderTable(rows);
       }
 
+      // 高速モードでは途中描画を間引くため、最後に必ず全体を再描画する。
+      try{ rsRenderSummary(rows); rsRenderTable(rows); rsRenderChart(rows); }catch(e){}
       const okCount = rows.filter(x => x.status === 'ok').length;
       if(prog) prog.innerHTML = `<div class="url-status ok">✅ 完了：${okCount}/${races.length}レースをシミュレーションしました。</div>`;
     }catch(e){
@@ -10494,6 +10546,8 @@ if(horses.length === 0){
 
     const selVenues = rsSelectedVenueCodes(); // 空なら全場
     const recordToChart = $('rsRecord')?.checked;
+    const fastMode = !!($('rsFast') && $('rsFast').checked);
+    const todayForFast = (typeof todayYmd === 'function') ? todayYmd() : new Date().toISOString().slice(0,10);
 
     // 馬データタブの選択を退避
     const save = { kind: $('pickKind')?.value, date: $('pickDate')?.value, venue: $('pickVenue')?.value };
@@ -10517,7 +10571,7 @@ if(horses.length === 0){
       // 日付ごとの全場プローブ／公式一覧依存を排し、Worker 502下でもブリッジだけで完結。
       let rsJraPlan = null;
       if(kind === 'JRA'){
-        if(prog) prog.innerHTML = `<div class="url-status">🧭 JRA開催回をrace_idで探索中（回ベース）...</div>`;
+        if(prog) prog.innerHTML = `<div class="url-status">🧭 JRA開催回をrace_idで探索中（回ベース）...${fastMode ? ' ⚡高速モード' : ''}</div>`;
         try{ rsJraPlan = await buildJraRangePlanByKaisai(selVenues, start, end, prog); }
         catch(e){ rsJraPlan = null; console.warn('[rsJraPlan] failed', e); }
         // v5.18.146: 回ベースplanが空(0件)のときの分岐を「到達できたか」で切り分ける。
@@ -10621,13 +10675,17 @@ if(horses.length === 0){
           for(let i = 0; i < races.length; i++){
             if(rsAbort) break;
             const r = races[i];
-            if(prog) prog.innerHTML = `<div class="url-status">♞ ${date} ${vn} ${r.no}R を処理中（${i + 1}/${races.length}R）</div>`;
+            if(prog && (!fastMode || i === 0 || ((i + 1) % 4 === 0) || i === races.length - 1)){
+              prog.innerHTML = `<div class="url-status">${fastMode ? '⚡' : '♞'} ${date} ${vn} ${r.no}R を処理中（${i + 1}/${races.length}R）${fastMode ? ' / 描画間引き中' : ''}</div>`;
+            }
 
             const row = { date, venueCode: vc, venueName: vn, no: r.no, rid: r.rid,
                           raceName: r.name || (r.no + 'R'), status: 'pending',
                           count: 0, bet: 0, ret: 0, profit: 0, roi: 0, hit: 0, hasFinish: false, finishTop: [] };
             try{
-              const loaded = await asw_loadHorses(kind, r.rid);
+              const loaded = (fastMode && String(date) < todayForFast)
+                ? await asw_loadHorsesFast(kind, r.rid)
+                : await asw_loadHorses(kind, r.rid);
               horses = loaded.horses;
               currentRaceId = r.rid;
               currentRaceName = loaded.raceName || r.name || (r.no + 'R');
@@ -10661,9 +10719,12 @@ if(horses.length === 0){
             rows.push(row);
             rsLastRows = rows;
             try{ window.__rsLastRows = rows.slice(); }catch(e){}
-            rsRenderSummary(rows);
-            rsRenderTable(rows);
-            rsRenderChart(rows);
+            const rsShouldRenderNow = !fastMode || ((rows.length % 8) === 0) || (i === races.length - 1) || rsAbort;
+            if(rsShouldRenderNow){
+              rsRenderSummary(rows);
+              rsRenderTable(rows);
+              rsRenderChart(rows);
+            }
           }
         }
       }
@@ -10804,6 +10865,8 @@ if(horses.length === 0){
       if(e && c.endDate) e.value = c.endDate;
       const pa = $('rsPastAdj');
       if(pa && typeof c.pastPerformanceAdjustment === 'boolean') pa.checked = c.pastPerformanceAdjustment;
+      const fm = $('rsFast');
+      if(fm && typeof c.fastMode === 'boolean') fm.checked = c.fastMode;
     }catch(e){}
   }
   function importRangeVenueSimulationJSON(){
@@ -12801,7 +12864,7 @@ if(horses.length === 0){
    ・設定パネルの説明文を新仕様に更新。
    ============================================================ */
 /* ============================================================
-   v5.18.194 DisabledTypeActionSelect
+   v5.18.195 RangeSimFastMode
    ・券種チェックOFF時の挙動を設定で選択可能にした。
      設定「基本設定」に「チェックOFF券種の扱い」セレクトを追加:
        - レースごと見送る（既定 / v5.18.193の挙動）
@@ -12842,7 +12905,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.194 DisabledTypeActionSelect';
+  window.APP_VERSION = 'v5.18.195 RangeSimFastMode';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -13271,7 +13334,7 @@ function json(obj, status = 200) {
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.194 DisabledTypeActionSelect';
+  window.APP_VERSION = 'v5.18.195 RangeSimFastMode';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -13568,7 +13631,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.194 DisabledTypeActionSelect';
+  window.APP_VERSION = 'v5.18.195 RangeSimFastMode';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -13786,7 +13849,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.194 DisabledTypeActionSelect';
+    window.APP_VERSION = 'v5.18.195 RangeSimFastMode';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -13801,7 +13864,7 @@ function json(obj, status = 200) {
    - 「取得中」に一度空配列を描いても、JRA土日を即「開催なし」に見せない。
    ============================================================ */
 (function(){
-  const V = 'v5.18.190 RangeSimJsonImport';
+  const V = 'v5.18.195 RangeSimFastMode';
   try{
     window.APP_VERSION = V;
     document.title = 'The競馬 EV分析 ' + V;
@@ -14086,7 +14149,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.194 DisabledTypeActionSelect';
+  window.APP_VERSION = 'v5.18.195 RangeSimFastMode';
   try{
     const ver = document.querySelector('.ver');
     if(ver){
@@ -14245,7 +14308,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  const V171 = 'v5.18.190 RangeSimJsonImport';
+  const V171 = 'v5.18.195 RangeSimFastMode';
   // 旧パッチ（v5.18.160系）の遅延バージョン上書きより後に走らせて確実に勝つ
   [0, 200, 800, 1600, 3000, 5000, 6500].forEach(ms => setTimeout(() => {
     window.APP_VERSION = V171;
@@ -14671,7 +14734,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  const V172 = 'v5.18.190 RangeSimJsonImport';
+  const V172 = 'v5.18.195 RangeSimFastMode';
   [0, 200, 800, 1600, 3000, 5000, 7000].forEach(ms => setTimeout(() => {
     window.APP_VERSION = V172;
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
@@ -14888,7 +14951,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.190 RangeSimJsonImport';
+  var VERSION = 'v5.18.195 RangeSimFastMode';
   try{
     window.APP_VERSION = VERSION;
     var ver = document.querySelector('.ver');
@@ -15048,7 +15111,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         startDate: el('rsStart') ? el('rsStart').value : '',
         endDate: el('rsEnd') ? el('rsEnd').value : '',
         pastPerformanceAdjustment: !!(el('rsPastAdj') && el('rsPastAdj').checked),
-        recordToProfitGraph: !!(el('rsRecord') && el('rsRecord').checked)
+        recordToProfitGraph: !!(el('rsRecord') && el('rsRecord').checked),
+        fastMode: !!(el('rsFast') && el('rsFast').checked)
       },
       summary: {
         processedRaces: okRows.length,
@@ -15128,7 +15192,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.190 RangeSimJsonImport';
+  var VERSION = 'v5.18.195 RangeSimFastMode';
   try{
     window.APP_VERSION = VERSION;
     var ver = document.querySelector('.ver');
@@ -15322,7 +15386,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         startDate: $('rsStart') ? $('rsStart').value : '',
         endDate: $('rsEnd') ? $('rsEnd').value : '',
         pastPerformanceAdjustment: !!($('rsPastAdj') && $('rsPastAdj').checked),
-        recordToProfitGraph: !!($('rsRecord') && $('rsRecord').checked)
+        recordToProfitGraph: !!($('rsRecord') && $('rsRecord').checked),
+        fastMode: !!($('rsFast') && $('rsFast').checked)
       },
       summary: {
         records: all.length,
@@ -15423,7 +15488,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 })();
 </script>
 
-<!-- v5.18.190 RangeSimJsonImport:
+<!-- v5.18.195 RangeSimFastMode:
   「📥 期間横断JSON読込」ボタンを追加。
   ・「📊 期間横断JSON出力」(schema: keiba-range-venue-simulation-v2)で保存した
     JSONを読み込み、集計KPI・開催場/日別集計表・レース別明細・累計収支グラフを復元。
@@ -15444,7 +15509,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.190 RangeSimJsonImport';
+  var VERSION = 'v5.18.195 RangeSimFastMode';
   function writeVer(){
     try{
       window.APP_VERSION = VERSION;
@@ -15691,7 +15756,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       return g;
     });
   }
-  // v5.18.190 RangeSimJsonImport:
+  // v5.18.195 RangeSimFastMode:
   // ・明細レコードは「収支明細」の1系統だけにする（旧v1は同一明細を
   //   raceRecords/records/profitRecords/収支明細/trend の5系統に重複出力しており、
   //   解析ツールが全部を明細として拾って件数・収支が約5倍になっていた）。
@@ -15827,7 +15892,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         endDate: $('rsEnd') ? $('rsEnd').value : '',
         mode: (typeof settings !== 'undefined' && settings && settings.mode) ? settings.mode : '',
         pastPerformanceAdjustment: !!($('rsPastAdj') && $('rsPastAdj').checked),
-        recordToProfitGraph: !!($('rsRecord') && $('rsRecord').checked)
+        recordToProfitGraph: !!($('rsRecord') && $('rsRecord').checked),
+        fastMode: !!($('rsFast') && $('rsFast').checked)
       },
       '集計': {
         '対象行数': all.length,

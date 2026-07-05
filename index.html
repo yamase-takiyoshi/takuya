@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.188 RangeSimDetailExport</title>
+<title>The競馬 EV分析 v5.18.189 ExcludeUnclassifiedRows</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.188 RangeSimDetailExport</span>
+    <span class="ver">v5.18.189 ExcludeUnclassifiedRows</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -712,7 +712,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.188 RangeSimDetailExport';
+window.APP_VERSION = 'v5.18.189 ExcludeUnclassifiedRows';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -1030,9 +1030,14 @@ function pgjNum(v){
 }
 function pgjDateOnly(v){
   const s = String(v || '');
+  if(!s) return ''; // v5.18.189: 未日付は今日で代用せず空にする（後段で除外）
   const m = s.match(/(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
   if(m) return `${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}`;
-  try{ return formatLocalDate(new Date(s)); }catch(e){ return formatLocalDate(); }
+  try{
+    const d = new Date(s);
+    if(isNaN(d.getTime())) return '';
+    return formatLocalDate(d);
+  }catch(e){ return ''; }
 }
 function pgjParseRaceLabel(x){
   const raw = String((x && (x.raceName || x.label || x.source)) || '');
@@ -1107,6 +1112,14 @@ function buildProfitGraphJSONSnapshot(){
   try{ if(typeof simHistory !== 'undefined') list = list.concat((simHistory || []).map((x,i)=>pgjRecordFromHistory(x,'シミュレーション収支',i))); }catch(e){}
   list = list.concat(pgjRecordsFromRangeRows());
   list = pgjDedupe(list).filter(r => Number(r.投資 || 0) > 0 || Number(r.払戻 || 0) > 0 || Number(r.収支 || 0) !== 0);
+  // v5.18.189: 未分類（場不明）・未日付（日付不明）のレコードは収支明細に含めない
+  list = list.filter(r => {
+    const d = String(r.日付 || '');
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(d)) return false;
+    const v = String(r.場 || '').trim();
+    if(!v || v === '未分類' || v === '不明' || v === 'unknown') return false;
+    return true;
+  });
   const totalBet = list.reduce((s,r)=>s+Number(r.投資||0),0);
   const totalReturn = list.reduce((s,r)=>s+Number(r.払戻||0),0);
   const totalProfit = list.reduce((s,r)=>s+Number(r.収支||0),0);
@@ -9578,7 +9591,7 @@ if(horses.length === 0){
     return { bet, ret, hit, profit: ret - bet, roi: bet ? ret / bet * 100 : 0, count: tickets.length, hasFinish };
   }
 
-  // v5.18.188 RangeSimDetailExport:
+  // v5.18.189 ExcludeUnclassifiedRows:
   // 精算直後に「実際に買った券種の内訳」を行データへ記録する。
   // 期間横断/一括シミュレーションのJSON出力で、券種別・買い目単位の詳細集計に使う。
   // 内訳のキー名は解析ツール(Profit Graph Switcher)の明細判定キー(投資/払戻/収支)と
@@ -12546,7 +12559,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.188 RangeSimDetailExport';
+  window.APP_VERSION = 'v5.18.189 ExcludeUnclassifiedRows';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -12975,7 +12988,7 @@ function json(obj, status = 200) {
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.188 RangeSimDetailExport';
+  window.APP_VERSION = 'v5.18.189 ExcludeUnclassifiedRows';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -13272,7 +13285,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.188 RangeSimDetailExport';
+  window.APP_VERSION = 'v5.18.189 ExcludeUnclassifiedRows';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -13490,7 +13503,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.188 RangeSimDetailExport';
+    window.APP_VERSION = 'v5.18.189 ExcludeUnclassifiedRows';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -13505,7 +13518,7 @@ function json(obj, status = 200) {
    - 「取得中」に一度空配列を描いても、JRA土日を即「開催なし」に見せない。
    ============================================================ */
 (function(){
-  const V = 'v5.18.188 RangeSimDetailExport';
+  const V = 'v5.18.189 ExcludeUnclassifiedRows';
   try{
     window.APP_VERSION = V;
     document.title = 'The競馬 EV分析 ' + V;
@@ -13790,7 +13803,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.188 RangeSimDetailExport';
+  window.APP_VERSION = 'v5.18.189 ExcludeUnclassifiedRows';
   try{
     const ver = document.querySelector('.ver');
     if(ver){
@@ -13949,7 +13962,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  const V171 = 'v5.18.188 RangeSimDetailExport';
+  const V171 = 'v5.18.189 ExcludeUnclassifiedRows';
   // 旧パッチ（v5.18.160系）の遅延バージョン上書きより後に走らせて確実に勝つ
   [0, 200, 800, 1600, 3000, 5000, 6500].forEach(ms => setTimeout(() => {
     window.APP_VERSION = V171;
@@ -14375,7 +14388,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  const V172 = 'v5.18.188 RangeSimDetailExport';
+  const V172 = 'v5.18.189 ExcludeUnclassifiedRows';
   [0, 200, 800, 1600, 3000, 5000, 7000].forEach(ms => setTimeout(() => {
     window.APP_VERSION = V172;
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
@@ -14592,7 +14605,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.188 RangeSimDetailExport';
+  var VERSION = 'v5.18.189 ExcludeUnclassifiedRows';
   try{
     window.APP_VERSION = VERSION;
     var ver = document.querySelector('.ver');
@@ -14832,7 +14845,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.188 RangeSimDetailExport';
+  var VERSION = 'v5.18.189 ExcludeUnclassifiedRows';
   try{
     window.APP_VERSION = VERSION;
     var ver = document.querySelector('.ver');
@@ -15127,7 +15140,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 })();
 </script>
 
-<!-- v5.18.188 RangeSimDetailExport:
+<!-- v5.18.189 ExcludeUnclassifiedRows:
   期間横断シミュレーションのJSON出力を詳細化。
   ・精算時に実際の買い目内訳（券種・買い目・購入額・払戻額・的中）を各レース行へ記録。
   ・出力は「収支明細」1系統のみ（旧v1の5系統重複＝解析ツールで約5倍計上される問題を解消）。
@@ -15140,7 +15153,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.188 RangeSimDetailExport';
+  var VERSION = 'v5.18.189 ExcludeUnclassifiedRows';
   function writeVer(){
     try{
       window.APP_VERSION = VERSION;
@@ -15387,7 +15400,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       return g;
     });
   }
-  // v5.18.188 RangeSimDetailExport:
+  // v5.18.189 ExcludeUnclassifiedRows:
   // ・明細レコードは「収支明細」の1系統だけにする（旧v1は同一明細を
   //   raceRecords/records/profitRecords/収支明細/trend の5系統に重複出力しており、
   //   解析ツールが全部を明細として拾って件数・収支が約5倍になっていた）。
@@ -15447,6 +15460,9 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         ROI: bet ? Math.round(ret / bet * 1000) / 10 : 0
       };
       if(Array.isArray(r.ticketDetails) && r.ticketDetails.length) rec['内訳'] = r.ticketDetails;
+      // v5.18.189: 未分類（場不明）・未日付（日付不明）の行は明細に出力しない
+      if(rec['場'] === '未分類' || rec['場'] === 'unknown' || rec['場'] === '不明' ||
+         !/^\d{4}-\d{2}-\d{2}$/.test(String(rec['日付'] || ''))) return;
       if(r.hasFinish) settled.push(rec); else pending.push(rec);
     });
     if(!settled.length && !pending.length && !errors.length) return null;

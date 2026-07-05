@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.178 ProfitTrendJsonExport</title>
+<title>The競馬 EV分析 v5.18.177 RangeSimJsonExport</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.178 ProfitTrendJsonExport</span>
+    <span class="ver">v5.18.177 RangeSimJsonExport</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -337,7 +337,6 @@ body{
       </div>
       <div class="btn-row" style="margin-bottom:10px">
         <button class="btn-sm" onclick="clearProfitHistory()">収支履歴クリア</button>
-        <button class="btn-sm" onclick="exportProfitGraphJSON()">📊 収支分析JSON出力</button>
       </div>
       <div class="summary-grid" id="profitSummary" style="margin-bottom:10px"></div>
       <div class="chart-box"><canvas id="profitChart" width="560" height="220"></canvas></div>
@@ -451,6 +450,7 @@ body{
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-primary" id="rsRunBtn" onclick="runRangeVenueSimulation()">📆 期間横断シミュレーション実行</button>
         <button class="btn-sm" id="rsStopBtn" onclick="stopRangeVenueSimulation()" style="display:none">⏹ 中断</button>
+        <button class="btn-sm" id="rsJsonExportBtn" onclick="exportRangeVenueSimulationJSON()">📊 期間横断JSON出力</button>
       </div>
       <div id="rsProgress" style="margin-top:10px"></div>
       <div id="rsSummary" style="margin-top:10px"></div>
@@ -597,7 +597,6 @@ body{
     <div class="card" id="simChartCard">
       <div class="section-header">
         <h2>📉 シミュレーション収支グラフ</h2>
-        <button class="btn-sm" onclick="exportProfitGraphJSON()">📊 JSON出力</button>
         <button class="btn-sm" onclick="simClearHistory()">履歴クリア</button>
       </div>
       <div id="simProfitSummary" class="summary-grid" style="margin-bottom:10px"></div>
@@ -666,7 +665,7 @@ body{
         &nbsp;&nbsp;上の欄で<b>ファイル名を指定</b>できます（空欄なら日付＋レースIDで自動命名）。<br>
         &nbsp;&nbsp;iPad/iPhoneでは<b>共有シート</b>が開くので「ファイルに保存」から<b>保存先フォルダを選択</b>できます。PCのChrome/Edgeでは保存ダイアログで場所を選べます。<br>
         <b>JSON読込</b>：保存したファイルから一括復元します。<br>
-        <b>収支分析JSON出力</b>：収支グラフ切替HTMLで読める形式（収支明細配列＋収支変動履歴）を書き出します。開催場別・券種別・構成比・変動グラフ用です。<br>
+        <b>収支分析JSON出力</b>：収支グラフ切替HTMLで読める形式（収支明細配列）を書き出します。開催場別・券種別・構成比・変動グラフ用です。<br>
         <b>設定を初期化</b>：各種設定を初期値に戻します（プロキシURLは保持）。
       </div>
     </div>
@@ -713,7 +712,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.178 ProfitTrendJsonExport';
+window.APP_VERSION = 'v5.18.177 RangeSimJsonExport';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -938,12 +937,6 @@ function buildStateSnapshot(){
   // 現在のUI入力値を settings へ反映してから書き出す
   try{ saveSettings(); }catch(e){}
   try{ saveProxy(); }catch(e){}
-  let profitGraphRecords = [];
-  let profitGraphSnapshot = null;
-  try{
-    if(typeof buildProfitGraphRecordsForExport === 'function') profitGraphRecords = buildProfitGraphRecordsForExport();
-    if(typeof buildProfitGraphJSONSnapshot === 'function') profitGraphSnapshot = buildProfitGraphJSONSnapshot({ allowEmpty:true });
-  }catch(e){}
   return {
     app: 'The競馬 EV分析',
     schema: 1,
@@ -953,19 +946,10 @@ function buildStateSnapshot(){
     horses: horses,
     currentRaceName: currentRaceName,
     currentRaceId: currentRaceId,
-    profitHistory: profitHistory,
-    simHistory: (typeof simHistory !== 'undefined' && Array.isArray(simHistory)) ? simHistory : [],
-    lastTickets: (typeof lastTickets !== 'undefined' && Array.isArray(lastTickets)) ? lastTickets : [],
-    simTickets: (typeof simTickets !== 'undefined' && Array.isArray(simTickets)) ? simTickets : [],
-
-    // v5.18.177: 収支分析グラフHTMLが直接読める互換フィールド
-    // keiba_profit_spec_chart_switcher.html は「収支明細」を自動抽出する。
-    // 精算済み履歴が無い場合でも、現在の推奨買い目を「期待値ベース」の明細として出力する。
-    schema_profit_graph: 'keiba-profit-graph-v1',
-    収支明細: profitGraphRecords,
-    profitGraph: profitGraphSnapshot
+    profitHistory: profitHistory
   };
 }
+
 // v5.18.175: ファイル名指定＋保存先選択（iOS共有シート / PC保存ダイアログ）対応
 function buildExportFileName(){
   const rid = String(currentRaceId || '').replace(/[^\d]/g, '');
@@ -1039,12 +1023,7 @@ async function exportStateJSON(){
 }
 
 
-// v5.18.177: 収支分析グラフ切替HTML 対応JSON出力 Plus
-// 対応先: keiba_profit_spec_chart_switcher.html
-// ポイント:
-// 1) 精算済みの profitHistory / simHistory / 期間横断結果を「収支明細」に正規化
-// 2) 精算履歴が無い場合でも、現在の推奨買い目・シミュレーション買い目を「期待値ベース」で出力
-// 3) 通常の「JSON保存」にも 収支明細 を同梱するので、分析HTMLへそのまま読込可能
+// v5.18.176: 収支分析グラフ切替HTML 対応JSON出力
 function pgjNum(v){
   const n = Number(String(v ?? '').replace(/[,+円\s]/g, '').replace(/^▲/, '-'));
   return Number.isFinite(n) ? n : 0;
@@ -1053,40 +1032,12 @@ function pgjDateOnly(v){
   const s = String(v || '');
   const m = s.match(/(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
   if(m) return `${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}`;
-  try{
-    const d = new Date(s);
-    if(!Number.isNaN(d.getTime()) && typeof formatLocalDate === 'function') return formatLocalDate(d);
-  }catch(e){}
-  return (typeof formatLocalDate === 'function') ? formatLocalDate() : new Date().toISOString().slice(0,10);
-}
-function pgjVenueNameFromRaceId(rid){
-  const id = String(rid || '').replace(/\D/g, '');
-  if(id.length < 10) return '';
-  // netkeiba race_id: YYYY + 場コード2桁 + 開催回2桁 + 日2桁 + R2桁 など
-  const code = id.slice(4,6);
-  const all = [];
-  try{ if(typeof JRA_VENUES !== 'undefined') all.push(...JRA_VENUES); }catch(e){}
-  try{ if(typeof NAR_VENUES !== 'undefined') all.push(...NAR_VENUES); }catch(e){}
-  for(const v of all){
-    if(Array.isArray(v) && String(v[0]).padStart(2,'0') === code) return v[1] || '';
-  }
-  return '';
-}
-function pgjRaceNoFromRaceId(rid){
-  const id = String(rid || '').replace(/\D/g, '');
-  if(id.length >= 2){
-    const no = Number(id.slice(-2));
-    if(no >= 1 && no <= 18) return no + 'R';
-  }
-  return '';
+  try{ return formatLocalDate(new Date(s)); }catch(e){ return formatLocalDate(); }
 }
 function pgjParseRaceLabel(x){
-  const raw = String((x && (x.raceName || x.label || x.source || x.name)) || currentRaceName || '');
-  const rid = String((x && (x.raceId || x.rid || x.race_id)) || currentRaceId || '');
-  const out = { venue: pgjVenueNameFromRaceId(rid) || '未分類', race: pgjRaceNoFromRaceId(rid), ticket:'未分類' };
-  const venueList = [];
-  try{ if(typeof JRA_VENUES !== 'undefined') venueList.push(...JRA_VENUES); }catch(e){}
-  try{ if(typeof NAR_VENUES !== 'undefined') venueList.push(...NAR_VENUES); }catch(e){}
+  const raw = String((x && (x.raceName || x.label || x.source)) || '');
+  const out = { venue:'未分類', race:'', ticket:'未分類' };
+  const venueList = (typeof JRA_VENUES !== 'undefined' ? JRA_VENUES : []).concat(typeof NAR_VENUES !== 'undefined' ? NAR_VENUES : []);
   for(const v of venueList){
     const name = Array.isArray(v) ? v[1] : '';
     if(name && raw.includes(name)){ out.venue = name; break; }
@@ -1103,50 +1054,17 @@ function pgjRecordFromHistory(x, source, i){
   const ret = pgjNum(x && (x.ret ?? x.return ?? x.payout ?? x.払戻));
   const profit = (x && x.profit != null) ? pgjNum(x.profit) : (ret - bet);
   const roi = bet ? Math.round(ret / bet * 1000) / 10 : 0;
-  const rid = (x && (x.raceId || x.rid || x.race_id)) || '';
   return {
     日付: pgjDateOnly(x && (x.date || x.createdAt || x.日付)),
     場: (x && (x.venueName || x.venue || x.place || x.場)) || p.venue,
     R: (x && (x.raceNo || x.no || x.R || x.race)) ? String(x.raceNo || x.no || x.R || x.race).replace(/R?$/,'') + 'R' : p.race,
-    レース名: (x && (x.raceName || x.name || x.レース名)) || currentRaceName || '',
-    race_id: rid,
+    レース名: (x && (x.raceName || x.name || x.レース名)) || '',
+    race_id: (x && (x.raceId || x.rid || x.race_id)) || '',
     券種: (x && (x.ticketType || x.type || x.betType || x.券種)) || p.ticket || source,
     投資: bet,
     払戻: ret,
     収支: profit,
     ROI: roi,
-    状態: '精算済み',
-    source: source,
-    sourceIndex: i
-  };
-}
-function pgjTicketLabel(t){
-  const nums = Array.isArray(t && t.nums) ? t.nums.join('-') : '';
-  return `${(t && t.type) || '買い目'} ${nums}`.trim();
-}
-function pgjRecordFromTicket(t, source, i){
-  const p = pgjParseRaceLabel({ raceName: currentRaceName, raceId: currentRaceId });
-  const bet = pgjNum(t && (t.amount ?? t.stake ?? t.投資));
-  const expected = pgjNum(t && (t.expectedReturn ?? t.expReturn ?? t.expRet));
-  const evRet = Math.round(Number(t && t.ev || 0) * bet);
-  const oddsRet = Math.round(Number(t && t.odds || 0) * bet);
-  // 期待値ベース。expectedReturn が無ければ EV×投資、EVも無ければ想定オッズ×投資を使う。
-  const ret = expected || evRet || oddsRet || 0;
-  return {
-    日付: (typeof formatLocalDate === 'function') ? formatLocalDate() : new Date().toISOString().slice(0,10),
-    場: p.venue,
-    R: p.race,
-    レース名: currentRaceName || '',
-    race_id: currentRaceId || '',
-    券種: (t && (t.type || t.ticketType || t.券種)) || '買い目',
-    買い目: pgjTicketLabel(t),
-    投資: bet,
-    払戻: ret,
-    収支: ret - bet,
-    ROI: bet ? Math.round(ret / bet * 1000) / 10 : 0,
-    EV: Number(t && t.ev || 0),
-    想定オッズ: Number(t && t.odds || 0),
-    状態: '未精算・期待値',
     source: source,
     sourceIndex: i
   };
@@ -1169,7 +1087,6 @@ function pgjRecordsFromRangeRows(){
           払戻: ret,
           収支: profit,
           ROI: bet ? Math.round(ret / bet * 1000) / 10 : 0,
-          状態: '精算済み',
           source: '期間横断シミュレーション',
           sourceIndex: i
         };
@@ -1179,103 +1096,26 @@ function pgjRecordsFromRangeRows(){
 function pgjDedupe(records){
   const seen = new Set(), out = [];
   records.forEach(r => {
-    const key = [r.source, r.race_id, r.日付, r.場, r.R, r.券種, r.買い目 || '', r.投資, r.払戻, r.収支].join('|');
+    const key = [r.source, r.race_id, r.日付, r.場, r.R, r.券種, r.投資, r.払戻, r.収支].join('|');
     if(!seen.has(key)){ seen.add(key); out.push(r); }
   });
   return out;
 }
-function buildProfitGraphRecordsForExport(){
-  let settled = [];
-  try{ settled = settled.concat((profitHistory || []).map((x,i)=>pgjRecordFromHistory(x,'手入力収支',i))); }catch(e){}
-  try{ if(typeof simHistory !== 'undefined') settled = settled.concat((simHistory || []).map((x,i)=>pgjRecordFromHistory(x,'シミュレーション収支',i))); }catch(e){}
-  settled = settled.concat(pgjRecordsFromRangeRows());
-  settled = pgjDedupe(settled).filter(r => Number(r.投資 || 0) > 0 || Number(r.払戻 || 0) > 0 || Number(r.収支 || 0) !== 0);
-
-  // 精算済みがある場合はそれを優先。無い場合だけ、現在の買い目を期待値明細として出す。
-  if(settled.length) return settled;
-
-  let tickets = [];
-  try{ if(typeof simTickets !== 'undefined' && Array.isArray(simTickets) && simTickets.length) tickets = simTickets; }catch(e){}
-  try{ if(!tickets.length && typeof lastTickets !== 'undefined' && Array.isArray(lastTickets)) tickets = lastTickets; }catch(e){}
-  const expectedRows = tickets
-    .filter(t => Number(t && (t.amount || t.stake || 0)) > 0)
-    .map((t,i)=>pgjRecordFromTicket(t,'現在の推奨買い目（期待値）',i));
-  return pgjDedupe(expectedRows);
-}
-function pgjSortDateValue(r){
-  const s = String((r && (r.日付 || r.date || r.createdAt)) || '');
-  const t = Date.parse(s);
-  return Number.isFinite(t) ? t : 0;
-}
-function buildProfitTrendRows(list){
-  const sorted = (list || []).slice().sort((a,b) => {
-    const da = pgjSortDateValue(a), db = pgjSortDateValue(b);
-    if(da !== db) return da - db;
-    return Number(a.sourceIndex || 0) - Number(b.sourceIndex || 0);
-  });
-  let cumBet = 0, cumReturn = 0, cumProfit = 0;
-  return sorted.map((r,i) => {
-    const bet = Number(r.投資 || 0);
-    const ret = Number(r.払戻 || 0);
-    const profit = Number(r.収支 || 0);
-    cumBet += bet;
-    cumReturn += ret;
-    cumProfit += profit;
-    return {
-      No: i + 1,
-      日付: r.日付 || '',
-      場: r.場 || '未分類',
-      R: r.R || '',
-      レース名: r.レース名 || '',
-      race_id: r.race_id || '',
-      券種: r.券種 || '未分類',
-      買い目: r.買い目 || '',
-      投資: bet,
-      払戻: ret,
-      収支: profit,
-      累計投資: cumBet,
-      累計払戻: cumReturn,
-      累計収支: cumProfit,
-      累計ROI: cumBet ? Math.round(cumReturn / cumBet * 1000) / 10 : 0,
-      状態: r.状態 || '',
-      source: r.source || ''
-    };
-  });
-}
-function attachProfitTrendToRecords(list){
-  const trend = buildProfitTrendRows(list);
-  const keyMap = new Map();
-  trend.forEach(t => {
-    const key = [t.日付,t.場,t.R,t.race_id,t.券種,t.買い目,t.投資,t.払戻,t.収支,t.source].join('|');
-    keyMap.set(key, t);
-  });
-  return (list || []).map(r => {
-    const key = [r.日付,r.場,r.R,r.race_id,r.券種,r.買い目||'',Number(r.投資||0),Number(r.払戻||0),Number(r.収支||0),r.source||''].join('|');
-    const t = keyMap.get(key);
-    if(!t) return r;
-    return Object.assign({}, r, {
-      変動No: t.No,
-      累計投資: t.累計投資,
-      累計払戻: t.累計払戻,
-      累計収支: t.累計収支,
-      累計ROI: t.累計ROI
-    });
-  });
-}
-function buildProfitGraphJSONSnapshot(opt){
-  const options = opt || {};
-  const baseList = buildProfitGraphRecordsForExport();
-  const trend = buildProfitTrendRows(baseList);
-  const list = attachProfitTrendToRecords(baseList);
+function buildProfitGraphJSONSnapshot(){
+  let list = [];
+  try{ list = list.concat((profitHistory || []).map((x,i)=>pgjRecordFromHistory(x,'手入力収支',i))); }catch(e){}
+  try{ if(typeof simHistory !== 'undefined') list = list.concat((simHistory || []).map((x,i)=>pgjRecordFromHistory(x,'シミュレーション収支',i))); }catch(e){}
+  list = list.concat(pgjRecordsFromRangeRows());
+  list = pgjDedupe(list).filter(r => Number(r.投資 || 0) > 0 || Number(r.払戻 || 0) > 0 || Number(r.収支 || 0) !== 0);
   const totalBet = list.reduce((s,r)=>s+Number(r.投資||0),0);
   const totalReturn = list.reduce((s,r)=>s+Number(r.払戻||0),0);
   const totalProfit = list.reduce((s,r)=>s+Number(r.収支||0),0);
   return {
     product: 'The競馬 EV分析',
-    schema: 'keiba-profit-graph-v2',
+    schema: 'keiba-profit-graph-v1',
     version: (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : '',
     exportedAt: new Date().toISOString(),
-    説明: 'keiba_profit_spec_chart_switcher.html / 競馬アプリ収支分析グラフ仕様HTML 対応JSON。収支変動も記録します。',
+    説明: 'keiba_profit_spec_chart_switcher.html / 競馬アプリ収支分析グラフ仕様HTML 対応JSON',
     集計: {
       件数: list.length,
       投資合計: totalBet,
@@ -1284,13 +1124,10 @@ function buildProfitGraphJSONSnapshot(opt){
       ROI: totalBet ? Math.round(totalReturn / totalBet * 1000) / 10 : 0
     },
     収支明細: list,
-    収支変動: trend,
     仕様: {
       graphs: ['収支構成比','開催場別収支','券種別収支','累計収支変動'],
       chartSwitch: ['円グラフ','棒グラフ','折れ線グラフ'],
-      trendFields: ['No','日付','投資','払戻','収支','累計投資','累計払戻','累計収支','累計ROI'],
-      compatibleWith: 'keiba_profit_spec_chart_switcher.html',
-      note: '収支明細にも累計投資・累計払戻・累計収支・累計ROIを付与します。精算済み履歴が無い場合、現在の買い目は未精算・期待値として出力されます。'
+      compatibleWith: 'keiba_profit_spec_chart_switcher.html'
     }
   };
 }
@@ -1304,7 +1141,7 @@ async function exportProfitGraphJSON(){
   try{
     const snap = buildProfitGraphJSONSnapshot();
     if(!snap.収支明細.length){
-      dataIoStatus('出力できる収支データがありません。EV計算で買い目を作るか、シミュレーション精算・収支記録後に実行してください。', false);
+      dataIoStatus('出力できる収支履歴がありません。シミュレーション精算または収支記録後に実行してください。', false);
       return;
     }
     json = JSON.stringify(snap, null, 2);
@@ -9934,6 +9771,7 @@ if(horses.length === 0){
   // ============================================================
   let rsAbort = false;
   let rsLastRows = [];   // 直近の実行結果（収支グラフ転記用）
+  window.__rsLastRows = rsLastRows; // v5.18.177 期間横断JSON出力用
 
   function rsVenuesForKind(kind){ return (kind === 'NAR') ? NAR_VENUES : JRA_VENUES; }
 
@@ -10539,6 +10377,7 @@ if(horses.length === 0){
 
     rsAbort = false;
     rsLastRows = [];
+    window.__rsLastRows = rsLastRows;
     rsLastOpenVenuesError = null;
     rsOpenVenuesFailCount = 0;
     rsOpenVenuesOkCount = 0;
@@ -10623,6 +10462,7 @@ if(horses.length === 0){
 
         if(!venues.length){
           rows.push({ date, header: true, note: `${date}：${kind}は開催なし` });
+          rsLastRows = rows; window.__rsLastRows = rsLastRows;
           continue;
         }
 
@@ -10649,6 +10489,7 @@ if(horses.length === 0){
               continue;
             }
             rows.push({ date, venueCode: vc, venueName: vn, no: 0, status: 'error', error: 'レース一覧を取得できませんでした' });
+            rsLastRows = rows; window.__rsLastRows = rsLastRows;
             rsRenderTable(rows);
             continue;
           }
@@ -10697,6 +10538,7 @@ if(horses.length === 0){
             }
             rows.push(row);
             rsLastRows = rows;
+            window.__rsLastRows = rsLastRows;
             rsRenderSummary(rows);
             rsRenderTable(rows);
             rsRenderChart(rows);
@@ -12678,7 +12520,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.178 ProfitTrendJsonExport';
+  window.APP_VERSION = 'v5.18.177 RangeSimJsonExport';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -13107,7 +12949,7 @@ function json(obj, status = 200) {
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.178 ProfitTrendJsonExport';
+  window.APP_VERSION = 'v5.18.177 RangeSimJsonExport';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -13404,7 +13246,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.178 ProfitTrendJsonExport';
+  window.APP_VERSION = 'v5.18.177 RangeSimJsonExport';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -13622,7 +13464,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.178 ProfitTrendJsonExport';
+    window.APP_VERSION = 'v5.18.177 RangeSimJsonExport';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -13922,7 +13764,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.178 ProfitTrendJsonExport';
+  window.APP_VERSION = 'v5.18.177 RangeSimJsonExport';
   try{
     const ver = document.querySelector('.ver');
     if(ver){
@@ -14715,6 +14557,181 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   });
 
   console.log('[v5.18.172] NAR past-performance adjustment integrated into simulation (all NAR venues)');
+})();
+</script>
+
+
+
+<!-- ============================================================
+     v5.18.177 RangeSimJsonExport
+     期間×開催場 横断シミュレーションの直近結果を
+     keiba_profit_spec_chart_switcher.html 対応JSONとして保存する。
+     profitHistory/simHistoryではなく、rsLastRowsだけを出力する。
+     ============================================================ -->
+<script>
+(function(){
+  'use strict';
+
+  function rsj$(id){ return document.getElementById(id); }
+  function rsjNum(v){ const n = Number(String(v ?? 0).replace(/[,+円\s]/g,'')); return Number.isFinite(n) ? n : 0; }
+  function rsjDateOnly(v){ return String(v || '').slice(0,10) || '未日付'; }
+  function rsjYmd(){
+    try{ return (typeof formatLocalDate === 'function' ? formatLocalDate() : new Date().toISOString().slice(0,10)).replace(/-/g,''); }
+    catch(e){ return String(Date.now()); }
+  }
+  function rsjRows(){
+    const rows = Array.isArray(window.__rsLastRows) ? window.__rsLastRows : [];
+    return rows.slice();
+  }
+  function rsjGroup(rows, keyFn){
+    const map = new Map();
+    rows.forEach(r => {
+      if(!r || r.status !== 'ok' || !r.hasFinish) return;
+      const key = keyFn(r);
+      if(!map.has(key)) map.set(key, { name:key, races:0, hit:0, bet:0, return:0, profit:0 });
+      const x = map.get(key);
+      x.races += 1;
+      x.hit += rsjNum(r.hit) > 0 ? 1 : 0;
+      x.bet += rsjNum(r.bet);
+      x.return += rsjNum(r.ret);
+      x.profit += (r.profit != null) ? rsjNum(r.profit) : rsjNum(r.ret) - rsjNum(r.bet);
+    });
+    return Array.from(map.values()).map(x => ({ ...x, roi: x.bet ? Math.round(x.return / x.bet * 1000) / 10 : 0 }));
+  }
+  function rsjTrend(rows){
+    let cumBet = 0, cumReturn = 0, cumProfit = 0;
+    return rows
+      .filter(r => r && r.status === 'ok' && r.hasFinish)
+      .sort((a,b) => String(a.date).localeCompare(String(b.date)) || rsjNum(a.no) - rsjNum(b.no))
+      .map((r, i) => {
+        const bet = rsjNum(r.bet);
+        const ret = rsjNum(r.ret);
+        const profit = (r.profit != null) ? rsjNum(r.profit) : ret - bet;
+        cumBet += bet; cumReturn += ret; cumProfit += profit;
+        return {
+          index: i + 1,
+          日付: rsjDateOnly(r.date),
+          場: r.venueName || r.venueCode || '未分類',
+          R: r.no ? String(r.no) + 'R' : '',
+          レース名: r.raceName || '',
+          race_id: r.rid || '',
+          投資: bet,
+          払戻: ret,
+          収支: profit,
+          累計投資: cumBet,
+          累計払戻: cumReturn,
+          累計収支: cumProfit,
+          累計ROI: cumBet ? Math.round(cumReturn / cumBet * 1000) / 10 : 0
+        };
+      });
+  }
+  function buildRangeVenueSimulationJSON(){
+    const rows = rsjRows();
+    const ok = rows.filter(r => r && r.status === 'ok');
+    const settled = ok.filter(r => r.hasFinish);
+    const errors = rows.filter(r => r && r.status === 'error');
+    const detail = rows
+      .filter(r => r && (r.status === 'ok' || r.status === 'error'))
+      .map((r, i) => {
+        const bet = rsjNum(r.bet), ret = rsjNum(r.ret);
+        const profit = (r.profit != null) ? rsjNum(r.profit) : ret - bet;
+        return {
+          index: i + 1,
+          status: r.status || '',
+          日付: rsjDateOnly(r.date),
+          場: r.venueName || r.venueCode || '未分類',
+          venueCode: r.venueCode || '',
+          R: r.no ? String(r.no) + 'R' : '',
+          race_id: r.rid || '',
+          レース名: r.raceName || '',
+          着順: Array.isArray(r.finishTop) ? r.finishTop.join('-') : '',
+          点数: rsjNum(r.count),
+          投資: bet,
+          払戻: r.hasFinish ? ret : 0,
+          収支: r.hasFinish ? profit : 0,
+          ROI: (r.hasFinish && bet) ? Math.round(ret / bet * 1000) / 10 : 0,
+          的中点数: rsjNum(r.hit),
+          確定: !!r.hasFinish,
+          error: r.error || ''
+        };
+      });
+    const profitRecords = detail
+      .filter(r => r.status === 'ok' && (rsjNum(r.投資) > 0 || rsjNum(r.払戻) > 0 || rsjNum(r.収支) !== 0))
+      .map((r, i) => ({
+        日付: r.日付,
+        場: r.場,
+        R: r.R,
+        レース名: r.レース名,
+        race_id: r.race_id,
+        券種: '期間横断',
+        投資: r.投資,
+        払戻: r.払戻,
+        収支: r.収支,
+        ROI: r.ROI,
+        source: '期間横断シミュレーション',
+        sourceIndex: i
+      }));
+    const bet = settled.reduce((s,r)=>s+rsjNum(r.bet),0);
+    const ret = settled.reduce((s,r)=>s+rsjNum(r.ret),0);
+    const profit = settled.reduce((s,r)=>s+((r.profit != null) ? rsjNum(r.profit) : rsjNum(r.ret)-rsjNum(r.bet)),0);
+    const hitRaces = settled.filter(r => rsjNum(r.hit) > 0).length;
+    return {
+      product: 'The競馬 EV分析',
+      schema: 'keiba-range-venue-simulation-v1',
+      version: (window.APP_VERSION || 'v5.18.177 RangeSimJsonExport'),
+      exportedAt: new Date().toISOString(),
+      説明: '期間×開催場 横断シミュレーションの直近実行結果。keiba_profit_spec_chart_switcher.htmlでも読込可能な収支明細を含みます。',
+      条件: {
+        区分: rsj$('rsKind') ? rsj$('rsKind').value : '',
+        開始日: rsj$('rsStart') ? rsj$('rsStart').value : '',
+        終了日: rsj$('rsEnd') ? rsj$('rsEnd').value : '',
+        馬柱補正: !!(rsj$('rsPastAdj') && rsj$('rsPastAdj').checked),
+        収支グラフ記録: !!(rsj$('rsRecord') && rsj$('rsRecord').checked)
+      },
+      集計: {
+        処理R: ok.length,
+        確定R: settled.length,
+        エラーR: errors.length,
+        的中R: hitRaces,
+        的中率: settled.length ? Math.round(hitRaces / settled.length * 1000) / 10 : 0,
+        投資合計: bet,
+        払戻合計: ret,
+        収支合計: profit,
+        ROI: bet ? Math.round(ret / bet * 1000) / 10 : 0
+      },
+      開催場別集計: rsjGroup(settled, r => r.venueName || r.venueCode || '未分類'),
+      日別集計: rsjGroup(settled, r => rsjDateOnly(r.date)),
+      開催場日別集計: rsjGroup(settled, r => rsjDateOnly(r.date) + ' ' + (r.venueName || r.venueCode || '未分類')),
+      収支変動: rsjTrend(settled),
+      レース別明細: detail,
+      収支明細: profitRecords,
+      仕様: {
+        compatibleWith: 'keiba_profit_spec_chart_switcher.html',
+        graphs: ['開催場別収支','券種別収支','収支構成比','収支変動'],
+        chartSwitch: ['棒','円','折れ線'],
+        note: '券種別グラフでは期間横断単位の集計として「期間横断」にまとまります。券種別内訳は今後、row.tickets明細保存で拡張可能です。'
+      }
+    };
+  }
+  function rsjSaveJSON(obj, fileName){
+    const json = JSON.stringify(obj, null, 2);
+    const blob = new Blob([json], { type:'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = fileName; document.body.appendChild(a); a.click();
+    setTimeout(() => { try{ document.body.removeChild(a); }catch(e){} URL.revokeObjectURL(url); }, 1200);
+  }
+  window.exportRangeVenueSimulationJSON = function exportRangeVenueSimulationJSON(){
+    const rows = rsjRows();
+    if(!rows.length){ alert('期間横断シミュレーション結果がありません。先に「期間横断シミュレーション実行」を押してください。'); return; }
+    const obj = buildRangeVenueSimulationJSON();
+    if(!obj.レース別明細.length){ alert('出力できるレース別明細がありません。'); return; }
+    const cond = obj.条件 || {};
+    const fileName = `keiba-range-sim_${cond.区分 || 'KEIBA'}_${String(cond.開始日||rsjYmd()).replace(/-/g,'')}-${String(cond.終了日||rsjYmd()).replace(/-/g,'')}.json`;
+    rsjSaveJSON(obj, fileName);
+    const btn = rsj$('rsJsonExportBtn');
+    if(btn){ const old = btn.textContent; btn.textContent = '✅ JSON出力しました'; setTimeout(()=>{ btn.textContent = old; }, 1800); }
+  };
 })();
 </script>
 

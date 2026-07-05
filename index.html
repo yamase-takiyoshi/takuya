@@ -456,6 +456,7 @@ body{
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-primary" id="rsRunBtn" onclick="runRangeVenueSimulation()">📆 期間横断シミュレーション実行</button>
+        <button class="btn-sm" id="rsOneShotBtn" onclick="runRangeVenueSimulationOneShot()" type="button" style="background:rgba(0,255,136,.16);border-color:rgba(0,255,136,.35);color:#d9ffe8;font-weight:900">🚄 一発モード</button>
         <button class="btn-sm" id="rsStopBtn" onclick="stopRangeVenueSimulation()" style="display:none">⏹ 中断</button>
         <button class="btn-sm" id="rsJsonExportBtn" onclick="exportRangeVenueSimulationJSON()" type="button">📊 期間横断JSON出力</button>
         <button class="btn-sm" id="rsJsonImportBtn" onclick="importRangeVenueSimulationJSON()" type="button">📥 期間横断JSON読込</button>
@@ -10757,6 +10758,242 @@ if(horses.length === 0){
     }
   }
 
+
+  // ============================================================
+  //  v5.18.196 RangeSimOneShot
+  //  超高速一発モード：全レースの処理対象を先に作り、描画は最後だけ。
+  //  レース処理はグローバル horses に依存しないローカル判定で並列チャンク実行する。
+  //  通常モードより速い代わりに、通信制限時は一部エラーが出やすい。
+  // ============================================================
+  function rsOneShotComboKey(type, nums){
+    try{ if(typeof comboKey === 'function') return comboKey(type, nums); }catch(e){}
+    const a = (nums || []).map(Number).filter(n=>n>0);
+    if(type === '馬単' || type === '3連単') return a.join('-');
+    return a.slice().sort((x,y)=>x-y).join('-');
+  }
+  function rsOneShotParseFinish(doc, localHorses){
+    const rows2 = [...doc.querySelectorAll('table tr')];
+    const finish = [];
+    rows2.forEach(tr => {
+      const tds = [...tr.querySelectorAll('td')];
+      if(tds.length < 4) return;
+      const rankText = (typeof normSimDigits === 'function') ? normSimDigits(tds[0].textContent || '') : String(tds[0].textContent || '');
+      const rank = Number((rankText.match(/^(\d{1,2})/) || [])[1]);
+      if(!(rank >= 1 && rank <= 18)) return;
+      const c1 = (typeof normSimDigits === 'function') ? normSimDigits(tds[1]?.textContent || '') : String(tds[1]?.textContent || '');
+      const c2 = (typeof normSimDigits === 'function') ? normSimDigits(tds[2]?.textContent || '') : String(tds[2]?.textContent || '');
+      let frame = Number((c1.match(/\d{1,2}/) || [])[0]);
+      let horseNo = Number((c2.match(/\d{1,2}/) || [])[0]);
+      if(!(horseNo >= 1 && horseNo <= 18)) return;
+      if(!(frame >= 1 && frame <= 8)){
+        const h = (localHorses || []).find(x => Number(x.num) === horseNo);
+        frame = Number(h?.frame || 0);
+      }
+      finish.push({rank, horseNo, frame});
+    });
+    const seen = new Set();
+    return finish.sort((a,b)=>a.rank-b.rank).filter(x => {
+      if(seen.has(x.horseNo)) return false;
+      seen.add(x.horseNo);
+      return true;
+    }).slice(0, 10);
+  }
+  async function rsOneShotGetResult(kind, rid, resultDoc, localHorses){
+    let doc = resultDoc;
+    if(!doc){
+      const url = `${asw_host(kind)}/race/result.html?race_id=${rid}&rf=race_submenu`;
+      const html = await fetchHtmlViaProxy(url);
+      doc = new DOMParser().parseFromString(html, 'text/html');
+    }
+    return { finish: rsOneShotParseFinish(doc, localHorses), payouts: parsePayoutsFromResultDoc(doc) };
+  }
+  function rsOneShotJudge(ticket, finish, localHorseCount){
+    const nums = (finish || []).map(x => x.horseNo);
+    const frames = (finish || []).map(x => x.frame);
+    const n = localHorseCount || nums.length;
+    const placeLimit = n <= 7 ? 2 : 3;
+    if(ticket.type === '単勝') return Number(ticket.nums[0]) === nums[0];
+    if(ticket.type === '複勝') return nums.slice(0, placeLimit).includes(Number(ticket.nums[0]));
+    if(ticket.type === '枠連') return rsOneShotComboKey('枠連', ticket.nums) === rsOneShotComboKey('枠連', frames.slice(0,2));
+    if(ticket.type === '馬連') return rsOneShotComboKey('馬連', ticket.nums) === rsOneShotComboKey('馬連', nums.slice(0,2));
+    if(ticket.type === 'ワイド') return ticket.nums.every(x => nums.slice(0,3).includes(Number(x)));
+    if(ticket.type === '馬単') return rsOneShotComboKey('馬単', ticket.nums) === rsOneShotComboKey('馬単', nums.slice(0,2));
+    if(ticket.type === '3連複') return rsOneShotComboKey('3連複', ticket.nums) === rsOneShotComboKey('3連複', nums.slice(0,3));
+    if(ticket.type === '3連単') return rsOneShotComboKey('3連単', ticket.nums) === rsOneShotComboKey('3連単', nums.slice(0,3));
+    return false;
+  }
+  function rsOneShotPayout(ticket, payouts){
+    const key = `${ticket.type}:${rsOneShotComboKey(ticket.type, ticket.nums)}`;
+    if(payouts && payouts[key]) return {amount:payouts[key], source:'real'};
+    return {amount:Math.max(0, Math.round((Number(ticket.odds || 0) * 100) / 10) * 10), source:'estimate'};
+  }
+  function rsOneShotSettle(tickets, finish, payouts, localHorseCount){
+    let bet = 0, ret = 0, hit = 0;
+    const hasFinish = finish && finish.length >= 2;
+    (tickets || []).forEach(t => {
+      const a = Number(t.amount || 0);
+      bet += a;
+      const isHit = hasFinish ? rsOneShotJudge(t, finish, localHorseCount) : false;
+      const pay  = isHit ? rsOneShotPayout(t, payouts) : { amount: 0 };
+      const r    = isHit ? Math.floor(a / 100) * Number(pay.amount || 0) : 0;
+      if(isHit) hit++;
+      ret += r;
+    });
+    return { bet, ret, hit, profit: ret - bet, roi: bet ? ret / bet * 100 : 0, count: (tickets || []).length, hasFinish };
+  }
+  function rsOneShotBreakdown(row, tickets, finish, payouts, localHorseCount){
+    try{
+      const details = [];
+      const byType = {};
+      (tickets || []).forEach(t => {
+        const a = Number(t.amount || 0);
+        const isHit = row.hasFinish ? rsOneShotJudge(t, finish, localHorseCount) : false;
+        const pay = isHit ? rsOneShotPayout(t, payouts) : { amount: 0 };
+        const ret = isHit ? Math.floor(a / 100) * Number(pay.amount || 0) : 0;
+        const nums = Array.isArray(t.nums) ? t.nums.join('-') : '';
+        details.push({ 券種名: t.type || '', 買い目: nums, 購入額: a, 払戻額: ret, 的中: isHit ? 1 : 0 });
+        const k = t.type || '不明';
+        if(!byType[k]) byType[k] = { 券種名:k, 点数:0, 購入額:0, 払戻額:0, 的中:0 };
+        byType[k].点数 += 1; byType[k].購入額 += a; byType[k].払戻額 += ret; if(isHit) byType[k].的中 += 1;
+      });
+      row.ticketDetails = details;
+      row.ticketTypeBreakdown = Object.values(byType);
+      row.ticketType = Object.keys(byType).join('+');
+    }catch(e){}
+  }
+  async function rsOneShotBuildTasks(kind, dates, selVenues, prog){
+    const tasks = [];
+    let rsJraPlan = null;
+    if(kind === 'JRA'){
+      if(prog) prog.innerHTML = `<div class="url-status">🚄 一発モード：JRA開催回を先に探索中...</div>`;
+      try{ rsJraPlan = await buildJraRangePlanByKaisai(selVenues, dates[0], dates[dates.length - 1], prog); }
+      catch(e){ rsJraPlan = null; }
+      if(rsJraPlan && rsJraPlan.size === 0 && !rsJraPlan.reachable) rsJraPlan = null;
+    }
+    for(const date of dates){
+      if(rsAbort) break;
+      if(kind === 'JRA'){
+        if(rsJraPlan){ if(!((rsJraPlan.get(date)||[]).length)) continue; }
+        else if(!isJraPossibleRaceDay(date)) continue;
+      }
+      let venues = [];
+      if(kind === 'NAR' && selVenues.length){
+        venues = selVenues.slice();
+      }else{
+        const openVenues = rsJraPlan ? (rsJraPlan.get(date) || []).map(v => v.venueCode) : await rsOpenVenues(kind, date);
+        venues = selVenues.length ? openVenues.filter(c => selVenues.includes(c)) : openVenues;
+      }
+      for(const vc of venues){
+        if(rsAbort) break;
+        const vn = venueName(kind, vc);
+        if(prog && (tasks.length % 24 === 0)) prog.innerHTML = `<div class="url-status">🚄 一発モード：対象レース収集中... ${date} ${vn}</div>`;
+        let races = [];
+        if(rsJraPlan){
+          const v = (rsJraPlan.get(date) || []).find(x => x.venueCode === vc);
+          races = v ? v.races.slice() : [];
+        }else{
+          try{ races = await rsCollectRaces(kind, date, vc); }catch(e){ races = []; }
+        }
+        races.forEach(r => tasks.push({date, venueCode:vc, venueName:vn, no:r.no, rid:r.rid, raceName:r.name || (r.no + 'R')}));
+      }
+    }
+    return tasks;
+  }
+  async function rsOneShotProcessTask(kind, task, todayForFast){
+    const row = { date: task.date, venueCode: task.venueCode, venueName: task.venueName, no: task.no, rid: task.rid,
+      raceName: task.raceName || (task.no + 'R'), status: 'pending', count: 0, bet: 0, ret: 0, profit: 0, roi: 0,
+      hit: 0, hasFinish: false, finishTop: [] };
+    try{
+      const loaded = String(task.date) < todayForFast ? await asw_loadHorsesFast(kind, task.rid) : await asw_loadHorses(kind, task.rid);
+      const localHorses = loaded.horses || [];
+      row.raceName = loaded.raceName || task.raceName || (task.no + 'R');
+      const valid = localHorses.filter(h => Number(h.num) > 0 && h.name);
+      if(valid.length < 2) throw new Error('有効な出走馬が2頭未満');
+      const made = generateCandidates(valid);
+      const tickets = buildTickets(made.recs).map(t => ({ ...t, nums:[...t.nums] }));
+      row.count = tickets.length;
+      const { finish, payouts } = await rsOneShotGetResult(kind, task.rid, loaded.resultDoc, localHorses);
+      row.hasFinish = finish && finish.length >= 2;
+      row.finishTop = row.hasFinish ? finish.slice(0, 3).map(x => x.horseNo) : [];
+      const s = rsOneShotSettle(tickets, finish, payouts, valid.length);
+      row.bet = s.bet; row.ret = s.ret; row.profit = s.profit; row.roi = s.roi; row.hit = s.hit; row.status = 'ok';
+      rsOneShotBreakdown(row, tickets, finish, payouts, valid.length);
+    }catch(e){
+      row.status = 'error';
+      row.error = (e && e.message) || String(e);
+    }
+    return row;
+  }
+  async function runRangeVenueSimulationOneShot(){
+    const btn = $('rsOneShotBtn'), stopBtn = $('rsStopBtn'), prog = $('rsProgress');
+    const kind = $('rsKind')?.value || 'JRA';
+    const start = $('rsStart')?.value || '';
+    const end = $('rsEnd')?.value || '';
+    if(!settings.proxyUrl){ alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。'); return; }
+    if(!start || !end){ alert('開始日と終了日を選択してください。'); return; }
+    if(start > end){ alert('開始日は終了日より前（または同日）にしてください。'); return; }
+    const RS_MAX_DAYS = 400;
+    const dates = [];
+    let cur = start, guard = 0;
+    while(cur <= end && guard < RS_MAX_DAYS){ dates.push(cur); cur = addLocalDaysYmd(cur, 1); guard++; }
+    const truncated = (cur <= end);
+    const selVenues = rsSelectedVenueCodes();
+    const recordToChart = $('rsRecord')?.checked;
+    const todayForFast = (typeof todayYmd === 'function') ? todayYmd() : new Date().toISOString().slice(0,10);
+    rsAbort = false; rsLastRows = [];
+    try{ window.__rsLastRows = []; }catch(e){}
+    $('rsSummary').innerHTML = ''; $('rsTable').innerHTML = '';
+    { const cw = $('rsChartWrap'); if(cw) cw.style.display = 'none'; }
+    if(btn){ btn.disabled = true; btn.textContent = '🚄 一発実行中...'; }
+    const normalBtn = $('rsRunBtn'); if(normalBtn) normalBtn.disabled = true;
+    if(stopBtn) stopBtn.style.display = '';
+    try{
+      if(prog) prog.innerHTML = `<div class="url-status">🚄 一発モード：対象レースを収集中...</div>`;
+      const tasks = await rsOneShotBuildTasks(kind, dates, selVenues, prog);
+      if(!tasks.length){
+        if(prog) prog.innerHTML = `<div class="url-status ok">✅ 一発モード完了：対象レースはありませんでした。</div>`;
+        return;
+      }
+      const rows = [];
+      const chunkSize = kind === 'JRA' ? 6 : 4;
+      const started = Date.now();
+      for(let i = 0; i < tasks.length; i += chunkSize){
+        if(rsAbort) break;
+        const chunk = tasks.slice(i, i + chunkSize);
+        if(prog) prog.innerHTML = `<div class="url-status">🚄 一発モード：${Math.min(i + chunk.length, tasks.length)}/${tasks.length}R 処理中（${chunkSize}並列・描画なし）...</div>`;
+        const res = await Promise.all(chunk.map(t => rsOneShotProcessTask(kind, t, todayForFast)));
+        rows.push(...res);
+        rsLastRows = rows; try{ window.__rsLastRows = rows.slice(); }catch(e){}
+        if(recordToChart){
+          res.forEach(r => {
+            if(r && r.status === 'ok' && r.hasFinish && Number(r.bet || 0) > 0){
+              try{
+                currentRaceId = r.rid || '';
+                currentRaceName = `${r.date} ${r.venueName || ''} ${r.raceName || (r.no + 'R')}`;
+                simRecordProfit(true, r.bet, r.ret, r.hit, r.count, '期間横断一発モード');
+              }catch(e){}
+            }
+          });
+        }
+        // 通信ブロック回避の軽い休憩。通常モードより大幅短縮。
+        if(i + chunkSize < tasks.length) await new Promise(r => setTimeout(r, kind === 'JRA' ? 70 : 120));
+      }
+      rows.sort((a,b)=>(a.date+'|'+(a.venueCode||'')+'|'+String(a.no).padStart(2,'0')).localeCompare(b.date+'|'+(b.venueCode||'')+'|'+String(b.no).padStart(2,'0')));
+      rsLastRows = rows; try{ window.__rsLastRows = rows.slice(); }catch(e){}
+      rsRenderSummary(rows); rsRenderTable(rows); rsRenderChart(rows);
+      const okCount = rows.filter(x => x.status === 'ok').length;
+      const sec = Math.max(1, Math.round((Date.now() - started) / 1000));
+      if(prog) prog.innerHTML = `<div class="url-status ok">✅ 一発モード完了：${okCount}/${tasks.length}レースを${sec}秒で処理しました${rsAbort ? '（中断）' : ''}${truncated ? `（⚠️先頭${RS_MAX_DAYS}日のみ）` : ''}。</div>`;
+    }catch(e){
+      console.error('[runRangeVenueSimulationOneShot]', e);
+      if(prog) prog.innerHTML = `<div class="url-status err">❌ 一発モード失敗: ${asw_esc((e && e.message) || e)}</div>`;
+    }finally{
+      if(btn){ btn.disabled = false; btn.textContent = '🚄 一発モード'; }
+      if(normalBtn) normalBtn.disabled = false;
+      if(stopBtn) stopBtn.style.display = 'none';
+    }
+  }
+
   function stopRangeVenueSimulation(){ rsAbort = true; }
 
   // 初期化：日付デフォルト・開催場チェックボックス生成
@@ -10925,6 +11162,7 @@ if(horses.length === 0){
   // 公開
   window.runAllRacesSimulation = runAllRacesSimulation;
   window.runRangeVenueSimulation = runRangeVenueSimulation;
+  window.runRangeVenueSimulationOneShot = runRangeVenueSimulationOneShot;
   window.importRangeVenueSimulationJSON = importRangeVenueSimulationJSON;
   window.stopRangeVenueSimulation = stopRangeVenueSimulation;
   window.rsRenderVenueChecks = rsRenderVenueChecks;

@@ -13475,7 +13475,7 @@ function json(obj, status = 200) {
    - 「取得中」に一度空配列を描いても、JRA土日を即「開催なし」に見せない。
    ============================================================ */
 (function(){
-  const V = 'v5.18.178 RangeSimJsonExportFixed';
+  const V = 'v5.18.179 RangeSimJsonExportSaveAsUtf8';
   try{
     window.APP_VERSION = V;
     document.title = 'The競馬 EV分析 ' + V;
@@ -13919,7 +13919,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  const V171 = 'v5.18.178 RangeSimJsonExportFixed';
+  const V171 = 'v5.18.179 RangeSimJsonExportSaveAsUtf8';
   // 旧パッチ（v5.18.160系）の遅延バージョン上書きより後に走らせて確実に勝つ
   [0, 200, 800, 1600, 3000, 5000, 6500].forEach(ms => setTimeout(() => {
     window.APP_VERSION = V171;
@@ -14345,7 +14345,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  const V172 = 'v5.18.178 RangeSimJsonExportFixed';
+  const V172 = 'v5.18.179 RangeSimJsonExportSaveAsUtf8';
   [0, 200, 800, 1600, 3000, 5000, 7000].forEach(ms => setTimeout(() => {
     window.APP_VERSION = V172;
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
@@ -14559,7 +14559,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 
 <!-- ============================================================
-     v5.18.178 RangeSimJsonExportFixed
+     v5.18.179 RangeSimJsonExportSaveAsUtf8
      期間×開催場 横断シミュレーション結果JSON出力（安全版）
      ============================================================ -->
 <script>
@@ -14636,7 +14636,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     return {
       product:'The競馬 EV分析',
       schema:'keiba-range-venue-simulation-v1',
-      version:window.APP_VERSION || 'v5.18.178 RangeSimJsonExportFixed',
+      version:window.APP_VERSION || 'v5.18.179 RangeSimJsonExportSaveAsUtf8',
       exportedAt:new Date().toISOString(),
       説明:'期間×開催場 横断シミュレーションの直近実行結果。収支分析グラフHTMLで読込可能な収支明細と収支変動を含みます。',
       条件:{
@@ -14656,21 +14656,62 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       仕様:{ compatibleWith:'keiba_profit_spec_chart_switcher.html', graphs:['開催場別収支','券種別収支','収支構成比','収支変動'], chartSwitch:['棒','円','折れ線'] }
     };
   }
-  function save(obj, name){
-    const blob = new Blob([JSON.stringify(obj,null,2)], {type:'application/json'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click();
-    setTimeout(()=>{ try{a.remove()}catch(e){} URL.revokeObjectURL(url); }, 1200);
+  // JSONをASCIIエスケープして保存する。
+  // iPad/Safari/EdgeでJSONを直接開いたときの文字コード誤判定による文字化けを避けるため、
+  // 日本語キー・日本語値は\uXXXX形式で出力する。JSON.parse後は通常の日本語として復元される。
+  function jsonStringifyAscii(obj){
+    return JSON.stringify(obj, null, 2).replace(/[\u007f-\uffff]/g, function(ch){
+      return '\\u' + ('0000' + ch.charCodeAt(0).toString(16)).slice(-4);
+    });
   }
-  window.exportRangeVenueSimulationJSON = function(){
+  function sanitizeFileName(name){
+    return String(name || 'keiba-range-sim.json')
+      .replace(/[\\/:*?"<>|]+/g, '_')
+      .replace(/\s+/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_+|_+$/g, '') || 'keiba-range-sim.json';
+  }
+  async function save(obj, defaultName){
+    let name = prompt('保存するJSONファイル名を入力してください', defaultName || 'keiba-range-sim.json');
+    if(name === null) return false;
+    name = sanitizeFileName(name);
+    if(!/\.json$/i.test(name)) name += '.json';
+    const text = jsonStringifyAscii(obj);
+    const blob = new Blob([text], {type:'application/json;charset=UTF-8'});
+
+    // iPad/iPhoneでは共有シート経由の「ファイルに保存」が一番確実。
+    try{
+      if(window.File && navigator.share){
+        const file = new File([blob], name, {type:'application/json;charset=UTF-8'});
+        if(!navigator.canShare || navigator.canShare({files:[file]})){
+          await navigator.share({files:[file], title:name, text:'期間横断シミュレーションJSON'});
+          return true;
+        }
+      }
+    }catch(e){
+      // キャンセル時や共有非対応時は下のdownloadへフォールバックする。
+    }
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(()=>{ try{a.remove()}catch(e){} URL.revokeObjectURL(url); }, 1500);
+    return true;
+  }
+  window.exportRangeVenueSimulationJSON = async function(){
     const all = rows();
     if(!all.length){ alert('期間横断シミュレーション結果がありません。先に「期間横断シミュレーション実行」を押してください。'); return; }
     const obj = buildJson();
     if(!obj.レース別明細.length){ alert('出力できるレース別明細がありません。'); return; }
     const c = obj.条件 || {};
     const name = `keiba-range-sim_${c.区分 || 'KEIBA'}_${String(c.開始日||ymd()).replace(/-/g,'')}-${String(c.終了日||ymd()).replace(/-/g,'')}.json`;
-    save(obj, name);
-    const b = $('rsJsonExportBtn'); if(b){ const old=b.textContent; b.textContent='✅ JSON出力しました'; setTimeout(()=>b.textContent=old,1800); }
+    const ok = await save(obj, name);
+    const b = $('rsJsonExportBtn');
+    if(b && ok){ const old=b.textContent; b.textContent='✅ JSON保存しました'; setTimeout(()=>b.textContent=old,1800); }
   };
 })();
 </script>

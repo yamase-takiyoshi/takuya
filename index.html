@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.182 RangeSimJsonExportRobust</title>
+<title>The競馬 EV分析 v5.18.184 RangeSimJsonExportSaveMenu</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.182 RangeSimJsonExportRobust</span>
+    <span class="ver">v5.18.184 RangeSimJsonExportSaveMenu</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -712,7 +712,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.182 RangeSimJsonExportRobust';
+window.APP_VERSION = 'v5.18.184 RangeSimJsonExportSaveMenu';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -14563,7 +14563,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.183 RangeSimJsonExportSavePicker';
+  var VERSION = 'v5.18.184 RangeSimJsonExportSaveMenu';
   try{
     window.APP_VERSION = VERSION;
     var ver = document.querySelector('.ver');
@@ -14803,7 +14803,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.183 RangeSimJsonExportSavePicker';
+  var VERSION = 'v5.18.184 RangeSimJsonExportSaveMenu';
   try{
     window.APP_VERSION = VERSION;
     var ver = document.querySelector('.ver');
@@ -15041,19 +15041,40 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       }
     }
 
-    // 2) iPad / iPhone Safari / Edge: 共有シート →「ファイルに保存」で保存先を選択
-    try{
-      var file = new File([blob], filename, {type:'application/json'});
-      if(navigator.canShare && navigator.canShare({files:[file]})){
-        await navigator.share({files:[file], title:filename});
-        return {ok:true, method:'share'};
+    // 2) iPad/iPhone: 共有シートを最優先で開く。
+    // Edge/Safariでは navigator.canShare({files}) が false/未実装でも share(files) が動く場合があるため、canShareで止めない。
+    if(navigator.share){
+      try{
+        var file = new File([blob], filename, {type:'application/json'});
+        await navigator.share({files:[file], title:filename, text:'期間横断シミュレーションJSON'});
+        return {ok:true, method:'share-file'};
+      }catch(e1){
+        if(e1 && e1.name === 'AbortError') return {ok:false, cancelled:true};
+        // ファイル共有非対応なら、次にJSON本文共有を試す（保存先選択の共有シートを出すため）
+        try{
+          await navigator.share({title:filename, text:text});
+          return {ok:true, method:'share-text'};
+        }catch(e2){
+          if(e2 && e2.name === 'AbortError') return {ok:false, cancelled:true};
+        }
       }
-    }catch(e){
-      if(e && e.name === 'AbortError') return {ok:false, cancelled:true};
     }
 
-    // 3) 最終フォールバック: ダウンロード
+    // 3) iPad/Edge等でファイル共有が使えない場合：JSONを新規タブで表示。
+    // 新規タブ右上の共有ボタン →「ファイルに保存」で保存場所を選べる。
+    try{
+      var url = URL.createObjectURL(blob);
+      var opened = window.open(url, '_blank');
+      if(opened){
+        setTimeout(function(){ try{ URL.revokeObjectURL(url); }catch(e){} }, 60000);
+        alert('JSONを新しいタブで開きました。右上の共有ボタンから「ファイルに保存」を選ぶと、保存場所を選択できます。');
+        return {ok:true, method:'open-tab'};
+      }
+    }catch(e3){}
+
+    // 4) 最終フォールバック: ダウンロード（ブラウザ仕様上、保存場所を選べない場合があります）
     fallbackDownload(filename, blob);
+    alert('このブラウザではHTMLから直接保存場所を指定できません。ダウンロード後、ファイルアプリで移動してください。保存場所を選びたい場合は、Safariで開いて共有ボタンから「ファイルに保存」を使ってください。');
     return {ok:true, method:'download'};
   }
   function fallbackDownload(filename, blob){

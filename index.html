@@ -652,8 +652,17 @@ body{
         <label>ワイド＋馬連を使う</label>
         <input type="checkbox" id="setUseWideUmaren" checked onchange="saveSettings()">
       </div>
+      <div class="settings-row">
+        <label>チェックOFF券種の扱い</label>
+        <select id="setDisabledTypeAction" onchange="saveSettings()">
+          <option value="skip">レースごと見送る</option>
+          <option value="exclude">その券種だけ買わない</option>
+        </select>
+      </div>
       <div class="proxy-note" style="margin-top:6px;font-size:11px;line-height:1.6">
-        チェックを外した券種が推奨買い目に含まれるレースは、他の券種で代替購入せず「見送り」になります（通常予測・全レース一括・期間横断シミュレーション共通。手動追加は可能）。
+        <b>レースごと見送る</b>：チェックを外した券種が推奨買い目に含まれるレースは、他の券種で代替購入せず丸ごと「見送り」になります。<br>
+        <b>その券種だけ買わない</b>：OFF券種を候補から除外し、残りの券種だけで通常どおり買い目を組みます（レース自体は購入）。<br>
+        いずれも通常予測・全レース一括・期間横断シミュレーション共通。手動追加は可能です。
       </div>
     </div>
 
@@ -729,7 +738,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.193 SkipRaceOnDisabledType';
+window.APP_VERSION = 'v5.18.194 DisabledTypeActionSelect';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -804,6 +813,7 @@ let settings = {
   useWakuren: true,   // v5.18.191: 枠連を買い目に含める
   useSanren: true,    // v5.18.191: 3連単＋3連複を買い目に含める
   useWideUmaren: true, // v5.18.192: ワイド＋馬連を買い目に含める
+  disabledTypeAction: 'skip', // v5.18.194: チェックOFF券種の扱い 'skip'=レースごと見送り / 'exclude'=その券種だけ除外して残りで購入
   minEVByType: {...DEFAULT_MIN_EV},
   proxyUrl: 'https://takuya.nitta-katsuhiko.workers.dev/'
 };
@@ -936,6 +946,7 @@ function saveSettings(){
   settings.useWakuren = document.getElementById('setUseWakuren')?.checked !== false;
   settings.useSanren = document.getElementById('setUseSanren')?.checked !== false;
   settings.useWideUmaren = document.getElementById('setUseWideUmaren')?.checked !== false;
+  settings.disabledTypeAction = (document.getElementById('setDisabledTypeAction')?.value === 'exclude') ? 'exclude' : 'skip'; // v5.18.194
   TICKET_TYPES.forEach(t => {
     const el = document.getElementById('ev-' + t);
     if(el) settings.minEVByType[t] = Number(el.value || DEFAULT_MIN_EV[t]);
@@ -1276,6 +1287,7 @@ function refreshSettingsUI(){
   const setUW = document.getElementById('setUseWakuren'); if(setUW) setUW.checked = settings.useWakuren !== false;
   const setUS = document.getElementById('setUseSanren'); if(setUS) setUS.checked = settings.useSanren !== false;
   const setUWU = document.getElementById('setUseWideUmaren'); if(setUWU) setUWU.checked = settings.useWideUmaren !== false;
+  const setDTA = document.getElementById('setDisabledTypeAction'); if(setDTA) setDTA.value = (settings.disabledTypeAction === 'exclude') ? 'exclude' : 'skip'; // v5.18.194
   const pUrl = document.getElementById('proxyUrl'); if(pUrl) pUrl.value = settings.proxyUrl || '';
   const nb = document.getElementById('narBadge'); if(nb) nb.style.display = settings.nar ? '' : 'none';
   TICKET_TYPES.forEach(t => {
@@ -1309,6 +1321,7 @@ function resetSettingsToDefault(){
     useWakuren: true,
     useSanren: true,
     useWideUmaren: true,
+    disabledTypeAction: 'skip', // v5.18.194
     minEVByType: {...DEFAULT_MIN_EV},
     proxyUrl: keepProxy || 'https://takuya.nitta-katsuhiko.workers.dev/'
   };
@@ -1357,6 +1370,7 @@ function initUI(){
   document.getElementById('setUseWakuren').checked = settings.useWakuren !== false;
   document.getElementById('setUseSanren').checked = settings.useSanren !== false;
   document.getElementById('setUseWideUmaren').checked = settings.useWideUmaren !== false;
+  document.getElementById('setDisabledTypeAction').value = (settings.disabledTypeAction === 'exclude') ? 'exclude' : 'skip'; // v5.18.194
   document.getElementById('proxyUrl').value = settings.proxyUrl || '';
   document.getElementById('narBadge').style.display = settings.nar ? '' : 'none';
 
@@ -2020,10 +2034,16 @@ function isDisabledTicketType(t){
 let lastModeSkipTypes = null;
 
 function selectByMode(recs, mode, max){
-  // v5.18.193: 券種チェックOFFの場合、他の券種で代替購入はしない。
-  // モード本来の推奨買い目にOFF券種が含まれるレースは丸ごと見送り（0点）にする。
+  // v5.18.194: 券種チェックOFF時の挙動を settings.disabledTypeAction で選択可能に。
+  //  'skip'    (既定): v5.18.193と同じ。モード本来の推奨買い目にOFF券種が
+  //                    含まれるレースは、他券種で代替購入せず丸ごと見送り（0点）。
+  //  'exclude'       : OFF券種を候補段階で除外し、残りの券種だけで通常どおり
+  //                    選出する（v5.18.192以前の挙動。レース自体は購入）。
   // （runPredict / 全レース一括 / 期間横断シミュレーション すべてここを通る）
   lastModeSkipTypes = null;
+  if(settings.disabledTypeAction === 'exclude'){
+    return selectByModeCore(recs.filter(r => !isDisabledTicketType(r.type)), mode, max);
+  }
   const picked = selectByModeCore(recs, mode, max);
   const disabled = picked.filter(r => isDisabledTicketType(r.type)).map(r => r.type);
   if(disabled.length){
@@ -12780,6 +12800,21 @@ if(horses.length === 0){
      lastModeSkipTypes に直近の見送り券種を保持。
    ・設定パネルの説明文を新仕様に更新。
    ============================================================ */
+/* ============================================================
+   v5.18.194 DisabledTypeActionSelect
+   ・券種チェックOFF時の挙動を設定で選択可能にした。
+     設定「基本設定」に「チェックOFF券種の扱い」セレクトを追加:
+       - レースごと見送る（既定 / v5.18.193の挙動）
+       - その券種だけ買わない（v5.18.192以前の挙動。OFF券種を候補から
+         除外し、残りの券種だけで通常どおり買い目を組んでレースは購入）
+   ・settings.disabledTypeAction ('skip' / 'exclude') として
+     localStorage / JSON保存・読込 / 設定初期化（♻️）に対応（初期値 skip）。
+   ・selectByMode() 冒頭で分岐。'exclude' 時は selectByModeCore() へ渡す
+     候補から isDisabledTicketType() 該当券種を事前除去（代替購入あり）。
+     'skip' 時は従来どおり選出結果にOFF券種が含まれれば空配列で見送り。
+   ・通常予測・全レース一括・期間横断シミュレーションすべてに反映
+     （いずれも selectByMode() 経由のため）。手動追加は従来どおり可能。
+   ============================================================ */
 </script>
 
 <script>
@@ -12807,7 +12842,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.193 SkipRaceOnDisabledType';
+  window.APP_VERSION = 'v5.18.194 DisabledTypeActionSelect';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -13236,7 +13271,7 @@ function json(obj, status = 200) {
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.193 SkipRaceOnDisabledType';
+  window.APP_VERSION = 'v5.18.194 DisabledTypeActionSelect';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -13533,7 +13568,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.193 SkipRaceOnDisabledType';
+  window.APP_VERSION = 'v5.18.194 DisabledTypeActionSelect';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -13751,7 +13786,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.193 SkipRaceOnDisabledType';
+    window.APP_VERSION = 'v5.18.194 DisabledTypeActionSelect';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -14051,7 +14086,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.193 SkipRaceOnDisabledType';
+  window.APP_VERSION = 'v5.18.194 DisabledTypeActionSelect';
   try{
     const ver = document.querySelector('.ver');
     if(ver){

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.189 ExcludeUnclassifiedRows</title>
+<title>The競馬 EV分析 v5.18.190 RangeSimJsonImport</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.189 ExcludeUnclassifiedRows</span>
+    <span class="ver">v5.18.190 RangeSimJsonImport</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -451,6 +451,8 @@ body{
         <button class="btn btn-primary" id="rsRunBtn" onclick="runRangeVenueSimulation()">📆 期間横断シミュレーション実行</button>
         <button class="btn-sm" id="rsStopBtn" onclick="stopRangeVenueSimulation()" style="display:none">⏹ 中断</button>
         <button class="btn-sm" id="rsJsonExportBtn" onclick="exportRangeVenueSimulationJSON()" type="button">📊 期間横断JSON出力</button>
+        <button class="btn-sm" id="rsJsonImportBtn" onclick="importRangeVenueSimulationJSON()" type="button">📥 期間横断JSON読込</button>
+        <input type="file" id="rsJsonImportFile" accept=".json,application/json,text/json" style="display:none">
       </div>
       <div id="rsProgress" style="margin-top:10px"></div>
       <div id="rsSummary" style="margin-top:10px"></div>
@@ -712,7 +714,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.189 ExcludeUnclassifiedRows';
+window.APP_VERSION = 'v5.18.190 RangeSimJsonImport';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -9591,7 +9593,7 @@ if(horses.length === 0){
     return { bet, ret, hit, profit: ret - bet, roi: bet ? ret / bet * 100 : 0, count: tickets.length, hasFinish };
   }
 
-  // v5.18.189 ExcludeUnclassifiedRows:
+  // v5.18.190 RangeSimJsonImport:
   // 精算直後に「実際に買った券種の内訳」を行データへ記録する。
   // 期間横断/一括シミュレーションのJSON出力で、券種別・買い目単位の詳細集計に使う。
   // 内訳のキー名は解析ツール(Profit Graph Switcher)の明細判定キー(投資/払戻/収支)と
@@ -10625,9 +10627,161 @@ if(horses.length === 0){
     rsRenderVenueChecks();
   }
 
+  // ============================================================
+  //  v5.18.190: 期間横断JSON読込み
+  //  「📊 期間横断JSON出力」(schema: keiba-range-venue-simulation-v2)で
+  //  保存したJSONを読み込み、集計KPI・開催場/日別集計表・レース別明細・
+  //  累計収支グラフをそのまま復元する。rsLastRows / window.__rsLastRows も
+  //  復元するため、読込み後に「📊 期間横断JSON出力」「📤 収支グラフへ転記」
+  //  「📋 集計/明細コピー」もそのまま再実行できる。
+  // ============================================================
+  function rsImpNum(v){
+    if(v == null) return 0;
+    const s = String(v).replace(/[,+円￥%\s]/g,'').replace(/^▲/,'-');
+    const n = Number(s);
+    return Number.isFinite(n) ? n : 0;
+  }
+  function rsImpVenueCode(name, kind){
+    const s = String(name || '').trim();
+    if(/^\d{1,2}$/.test(s)) return ('0' + s).slice(-2);
+    const lists = (kind === 'NAR') ? [NAR_VENUES, JRA_VENUES] : [JRA_VENUES, NAR_VENUES];
+    for(const list of lists){
+      const hit = list.find(v => v[1] === s || (s && s.indexOf(v[1]) === 0));
+      if(hit) return hit[0];
+    }
+    return s || '';
+  }
+  function rsImpRaceNo(v){
+    const m = String(v == null ? '' : v).match(/\d+/);
+    return m ? Number(m[0]) : 0;
+  }
+  function rsRowsFromRangeJSON(obj){
+    const kind = (obj.conditions && obj.conditions.kind) || '';
+    const rows = [];
+    const settled = Array.isArray(obj['収支明細']) ? obj['収支明細'] : [];
+    const pending = Array.isArray(obj['未確定明細']) ? obj['未確定明細'] : [];
+    const errors  = Array.isArray(obj['エラー明細']) ? obj['エラー明細'] : [];
+    settled.forEach(r => {
+      if(!r) return;
+      const bet = rsImpNum(r['投資']), ret = rsImpNum(r['払戻']);
+      const fin = String(r['着順'] || '').split('-').map(x => x.trim()).filter(Boolean);
+      const row = {
+        date: String(r['日付'] || ''),
+        venueName: String(r['場'] || ''), venueCode: rsImpVenueCode(r['場'], kind),
+        no: rsImpRaceNo(r['R']), rid: r.race_id || '',
+        raceName: String(r['レース名'] || ''),
+        status: 'ok', hasFinish: true, finishTop: fin,
+        count: rsImpNum(r['点数']), hit: rsImpNum(r['的中']),
+        bet, ret,
+        profit: (r['収支'] != null) ? rsImpNum(r['収支']) : ret - bet,
+        roi: (r['ROI'] != null) ? rsImpNum(r['ROI']) : (bet ? ret / bet * 100 : 0),
+        ticketType: r['券種'] || ''
+      };
+      if(Array.isArray(r['内訳']) && r['内訳'].length) row.ticketDetails = r['内訳'];
+      rows.push(row);
+    });
+    pending.forEach(r => {
+      if(!r) return;
+      rows.push({
+        date: String(r['日付'] || ''),
+        venueName: String(r['場'] || ''), venueCode: rsImpVenueCode(r['場'], kind),
+        no: rsImpRaceNo(r['R']), rid: r.race_id || '',
+        raceName: String(r['レース名'] || ''),
+        status: 'ok', hasFinish: false, finishTop: [],
+        count: rsImpNum(r['点数'] != null ? r['点数'] : 1), hit: 0,
+        bet: rsImpNum(r['購入額'] != null ? r['購入額'] : r['投資']),
+        ret: 0, profit: 0, roi: 0,
+        ticketType: r['券種'] || ''
+      });
+    });
+    errors.forEach(r => {
+      if(!r) return;
+      rows.push({
+        date: String(r['日付'] || ''),
+        venueName: String(r['場'] || ''), venueCode: rsImpVenueCode(r['場'], kind),
+        no: rsImpRaceNo(r['R']),
+        status: 'error', error: String(r['内容'] || r['error'] || '取得失敗'),
+        hasFinish: false, finishTop: [], count: 0, hit: 0, bet: 0, ret: 0, profit: 0, roi: 0
+      });
+    });
+    // 出力時と同じ「日付→場→R」順に整列（グラフ・明細表示の並び安定化）
+    rows.sort((a, b) =>
+      (a.date + '|' + (a.venueCode || '') + '|' + String(a.no).padStart(2,'0'))
+        .localeCompare(b.date + '|' + (b.venueCode || '') + '|' + String(b.no).padStart(2,'0')));
+    return rows;
+  }
+  function rsApplyImportedConditions(c){
+    if(!c) return;
+    try{
+      const k = $('rsKind');
+      if(k && c.kind && [...k.options].some(o => o.value === c.kind)){
+        k.value = c.kind;
+        rsRenderVenueChecks();
+      }
+      const s = $('rsStart'), e = $('rsEnd');
+      if(s && c.startDate) s.value = c.startDate;
+      if(e && c.endDate) e.value = c.endDate;
+      const pa = $('rsPastAdj');
+      if(pa && typeof c.pastPerformanceAdjustment === 'boolean') pa.checked = c.pastPerformanceAdjustment;
+    }catch(e){}
+  }
+  function importRangeVenueSimulationJSON(){
+    const input = $('rsJsonImportFile');
+    if(!input){ alert('読込み用のファイル入力が見つかりません。'); return; }
+    input.value = '';
+    input.onchange = function(){
+      const file = input.files && input.files[0];
+      if(!file) return;
+      const btn = $('rsJsonImportBtn');
+      const old = btn ? btn.textContent : '';
+      const prog = $('rsProgress');
+      const reader = new FileReader();
+      reader.onload = function(){
+        try{
+          const obj = JSON.parse(String(reader.result || ''));
+          if(!obj || typeof obj !== 'object' || Array.isArray(obj)) throw new Error('JSONの形式が不正です');
+          const isRange = obj.schema === 'keiba-range-venue-simulation-v2' ||
+                          Array.isArray(obj['収支明細']) || Array.isArray(obj['未確定明細']) || Array.isArray(obj['エラー明細']);
+          if(!isRange){
+            const hint = (obj.horses || obj.settings) ?
+              '\n（これは状態スナップショットJSONのようです。読込みは「💾 データ管理」のJSON読込をご利用ください）' : '';
+            alert('期間横断シミュレーションのJSON（📊 期間横断JSON出力で保存したファイル）ではないようです。' + hint);
+            return;
+          }
+          const rows = rsRowsFromRangeJSON(obj);
+          if(!rows.length){
+            alert('このJSONに復元できる明細がありません（収支明細・未確定明細・エラー明細がすべて空です）。');
+            return;
+          }
+          rsApplyImportedConditions(obj.conditions);
+          rsLastRows = rows;
+          try{ window.__rsLastRows = rows.slice(); }catch(e){}
+          rsRenderSummary(rows);
+          rsRenderTable(rows);
+          rsRenderChart(rows);
+          const okRows = rows.filter(r => r.status === 'ok');
+          const settledN = okRows.filter(r => r.hasFinish).length;
+          const pendingN = okRows.length - settledN;
+          const errN = rows.length - okRows.length;
+          const stamp = obj.exportedAt ? ' / 出力: ' + String(obj.exportedAt).slice(0,19).replace('T',' ') : '';
+          if(prog) prog.innerHTML = `<div class="url-status ok">📥 JSONを復元しました：確定${settledN}R・未確定${pendingN}R・エラー${errN}件（${asw_esc(file.name)}${asw_esc(stamp)}）</div>`;
+          if(btn){ btn.textContent = '✅ 読込完了'; setTimeout(() => { btn.textContent = old || '📥 期間横断JSON読込'; }, 1800); }
+        }catch(e){
+          console.error('[importRangeVenueSimulationJSON]', e);
+          alert('JSONの読込みに失敗しました: ' + ((e && e.message) || e));
+          if(btn){ btn.textContent = '❌ 読込失敗'; setTimeout(() => { btn.textContent = old || '📥 期間横断JSON読込'; }, 1800); }
+        }
+      };
+      reader.onerror = function(){ alert('ファイルを読み取れませんでした。'); };
+      reader.readAsText(file, 'utf-8');
+    };
+    input.click();
+  }
+
   // 公開
   window.runAllRacesSimulation = runAllRacesSimulation;
   window.runRangeVenueSimulation = runRangeVenueSimulation;
+  window.importRangeVenueSimulationJSON = importRangeVenueSimulationJSON;
   window.stopRangeVenueSimulation = stopRangeVenueSimulation;
   window.rsRenderVenueChecks = rsRenderVenueChecks;
   window.rsToggleAllVenues = rsToggleAllVenues;
@@ -12559,7 +12713,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.189 ExcludeUnclassifiedRows';
+  window.APP_VERSION = 'v5.18.190 RangeSimJsonImport';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -12988,7 +13142,7 @@ function json(obj, status = 200) {
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.189 ExcludeUnclassifiedRows';
+  window.APP_VERSION = 'v5.18.190 RangeSimJsonImport';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -13285,7 +13439,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.189 ExcludeUnclassifiedRows';
+  window.APP_VERSION = 'v5.18.190 RangeSimJsonImport';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -13503,7 +13657,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.189 ExcludeUnclassifiedRows';
+    window.APP_VERSION = 'v5.18.190 RangeSimJsonImport';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -13518,7 +13672,7 @@ function json(obj, status = 200) {
    - 「取得中」に一度空配列を描いても、JRA土日を即「開催なし」に見せない。
    ============================================================ */
 (function(){
-  const V = 'v5.18.189 ExcludeUnclassifiedRows';
+  const V = 'v5.18.190 RangeSimJsonImport';
   try{
     window.APP_VERSION = V;
     document.title = 'The競馬 EV分析 ' + V;
@@ -13803,7 +13957,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.189 ExcludeUnclassifiedRows';
+  window.APP_VERSION = 'v5.18.190 RangeSimJsonImport';
   try{
     const ver = document.querySelector('.ver');
     if(ver){
@@ -13962,7 +14116,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  const V171 = 'v5.18.189 ExcludeUnclassifiedRows';
+  const V171 = 'v5.18.190 RangeSimJsonImport';
   // 旧パッチ（v5.18.160系）の遅延バージョン上書きより後に走らせて確実に勝つ
   [0, 200, 800, 1600, 3000, 5000, 6500].forEach(ms => setTimeout(() => {
     window.APP_VERSION = V171;
@@ -14388,7 +14542,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  const V172 = 'v5.18.189 ExcludeUnclassifiedRows';
+  const V172 = 'v5.18.190 RangeSimJsonImport';
   [0, 200, 800, 1600, 3000, 5000, 7000].forEach(ms => setTimeout(() => {
     window.APP_VERSION = V172;
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
@@ -14605,7 +14759,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.189 ExcludeUnclassifiedRows';
+  var VERSION = 'v5.18.190 RangeSimJsonImport';
   try{
     window.APP_VERSION = VERSION;
     var ver = document.querySelector('.ver');
@@ -14845,7 +14999,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.189 ExcludeUnclassifiedRows';
+  var VERSION = 'v5.18.190 RangeSimJsonImport';
   try{
     window.APP_VERSION = VERSION;
     var ver = document.querySelector('.ver');
@@ -15140,7 +15294,15 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 })();
 </script>
 
-<!-- v5.18.189 ExcludeUnclassifiedRows:
+<!-- v5.18.190 RangeSimJsonImport:
+  「📥 期間横断JSON読込」ボタンを追加。
+  ・「📊 期間横断JSON出力」(schema: keiba-range-venue-simulation-v2)で保存した
+    JSONを読み込み、集計KPI・開催場/日別集計表・レース別明細・累計収支グラフを復元。
+  ・収支明細/未確定明細/エラー明細から内部行(rsLastRows/window.__rsLastRows)を再構築
+    するため、読込み後に JSON再出力・収支グラフへの転記・集計/明細コピーも可能。
+  ・conditions(JRA/NAR・期間・馬柱補正)も入力欄へ復元。場名→場コードの逆引き対応。
+  ・状態スナップショットJSONを誤って選んだ場合は案内メッセージを表示。
+  （以下はv5.18.189 ExcludeUnclassifiedRowsの説明）
   期間横断シミュレーションのJSON出力を詳細化。
   ・精算時に実際の買い目内訳（券種・買い目・購入額・払戻額・的中）を各レース行へ記録。
   ・出力は「収支明細」1系統のみ（旧v1の5系統重複＝解析ツールで約5倍計上される問題を解消）。
@@ -15153,7 +15315,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.189 ExcludeUnclassifiedRows';
+  var VERSION = 'v5.18.190 RangeSimJsonImport';
   function writeVer(){
     try{
       window.APP_VERSION = VERSION;
@@ -15400,7 +15562,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       return g;
     });
   }
-  // v5.18.189 ExcludeUnclassifiedRows:
+  // v5.18.190 RangeSimJsonImport:
   // ・明細レコードは「収支明細」の1系統だけにする（旧v1は同一明細を
   //   raceRecords/records/profitRecords/収支明細/trend の5系統に重複出力しており、
   //   解析ツールが全部を明細として拾って件数・収支が約5倍になっていた）。

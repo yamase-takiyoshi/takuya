@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.180 RangeSimJsonExportNoBlank</title>
+<title>The競馬 EV分析 v5.18.181 RangeSimJsonExportFixedRows</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.180 RangeSimJsonExportNoBlank</span>
+    <span class="ver">v5.18.181 RangeSimJsonExportFixedRows</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -712,7 +712,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.180 RangeSimJsonExportNoBlank';
+window.APP_VERSION = 'v5.18.181 RangeSimJsonExportFixedRows';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -10376,6 +10376,7 @@ if(horses.length === 0){
 
     rsAbort = false;
     rsLastRows = [];
+    try{ window.__rsLastRows = []; }catch(e){}
     rsLastOpenVenuesError = null;
     rsOpenVenuesFailCount = 0;
     rsOpenVenuesOkCount = 0;
@@ -10534,6 +10535,7 @@ if(horses.length === 0){
             }
             rows.push(row);
             rsLastRows = rows;
+            try{ window.__rsLastRows = rows.slice(); }catch(e){}
             rsRenderSummary(rows);
             rsRenderTable(rows);
             rsRenderChart(rows);
@@ -14561,7 +14563,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.180 RangeSimJsonExportNoBlank';
+  var VERSION = 'v5.18.181 RangeSimJsonExportFixedRows';
   try{
     window.APP_VERSION = VERSION;
     var ver = document.querySelector('.ver');
@@ -14578,7 +14580,31 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   }
   function safeDate(v){ return String(v || '').slice(0,10) || 'unknown'; }
   function getRows(){
-    if(Array.isArray(window.__rsLastRows)) return window.__rsLastRows.slice();
+    if(Array.isArray(window.__rsLastRows) && window.__rsLastRows.length) return window.__rsLastRows.slice();
+    try{
+      if(typeof rsLastRows !== 'undefined' && Array.isArray(rsLastRows) && rsLastRows.length) return rsLastRows.slice();
+    }catch(e){}
+    try{
+      const table = document.getElementById('rsTable');
+      if(table){
+        const rows = Array.from(table.querySelectorAll('tbody tr')).map(tr => {
+          const t = Array.from(tr.children).map(td => (td.textContent || '').trim());
+          if(t.length < 6) return null;
+          return {
+            date: t[0] || '',
+            venueName: t[1] || '',
+            raceNo: t[2] || '',
+            status: t[3] || '',
+            hit: /的中|hit/i.test(t.join(' ')),
+            bet: toNumber(t[4]),
+            ret: toNumber(t[5]),
+            profit: toNumber(t[6]),
+            roi: toNumber(t[7])
+          };
+        }).filter(Boolean);
+        if(rows.length) return rows;
+      }
+    }catch(e){}
     return [];
   }
   function pad2(x){ return String(x).padStart(2,'0'); }

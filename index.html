@@ -14563,7 +14563,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.182 RangeSimJsonExportRobust';
+  var VERSION = 'v5.18.183 RangeSimJsonExportSavePicker';
   try{
     window.APP_VERSION = VERSION;
     var ver = document.querySelector('.ver');
@@ -14803,7 +14803,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.182 RangeSimJsonExportRobust';
+  var VERSION = 'v5.18.183 RangeSimJsonExportSavePicker';
   try{
     window.APP_VERSION = VERSION;
     var ver = document.querySelector('.ver');
@@ -15022,15 +15022,39 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     // UTF-8 BOM付き。iPad/Safari/Windowsメモ帳でも文字化けしにくい。
     return '\ufeff' + JSON.stringify(obj, null, 2);
   }
-  function saveText(filename, text){
+  async function saveText(filename, text){
     var blob = new Blob([text], {type:'application/json;charset=utf-8'});
-    var file = null;
-    try{ file = new File([blob], filename, {type:'application/json'}); }catch(e){}
-    if(navigator.canShare && file && navigator.canShare({files:[file]})){
-      navigator.share({files:[file], title:filename}).catch(function(){ fallbackDownload(filename, blob); });
-    }else{
-      fallbackDownload(filename, blob);
+
+    // 1) PC Chrome / Edge: OS の「名前を付けて保存」で保存先フォルダを選択
+    if(typeof window.showSaveFilePicker === 'function'){
+      try{
+        var handle = await window.showSaveFilePicker({
+          suggestedName: filename,
+          types: [{ description:'JSON file', accept:{ 'application/json':['.json'] } }]
+        });
+        var writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        return {ok:true, method:'picker'};
+      }catch(e){
+        if(e && e.name === 'AbortError') return {ok:false, cancelled:true};
+      }
     }
+
+    // 2) iPad / iPhone Safari / Edge: 共有シート →「ファイルに保存」で保存先を選択
+    try{
+      var file = new File([blob], filename, {type:'application/json'});
+      if(navigator.canShare && navigator.canShare({files:[file]})){
+        await navigator.share({files:[file], title:filename});
+        return {ok:true, method:'share'};
+      }
+    }catch(e){
+      if(e && e.name === 'AbortError') return {ok:false, cancelled:true};
+    }
+
+    // 3) 最終フォールバック: ダウンロード
+    fallbackDownload(filename, blob);
+    return {ok:true, method:'download'};
   }
   function fallbackDownload(filename, blob){
     var url = URL.createObjectURL(blob);
@@ -15050,7 +15074,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       window.rsRenderTable.__jsonWrapped = true;
     }
   }catch(e){}
-  window.exportRangeVenueSimulationJSON = function(){
+  window.exportRangeVenueSimulationJSON = async function(){
     var obj = buildExportObject();
     if(!obj.raceRecords.length){
       alert('期間横断シミュレーション結果が見つかりません。完了後の集計表が表示されている状態で、もう一度押してください。');
@@ -15060,9 +15084,15 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     var def = 'keiba_range_sim_' + (c.kind || 'KEIBA') + '_' + String(c.startDate || nowStamp()).replace(/-/g,'') + '-' + String(c.endDate || nowStamp()).replace(/-/g,'') + '.json';
     var name = prompt('保存するJSONファイル名', def);
     if(name === null) return;
-    saveText(cleanName(name), jsonText(obj));
+    var fileName = cleanName(name);
     var b = $('rsJsonExportBtn');
-    if(b){ var old=b.textContent; b.textContent='✅ JSON保存'; setTimeout(function(){ b.textContent=old; }, 1600); }
+    var old = b ? b.textContent : '';
+    if(b) b.textContent = '💾 保存先を選択中...';
+    var res = await saveText(fileName, jsonText(obj));
+    if(b){
+      b.textContent = res && res.cancelled ? 'キャンセル' : '✅ JSON保存';
+      setTimeout(function(){ b.textContent = old || '📊 期間横断JSON出力'; }, 1800);
+    }
   };
 })();
 </script>

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.174 PayoutMaxMode</title>
+<title>The競馬 EV分析 v5.18.175 NamedJsonSave</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.174 PayoutMaxMode</span>
+    <span class="ver">v5.18.175 NamedJsonSave</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -646,6 +646,10 @@ body{
 
     <div class="card">
       <h2>💾 データ保存・読込</h2>
+      <div class="field" style="margin-bottom:8px">
+        <label>保存ファイル名（空欄なら自動命名／.jsonは自動付与）</label>
+        <input type="text" id="exportJsonName" placeholder="例: 大井11R_0705" autocomplete="off">
+      </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <button class="btn-sm" onclick="exportStateJSON()">💾 JSON保存</button>
         <button class="btn-sm" onclick="triggerImportJSON()">📂 JSON読込</button>
@@ -656,6 +660,8 @@ body{
       <div id="dataIoStatus" style="font-size:12px;color:var(--muted);margin-top:8px"></div>
       <div class="proxy-note" style="margin-top:8px;font-size:11px;line-height:1.7">
         <b>JSON保存</b>：出走馬データ・各種設定・選択中レース情報をまとめて1ファイルに書き出します（バックアップ／別端末への移行用）。<br>
+        &nbsp;&nbsp;上の欄で<b>ファイル名を指定</b>できます（空欄なら日付＋レースIDで自動命名）。<br>
+        &nbsp;&nbsp;iPad/iPhoneでは<b>共有シート</b>が開くので「ファイルに保存」から<b>保存先フォルダを選択</b>できます。PCのChrome/Edgeでは保存ダイアログで場所を選べます。<br>
         <b>JSON読込</b>：保存したファイルから一括復元します。<br>
         <b>設定を初期化</b>：各種設定を初期値に戻します（プロキシURLは保持）。
       </div>
@@ -703,7 +709,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.174 PayoutMaxMode';
+window.APP_VERSION = 'v5.18.175 NamedJsonSave';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -941,19 +947,73 @@ function buildStateSnapshot(){
   };
 }
 
-function exportStateJSON(){
+// v5.18.175: ファイル名指定＋保存先選択（iOS共有シート / PC保存ダイアログ）対応
+function buildExportFileName(){
+  const rid = String(currentRaceId || '').replace(/[^\d]/g, '');
+  const auto = `keiba-ev_${formatLocalDate().replace(/-/g,'')}${rid ? '_' + rid : ''}`;
+  const inp = document.getElementById('exportJsonName');
+  let name = inp && inp.value ? inp.value.trim() : '';
+  if(!name) name = auto;
+  // ファイル名に使えない文字を除去し、.json を保証
+  name = name.replace(/[\\\/:*?"<>|]/g, '_').replace(/\s+/g, '_');
+  if(!/\.json$/i.test(name)) name += '.json';
+  return name;
+}
+
+async function exportStateJSON(){
+  let json, fileName;
   try{
-    const json = JSON.stringify(buildStateSnapshot(), null, 2);
-    const blob = new Blob([json], { type: 'application/json' });
+    json = JSON.stringify(buildStateSnapshot(), null, 2);
+    fileName = buildExportFileName();
+  }catch(e){
+    dataIoStatus('保存に失敗しました: ' + (e && e.message ? e.message : e), false);
+    return;
+  }
+  const blob = new Blob([json], { type: 'application/json' });
+
+  // ① PC Chrome/Edge等: File System Access API（保存ダイアログでフォルダ選択可）
+  if(typeof window.showSaveFilePicker === 'function'){
+    try{
+      const handle = await window.showSaveFilePicker({
+        suggestedName: fileName,
+        types: [{ description: 'JSON', accept: { 'application/json': ['.json'] } }]
+      });
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      dataIoStatus(`💾 保存しました: ${fileName}（出走馬${horses.length}頭・設定一式）`, true);
+      return;
+    }catch(e){
+      if(e && e.name === 'AbortError'){ dataIoStatus('保存をキャンセルしました', null); return; }
+      // 失敗時は次の方式へフォールバック
+    }
+  }
+
+  // ② iPad/iPhone Safari等: 共有シート →「ファイルに保存」で保存先フォルダを選択
+  try{
+    if(navigator.share && navigator.canShare){
+      const file = new File([blob], fileName, { type: 'application/json' });
+      if(navigator.canShare({ files: [file] })){
+        await navigator.share({ files: [file] });
+        dataIoStatus(`💾 保存しました: ${fileName}（出走馬${horses.length}頭・設定一式）`, true);
+        return;
+      }
+    }
+  }catch(e){
+    if(e && e.name === 'AbortError'){ dataIoStatus('保存をキャンセルしました', null); return; }
+    // 失敗時は次の方式へフォールバック
+  }
+
+  // ③ フォールバック: 従来のダウンロード（名前は反映される／保存先は既定）
+  try{
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    const rid = String(currentRaceId || '').replace(/[^\d]/g, '');
     a.href = url;
-    a.download = `keiba-ev_${formatLocalDate().replace(/-/g,'')}${rid ? '_' + rid : ''}.json`;
+    a.download = fileName;
     document.body.appendChild(a);
     a.click();
     setTimeout(() => { try{ document.body.removeChild(a); }catch(e){} URL.revokeObjectURL(url); }, 1500);
-    dataIoStatus(`💾 保存しました（出走馬${horses.length}頭・設定一式）`, true);
+    dataIoStatus(`💾 保存しました: ${fileName}（出走馬${horses.length}頭・設定一式）`, true);
   }catch(e){
     dataIoStatus('保存に失敗しました: ' + (e && e.message ? e.message : e), false);
   }
@@ -12297,7 +12357,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.174 PayoutMaxMode';
+  window.APP_VERSION = 'v5.18.175 NamedJsonSave';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -12726,7 +12786,7 @@ function json(obj, status = 200) {
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.174 PayoutMaxMode';
+  window.APP_VERSION = 'v5.18.175 NamedJsonSave';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -13023,7 +13083,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.174 PayoutMaxMode';
+  window.APP_VERSION = 'v5.18.175 NamedJsonSave';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -13241,7 +13301,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.174 PayoutMaxMode';
+    window.APP_VERSION = 'v5.18.175 NamedJsonSave';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -13256,7 +13316,7 @@ function json(obj, status = 200) {
    - 「取得中」に一度空配列を描いても、JRA土日を即「開催なし」に見せない。
    ============================================================ */
 (function(){
-  const V = 'v5.18.174 PayoutMaxMode';
+  const V = 'v5.18.175 NamedJsonSave';
   try{
     window.APP_VERSION = V;
     document.title = 'The競馬 EV分析 ' + V;
@@ -13541,7 +13601,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.174 PayoutMaxMode';
+  window.APP_VERSION = 'v5.18.175 NamedJsonSave';
   try{
     const ver = document.querySelector('.ver');
     if(ver){
@@ -13700,7 +13760,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  const V171 = 'v5.18.174 PayoutMaxMode';
+  const V171 = 'v5.18.175 NamedJsonSave';
   // 旧パッチ（v5.18.160系）の遅延バージョン上書きより後に走らせて確実に勝つ
   [0, 200, 800, 1600, 3000, 5000, 6500].forEach(ms => setTimeout(() => {
     window.APP_VERSION = V171;
@@ -14126,7 +14186,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  const V172 = 'v5.18.174 PayoutMaxMode';
+  const V172 = 'v5.18.175 NamedJsonSave';
   [0, 200, 800, 1600, 3000, 5000, 7000].forEach(ms => setTimeout(() => {
     window.APP_VERSION = V172;
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();

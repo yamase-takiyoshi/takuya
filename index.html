@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.181 RangeSimJsonExportFixedRows</title>
+<title>The競馬 EV分析 v5.18.182 RangeSimJsonExportRobust</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.181 RangeSimJsonExportFixedRows</span>
+    <span class="ver">v5.18.182 RangeSimJsonExportRobust</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -712,7 +712,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.181 RangeSimJsonExportFixedRows';
+window.APP_VERSION = 'v5.18.182 RangeSimJsonExportRobust';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -14563,7 +14563,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.181 RangeSimJsonExportFixedRows';
+  var VERSION = 'v5.18.182 RangeSimJsonExportRobust';
   try{
     window.APP_VERSION = VERSION;
     var ver = document.querySelector('.ver');
@@ -14793,6 +14793,276 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       b.textContent = 'Saved JSON';
       setTimeout(function(){ b.textContent = old; }, 1600);
     }
+  };
+})();
+</script>
+
+
+
+<!-- v5.18.182 Robust range simulation JSON export override -->
+<script>
+(function(){
+  'use strict';
+  var VERSION = 'v5.18.182 RangeSimJsonExportRobust';
+  try{
+    window.APP_VERSION = VERSION;
+    var ver = document.querySelector('.ver');
+    if(ver) ver.textContent = VERSION;
+    document.title = 'The競馬 EV分析 ' + VERSION;
+  }catch(e){}
+
+  function $(id){ return document.getElementById(id); }
+  function cleanText(v){ return String(v == null ? '' : v).replace(/\s+/g,' ').trim(); }
+  function toNumber(v){
+    if(v == null) return 0;
+    var s = String(v)
+      .replace(/[,+円￥\s]/g,'')
+      .replace(/^▲/,'-')
+      .replace(/^\+/,'')
+      .replace(/%$/,'')
+      .replace(/-/g,'0');
+    var n = Number(s);
+    return Number.isFinite(n) ? n : 0;
+  }
+  function safeDate(v){
+    var s = cleanText(v);
+    var m = s.match(/(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})/);
+    if(m) return m[1] + '-' + String(m[2]).padStart(2,'0') + '-' + String(m[3]).padStart(2,'0');
+    return s || 'unknown';
+  }
+  function pad2(n){ return String(n).padStart(2,'0'); }
+  function nowStamp(){
+    var d = new Date();
+    return d.getFullYear()+pad2(d.getMonth()+1)+pad2(d.getDate())+'_'+pad2(d.getHours())+pad2(d.getMinutes());
+  }
+  function cleanName(s){
+    s = String(s || ('keiba_range_sim_' + nowStamp() + '.json'));
+    s = s.replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, '_');
+    if(!/\.json$/i.test(s)) s += '.json';
+    return s;
+  }
+  function getGlobalRows(){
+    var names = ['__rsLastRows','rsLastRows','__rangeSimRows','rangeSimulationRows','rangeSimulationResultRows'];
+    for(var i=0;i<names.length;i++){
+      try{
+        var v = window[names[i]];
+        if(Array.isArray(v) && v.length) return v.slice();
+        if(v && Array.isArray(v.rows) && v.rows.length) return v.rows.slice();
+        if(v && Array.isArray(v.records) && v.records.length) return v.records.slice();
+      }catch(e){}
+    }
+    return [];
+  }
+  function parseRowsFromDetailTable(){
+    var root = $('rsTable');
+    if(!root) return [];
+    var out = [];
+    var detailTables = Array.from(root.querySelectorAll('details table'));
+    var table = detailTables.length ? detailTables[detailTables.length - 1] : null;
+    if(table){
+      Array.from(table.querySelectorAll('tbody tr')).forEach(function(tr, i){
+        var td = Array.from(tr.children);
+        var t = td.map(function(x){ return cleanText(x.textContent); });
+        if(t.length >= 10){
+          var raceNo = toNumber(t[2]);
+          var retMissing = /未確定|-/.test(t[7]);
+          out.push({
+            source: 'dom-detail',
+            index: i + 1,
+            status: 'ok',
+            date: safeDate(t[0]),
+            venueName: t[1] || 'unknown',
+            venue: t[1] || 'unknown',
+            no: raceNo,
+            race: raceNo ? raceNo + 'R' : t[2],
+            raceName: t[3] || '',
+            finishText: t[4] || '',
+            hasFinish: !retMissing && !/未確定/.test(t[4]),
+            count: toNumber(t[5]),
+            bet: toNumber(t[6]),
+            ret: retMissing ? 0 : toNumber(t[7]),
+            return: retMissing ? 0 : toNumber(t[7]),
+            profit: retMissing ? 0 : toNumber(t[8]),
+            roi: retMissing ? 0 : toNumber(t[9]),
+            hit: /(^|[^0-9])0([^0-9]|$)/.test(t[5]) ? 0 : (/未確定/.test(t[4]) ? 0 : 0)
+          });
+        }else if(t.length >= 4){
+          // error rows with colspan
+          out.push({
+            source:'dom-detail', index:i+1, status:'error', date:safeDate(t[0]), venueName:t[1]||'unknown', no:toNumber(t[2]), error:t.slice(3).join(' '), hasFinish:false, bet:0, ret:0, return:0, profit:0, roi:0
+          });
+        }
+      });
+      if(out.length) return out;
+    }
+    return [];
+  }
+  function parseRowsFromAggregateTable(){
+    var root = $('rsTable');
+    if(!root) return [];
+    var first = root.querySelector('table');
+    if(!first) return [];
+    var out = [];
+    Array.from(first.querySelectorAll('tbody tr')).forEach(function(tr, i){
+      var t = Array.from(tr.children).map(function(x){ return cleanText(x.textContent); });
+      if(t.length < 9) return;
+      if(/全期間/.test(t[0])) return;
+      var bet = toNumber(t[5]), ret = toNumber(t[6]), profit = toNumber(t[7]);
+      out.push({
+        source:'dom-aggregate', index:i+1, status:'ok', date:safeDate(t[0]), venueName:t[1]||'unknown', venue:t[1]||'unknown', no:0,
+        race:'', raceName:'日別集計', hasFinish:true, count:toNumber(t[2]), settledRaces:toNumber(t[3]), hit:toNumber(t[4]), bet:bet, ret:ret, return:ret, profit:profit, roi:toNumber(t[8])
+      });
+    });
+    return out;
+  }
+  function normalizeRows(rows){
+    return (rows || []).filter(Boolean).map(function(r, i){
+      var ret = r.ret != null ? r.ret : r.return;
+      var bet = toNumber(r.bet);
+      ret = toNumber(ret);
+      var profit = r.profit != null ? toNumber(r.profit) : ret - bet;
+      var hasFinish = (r.hasFinish != null) ? !!r.hasFinish : (ret || profit || bet);
+      return {
+        source: r.source || 'runtime',
+        index: i + 1,
+        status: String(r.status || 'ok'),
+        date: safeDate(r.date),
+        venue: String(r.venueName || r.venue || r.venueCode || 'unknown'),
+        venueCode: String(r.venueCode || ''),
+        race: r.race || (r.no ? String(r.no) + 'R' : ''),
+        raceNo: toNumber(r.no || r.raceNo),
+        race_id: String(r.rid || r.race_id || ''),
+        raceName: String(r.raceName || ''),
+        finish: Array.isArray(r.finishTop) ? r.finishTop.join('-') : String(r.finishText || r.finish || ''),
+        ticketType: String(r.ticketType || 'range-sim'),
+        count: toNumber(r.count),
+        bet: bet,
+        return: hasFinish ? ret : 0,
+        profit: hasFinish ? profit : 0,
+        roi: hasFinish && bet ? Math.round(ret / bet * 1000) / 10 : toNumber(r.roi),
+        hitCount: toNumber(r.hit || r.hitCount),
+        settled: !!hasFinish,
+        error: String(r.error || '')
+      };
+    });
+  }
+  function getRows(){
+    var rows = getGlobalRows();
+    if(rows.length) return normalizeRows(rows);
+    rows = parseRowsFromDetailTable();
+    if(rows.length) return normalizeRows(rows);
+    rows = parseRowsFromAggregateTable();
+    if(rows.length) return normalizeRows(rows);
+    return [];
+  }
+  function group(records, keyName){
+    var map = new Map();
+    records.forEach(function(r){
+      var k = r[keyName] || 'unknown';
+      if(!map.has(k)) map.set(k, {key:k, races:0, hitRaces:0, bet:0, return:0, profit:0});
+      var x = map.get(k);
+      x.races += 1;
+      if(toNumber(r.hitCount) > 0 || toNumber(r.profit) > 0) x.hitRaces += 1;
+      x.bet += toNumber(r.bet);
+      x.return += toNumber(r.return);
+      x.profit += toNumber(r.profit);
+    });
+    return Array.from(map.values()).map(function(x){
+      x.roi = x.bet ? Math.round(x.return / x.bet * 1000) / 10 : 0;
+      return x;
+    });
+  }
+  function buildExportObject(){
+    var all = getRows();
+    var profitRecords = all.filter(function(r){ return r.status === 'ok' && r.settled && (r.bet || r.return || r.profit); });
+    var cumBet=0, cumReturn=0, cumProfit=0;
+    var trend = profitRecords.slice().sort(function(a,b){
+      var d = String(a.date).localeCompare(String(b.date)); if(d) return d;
+      d = String(a.venue).localeCompare(String(b.venue),'ja'); if(d) return d;
+      return toNumber(a.raceNo) - toNumber(b.raceNo);
+    }).map(function(r,i){
+      cumBet += toNumber(r.bet); cumReturn += toNumber(r.return); cumProfit += toNumber(r.profit);
+      return { index:i+1, date:r.date, venue:r.venue, race:r.race, race_id:r.race_id, raceName:r.raceName, bet:r.bet, return:r.return, profit:r.profit, cumulativeBet:cumBet, cumulativeReturn:cumReturn, cumulativeProfit:cumProfit, cumulativeROI:cumBet?Math.round(cumReturn/cumBet*1000)/10:0 };
+    });
+    var totalBet = profitRecords.reduce(function(a,r){return a + toNumber(r.bet);},0);
+    var totalReturn = profitRecords.reduce(function(a,r){return a + toNumber(r.return);},0);
+    var totalProfit = profitRecords.reduce(function(a,r){return a + toNumber(r.profit);},0);
+    return {
+      product: 'The競馬 EV分析',
+      schema: 'keiba-range-venue-simulation-v1',
+      version: VERSION,
+      exportedAt: new Date().toISOString(),
+      conditions: {
+        kind: $('rsKind') ? $('rsKind').value : '',
+        startDate: $('rsStart') ? $('rsStart').value : '',
+        endDate: $('rsEnd') ? $('rsEnd').value : '',
+        pastPerformanceAdjustment: !!($('rsPastAdj') && $('rsPastAdj').checked),
+        recordToProfitGraph: !!($('rsRecord') && $('rsRecord').checked)
+      },
+      summary: {
+        records: all.length,
+        settledRaces: profitRecords.length,
+        bet: totalBet,
+        return: totalReturn,
+        profit: totalProfit,
+        roi: totalBet ? Math.round(totalReturn / totalBet * 1000) / 10 : 0
+      },
+      venueSummary: group(profitRecords, 'venue'),
+      dailySummary: group(profitRecords, 'date'),
+      ticketSummary: group(profitRecords, 'ticketType'),
+      trend: trend,
+      raceRecords: all,
+      records: profitRecords,
+      profitRecords: profitRecords,
+      // 収支分析グラフ仕様HTMLが読む日本語配列も同梱
+      '収支明細': profitRecords.map(function(r){ return { '日付':r.date, '場':r.venue, 'R':r.race, 'レース名':r.raceName, '券種':r.ticketType, '投資':r.bet, '払戻':r.return, '収支':r.profit, 'ROI':r.roi }; })
+    };
+  }
+  function jsonText(obj){
+    // UTF-8 BOM付き。iPad/Safari/Windowsメモ帳でも文字化けしにくい。
+    return '\ufeff' + JSON.stringify(obj, null, 2);
+  }
+  function saveText(filename, text){
+    var blob = new Blob([text], {type:'application/json;charset=utf-8'});
+    var file = null;
+    try{ file = new File([blob], filename, {type:'application/json'}); }catch(e){}
+    if(navigator.canShare && file && navigator.canShare({files:[file]})){
+      navigator.share({files:[file], title:filename}).catch(function(){ fallbackDownload(filename, blob); });
+    }else{
+      fallbackDownload(filename, blob);
+    }
+  }
+  function fallbackDownload(filename, blob){
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = filename; a.style.display = 'none';
+    document.body.appendChild(a); a.click();
+    setTimeout(function(){ try{a.remove();URL.revokeObjectURL(url);}catch(e){} }, 2000);
+  }
+  // Render時に確実に保存。元関数がグローバルならラップする。
+  try{
+    if(typeof window.rsRenderTable === 'function' && !window.rsRenderTable.__jsonWrapped){
+      var originalRender = window.rsRenderTable;
+      window.rsRenderTable = function(rows){
+        try{ window.__rsLastRows = Array.isArray(rows) ? rows.slice() : []; }catch(e){}
+        return originalRender.apply(this, arguments);
+      };
+      window.rsRenderTable.__jsonWrapped = true;
+    }
+  }catch(e){}
+  window.exportRangeVenueSimulationJSON = function(){
+    var obj = buildExportObject();
+    if(!obj.raceRecords.length){
+      alert('期間横断シミュレーション結果が見つかりません。完了後の集計表が表示されている状態で、もう一度押してください。');
+      return;
+    }
+    var c = obj.conditions || {};
+    var def = 'keiba_range_sim_' + (c.kind || 'KEIBA') + '_' + String(c.startDate || nowStamp()).replace(/-/g,'') + '-' + String(c.endDate || nowStamp()).replace(/-/g,'') + '.json';
+    var name = prompt('保存するJSONファイル名', def);
+    if(name === null) return;
+    saveText(cleanName(name), jsonText(obj));
+    var b = $('rsJsonExportBtn');
+    if(b){ var old=b.textContent; b.textContent='✅ JSON保存'; setTimeout(function(){ b.textContent=old; }, 1600); }
   };
 })();
 </script>

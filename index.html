@@ -648,6 +648,10 @@ body{
         <label>3連単＋3連複を使う</label>
         <input type="checkbox" id="setUseSanren" checked onchange="saveSettings()">
       </div>
+      <div class="settings-row">
+        <label>ワイド＋馬連を使う</label>
+        <input type="checkbox" id="setUseWideUmaren" checked onchange="saveSettings()">
+      </div>
       <div class="proxy-note" style="margin-top:6px;font-size:11px;line-height:1.6">
         チェックを外すと、その券種は買い目生成・全シミュレーションから除外されます（手動追加は可能）。
       </div>
@@ -725,7 +729,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.191 TicketTypeToggle';
+window.APP_VERSION = 'v5.18.192 WideUmarenToggle';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -799,6 +803,7 @@ let settings = {
   antigami: true,
   useWakuren: true,   // v5.18.191: 枠連を買い目に含める
   useSanren: true,    // v5.18.191: 3連単＋3連複を買い目に含める
+  useWideUmaren: true, // v5.18.192: ワイド＋馬連を買い目に含める
   minEVByType: {...DEFAULT_MIN_EV},
   proxyUrl: 'https://takuya.nitta-katsuhiko.workers.dev/'
 };
@@ -930,6 +935,7 @@ function saveSettings(){
   settings.antigami = document.getElementById('setAntigami')?.checked !== false;
   settings.useWakuren = document.getElementById('setUseWakuren')?.checked !== false;
   settings.useSanren = document.getElementById('setUseSanren')?.checked !== false;
+  settings.useWideUmaren = document.getElementById('setUseWideUmaren')?.checked !== false;
   TICKET_TYPES.forEach(t => {
     const el = document.getElementById('ev-' + t);
     if(el) settings.minEVByType[t] = Number(el.value || DEFAULT_MIN_EV[t]);
@@ -1269,6 +1275,7 @@ function refreshSettingsUI(){
   const setAnti = document.getElementById('setAntigami'); if(setAnti) setAnti.checked = settings.antigami !== false;
   const setUW = document.getElementById('setUseWakuren'); if(setUW) setUW.checked = settings.useWakuren !== false;
   const setUS = document.getElementById('setUseSanren'); if(setUS) setUS.checked = settings.useSanren !== false;
+  const setUWU = document.getElementById('setUseWideUmaren'); if(setUWU) setUWU.checked = settings.useWideUmaren !== false;
   const pUrl = document.getElementById('proxyUrl'); if(pUrl) pUrl.value = settings.proxyUrl || '';
   const nb = document.getElementById('narBadge'); if(nb) nb.style.display = settings.nar ? '' : 'none';
   TICKET_TYPES.forEach(t => {
@@ -1301,6 +1308,7 @@ function resetSettingsToDefault(){
     antigami: true,
     useWakuren: true,
     useSanren: true,
+    useWideUmaren: true,
     minEVByType: {...DEFAULT_MIN_EV},
     proxyUrl: keepProxy || 'https://takuya.nitta-katsuhiko.workers.dev/'
   };
@@ -1348,6 +1356,7 @@ function initUI(){
   document.getElementById('setAntigami').checked = settings.antigami;
   document.getElementById('setUseWakuren').checked = settings.useWakuren !== false;
   document.getElementById('setUseSanren').checked = settings.useSanren !== false;
+  document.getElementById('setUseWideUmaren').checked = settings.useWideUmaren !== false;
   document.getElementById('proxyUrl').value = settings.proxyUrl || '';
   document.getElementById('narBadge').style.display = settings.nar ? '' : 'none';
 
@@ -2004,6 +2013,7 @@ function selectByMode(recs, mode, max){
   recs = recs.filter(r => {
     if(settings.useWakuren === false && r.type === '枠連') return false;
     if(settings.useSanren === false && (r.type === '3連単' || r.type === '3連複')) return false;
+    if(settings.useWideUmaren === false && (r.type === 'ワイド' || r.type === '馬連')) return false; // v5.18.192
     return true;
   });
   const minEV = MODE_EV[mode] || settings.minEVByType;
@@ -12724,6 +12734,14 @@ if(horses.length === 0){
      通常予測・全レース一括・期間横断シミュレーションすべてに反映。
    ・設定は localStorage / JSON保存・読込 / 設定初期化に対応（初期値はON）。
    ============================================================ */
+/* ============================================================
+   v5.18.192 WideUmarenToggle
+   ・設定「基本設定」に「ワイド＋馬連を使う」チェックを追加（初期値ON）。
+   ・チェックOFFにすると ワイド・馬連 が selectByMode() で候補から除外され、
+     通常予測・全レース一括・期間横断シミュレーションすべてに反映。
+   ・settings.useWideUmaren として localStorage / JSON保存・読込 /
+     設定初期化（♻️）に対応。手動追加は従来どおり可能。
+   ============================================================ */
 </script>
 
 <script>
@@ -12751,7 +12769,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.191 TicketTypeToggle';
+  window.APP_VERSION = 'v5.18.192 WideUmarenToggle';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -13180,7 +13198,7 @@ function json(obj, status = 200) {
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.191 TicketTypeToggle';
+  window.APP_VERSION = 'v5.18.192 WideUmarenToggle';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -13477,7 +13495,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.191 TicketTypeToggle';
+  window.APP_VERSION = 'v5.18.192 WideUmarenToggle';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -13695,7 +13713,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.191 TicketTypeToggle';
+    window.APP_VERSION = 'v5.18.192 WideUmarenToggle';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -13995,7 +14013,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.191 TicketTypeToggle';
+  window.APP_VERSION = 'v5.18.192 WideUmarenToggle';
   try{
     const ver = document.querySelector('.ver');
     if(ver){

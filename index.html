@@ -653,7 +653,7 @@ body{
         <input type="checkbox" id="setUseWideUmaren" checked onchange="saveSettings()">
       </div>
       <div class="proxy-note" style="margin-top:6px;font-size:11px;line-height:1.6">
-        チェックを外すと、その券種は買い目生成・全シミュレーションから除外されます（手動追加は可能）。
+        チェックを外した券種が推奨買い目に含まれるレースは、他の券種で代替購入せず「見送り」になります（通常予測・全レース一括・期間横断シミュレーション共通。手動追加は可能）。
       </div>
     </div>
 
@@ -729,7 +729,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.192 WideUmarenToggle';
+window.APP_VERSION = 'v5.18.193 SkipRaceOnDisabledType';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -2007,15 +2007,33 @@ function getTypeQuota(mode, max){
   return out;
 }
 
+// v5.18.193: 設定チェックでOFFにされた券種か判定
+function isDisabledTicketType(t){
+  if(settings.useWakuren === false && t === '枠連') return true;
+  if(settings.useSanren === false && (t === '3連単' || t === '3連複')) return true;
+  if(settings.useWideUmaren === false && (t === 'ワイド' || t === '馬連')) return true;
+  return false;
+}
+
+// v5.18.193: 直近のselectByModeが券種設定オフにより見送りになった場合、
+// そのOFF券種名の配列が入る（見送りでなければ null）
+let lastModeSkipTypes = null;
+
 function selectByMode(recs, mode, max){
-  // v5.18.191: 設定チェックで無効化された券種を候補から除外
+  // v5.18.193: 券種チェックOFFの場合、他の券種で代替購入はしない。
+  // モード本来の推奨買い目にOFF券種が含まれるレースは丸ごと見送り（0点）にする。
   // （runPredict / 全レース一括 / 期間横断シミュレーション すべてここを通る）
-  recs = recs.filter(r => {
-    if(settings.useWakuren === false && r.type === '枠連') return false;
-    if(settings.useSanren === false && (r.type === '3連単' || r.type === '3連複')) return false;
-    if(settings.useWideUmaren === false && (r.type === 'ワイド' || r.type === '馬連')) return false; // v5.18.192
-    return true;
-  });
+  lastModeSkipTypes = null;
+  const picked = selectByModeCore(recs, mode, max);
+  const disabled = picked.filter(r => isDisabledTicketType(r.type)).map(r => r.type);
+  if(disabled.length){
+    lastModeSkipTypes = [...new Set(disabled)];
+    return []; // 見送り
+  }
+  return picked;
+}
+
+function selectByModeCore(recs, mode, max){
   const minEV = MODE_EV[mode] || settings.minEVByType;
   const scored = recs.map(r => ({...r, modeScore: getModeScore(r, mode)}))
     .filter(r => {
@@ -2145,7 +2163,12 @@ function renderResult(valid, rated){
   // 推奨買い目
   const tl = document.getElementById('ticketList');
   if(!lastTickets.length){
-    tl.innerHTML = '<div class="empty">推奨買い目がありません。<br>モードやEV閾値を調整してみてください。</div>';
+    if(lastModeSkipTypes && lastModeSkipTypes.length){
+      // v5.18.193: 券種設定オフによる見送り
+      tl.innerHTML = `<div class="empty">🛑 このレースは見送りです。<br>推奨買い目にOFF設定の券種（${lastModeSkipTypes.join('・')}）が含まれるため、代替購入せず見送ります。</div>`;
+    } else {
+      tl.innerHTML = '<div class="empty">推奨買い目がありません。<br>モードやEV閾値を調整してみてください。</div>';
+    }
   } else {
     const warns = lastTickets.filter(t => isTrigami(t, totalBet));
     let html = '';
@@ -12742,6 +12765,21 @@ if(horses.length === 0){
    ・settings.useWideUmaren として localStorage / JSON保存・読込 /
      設定初期化（♻️）に対応。手動追加は従来どおり可能。
    ============================================================ */
+/* ============================================================
+   v5.18.193 SkipRaceOnDisabledType
+   ・券種チェックOFF時の挙動を「除外して残り券種で代替購入」から
+     「レースごと見送り」へ変更。
+   ・selectByMode() を2段階化: selectByModeCore() でモード本来の
+     推奨買い目を選出し、その中にOFF券種（枠連 / 3連単・3連複 /
+     ワイド・馬連）が1点でも含まれる場合は空配列を返して見送り。
+     OFF券種が元々選ばれないレースは従来どおり購入する。
+   ・通常予測・全レース一括・期間横断シミュレーションすべてに反映
+     （いずれも selectByMode() 経由のため）。見送りは既存の
+     count===0 扱いとなり、集計・グラフでも従来の見送りと同様に処理。
+   ・単一レース予測では見送り理由（OFF券種名）を買い目欄に表示。
+     lastModeSkipTypes に直近の見送り券種を保持。
+   ・設定パネルの説明文を新仕様に更新。
+   ============================================================ */
 </script>
 
 <script>
@@ -12769,7 +12807,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.192 WideUmarenToggle';
+  window.APP_VERSION = 'v5.18.193 SkipRaceOnDisabledType';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -13198,7 +13236,7 @@ function json(obj, status = 200) {
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.192 WideUmarenToggle';
+  window.APP_VERSION = 'v5.18.193 SkipRaceOnDisabledType';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -13495,7 +13533,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.192 WideUmarenToggle';
+  window.APP_VERSION = 'v5.18.193 SkipRaceOnDisabledType';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -13713,7 +13751,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.192 WideUmarenToggle';
+    window.APP_VERSION = 'v5.18.193 SkipRaceOnDisabledType';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -14013,7 +14051,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.192 WideUmarenToggle';
+  window.APP_VERSION = 'v5.18.193 SkipRaceOnDisabledType';
   try{
     const ver = document.querySelector('.ver');
     if(ver){

@@ -14287,7 +14287,7 @@ function json(obj, status = 200) {
    - 「取得中」に一度空配列を描いても、JRA土日を即「開催なし」に見せない。
    ============================================================ */
 (function(){
-  const V = 'v5.18.199 LearningPredictMode';
+  const V = 'v5.18.200 ClassGradeLearning';
   try{
     window.APP_VERSION = V;
     document.title = 'The競馬 EV分析 ' + V;
@@ -16388,21 +16388,24 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script>
 /* ═══════════════════════════════════════════════════════════════
-   v5.18.199 LearningPredictMode（学習機能モード：予想モード）
-   ・モード選択に「🧠 学習（精算結果から補正）」を追加。
-   ・精算のたびに judgeTicketHit() をフックして、
-     JRA/NAR × 券種 × オッズ帯 ごとに
-     「推定確率の合計」と「実際の的中数」を自動蓄積する。
-     （手動精算・自動精算・全レース一括・期間横断シミュ・
-       予想テキスト精算のすべてが judgeTicketHit を通るため共通で効く）
-   ・学習モードで予想すると、蓄積データから較正係数
-     calib = 実的中数 ÷ 推定確率合計 を求め、
-     サンプル数に応じた重み w = n/(n+40) で
-     EV' = EV × (1 + w×(calib−1)) に補正して買い目を選ぶ。
-     （少サンプルでは補正ほぼ0＝既存EVと同じ。過学習防止）
-   ・同一レースの再精算は seen キーで重複記録を防止。
-   ・設定タブに「🧠 学習機能」カードを追加：
-     蓄積状況の表・記録ON/OFF・リセット・JSON出力/読込。
+   v5.18.200 ClassGradeLearning（学習機能：クラス・組・グレード対応）
+   ・v5.18.199 の学習モードを拡張し、蓄積バケットを
+     JRA/NAR × 券種 × オッズ帯 × クラス に細分化。
+     クラスはレース名から自動判定：
+       - グレード: G1/G2/G3, JG1〜(障害), Jpn1〜(交流), S1〜(南関重賞), L(リステッド)
+       - JRAクラス: 新馬 / 未勝利 / 1勝 / 2勝 / 3勝 / OP / 特別
+       - NARクラス: A1〜C4（＋組があれば「C2-3組」のように付与）
+       - 判定不能・レース名なしは「その他」「不明」
+   ・EV補正の適用順（サンプル数が足りる最も細かい層を採用）：
+       ①クラス(組込み)別 → ②クラス別(組を集約) → ③オッズ帯別
+       → ④券種別 → ⑤補正なし
+     （集計は遅延キャッシュで高速化。少サンプル時の挙動は従来どおり）
+   ・既存の学習データ（旧3階層キー）は読込時に「|不明」クラスへ
+     自動移行し、③④の集計にはそのまま寄与する（退行なし）。
+   ・レース名は currentRaceName を基本とし、予想テキスト精算など
+     currentRaceName が更新されないフローでは、直前に結果docから
+     解析したレース名（parseRaceTitleFromDoc ラップ）を使用。
+   ・設定タブの学習カードに「クラス別」集計表を追加。
    ・既存関数は書き換えず、グローバル再代入によるラップのみ。
      学習モード以外の挙動は完全に従来どおり（退行なし）。
    ═══════════════════════════════════════════════════════════════ */
@@ -16413,17 +16416,115 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   var LS_DATA = 'tk-learn-v1';
   var LS_ON   = 'tk-learn-enabled';
   var SHRINK_N = 40;      // 重み w = n/(n+SHRINK_N)
-  var MIN_BUCKET_N = 8;   // オッズ帯バケット採用の最低サンプル
+  var MIN_BUCKET_N = 8;   // クラス別/オッズ帯バケット採用の最低サンプル
   var MIN_TYPE_N = 15;    // 券種集計フォールバック採用の最低サンプル
   var MULT_LO = 0.55, MULT_HI = 1.60;
   var SEEN_MAX = 6000;
 
+  // ── クラス・組・グレード判定 ─────────────────
+  function kanji2num(s){
+    if(/^[0-9]+$/.test(s)) return parseInt(s, 10);
+    var d = {'一':1,'二':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9};
+    var m = String(s).match(/^([一二三四五六七八九])?(十)?([一二三四五六七八九])?$/);
+    if(!m || (!m[1] && !m[2] && !m[3])) return 0;
+    var n = 0;
+    if(m[2]) n = (m[1] ? d[m[1]] : 1) * 10;
+    else if(m[1]) n = d[m[1]];
+    if(m[3]) n += d[m[3]];
+    return n;
+  }
+  var ROMAN = {'Ⅰ':'1','Ⅱ':'2','Ⅲ':'3','III':'3','II':'2','I':'1','1':'1','2':'2','3':'3'};
+  var RANK_RE = '(Ⅰ|Ⅱ|Ⅲ|III|II|I|[1-3])';
+  function parseClassKey(name){
+    var s = String(name || '');
+    if(!s) return '不明';
+    // 全角英数字・括弧を半角へ正規化
+    s = s.replace(/[０-９Ａ-Ｚａ-ｚ（）]/g, function(c){
+      var code = c.charCodeAt(0);
+      if(code === 0xFF08) return '(';
+      if(code === 0xFF09) return ')';
+      return String.fromCharCode(code - 0xFEE0);
+    });
+    var t = s.replace(/[\s\u3000]+/g, '');
+    var m;
+    // グレード（障害J・G → 交流Jpn → 中央G → 南関S → リステッドL）
+    if((m = t.match(new RegExp('J・?G' + RANK_RE)))) return 'JG' + ROMAN[m[1]];
+    if((m = t.match(new RegExp('Jpn' + RANK_RE, 'i')))) return 'Jpn' + ROMAN[m[1]];
+    if((m = t.match(new RegExp('(?:^|[^A-Za-z])G' + RANK_RE + '(?![0-9A-Za-z])')))) return 'G' + ROMAN[m[1]];
+    if((m = t.match(new RegExp('\\(S' + RANK_RE + '\\)')))) return 'S' + ROMAN[m[1]];
+    if(/\(L\)|リステッド/.test(t)) return 'L';
+    // JRA条件クラス
+    if(/新馬|メイクデビュー/.test(t)) return '新馬';
+    if(/未勝利/.test(t)) return '未勝利';
+    if((m = t.match(/([1-3])勝クラス/))) return m[1] + '勝';
+    if(/500万/.test(t)) return '1勝';
+    if(/1000万/.test(t)) return '2勝';
+    if(/1600万/.test(t)) return '3勝';
+    if(/オープン|(?:^|[^A-Za-z])OP(?![A-Za-z])/.test(t)) return 'OP';
+    // NARクラス（A1〜C4）＋組（例: C2三組 / C2 7組 → C2-3組 / C2-7組）
+    // 「C2 7組」のように空白＋算用数字が続く形式を拾うため、空白は除去せず判定する
+    var u = s.replace(/[\s\u3000]+/g, ' ');
+    var cm = u.match(/(?:^|[^A-Za-z])([ABC])([1-4])(?![0-9])/);
+    var km = u.match(/([0-9]+|[一二三四五六七八九十]+)組/);
+    if(cm){
+      var cls = cm[1] + cm[2];
+      if(km){
+        var kn = kanji2num(km[1]);
+        if(kn > 0) return cls + '-' + kn + '組';
+      }
+      return cls;
+    }
+    if(/重賞/.test(t)) return '重賞';
+    if(/特別|ステークス/.test(t)) return '特別';
+    return 'その他';
+  }
+  function classBase(cls){ return String(cls || '').replace(/-\d+組$/, ''); }
+  window.tkParseClassKey = parseClassKey; // デバッグ・検証用に公開
+
+  // ── レース名の取得 ───────────────────────────
+  //    予想テキスト精算などは currentRaceName を更新しないため、
+  //    parseRaceTitleFromDoc をラップして「直前に解析したレース名」を記憶。
+  var lastParsed = { name: '', t: 0 };
+  var _prt = window.parseRaceTitleFromDoc;
+  if(typeof _prt === 'function'){
+    window.parseRaceTitleFromDoc = function(){
+      var r = _prt.apply(this, arguments);
+      try{ if(r){ lastParsed.name = String(r); lastParsed.t = Date.now(); } }catch(e){}
+      return r;
+    };
+  }
+  function activeRaceName(){
+    var n = '';
+    try{ if(typeof currentRaceName === 'string' && currentRaceName) n = currentRaceName; }catch(e){}
+    if(!n){ try{ n = String(window.currentRaceName || ''); }catch(e){} }
+    // 直前（5秒以内）に結果docから解析した名前があればそちらを優先
+    if(lastParsed.name && (Date.now() - lastParsed.t) < 5000) n = lastParsed.name;
+    return n;
+  }
+  function activeClassKey(){ return parseClassKey(activeRaceName()); }
+
   // ── 学習ストア ─────────────────────────────
+  //    旧形式（kind|type|band）のキーは「|不明」クラスへ自動移行。
+  function migrateBuckets(buckets){
+    var out = {}, changed = false;
+    for(var k in buckets){
+      var parts = String(k).split('|');
+      var nk = parts.length >= 4 ? k : (k + '|不明');
+      if(nk !== k) changed = true;
+      var b = buckets[k] || {};
+      var o = out[nk] || (out[nk] = { n: 0, sp: 0, h: 0 });
+      o.n += Number(b.n || 0); o.sp += Number(b.sp || 0); o.h += Number(b.h || 0);
+    }
+    return { buckets: out, changed: changed };
+  }
   var learn = loadLearn();
   function loadLearn(){
     try{
       var d = JSON.parse(localStorage.getItem(LS_DATA) || 'null');
-      if(d && d.buckets) return { buckets: d.buckets, seen: Array.isArray(d.seen) ? d.seen : [] };
+      if(d && d.buckets){
+        var mig = migrateBuckets(d.buckets);
+        return { buckets: mig.buckets, seen: Array.isArray(d.seen) ? d.seen : [] };
+      }
     }catch(e){}
     return { buckets: {}, seen: [] };
   }
@@ -16447,10 +16548,30 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     if(o < 100) return '50-99';
     return '100+';
   }
-  function bKey(kind, type, band){ return kind + '|' + type + '|' + band; }
+  function bKey(kind, type, band, cls){ return kind + '|' + type + '|' + band + '|' + (cls || '不明'); }
+
+  // ── 集計キャッシュ（クラス集約・オッズ帯集約・券種集約）──
+  var aggCache = null;
+  function invalidateAgg(){ aggCache = null; }
+  function aggAdd(map, key, b){
+    var o = map[key] || (map[key] = { n: 0, sp: 0, h: 0 });
+    o.n += b.n; o.sp += b.sp; o.h += b.h;
+  }
+  function buildAgg(){
+    var c = { base: {}, band: {}, type: {} };
+    for(var k in learn.buckets){
+      var p = k.split('|');
+      var kind = p[0], type = p[1], band = p[2], cls = p[3] || '不明';
+      var b = learn.buckets[k];
+      aggAdd(c.base, kind + '|' + type + '|' + band + '|' + classBase(cls), b);
+      aggAdd(c.band, kind + '|' + type + '|' + band, b);
+      aggAdd(c.type, kind + '|' + type, b);
+    }
+    aggCache = c;
+  }
 
   // ── 精算フック：judgeTicketHit をラップして自動蓄積 ──
-  //    サンプル = { 推定確率p, 的中したか } を券種×オッズ帯バケットへ加算。
+  //    サンプル = { 推定確率p, 的中したか } を券種×オッズ帯×クラスのバケットへ加算。
   //    p が無い買い目（テキスト復元等）は p = ev/odds で復元。
   var seenSet = null;
   function seenHas(k){
@@ -16490,9 +16611,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     seenAdd(key);
 
     var kind = (typeof isNAR === 'function' && isNAR()) ? 'NAR' : 'JRA';
-    var k = bKey(kind, t.type, oddsBand(odds));
+    var cls = activeClassKey();
+    var k = bKey(kind, t.type, oddsBand(odds), cls);
     var b = learn.buckets[k] || (learn.buckets[k] = { n: 0, sp: 0, h: 0 });
     b.n += 1; b.sp += p; if(hit) b.h += 1;
+    invalidateAgg();
 
     clearTimeout(saveTimer);
     saveTimer = setTimeout(function(){ saveLearn(); try{ renderLearnCard(); }catch(e){} }, 400);
@@ -16501,31 +16624,36 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   // ── 補正係数 ───────────────────────────────
   //    calibRaw = 的中数 ÷ 推定確率合計（1より大＝過小評価していた）
   //    mult = 1 + w×(calibRaw−1), w = n/(n+40)。クランプで暴走防止。
+  //    適用順: ①クラス(組込み)別 → ②クラス別(組集約) → ③オッズ帯別 → ④券種別 → ⑤なし
   function bucketMult(b){
     if(!b || b.n < 1 || !(b.sp > 0)) return null;
     var calib = b.h / b.sp;
     var w = b.n / (b.n + SHRINK_N);
     return Math.max(MULT_LO, Math.min(MULT_HI, 1 + w * (calib - 1)));
   }
-  function typeAggregate(kind, type){
-    var agg = { n: 0, sp: 0, h: 0 };
-    for(var k in learn.buckets){
-      var parts = k.split('|');
-      if(parts[0] === kind && parts[1] === type){
-        var b = learn.buckets[k];
-        agg.n += b.n; agg.sp += b.sp; agg.h += b.h;
-      }
+  function learnMult(kind, type, odds, cls){
+    cls = cls || '不明';
+    var band = oddsBand(odds);
+    var m;
+    // ①クラス（組込み）×オッズ帯
+    var b1 = learn.buckets[bKey(kind, type, band, cls)];
+    if(b1 && b1.n >= MIN_BUCKET_N){ m = bucketMult(b1); if(m != null) return m; }
+    if(!aggCache) buildAgg();
+    // ②クラス（組を集約）×オッズ帯
+    var base = classBase(cls);
+    if(base && base !== cls){
+      var b2 = aggCache.base[kind + '|' + type + '|' + band + '|' + base];
+      if(b2 && b2.n >= MIN_BUCKET_N){ m = bucketMult(b2); if(m != null) return m; }
     }
-    return agg;
-  }
-  function learnMult(kind, type, odds){
-    var b = learn.buckets[bKey(kind, type, oddsBand(odds))];
-    if(b && b.n >= MIN_BUCKET_N){ var m = bucketMult(b); if(m != null) return m; }
-    var agg = typeAggregate(kind, type);
-    if(agg.n >= MIN_TYPE_N){ var m2 = bucketMult(agg); if(m2 != null) return m2; }
+    // ③オッズ帯（クラス集約）
+    var b3 = aggCache.band[kind + '|' + type + '|' + band];
+    if(b3 && b3.n >= MIN_BUCKET_N){ m = bucketMult(b3); if(m != null) return m; }
+    // ④券種
+    var b4 = aggCache.type[kind + '|' + type];
+    if(b4 && b4.n >= MIN_TYPE_N){ m = bucketMult(b4); if(m != null) return m; }
     return 1;
   }
-  window.tkLearnMult = learnMult; // デバッグ・検証用に公開
+  window.tkLearnMult = learnMult; // デバッグ・検証用に公開（第4引数cls省略可）
 
   // ── モード登録 ─────────────────────────────
   try{
@@ -16546,15 +16674,17 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     window.selectByModeCore = function(recs, mode, max){
       if(mode !== LMODE) return _core(recs, mode, max);
       var kind = (typeof isNAR === 'function' && isNAR()) ? 'NAR' : 'JRA';
+      var cls = activeClassKey(); // 予想対象レースのクラス・組・グレード
       var adj = [];
       (recs || []).forEach(function(r){
-        var m = learnMult(kind, r.type, r.odds);
+        var m = learnMult(kind, r.type, r.odds, cls);
         var ev2 = Number(r.ev || 0) * m;
         var mv = (settings.minEVByType && settings.minEVByType[r.type]) || (typeof DEFAULT_MIN_EV !== 'undefined' && DEFAULT_MIN_EV[r.type]) || 1.05;
         if(ev2 < mv) return; // 補正後EVが券種別閾値未満は除外
         var c = Object.assign({}, r);
         c.evRaw = r.ev;
         c.learnAdj = m;
+        c.learnClass = cls;
         c.ev = ev2;
         c.p = Math.max(0.0001, Math.min(0.98, Number(r.p || 0) * m));
         c.expectedReturn = ev2 * (c.unit || 100);
@@ -16620,9 +16750,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       '<h2>🧠 学習機能（予想モード用）</h2>' +
       '<div class="proxy-note" style="font-size:11px;line-height:1.6;margin-bottom:8px">' +
       '精算（手動・自動・全レース一括・期間横断シミュ・予想テキスト精算）のたびに、買い目ごとの' +
-      '<b>推定確率と実際の的中/不的中</b>を JRA/NAR × 券種 × オッズ帯 で自動蓄積します。' +
-      'モード「🧠 学習」で予想すると、蓄積データの較正係数でEVを補正した買い目を選びます。' +
-      'サンプルが少ないうちは補正がほぼ0（＝従来EVと同等）で、貯まるほど補正が効きます。' +
+      '<b>推定確率と実際の的中/不的中</b>を JRA/NAR × 券種 × オッズ帯 × <b>クラス</b> で自動蓄積します。' +
+      'クラスはレース名から自動判定：グレード（G1〜G3・Jpn・J・G・南関S・L）、' +
+      'JRA条件（新馬・未勝利・1勝〜3勝・OP・特別）、NARクラス（A1〜C4、組があれば「C2-3組」まで細分化）。' +
+      'モード「🧠 学習」で予想すると、そのレースのクラスに合った較正係数でEVを補正した買い目を選びます。' +
+      'サンプルが少ないうちは組→クラス→オッズ帯→券種の順に広い集計へフォールバックします。' +
       '</div>' +
       '<div class="settings-row"><label>精算結果を学習に記録する</label><input type="checkbox" id="learnEnableChk"></div>' +
       '<div id="learnStats" style="margin-top:8px"></div>' +
@@ -16648,11 +16780,13 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         try{
           var d = JSON.parse(fr.result);
           if(!d || typeof d.buckets !== 'object') throw new Error('buckets がありません');
-          learn = { buckets: d.buckets, seen: Array.isArray(d.seen) ? d.seen : [] };
+          var mig = migrateBuckets(d.buckets); // 旧形式キーも自動移行
+          learn = { buckets: mig.buckets, seen: Array.isArray(d.seen) ? d.seen : [] };
           seenSet = null;
+          invalidateAgg();
           saveLearn();
           renderLearnCard();
-          alert('✅ 学習データを読み込みました');
+          alert('✅ 学習データを読み込みました' + (mig.changed ? '（旧形式をクラス対応形式へ移行）' : ''));
         }catch(e){ alert('❌ 読込失敗: ' + (e && e.message || e)); }
         fileEl.value = '';
       };
@@ -16662,18 +16796,39 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     return true;
   }
 
+  function statRow(label, t){
+    var expRate = t.sp / t.n, actRate = t.h / t.n;
+    var calib = t.sp > 0 ? t.h / t.sp : 0;
+    var w = t.n / (t.n + SHRINK_N);
+    var mult = Math.max(MULT_LO, Math.min(MULT_HI, 1 + w * (calib - 1)));
+    var col = mult > 1.02 ? 'var(--green)' : mult < 0.98 ? 'var(--red)' : 'var(--muted)';
+    return '<tr><td style="padding:2px 6px">' + esc(label) + '</td>' +
+      '<td style="padding:2px 6px;text-align:right">' + t.n + '</td>' +
+      '<td style="padding:2px 6px;text-align:right">' + (expRate * 100).toFixed(1) + '%</td>' +
+      '<td style="padding:2px 6px;text-align:right">' + (actRate * 100).toFixed(1) + '%</td>' +
+      '<td style="padding:2px 6px;text-align:right">' + calib.toFixed(2) + '</td>' +
+      '<td style="padding:2px 6px;text-align:right;color:' + col + ';font-weight:700">×' + mult.toFixed(2) + '</td></tr>';
+  }
+  function statHead(firstCol){
+    return '<tr style="opacity:.7"><td style="padding:2px 6px">' + firstCol + '</td><td style="padding:2px 6px;text-align:right">n</td><td style="padding:2px 6px;text-align:right">推定的中率</td><td style="padding:2px 6px;text-align:right">実的中率</td><td style="padding:2px 6px;text-align:right">較正係数</td><td style="padding:2px 6px;text-align:right">EV補正(重み込)</td></tr>';
+  }
+
   function renderLearnCard(){
     var el = document.getElementById('learnStats');
     if(!el) return;
     var kinds = { JRA: {}, NAR: {} };
+    var classAgg = { JRA: {}, NAR: {} };
     var totalN = 0;
     for(var k in learn.buckets){
       var parts = k.split('|');
-      var kind = parts[0], type = parts[1];
+      var kind = parts[0], type = parts[1], cls = parts[3] || '不明';
       if(!kinds[kind]) kinds[kind] = {};
-      var t = kinds[kind][type] || (kinds[kind][type] = { n: 0, sp: 0, h: 0 });
+      if(!classAgg[kind]) classAgg[kind] = {};
       var b = learn.buckets[k];
+      var t = kinds[kind][type] || (kinds[kind][type] = { n: 0, sp: 0, h: 0 });
       t.n += b.n; t.sp += b.sp; t.h += b.h;
+      var c = classAgg[kind][cls] || (classAgg[kind][cls] = { n: 0, sp: 0, h: 0 });
+      c.n += b.n; c.sp += b.sp; c.h += b.h;
       totalN += b.n;
     }
     if(!totalN){
@@ -16686,24 +16841,25 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       if(!types.length) return;
       html += '<div style="font-weight:800;font-size:12px;margin:6px 0 3px">' + kind + '</div>';
       html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
-      html += '<tr style="opacity:.7"><td style="padding:2px 6px">券種</td><td style="padding:2px 6px;text-align:right">n</td><td style="padding:2px 6px;text-align:right">推定的中率</td><td style="padding:2px 6px;text-align:right">実的中率</td><td style="padding:2px 6px;text-align:right">較正係数</td><td style="padding:2px 6px;text-align:right">EV補正(重み込)</td></tr>';
-      types.sort().forEach(function(type){
-        var t = kinds[kind][type];
-        var expRate = t.sp / t.n, actRate = t.h / t.n;
-        var calib = t.sp > 0 ? t.h / t.sp : 0;
-        var w = t.n / (t.n + SHRINK_N);
-        var mult = Math.max(MULT_LO, Math.min(MULT_HI, 1 + w * (calib - 1)));
-        var col = mult > 1.02 ? 'var(--green)' : mult < 0.98 ? 'var(--red)' : 'var(--muted)';
-        html += '<tr><td style="padding:2px 6px">' + esc(type) + '</td>' +
-          '<td style="padding:2px 6px;text-align:right">' + t.n + '</td>' +
-          '<td style="padding:2px 6px;text-align:right">' + (expRate * 100).toFixed(1) + '%</td>' +
-          '<td style="padding:2px 6px;text-align:right">' + (actRate * 100).toFixed(1) + '%</td>' +
-          '<td style="padding:2px 6px;text-align:right">' + calib.toFixed(2) + '</td>' +
-          '<td style="padding:2px 6px;text-align:right;color:' + col + ';font-weight:700">×' + mult.toFixed(2) + '</td></tr>';
-      });
+      html += statHead('券種');
+      types.sort().forEach(function(type){ html += statRow(type, kinds[kind][type]); });
       html += '</table></div>';
+      // クラス別集計（n の多い順・上位14件）
+      var clsKeys = Object.keys(classAgg[kind] || {});
+      if(clsKeys.length){
+        clsKeys.sort(function(a, b){ return classAgg[kind][b].n - classAgg[kind][a].n; });
+        var shown = clsKeys.slice(0, 14);
+        html += '<div style="font-weight:700;font-size:11px;margin:4px 0 2px;opacity:.8">' + kind + '：クラス・組・グレード別</div>';
+        html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
+        html += statHead('クラス');
+        shown.forEach(function(cls){ html += statRow(cls, classAgg[kind][cls]); });
+        html += '</table></div>';
+        if(clsKeys.length > shown.length){
+          html += '<div style="font-size:10px;opacity:.55">…ほか ' + (clsKeys.length - shown.length) + ' クラス</div>';
+        }
+      }
     });
-    html += '<div style="font-size:10px;opacity:.6;margin-top:4px">較正係数＝実的中数÷推定確率合計。1超＝推定が控えめだった券種。学習モードのEV補正は「オッズ帯別（n≥' + MIN_BUCKET_N + '）→券種別（n≥' + MIN_TYPE_N + '）→補正なし」の順で適用。</div>';
+    html += '<div style="font-size:10px;opacity:.6;margin-top:4px">較正係数＝実的中数÷推定確率合計。1超＝推定が控えめだったカテゴリ。学習モードのEV補正は「クラス(組込み)×オッズ帯（n≥' + MIN_BUCKET_N + '）→クラス×オッズ帯（n≥' + MIN_BUCKET_N + '）→オッズ帯別（n≥' + MIN_BUCKET_N + '）→券種別（n≥' + MIN_TYPE_N + '）→補正なし」の順で適用。旧バージョンの蓄積データはクラス「不明」として集計に寄与します。</div>';
     el.innerHTML = html;
   }
 
@@ -16730,6 +16886,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     if(!confirm('学習データ（' + Object.keys(learn.buckets).length + 'バケット）をすべて削除します。よろしいですか？')) return;
     learn = { buckets: {}, seen: [] };
     seenSet = null;
+    invalidateAgg();
     saveLearn();
     renderLearnCard();
   };
@@ -16748,7 +16905,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     }, 300);
   }
 
-  console.log('[v5.18.199] LearningPredictMode: 学習モード追加・judgeTicketHitフック有効');
+  console.log('[v5.18.200] ClassGradeLearning: 学習バケットをクラス・組・グレード対応に拡張');
 })();
 </script>
 

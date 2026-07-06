@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.199 LearningPredictMode</title>
+<title>The競馬 EV分析 v5.18.200 PredictJSONVerify</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -500,7 +500,16 @@ body{
       <div id="predSimPastAdjStat" style="display:none;font-size:11px;color:var(--muted);margin:0 0 10px 26px"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-primary" id="predSimBtn" onclick="runUnsettledPredictionSimulation()">🔮 対象レースを一括予想</button>
+        <button class="btn-sm" id="predSimOneBtn" onclick="runSelectedRacePredictionSimulation()">1Rずつ予想</button>
+        <button class="btn-sm" id="predSimJsonSaveBtn" onclick="exportPredictionSimulationJSON()" style="display:none">💾 予想JSON保存</button>
+        <button class="btn-sm" id="predSimJsonLoadBtn" onclick="importPredictionSimulationJSON()">📥 予想JSON読込</button>
+        <button class="btn-sm" id="predSimVerifyOneBtn" onclick="verifyPredictionSimulationNextRace()" style="display:none">🧪 次の1Rを検証</button>
+        <button class="btn-sm" id="predSimVerifyAllBtn" onclick="verifyPredictionSimulationAllRaces()" style="display:none">🧪 一括検証</button>
         <button class="btn-sm" id="predSimCopyBtn" onclick="copyUnsettledPredictionText()" style="display:none">📋 予想をテキストコピー</button>
+        <input type="file" id="predSimJsonFile" accept=".json,application/json,text/json" style="display:none">
+      </div>
+      <div style="font-size:11px;color:var(--muted);margin-top:8px;line-height:1.6">
+        💾 予想JSONは未確定時点の買い目を保存します。後日読み込んで「次の1Rを検証」または「一括検証」で、結果ページの着順・払戻から回収率を確認できます。
       </div>
       <div id="predSimProgress" style="margin-top:10px"></div>
       <div id="predSimSummary" style="margin-top:10px"></div>
@@ -748,7 +757,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.199 LearningPredictMode';
+window.APP_VERSION = 'v5.18.200 PredictJSONVerify';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -11729,6 +11738,7 @@ if(horses.length === 0){
         prog.innerHTML = `<div class="url-status ok">${msg}</div>`;
       }
       if(copyBtn && predCount > 0) copyBtn.style.display = '';
+      ps_setJsonButtons(true);
     }catch(e){
       console.error('[runUnsettledPredictionSimulation]', e);
       if(prog) prog.innerHTML = `<div class="url-status err">❌ 予想シミュレーション失敗: ${ps_esc((e && e.message) || e)}</div>`;
@@ -11737,8 +11747,253 @@ if(horses.length === 0){
     }
   }
 
+
+  // ── v5.18.200: 予想JSON保存・読込・後日検証 ──
+  function ps_safeName(s){ return String(s || '').replace(/[\\\/:*?"<>|]/g, '_').replace(/\s+/g, '_').slice(0, 80); }
+
+  function ps_setJsonButtons(loaded){
+    const hasRows = !!(ps_lastMeta && ps_lastRows && ps_lastRows.length);
+    const saveBtn = $('predSimJsonSaveBtn');
+    const oneBtn = $('predSimVerifyOneBtn');
+    const allBtn = $('predSimVerifyAllBtn');
+    if(saveBtn) saveBtn.style.display = hasRows ? '' : 'none';
+    if(oneBtn) oneBtn.style.display = hasRows ? '' : 'none';
+    if(allBtn) allBtn.style.display = hasRows ? '' : 'none';
+    if(loaded && $('predSimCopyBtn')) $('predSimCopyBtn').style.display = hasRows ? '' : 'none';
+  }
+
+  function ps_buildPredictionJSON(){
+    if(!ps_lastMeta || !ps_lastRows.length) throw new Error('先に予想シミュレーションを実行、またはJSONを読み込んでください。');
+    const rows = ps_lastRows.map(r => ({
+      no: Number(r.no || 0), rid: String(r.rid || ''), raceName: r.raceName || '', status: r.status || '',
+      confirmedPredicted: !!r.confirmedPredicted,
+      count: Number(r.count || 0), bet: Number(r.bet || 0), expRet: Number(r.expRet || 0),
+      tickets: (r.tickets || []).map(t => ({
+        type: t.type, nums: (t.nums || []).map(Number), amount: Number(t.amount || 0),
+        odds: Number(t.odds || 0), p: Number(t.p || 0), ev: Number(t.ev || 0)
+      })),
+      verify: r.verify || null,
+      error: r.error || ''
+    }));
+    return {
+      app: 'The競馬 EV分析', schema: 'prediction-simulation-v1', version: window.APP_VERSION || VERSION88,
+      exportedAt: new Date().toISOString(), meta: { ...ps_lastMeta },
+      settingsSnapshot: { ...(typeof settings !== 'undefined' ? settings : {}) }, rows
+    };
+  }
+
+  async function ps_saveJsonFile(fileName, jsonText){
+    const blob = new Blob([jsonText], { type: 'application/json' });
+    if(typeof window.showSaveFilePicker === 'function'){
+      try{
+        const handle = await window.showSaveFilePicker({ suggestedName: fileName, types:[{ description:'JSON', accept:{ 'application/json':['.json'] } }] });
+        const writable = await handle.createWritable(); await writable.write(blob); await writable.close(); return true;
+      }catch(e){ if(e && e.name === 'AbortError') return false; }
+    }
+    try{
+      if(navigator.share && navigator.canShare){
+        const file = new File([blob], fileName, { type:'application/json' });
+        if(navigator.canShare({ files:[file] })){ await navigator.share({ files:[file] }); return true; }
+      }
+    }catch(e){ if(e && e.name === 'AbortError') return false; }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = fileName; document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 500);
+    return true;
+  }
+
+  async function exportPredictionSimulationJSON(){
+    const prog = $('predSimProgress');
+    try{
+      const obj = ps_buildPredictionJSON();
+      const m = obj.meta || {};
+      const fn = ps_safeName(`keiba_predict_${String(m.date||'').replace(/-/g,'')}_${m.kind||''}_${m.venue||''}_${m.mode||''}.json`) || 'keiba_predict.json';
+      const ok = await ps_saveJsonFile(fn, JSON.stringify(obj, null, 2));
+      if(prog) prog.innerHTML = ok ? `<div class="url-status ok">💾 予想JSONを保存しました：${ps_esc(fn)}</div>` : `<div class="url-status">保存をキャンセルしました。</div>`;
+    }catch(e){ if(prog) prog.innerHTML = `<div class="url-status err">❌ JSON保存失敗: ${ps_esc((e && e.message) || e)}</div>`; }
+  }
+
+  function ps_applyPredictionJSON(obj){
+    if(!obj || obj.schema !== 'prediction-simulation-v1') throw new Error('予想シミュレーションJSONではありません。');
+    if(!obj.meta || !Array.isArray(obj.rows)) throw new Error('JSONのmeta/rowsが不足しています。');
+    ps_lastMeta = { ...obj.meta };
+    ps_lastRows = obj.rows.map(r => ({ ...r, tickets: (r.tickets || []).map(t => ({ ...t, nums: (t.nums || []).map(Number) })) }));
+    try{
+      if(ps_lastMeta.date && $('pickDate')) $('pickDate').value = ps_lastMeta.date;
+      if(ps_lastMeta.kind && $('pickKind')) $('pickKind').value = ps_lastMeta.kind;
+      if(ps_lastMeta.venueCode && $('pickVenue')) $('pickVenue').value = ps_lastMeta.venueCode;
+    }catch(e){}
+    ps_renderTarget(); ps_renderSummary(ps_lastRows); ps_renderTable(ps_lastRows); ps_setJsonButtons(true);
+  }
+
+  function importPredictionSimulationJSON(){
+    const input = $('predSimJsonFile');
+    const prog = $('predSimProgress');
+    if(!input){ alert('JSON読込用inputが見つかりません。'); return; }
+    input.value = '';
+    input.onchange = function(){
+      const file = input.files && input.files[0]; if(!file) return;
+      const reader = new FileReader();
+      reader.onload = function(){
+        try{
+          const obj = JSON.parse(String(reader.result || ''));
+          ps_applyPredictionJSON(obj);
+          const okRows = ps_lastRows.filter(r => r.status === 'ok').length;
+          const verified = ps_lastRows.filter(r => r.verify && r.verify.hasFinish).length;
+          if(prog) prog.innerHTML = `<div class="url-status ok">📥 予想JSONを読み込みました：${ps_esc(file.name)}（予想${okRows}R / 検証済${verified}R）</div>`;
+        }catch(e){ if(prog) prog.innerHTML = `<div class="url-status err">❌ JSON読込失敗: ${ps_esc((e && e.message) || e)}</div>`; }
+      };
+      reader.onerror = function(){ if(prog) prog.innerHTML = '<div class="url-status err">❌ ファイルを読み取れませんでした。</div>'; };
+      reader.readAsText(file, 'utf-8');
+    };
+    input.click();
+  }
+
+  async function ps_verifyRace(row){
+    if(!row || row.status !== 'ok') return row;
+    if(!row.rid) throw new Error(`${row.no || '?'}Rのrace_idがありません。`);
+    const kind = ps_lastMeta?.kind || $('pickKind')?.value || 'JRA';
+    const url = `${ps_host(kind)}/race/result.html?race_id=${row.rid}&rf=race_submenu`;
+    const html = await fetchHtmlViaProxy(url);
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const rHorses = parseHorsesFromDoc(doc, url);
+    if(!rHorses || rHorses.length < 2) throw new Error('結果ページから出走馬を取得できませんでした');
+    const bak = horses; horses = rHorses;
+    try{
+      const finish = parseFinishFromResultDoc(doc) || [];
+      const hasFinish = finish.length >= 2;
+      const payouts = hasFinish ? parsePayoutsFromResultDoc(doc) : {};
+      let bet = 0, ret = 0, hit = 0;
+      const detail = (row.tickets || []).map(t => {
+        const a = Number(t.amount || 0); bet += a;
+        const isHit = hasFinish ? judgeTicketHit(t, finish) : false;
+        const pay = isHit ? payoutForTicket(t, payouts) : { amount:0, source:'' };
+        const tr = isHit ? Math.floor(a / 100) * Number(pay.amount || 0) : 0;
+        if(isHit) hit++; ret += tr;
+        return { ...t, hit:isHit, pay100:Number(pay.amount||0), paySource:pay.source||'', ret:tr };
+      });
+      row.verify = {
+        checkedAt: new Date().toISOString(), hasFinish,
+        raceName: parseRaceTitleFromDoc(doc) || row.raceName || '',
+        finishTop: hasFinish ? finish.slice(0,3).map(x => x.horseNo) : [],
+        bet, ret, hit, profit: ret - bet, roi: bet ? ret / bet * 100 : 0, detail
+      };
+      return row;
+    }finally{ horses = bak; }
+  }
+
+  function ps_renderVerifySummary(){
+    const prog = $('predSimProgress');
+    const verified = ps_lastRows.filter(r => r.status === 'ok' && r.verify && r.verify.hasFinish);
+    const pending = ps_lastRows.filter(r => r.status === 'ok' && (!r.verify || !r.verify.hasFinish));
+    const bet = verified.reduce((s, r) => s + Number(r.verify.bet || 0), 0);
+    const ret = verified.reduce((s, r) => s + Number(r.verify.ret || 0), 0);
+    const profit = ret - bet;
+    const roi = bet ? ret / bet * 100 : 0;
+    if(prog) prog.innerHTML = `<div class="url-status ok">🧪 検証：確定${verified.length}R / 未確定・未検証${pending.length}R ｜ 投資${ps_yen(bet)}円 → 払戻${ps_yen(ret)}円 ｜ 収支${profit>=0?'+':''}${ps_yen(profit)}円 ｜ 回収率${roi.toFixed(1)}%</div>`;
+    ps_renderPredictionVerifyTable();
+  }
+
+  function ps_renderPredictionVerifyTable(){
+    const box = $('predSimTable'); if(!box) return;
+    let h = '';
+    ps_lastRows.forEach(r => {
+      if(r.status !== 'ok'){ h += `<div style="border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:6px;opacity:.65"><b>${r.no}R</b> ${ps_esc(r.raceName||'')} ｜ ${ps_esc(r.status||'')}</div>`; return; }
+      const v = r.verify || {};
+      const fin = v.hasFinish ? (v.finishTop||[]).join('-') : '未検証/未確定';
+      const profit = Number(v.profit || 0), roi = Number(v.roi || 0);
+      h += `<details style="border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:6px;background:rgba(15,23,42,0.35)" ${v.hasFinish?'open':''}>
+        <summary style="cursor:pointer;list-style:none;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <b>${r.no}R</b><span style="flex:1;min-width:120px">${ps_esc(r.raceName || '')}</span>
+          <span style="font-size:11px;color:var(--muted)">着順 ${ps_esc(fin)}</span>
+          <span style="font-size:11px">予想投資 ${ps_yen(r.bet)}円</span>
+          <span style="font-size:11px">実払戻 ${v.hasFinish ? ps_yen(v.ret) + '円' : '-'}</span>
+          <span style="font-size:11px;font-weight:700;color:${profit>=0?'var(--green)':'var(--red)'}">${v.hasFinish ? ((profit>=0?'+':'') + ps_yen(profit) + '円') : ''}</span>
+          <span style="font-size:11px;font-weight:700;color:${roi>=100?'var(--green)':'var(--yellow)'}">${v.hasFinish && v.bet ? roi.toFixed(0)+'%' : ''}</span>
+        </summary>
+        ${v.hasFinish ? ptsLikeDetail(v.detail || []) : ps_ticketDetailHtml(r)}
+      </details>`;
+    });
+    box.innerHTML = h;
+  }
+
+  function ptsLikeDetail(detail){
+    if(!detail.length) return `<div style="font-size:11px;color:var(--muted);padding:4px 0">買い目なし</div>`;
+    let h = `<table style="width:100%;border-collapse:collapse;font-size:11px;margin-top:4px"><thead><tr style="color:var(--muted);text-align:left"><th style="padding:3px 4px">券種</th><th style="padding:3px 4px">買い目</th><th style="padding:3px 4px;text-align:right">金額</th><th style="padding:3px 4px;text-align:center">判定</th><th style="padding:3px 4px;text-align:right">払戻</th></tr></thead><tbody>`;
+    detail.forEach(t => { h += `<tr style="border-top:1px solid var(--border)${t.hit?';background:rgba(0,255,136,0.06)':''}"><td style="padding:3px 4px">${ps_esc(t.type)}</td><td style="padding:3px 4px">${(t.nums||[]).join('-')}</td><td style="padding:3px 4px;text-align:right">${ps_yen(t.amount)}円</td><td style="padding:3px 4px;text-align:center">${t.hit ? '<span style="color:var(--green);font-weight:700">的中</span>' : '<span style="color:var(--muted)">外れ</span>'}</td><td style="padding:3px 4px;text-align:right;font-weight:700">${t.hit ? ps_yen(t.ret)+'円' : '-'}</td></tr>`; });
+    return h + '</tbody></table>';
+  }
+
+  async function verifyPredictionSimulationNextRace(){
+    const prog = $('predSimProgress');
+    if(!ps_lastMeta || !ps_lastRows.length){ alert('先に予想JSONを読み込むか、予想シミュレーションを実行してください。'); return; }
+    if(!settings.proxyUrl){ alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。'); return; }
+    const row = ps_lastRows.find(r => r.status === 'ok' && (!r.verify || !r.verify.hasFinish));
+    if(!row){ ps_renderVerifySummary(); return; }
+    try{
+      if(prog) prog.innerHTML = `<div class="url-status">🧪 ${row.no}Rを検証中...</div>`;
+      await ps_verifyRace(row); ps_renderVerifySummary(); ps_setJsonButtons(true);
+    }catch(e){ row.verify = { checkedAt:new Date().toISOString(), hasFinish:false, error:(e&&e.message)||String(e) }; if(prog) prog.innerHTML = `<div class="url-status err">❌ ${row.no}R検証失敗: ${ps_esc(row.verify.error)}</div>`; ps_renderPredictionVerifyTable(); }
+  }
+
+  async function verifyPredictionSimulationAllRaces(){
+    const prog = $('predSimProgress');
+    if(!ps_lastMeta || !ps_lastRows.length){ alert('先に予想JSONを読み込むか、予想シミュレーションを実行してください。'); return; }
+    if(!settings.proxyUrl){ alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。'); return; }
+    const targets = ps_lastRows.filter(r => r.status === 'ok' && (!r.verify || !r.verify.hasFinish));
+    for(let i=0; i<targets.length; i++){
+      const r = targets[i];
+      try{ if(prog) prog.innerHTML = `<div class="url-status">🧪 ${i+1}/${targets.length} … ${r.no}Rを検証中</div>`; await ps_verifyRace(r); }
+      catch(e){ r.verify = { checkedAt:new Date().toISOString(), hasFinish:false, error:(e&&e.message)||String(e) }; }
+      ps_renderPredictionVerifyTable();
+    }
+    ps_renderVerifySummary(); ps_setJsonButtons(true);
+  }
+
+  async function runSelectedRacePredictionSimulation(){
+    const btn = $('predSimOneBtn'), prog = $('predSimProgress');
+    const kind = $('pickKind')?.value || 'JRA';
+    const date = $('pickDate')?.value || (typeof todayYmd === 'function' ? todayYmd() : '');
+    const venueCode = $('pickVenue')?.value || '';
+    const sel = $('raceSelect');
+    const opt = sel && sel.selectedOptions && sel.selectedOptions[0];
+    const rid = opt ? (opt.dataset.raceId || ((opt.value || '').match(/race_id=(\d{10,14})/) || [])[1] || '') : '';
+    const no = opt ? (Number(opt.dataset.raceNo || String(rid).slice(-2)) || 1) : 1;
+    const name = opt ? (opt.dataset.raceName || opt.textContent || '') : '';
+    if(!settings.proxyUrl){ alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。'); return; }
+    if(!venueCode){ alert('馬データタブで開催場を選択してください。'); return; }
+    if(!rid){ alert('レース選択で対象レースを選んでください。未取得なら「レース一覧」を押してください。'); return; }
+    if(btn){ btn.disabled = true; btn.textContent = '⏳ 1R予想中...'; }
+    try{
+      ps_lastRows = [];
+      ps_lastMeta = { date, kind, venue: venueName(kind, venueCode) || venueCode, venueCode, mode: settings.mode || '' };
+      const row = { no, rid, raceName:name || (no+'R'), status:'pending', count:0, bet:0, expRet:0, tickets:[] };
+      if(prog) prog.innerHTML = `<div class="url-status">🔮 ${no}Rを予想中...</div>`;
+      const chk = await ps_checkConfirmed(kind, rid);
+      const includeConfirmed = !!$('predSimIncludeConfirmed')?.checked;
+      if(chk.confirmed && !includeConfirmed){ row.status='confirmed'; }
+      else{
+        const loaded = chk.confirmed ? await ps_loadHorsesFromResult(kind, rid, chk.resultDoc) : await ps_loadHorsesForPredict(kind, rid);
+        if(chk.confirmed) row.confirmedPredicted = true;
+        horses = loaded.horses; currentRaceId = rid; currentRaceName = loaded.raceName || row.raceName; row.raceName = currentRaceName;
+        const valid = horses.filter(h => Number(h.num) > 0 && h.name);
+        const made = generateCandidates(valid); const tickets = buildTickets(made.recs);
+        row.tickets = tickets.map(t => ({ ...t, nums:[...t.nums] })); row.count = tickets.length;
+        row.bet = tickets.reduce((s,t)=>s+Number(t.amount||0),0); row.expRet = tickets.reduce((s,t)=>s+Number(t.ev||0)*Number(t.amount||0),0); row.status='ok';
+      }
+      ps_lastRows.push(row); ps_renderSummary(ps_lastRows); ps_renderTable(ps_lastRows); ps_setJsonButtons(true);
+      if(prog) prog.innerHTML = `<div class="url-status ok">✅ ${no}Rの予想を作成しました。JSON保存できます。</div>`;
+    }catch(e){ if(prog) prog.innerHTML = `<div class="url-status err">❌ 1R予想失敗: ${ps_esc((e&&e.message)||e)}</div>`; }
+    finally{ if(btn){ btn.disabled = false; btn.textContent = '1Rずつ予想'; } }
+  }
+
   // 公開
   window.runUnsettledPredictionSimulation = runUnsettledPredictionSimulation;
+  window.runSelectedRacePredictionSimulation = runSelectedRacePredictionSimulation;
+  window.exportPredictionSimulationJSON = exportPredictionSimulationJSON;
+  window.importPredictionSimulationJSON = importPredictionSimulationJSON;
+  window.verifyPredictionSimulationNextRace = verifyPredictionSimulationNextRace;
+  window.verifyPredictionSimulationAllRaces = verifyPredictionSimulationAllRaces;
   window.copyUnsettledPredictionText = copyUnsettledPredictionText;
 
   // シミュレーションタブを開いた時に対象表示を更新
@@ -13328,7 +13583,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.199 LearningPredictMode';
+  window.APP_VERSION = 'v5.18.200 PredictJSONVerify';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -13757,7 +14012,7 @@ function json(obj, status = 200) {
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.199 LearningPredictMode';
+  window.APP_VERSION = 'v5.18.200 PredictJSONVerify';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -14054,7 +14309,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.199 LearningPredictMode';
+  window.APP_VERSION = 'v5.18.200 PredictJSONVerify';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -14272,7 +14527,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.199 LearningPredictMode';
+    window.APP_VERSION = 'v5.18.200 PredictJSONVerify';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -14572,7 +14827,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.199 LearningPredictMode';
+  window.APP_VERSION = 'v5.18.200 PredictJSONVerify';
   try{
     const ver = document.querySelector('.ver');
     if(ver){

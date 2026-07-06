@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.195 RangeSimFastMode</title>
+<title>The競馬 EV分析 v5.18.197 RangeSimResume</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.195 RangeSimFastMode</span>
+    <span class="ver">v5.18.197 RangeSimResume</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -458,6 +458,8 @@ body{
         <button class="btn btn-primary" id="rsRunBtn" onclick="runRangeVenueSimulation()">📆 期間横断シミュレーション実行</button>
         <button class="btn-sm" id="rsOneShotBtn" onclick="runRangeVenueSimulationOneShot()" type="button" style="background:rgba(0,255,136,.16);border-color:rgba(0,255,136,.35);color:#d9ffe8;font-weight:900">🚄 一発モード</button>
         <button class="btn-sm" id="rsStopBtn" onclick="stopRangeVenueSimulation()" style="display:none">⏹ 中断</button>
+        <button class="btn-sm" id="rsResumeBtn" onclick="runRangeVenueSimulation({resume:true})" type="button" style="display:none;background:rgba(255,196,0,.14);border-color:rgba(255,196,0,.4);color:#ffe9b3;font-weight:900">▶️ 続きから再開</button>
+        <button class="btn-sm" id="rsResumeOneShotBtn" onclick="runRangeVenueSimulationOneShot({resume:true})" type="button" style="display:none;background:rgba(255,196,0,.10);border-color:rgba(255,196,0,.3);color:#ffe9b3">🚄 続きを一発モードで</button>
         <button class="btn-sm" id="rsJsonExportBtn" onclick="exportRangeVenueSimulationJSON()" type="button">📊 期間横断JSON出力</button>
         <button class="btn-sm" id="rsJsonImportBtn" onclick="importRangeVenueSimulationJSON()" type="button">📥 期間横断JSON読込</button>
         <input type="file" id="rsJsonImportFile" accept=".json,application/json,text/json" style="display:none">
@@ -746,7 +748,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.195 RangeSimFastMode';
+window.APP_VERSION = 'v5.18.197 RangeSimResume';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -10528,20 +10530,26 @@ if(horses.length === 0){
   }
 
   // ── メイン：期間×開催場 横断シミュレーション ──
-  async function runRangeVenueSimulation(){
+  async function runRangeVenueSimulation(opts){
     const btn = $('rsRunBtn'), stopBtn = $('rsStopBtn'), prog = $('rsProgress');
     const kind = $('rsKind')?.value || 'JRA';
     const start = $('rsStart')?.value || '';
     const end = $('rsEnd')?.value || '';
+    const resume = !!(opts && opts.resume === true); // v5.18.197 RangeSimResume
 
     if(!settings.proxyUrl){ alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。'); return; }
     if(!start || !end){ alert('開始日と終了日を選択してください。'); return; }
     if(start > end){ alert('開始日は終了日より前（または同日）にしてください。'); return; }
 
+    // v5.18.197: リジューム時は読込済み/直近の明細(rsLastRows)を土台に「続き」だけ実行
+    const rsResume = resume ? rsPrepareResume(start, end) : null;
+    if(resume && !rsResume) return;
+    const runStart = resume ? rsResume.effStart : start;
+
     // 日付列挙（安全上限）v5.18.140: 1年（うるう年366日）+αを許容。以前は70日で打ち切っていた
     const RS_MAX_DAYS = 400;
     const dates = [];
-    let cur = start, guard = 0;
+    let cur = runStart, guard = 0;
     while(cur <= end && guard < RS_MAX_DAYS){ dates.push(cur); cur = addLocalDaysYmd(cur, 1); guard++; }
     const truncated = (cur <= end);
 
@@ -10554,26 +10562,38 @@ if(horses.length === 0){
     const save = { kind: $('pickKind')?.value, date: $('pickDate')?.value, venue: $('pickVenue')?.value };
 
     rsAbort = false;
-    rsLastRows = [];
-    try{ window.__rsLastRows = []; }catch(e){}
+    if(!resume){
+      rsLastRows = [];
+      try{ window.__rsLastRows = []; }catch(e){}
+    }
     rsLastOpenVenuesError = null;
     rsOpenVenuesFailCount = 0;
     rsOpenVenuesOkCount = 0;
-    if(btn){ btn.disabled = true; btn.textContent = '⏳ 実行中...'; }
+    if(btn){ btn.disabled = true; btn.textContent = resume ? '⏳ リジューム中...' : '⏳ 実行中...'; }
+    rsSetResumeBtnsBusy(true);
     if(stopBtn) stopBtn.style.display = '';
-    $('rsSummary').innerHTML = '';
-    $('rsTable').innerHTML = '';
-    { const cw = $('rsChartWrap'); if(cw) cw.style.display = 'none'; }
+    if(resume){
+      // 復元済み明細を表示したまま続きを実行する
+      rsRenderSummary(rsResume.rows);
+      rsRenderTable(rsResume.rows);
+      rsRenderChart(rsResume.rows);
+      if(prog) prog.innerHTML = `<div class="url-status">▶️ リジューム：${runStart} 〜 ${end} の続きを実行します（精算済み${rsResume.doneKeys.size}Rはスキップ）。</div>`;
+    }else{
+      $('rsSummary').innerHTML = '';
+      $('rsTable').innerHTML = '';
+      const cw = $('rsChartWrap'); if(cw) cw.style.display = 'none';
+    }
     if(truncated && prog) prog.innerHTML = `<div class="url-status err">⚠️ 期間が${RS_MAX_DAYS}日を超えるため先頭${RS_MAX_DAYS}日のみ対象にします。</div>`;
 
-    const rows = [];
+    const rows = resume ? rsResume.rows : [];
+    let rsSkipped = 0; // v5.18.197: リジュームでスキップした精算済みレース数
     try{
       // v5.18.143: JRAは「回ベース」で選択場の開催日をrace_id直接列挙して事前計画化する。
       // 日付ごとの全場プローブ／公式一覧依存を排し、Worker 502下でもブリッジだけで完結。
       let rsJraPlan = null;
       if(kind === 'JRA'){
         if(prog) prog.innerHTML = `<div class="url-status">🧭 JRA開催回をrace_idで探索中（回ベース）...${fastMode ? ' ⚡高速モード' : ''}</div>`;
-        try{ rsJraPlan = await buildJraRangePlanByKaisai(selVenues, start, end, prog); }
+        try{ rsJraPlan = await buildJraRangePlanByKaisai(selVenues, runStart, end, prog); }
         catch(e){ rsJraPlan = null; console.warn('[rsJraPlan] failed', e); }
         // v5.18.146: 回ベースplanが空(0件)のときの分岐を「到達できたか」で切り分ける。
         //  ・到達OKで0件 ＝ 選択場はこの期間に開催なし。空planを保持→全日スキップ。
@@ -10676,6 +10696,8 @@ if(horses.length === 0){
           for(let i = 0; i < races.length; i++){
             if(rsAbort) break;
             const r = races[i];
+            // v5.18.197 RangeSimResume: 精算済み（着順確定でJSON/前回結果に記録済み）は再取得しない
+            if(resume && rsResume.isDone(date, vc, r.no, r.rid)){ rsSkipped++; continue; }
             if(prog && (!fastMode || i === 0 || ((i + 1) % 4 === 0) || i === races.length - 1)){
               prog.innerHTML = `<div class="url-status">${fastMode ? '⚡' : '♞'} ${date} ${vn} ${r.no}R を処理中（${i + 1}/${races.length}R）${fastMode ? ' / 描画間引き中' : ''}</div>`;
             }
@@ -10730,6 +10752,18 @@ if(horses.length === 0){
         }
       }
 
+      // v5.18.197: リジューム時は既存明細と追加分を「日付→場→R」順に整列し直す
+      if(resume){
+        rows.sort((a, b) =>
+          ((a.date || '') + '|' + (a.venueCode || '') + '|' + String(a.no || 0).padStart(2, '0'))
+            .localeCompare((b.date || '') + '|' + (b.venueCode || '') + '|' + String(b.no || 0).padStart(2, '0')));
+        rsLastRows = rows;
+        try{ window.__rsLastRows = rows.slice(); }catch(e){}
+        rsRenderSummary(rows);
+        rsRenderTable(rows);
+        rsRenderChart(rows);
+      }
+
       const okCount = rows.filter(x => x.status === 'ok').length;
       // v5.18.146: JRAで到達OK・plan空(選択場が期間内に開催なし)＝全日スキップ。0レースの理由を明示する。
       if(kind === 'JRA' && rsJraPlan && rsJraPlan.size === 0 && okCount === 0 && !rsAbort){
@@ -10740,7 +10774,7 @@ if(horses.length === 0){
         // 「開催なし」と誤認させず実際のエラー内容を表示する。
         if(prog) prog.innerHTML = `<div class="url-status err">❌ 完了：0レース（${rsOpenVenuesFailCount}日すべてで開催場一覧の取得に失敗）。原因: ${asw_esc(rsLastOpenVenuesError || '不明')}<br><span style="font-size:11px;opacity:.85">🌉Userscriptブリッジが未接続の可能性があります。バッジに🌉マークが出ているか確認してください。</span></div>`;
       }else if(prog){
-        prog.innerHTML = `<div class="url-status ok">✅ 完了：${okCount}レースをシミュレーションしました${rsAbort ? '（中断）' : ''}${truncated ? `（⚠️期間が${RS_MAX_DAYS}日を超えたため先頭${RS_MAX_DAYS}日のみ）` : ''}。</div>`;
+        prog.innerHTML = `<div class="url-status ok">✅ 完了：${okCount}レースをシミュレーションしました${resume ? `（▶️リジューム：精算済み${rsSkipped}Rを再取得せずスキップ）` : ''}${rsAbort ? '（中断）' : ''}${truncated ? `（⚠️期間が${RS_MAX_DAYS}日を超えたため先頭${RS_MAX_DAYS}日のみ）` : ''}。</div>`;
       }
     }catch(e){
       console.error('[runRangeVenueSimulation]', e);
@@ -10755,6 +10789,7 @@ if(horses.length === 0){
 
       if(btn){ btn.disabled = false; btn.textContent = '📆 期間横断シミュレーション実行'; }
       if(stopBtn) stopBtn.style.display = 'none';
+      rsUpdateResumeBtns(); // v5.18.197: 中断・完了後も続きから再開できるようにする
     }
   }
 
@@ -10924,38 +10959,59 @@ if(horses.length === 0){
     }
     return row;
   }
-  async function runRangeVenueSimulationOneShot(){
+  async function runRangeVenueSimulationOneShot(opts){
     const btn = $('rsOneShotBtn'), stopBtn = $('rsStopBtn'), prog = $('rsProgress');
     const kind = $('rsKind')?.value || 'JRA';
     const start = $('rsStart')?.value || '';
     const end = $('rsEnd')?.value || '';
+    const resume = !!(opts && opts.resume === true); // v5.18.197 RangeSimResume
     if(!settings.proxyUrl){ alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。'); return; }
     if(!start || !end){ alert('開始日と終了日を選択してください。'); return; }
     if(start > end){ alert('開始日は終了日より前（または同日）にしてください。'); return; }
+    const rsResume = resume ? rsPrepareResume(start, end) : null; // v5.18.197
+    if(resume && !rsResume) return;
+    const runStart = resume ? rsResume.effStart : start;
     const RS_MAX_DAYS = 400;
     const dates = [];
-    let cur = start, guard = 0;
+    let cur = runStart, guard = 0;
     while(cur <= end && guard < RS_MAX_DAYS){ dates.push(cur); cur = addLocalDaysYmd(cur, 1); guard++; }
     const truncated = (cur <= end);
     const selVenues = rsSelectedVenueCodes();
     const recordToChart = $('rsRecord')?.checked;
     const todayForFast = (typeof todayYmd === 'function') ? todayYmd() : new Date().toISOString().slice(0,10);
-    rsAbort = false; rsLastRows = [];
-    try{ window.__rsLastRows = []; }catch(e){}
-    $('rsSummary').innerHTML = ''; $('rsTable').innerHTML = '';
-    { const cw = $('rsChartWrap'); if(cw) cw.style.display = 'none'; }
-    if(btn){ btn.disabled = true; btn.textContent = '🚄 一発実行中...'; }
+    rsAbort = false;
+    if(!resume){
+      rsLastRows = [];
+      try{ window.__rsLastRows = []; }catch(e){}
+      $('rsSummary').innerHTML = ''; $('rsTable').innerHTML = '';
+      const cw = $('rsChartWrap'); if(cw) cw.style.display = 'none';
+    }
+    if(btn){ btn.disabled = true; btn.textContent = resume ? '🚄 リジューム中...' : '🚄 一発実行中...'; }
     const normalBtn = $('rsRunBtn'); if(normalBtn) normalBtn.disabled = true;
+    rsSetResumeBtnsBusy(true);
     if(stopBtn) stopBtn.style.display = '';
     try{
-      if(prog) prog.innerHTML = `<div class="url-status">🚄 一発モード：対象レースを収集中...</div>`;
-      const tasks = await rsOneShotBuildTasks(kind, dates, selVenues, prog);
+      if(prog) prog.innerHTML = `<div class="url-status">🚄 一発モード${resume ? '（リジューム）' : ''}：対象レースを収集中...</div>`;
+      let tasks = await rsOneShotBuildTasks(kind, dates, selVenues, prog);
+      let rsSkipped = 0;
+      if(resume){
+        const before = tasks.length;
+        tasks = tasks.filter(t => !rsResume.isDone(t.date, t.venueCode, t.no, t.rid));
+        rsSkipped = before - tasks.length;
+      }
       if(!tasks.length){
-        if(prog) prog.innerHTML = `<div class="url-status ok">✅ 一発モード完了：対象レースはありませんでした。</div>`;
+        if(resume){
+          // 追加分ゼロでも既存明細の表示は復元しておく
+          rsRenderSummary(rsResume.rows); rsRenderTable(rsResume.rows); rsRenderChart(rsResume.rows);
+          if(prog) prog.innerHTML = `<div class="url-status ok">✅ リジューム完了：追加で処理するレースはありませんでした（精算済み${rsSkipped}Rをスキップ）。終了日を延長すると続きを実行できます。</div>`;
+        }else{
+          if(prog) prog.innerHTML = `<div class="url-status ok">✅ 一発モード完了：対象レースはありませんでした。</div>`;
+        }
         return;
       }
-      const rows = [];
+      const rows = resume ? rsResume.rows : [];
       const chunkSize = kind === 'JRA' ? 6 : 4;
+      const baseLen = rows.length; // v5.18.197: リジューム時の既存明細件数
       const started = Date.now();
       for(let i = 0; i < tasks.length; i += chunkSize){
         if(rsAbort) break;
@@ -10982,8 +11038,11 @@ if(horses.length === 0){
       rsLastRows = rows; try{ window.__rsLastRows = rows.slice(); }catch(e){}
       rsRenderSummary(rows); rsRenderTable(rows); rsRenderChart(rows);
       const okCount = rows.filter(x => x.status === 'ok').length;
+      const newCount = Math.max(0, rows.length - baseLen);
       const sec = Math.max(1, Math.round((Date.now() - started) / 1000));
-      if(prog) prog.innerHTML = `<div class="url-status ok">✅ 一発モード完了：${okCount}/${tasks.length}レースを${sec}秒で処理しました${rsAbort ? '（中断）' : ''}${truncated ? `（⚠️先頭${RS_MAX_DAYS}日のみ）` : ''}。</div>`;
+      if(prog) prog.innerHTML = resume
+        ? `<div class="url-status ok">✅ リジューム完了：新規${newCount}/${tasks.length}レースを${sec}秒で処理（精算済み${rsSkipped}Rはスキップ、累計OK ${okCount}R）${rsAbort ? '（中断）' : ''}${truncated ? `（⚠️先頭${RS_MAX_DAYS}日のみ）` : ''}。</div>`
+        : `<div class="url-status ok">✅ 一発モード完了：${okCount}/${tasks.length}レースを${sec}秒で処理しました${rsAbort ? '（中断）' : ''}${truncated ? `（⚠️先頭${RS_MAX_DAYS}日のみ）` : ''}。</div>`;
     }catch(e){
       console.error('[runRangeVenueSimulationOneShot]', e);
       if(prog) prog.innerHTML = `<div class="url-status err">❌ 一発モード失敗: ${asw_esc((e && e.message) || e)}</div>`;
@@ -10991,10 +11050,90 @@ if(horses.length === 0){
       if(btn){ btn.disabled = false; btn.textContent = '🚄 一発モード'; }
       if(normalBtn) normalBtn.disabled = false;
       if(stopBtn) stopBtn.style.display = 'none';
+      rsUpdateResumeBtns(); // v5.18.197
     }
   }
 
   function stopRangeVenueSimulation(){ rsAbort = true; }
+
+  // ============================================================
+  //  v5.18.197 RangeSimResume
+  //  期間横断シミュレーションのリジューム（続きから再開）
+  //  ・「📥 期間横断JSON読込」で復元した明細、または中断/完了した
+  //    直近の実行結果(rsLastRows)を土台に、最終処理日から終了日まで
+  //    「続き」だけを実行する。
+  //  ・精算済み（status:ok かつ 着順確定）のレースは
+  //    date|場コード|R と race_id の両方で照合し、再取得せずスキップ。
+  //  ・最終処理日は「取り直し」対象：その日の未確定行・エラー行・
+  //    開催なしメモは削除して再取得する。前回未確定だったレースも
+  //    結果が出ていれば今回精算される。
+  //  ・読込み後に終了日(rsEnd)を延長すれば、追加期間も続けて実行できる。
+  // ============================================================
+  function rsRowKey(date, venueCode, no){
+    return String(date || '') + '|' + String(venueCode || '') + '|' + Number(no || 0);
+  }
+  function rsResumeLastDate(rows){
+    let last = '';
+    (rows || []).forEach(r => { if(r && r.date && String(r.date) > last) last = String(r.date); });
+    return last;
+  }
+  function rsPrepareResume(start, end){
+    const base = Array.isArray(rsLastRows) ? rsLastRows.slice() : [];
+    if(!base.some(r => r && r.date)){
+      alert('リジュームできる明細がありません。先に「📥 期間横断JSON読込」でJSONを読込むか、シミュレーションを実行してください。');
+      return null;
+    }
+    const lastDate = rsResumeLastDate(base);
+    // 再開日：最終処理日（同日は取り直し）。開始日より後ならそこから。
+    const effStart = (lastDate && lastDate > start) ? lastDate : start;
+    if(end && effStart > end){
+      alert(`読込済みの明細は ${lastDate} まで処理済みです。終了日（${end}）に到達しているため、続きを実行するには終了日を延長してください。`);
+      return null;
+    }
+    const doneKeys = new Set(), doneRids = new Set();
+    base.forEach(r => {
+      if(r && !r.header && r.status === 'ok' && r.hasFinish){
+        doneKeys.add(rsRowKey(r.date, r.venueCode, r.no));
+        if(r.rid) doneRids.add(String(r.rid));
+      }
+    });
+    // 再開日以降の「開催なしメモ」「エラー行」「未確定行」は削除して取り直す
+    const rows = base.filter(r => {
+      if(!r) return false;
+      if(!r.date || String(r.date) < effStart) return true;
+      if(r.header) return false;
+      if(r.status === 'error') return false;
+      if(r.status === 'ok' && !r.hasFinish) return false;
+      return true;
+    });
+    return {
+      rows, effStart, lastDate, doneKeys, doneRids,
+      isDone(date, vc, no, rid){
+        if(rid && doneRids.has(String(rid))) return true;
+        return doneKeys.has(rsRowKey(date, vc, no));
+      }
+    };
+  }
+  function rsUpdateResumeBtns(){
+    let has = false, last = '';
+    try{
+      has = Array.isArray(rsLastRows) && rsLastRows.some(r => r && r.date && !r.header);
+      if(has) last = rsResumeLastDate(rsLastRows);
+    }catch(e){}
+    ['rsResumeBtn','rsResumeOneShotBtn'].forEach(id => {
+      const b = $(id);
+      if(!b) return;
+      b.style.display = has ? '' : 'none';
+      b.disabled = false;
+      if(has) b.title = `最終処理日 ${last} から続きを実行（精算済みレースは再取得せずスキップ）`;
+    });
+  }
+  function rsSetResumeBtnsBusy(busy){
+    ['rsResumeBtn','rsResumeOneShotBtn'].forEach(id => {
+      const b = $(id);
+      if(b) b.disabled = !!busy;
+    });
+  }
 
   // 初期化：日付デフォルト・開催場チェックボックス生成
   function rsInit(){
@@ -11145,7 +11284,11 @@ if(horses.length === 0){
           const pendingN = okRows.length - settledN;
           const errN = rows.length - okRows.length;
           const stamp = obj.exportedAt ? ' / 出力: ' + String(obj.exportedAt).slice(0,19).replace('T',' ') : '';
-          if(prog) prog.innerHTML = `<div class="url-status ok">📥 JSONを復元しました：確定${settledN}R・未確定${pendingN}R・エラー${errN}件（${asw_esc(file.name)}${asw_esc(stamp)}）</div>`;
+          // v5.18.197 RangeSimResume: 読込後は「続きから再開」できることを案内
+          const lastD = rsResumeLastDate(rows);
+          rsUpdateResumeBtns();
+          if(prog) prog.innerHTML = `<div class="url-status ok">📥 JSONを復元しました：確定${settledN}R・未確定${pendingN}R・エラー${errN}件（${asw_esc(file.name)}${asw_esc(stamp)}）</div>`
+            + `<div class="url-status" style="margin-top:4px">▶️ 「続きから再開」で最終処理日 ${asw_esc(lastD || '不明')} 以降を続行できます（精算済みはスキップ／終了日を延長すれば追加期間も実行）。</div>`;
           if(btn){ btn.textContent = '✅ 読込完了'; setTimeout(() => { btn.textContent = old || '📥 期間横断JSON読込'; }, 1800); }
         }catch(e){
           console.error('[importRangeVenueSimulationJSON]', e);
@@ -13116,6 +13259,21 @@ if(horses.length === 0){
    ・通常予測・全レース一括・期間横断シミュレーションすべてに反映
      （いずれも selectByMode() 経由のため）。手動追加は従来どおり可能。
    ============================================================ */
+/* ============================================================
+   v5.18.197 RangeSimResume
+   ・期間横断シミュレーションに「▶️ 続きから再開」「🚄 続きを一発モードで」
+     リジューム機能を追加。
+   ・「📥 期間横断JSON読込」で復元した明細、または中断/完了した直近の
+     実行結果(rsLastRows)を土台に、最終処理日から終了日まで続きだけを実行。
+   ・精算済み（着順確定）レースは date|場コード|R と race_id の両方で
+     照合し、再取得せずスキップ（通信ゼロ）。スキップ数は完了時に表示。
+   ・最終処理日は取り直し対象：その日の未確定行・エラー行・開催なしメモは
+     削除して再取得するため、前回未確定だったレースも確定後なら精算される。
+   ・JSON読込後に終了日(rsEnd)を延長すれば、追加期間も続けて実行できる。
+   ・リジューム完了時は既存明細と追加分を「日付→場→R」順に整列し直し、
+     集計KPI・明細表・累計グラフを再構築。JSON出力・収支グラフ転記も
+     そのまま利用可能（rsLastRows / window.__rsLastRows を更新）。
+   ============================================================ */
 </script>
 
 <script>
@@ -13143,7 +13301,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.195 RangeSimFastMode';
+  window.APP_VERSION = 'v5.18.197 RangeSimResume';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -13572,7 +13730,7 @@ function json(obj, status = 200) {
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.195 RangeSimFastMode';
+  window.APP_VERSION = 'v5.18.197 RangeSimResume';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -13869,7 +14027,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.195 RangeSimFastMode';
+  window.APP_VERSION = 'v5.18.197 RangeSimResume';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -14087,7 +14245,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.195 RangeSimFastMode';
+    window.APP_VERSION = 'v5.18.197 RangeSimResume';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -14102,7 +14260,7 @@ function json(obj, status = 200) {
    - 「取得中」に一度空配列を描いても、JRA土日を即「開催なし」に見せない。
    ============================================================ */
 (function(){
-  const V = 'v5.18.195 RangeSimFastMode';
+  const V = 'v5.18.197 RangeSimResume';
   try{
     window.APP_VERSION = V;
     document.title = 'The競馬 EV分析 ' + V;
@@ -14387,7 +14545,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.195 RangeSimFastMode';
+  window.APP_VERSION = 'v5.18.197 RangeSimResume';
   try{
     const ver = document.querySelector('.ver');
     if(ver){
@@ -14546,7 +14704,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  const V171 = 'v5.18.195 RangeSimFastMode';
+  const V171 = 'v5.18.197 RangeSimResume';
   // 旧パッチ（v5.18.160系）の遅延バージョン上書きより後に走らせて確実に勝つ
   [0, 200, 800, 1600, 3000, 5000, 6500].forEach(ms => setTimeout(() => {
     window.APP_VERSION = V171;
@@ -14972,7 +15130,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  const V172 = 'v5.18.195 RangeSimFastMode';
+  const V172 = 'v5.18.197 RangeSimResume';
   [0, 200, 800, 1600, 3000, 5000, 7000].forEach(ms => setTimeout(() => {
     window.APP_VERSION = V172;
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
@@ -15189,7 +15347,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.195 RangeSimFastMode';
+  var VERSION = 'v5.18.197 RangeSimResume';
   try{
     window.APP_VERSION = VERSION;
     var ver = document.querySelector('.ver');
@@ -15430,7 +15588,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.195 RangeSimFastMode';
+  var VERSION = 'v5.18.197 RangeSimResume';
   try{
     window.APP_VERSION = VERSION;
     var ver = document.querySelector('.ver');
@@ -15747,7 +15905,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.195 RangeSimFastMode';
+  var VERSION = 'v5.18.197 RangeSimResume';
   function writeVer(){
     try{
       window.APP_VERSION = VERSION;

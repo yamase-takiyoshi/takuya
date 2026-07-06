@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.197 RangeSimResume</title>
+<title>The競馬 EV分析 v5.18.198 RangeSimResumeGapFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.197 RangeSimResume</span>
+    <span class="ver">v5.18.198 RangeSimResumeGapFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -748,7 +748,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.197 RangeSimResume';
+window.APP_VERSION = 'v5.18.198 RangeSimResumeGapFix';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -10535,7 +10535,7 @@ if(horses.length === 0){
     const kind = $('rsKind')?.value || 'JRA';
     const start = $('rsStart')?.value || '';
     const end = $('rsEnd')?.value || '';
-    const resume = !!(opts && opts.resume === true); // v5.18.197 RangeSimResume
+    const resume = !!(opts && opts.resume === true); // v5.18.198 RangeSimResumeGapFix
 
     if(!settings.proxyUrl){ alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。'); return; }
     if(!start || !end){ alert('開始日と終了日を選択してください。'); return; }
@@ -10696,7 +10696,7 @@ if(horses.length === 0){
           for(let i = 0; i < races.length; i++){
             if(rsAbort) break;
             const r = races[i];
-            // v5.18.197 RangeSimResume: 精算済み（着順確定でJSON/前回結果に記録済み）は再取得しない
+            // v5.18.198 RangeSimResumeGapFix: 精算済み（着順確定でJSON/前回結果に記録済み）は再取得しない
             if(resume && rsResume.isDone(date, vc, r.no, r.rid)){ rsSkipped++; continue; }
             if(prog && (!fastMode || i === 0 || ((i + 1) % 4 === 0) || i === races.length - 1)){
               prog.innerHTML = `<div class="url-status">${fastMode ? '⚡' : '♞'} ${date} ${vn} ${r.no}R を処理中（${i + 1}/${races.length}R）${fastMode ? ' / 描画間引き中' : ''}</div>`;
@@ -10964,7 +10964,7 @@ if(horses.length === 0){
     const kind = $('rsKind')?.value || 'JRA';
     const start = $('rsStart')?.value || '';
     const end = $('rsEnd')?.value || '';
-    const resume = !!(opts && opts.resume === true); // v5.18.197 RangeSimResume
+    const resume = !!(opts && opts.resume === true); // v5.18.198 RangeSimResumeGapFix
     if(!settings.proxyUrl){ alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。'); return; }
     if(!start || !end){ alert('開始日と終了日を選択してください。'); return; }
     if(start > end){ alert('開始日は終了日より前（または同日）にしてください。'); return; }
@@ -11057,7 +11057,7 @@ if(horses.length === 0){
   function stopRangeVenueSimulation(){ rsAbort = true; }
 
   // ============================================================
-  //  v5.18.197 RangeSimResume
+  //  v5.18.198 RangeSimResumeGapFix
   //  期間横断シミュレーションのリジューム（続きから再開）
   //  ・「📥 期間横断JSON読込」で復元した明細、または中断/完了した
   //    直近の実行結果(rsLastRows)を土台に、最終処理日から終了日まで
@@ -11084,8 +11084,21 @@ if(horses.length === 0){
       return null;
     }
     const lastDate = rsResumeLastDate(base);
-    // 再開日：最終処理日（同日は取り直し）。開始日より後ならそこから。
-    const effStart = (lastDate && lastDate > start) ? lastDate : start;
+    // v5.18.198 RangeSimResumeGapFix:
+    // リジュームは常に「最終処理日」から続ける（同日は取り直し）。
+    // 従来は画面の開始日(rsStart)が最終処理日より後だと effStart=start となり、
+    // 間の期間（例: 2025-08-20〜昨日）を無警告で丸ごと飛ばしていた。
+    const effStart = lastDate || start;
+    if(lastDate && start && start > lastDate){
+      const go = confirm(
+        `読込済みの明細は ${lastDate} まで処理済みです。\n` +
+        `画面の開始日（${start}）との間に空白期間がありますが、` +
+        `途切れなく続けるため ${lastDate} から再開します（同日は取り直し）。\n\n` +
+        `OK：${lastDate} 〜 ${end} を続きから実行\n` +
+        `キャンセル：中止（${start} から実行したい場合は通常の「実行」を使用）`
+      );
+      if(!go) return null;
+    }
     if(end && effStart > end){
       alert(`読込済みの明細は ${lastDate} まで処理済みです。終了日（${end}）に到達しているため、続きを実行するには終了日を延長してください。`);
       return null;
@@ -11284,7 +11297,7 @@ if(horses.length === 0){
           const pendingN = okRows.length - settledN;
           const errN = rows.length - okRows.length;
           const stamp = obj.exportedAt ? ' / 出力: ' + String(obj.exportedAt).slice(0,19).replace('T',' ') : '';
-          // v5.18.197 RangeSimResume: 読込後は「続きから再開」できることを案内
+          // v5.18.198 RangeSimResumeGapFix: 読込後は「続きから再開」できることを案内
           const lastD = rsResumeLastDate(rows);
           rsUpdateResumeBtns();
           if(prog) prog.innerHTML = `<div class="url-status ok">📥 JSONを復元しました：確定${settledN}R・未確定${pendingN}R・エラー${errN}件（${asw_esc(file.name)}${asw_esc(stamp)}）</div>`
@@ -13260,6 +13273,20 @@ if(horses.length === 0){
      （いずれも selectByMode() 経由のため）。手動追加は従来どおり可能。
    ============================================================ */
 /* ============================================================
+   v5.18.198 RangeSimResumeGapFix
+   ・リジューム開始日の計算を修正。従来は画面の開始日(rsStart)が
+     最終処理日より後の場合 effStart=rsStart となり、間の期間
+     （例: 最終処理日2025-08-19 → 開始日=今日 で約10ヶ月分）を
+     無警告で丸ごと飛ばして「続き」ではない実行になっていた。
+     （ページ再読込後は rsInit が開始/終了日を今日に初期化するため、
+       JSON読込→即リジュームで発生しやすかった）
+   ・リジュームは常に「最終処理日」から続行（同日は取り直し）に統一。
+     開始日フィールドとの間に空白期間がある場合は confirm で
+     「最終処理日から再開する」ことを明示してから実行する。
+   ・rsPrepareResume 内の修正のため「▶️ 続きから再開」
+     「🚄 続きを一発モードで」の両方に適用される。
+   ============================================================ */
+/* ============================================================
    v5.18.197 RangeSimResume
    ・期間横断シミュレーションに「▶️ 続きから再開」「🚄 続きを一発モードで」
      リジューム機能を追加。
@@ -13301,7 +13328,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.197 RangeSimResume';
+  window.APP_VERSION = 'v5.18.198 RangeSimResumeGapFix';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -13730,7 +13757,7 @@ function json(obj, status = 200) {
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.197 RangeSimResume';
+  window.APP_VERSION = 'v5.18.198 RangeSimResumeGapFix';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -14027,7 +14054,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.197 RangeSimResume';
+  window.APP_VERSION = 'v5.18.198 RangeSimResumeGapFix';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -14245,7 +14272,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.197 RangeSimResume';
+    window.APP_VERSION = 'v5.18.198 RangeSimResumeGapFix';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -14260,7 +14287,7 @@ function json(obj, status = 200) {
    - 「取得中」に一度空配列を描いても、JRA土日を即「開催なし」に見せない。
    ============================================================ */
 (function(){
-  const V = 'v5.18.197 RangeSimResume';
+  const V = 'v5.18.198 RangeSimResumeGapFix';
   try{
     window.APP_VERSION = V;
     document.title = 'The競馬 EV分析 ' + V;
@@ -14545,7 +14572,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.197 RangeSimResume';
+  window.APP_VERSION = 'v5.18.198 RangeSimResumeGapFix';
   try{
     const ver = document.querySelector('.ver');
     if(ver){
@@ -14704,7 +14731,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  const V171 = 'v5.18.197 RangeSimResume';
+  const V171 = 'v5.18.198 RangeSimResumeGapFix';
   // 旧パッチ（v5.18.160系）の遅延バージョン上書きより後に走らせて確実に勝つ
   [0, 200, 800, 1600, 3000, 5000, 6500].forEach(ms => setTimeout(() => {
     window.APP_VERSION = V171;
@@ -15130,7 +15157,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  const V172 = 'v5.18.197 RangeSimResume';
+  const V172 = 'v5.18.198 RangeSimResumeGapFix';
   [0, 200, 800, 1600, 3000, 5000, 7000].forEach(ms => setTimeout(() => {
     window.APP_VERSION = V172;
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
@@ -15347,7 +15374,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.197 RangeSimResume';
+  var VERSION = 'v5.18.198 RangeSimResumeGapFix';
   try{
     window.APP_VERSION = VERSION;
     var ver = document.querySelector('.ver');
@@ -15588,7 +15615,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.197 RangeSimResume';
+  var VERSION = 'v5.18.198 RangeSimResumeGapFix';
   try{
     window.APP_VERSION = VERSION;
     var ver = document.querySelector('.ver');
@@ -15905,7 +15932,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.197 RangeSimResume';
+  var VERSION = 'v5.18.198 RangeSimResumeGapFix';
   function writeVer(){
     try{
       window.APP_VERSION = VERSION;

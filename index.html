@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.204 VenueLearning</title>
+<title>The競馬 EV分析 v5.18.205 AggressiveLearning</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.204 VenueLearning</span>
+    <span class="ver">v5.18.205 AggressiveLearning</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -16834,6 +16834,25 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script>
 /* ═══════════════════════════════════════════════════════════════
+   v5.18.205 AggressiveLearning（学習強度＋結果フィードバック）
+   ・学習強度を「標準／アグレッシブ」で切替可能に（設定タブ・学習カード）。
+     既定はアグレッシブ。
+       標準:        重みn/(n+40)、バケット採用n≥8、券種n≥15、補正×0.55〜1.60
+       アグレッシブ: 重みn/(n+10)、バケット採用n≥3、券種n≥5、 補正×0.35〜2.20
+     → 少ないサンプルでも細かい層（開催場×クラス×帯）を早く採用し、
+       較正のズレをより強く・広くEVへ反映する。
+   ・結果フィードバック（2種）:
+     ①予想時: 学習モードで予想すると、推奨買い目の下に
+       「🧠 学習フィードバック」パネルを表示。買い目ごとに
+       素EV → 補正倍率 → 補正後EV と、適用された階層（場×クラス×帯 等）
+       およびそのサンプル数nを一覧表示。候補数→閾値通過数も表示。
+     ②精算時: 学習サンプルが蓄積されるたびに
+       「🧠 学習 +N件（累計M件）」トーストを画面下部に表示。
+   ・tkLearnMultInfo() を公開（倍率＋適用階層＋n を返す）。
+     tkLearnMult() は従来どおり倍率のみ（互換維持）。
+   ・学習カードの集計表・注記は選択中の強度パラメータで動的計算。
+     蓄積データ形式は不変（強度はEV補正の読み出し側のみに作用）。
+
    v5.18.204 VenueLearning（学習機能：開催場対応）
    ・v5.18.200 の学習モードをさらに拡張し、蓄積バケットを
      JRA/NAR × 券種 × オッズ帯 × クラス × 開催場 に細分化。
@@ -16874,10 +16893,22 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   var LLABEL = '🧠 学習（精算結果から補正）';
   var LS_DATA = 'tk-learn-v1';
   var LS_ON   = 'tk-learn-enabled';
-  var SHRINK_N = 40;      // 重み w = n/(n+SHRINK_N)
-  var MIN_BUCKET_N = 8;   // クラス別/オッズ帯バケット採用の最低サンプル
-  var MIN_TYPE_N = 15;    // 券種集計フォールバック採用の最低サンプル
-  var MULT_LO = 0.55, MULT_HI = 1.60;
+  // v5.18.205 AggressiveLearning: 学習強度をパラメータセットとして切替可能に
+  //   標準       … 従来どおり（SHRINK 40 / n≥8 / n≥15 / ×0.55〜1.60）
+  //   アグレッシブ … 少サンプルで細かい層を早く採用し、補正の効きも強く広く
+  var LS_STR = 'tk-learn-strength';
+  var LPARAMS = {
+    std:  { label: '標準',         SHRINK_N: 40, MIN_BUCKET_N: 8, MIN_TYPE_N: 15, LO: 0.55, HI: 1.60 },
+    aggr: { label: 'アグレッシブ', SHRINK_N: 10, MIN_BUCKET_N: 3, MIN_TYPE_N: 5,  LO: 0.35, HI: 2.20 }
+  };
+  function learnStrength(){
+    try{
+      var v = localStorage.getItem(LS_STR);
+      if(v && LPARAMS[v]) return v;
+    }catch(e){}
+    return 'aggr'; // 既定はアグレッシブ
+  }
+  function lp(){ return LPARAMS[learnStrength()]; }
   var SEEN_MAX = 6000;
 
   // ── クラス・組・グレード判定 ─────────────────
@@ -17101,10 +17132,15 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     var k = bKey(kind, t.type, oddsBand(odds), cls, ven);
     var b = learn.buckets[k] || (learn.buckets[k] = { n: 0, sp: 0, h: 0 });
     b.n += 1; b.sp += p; if(hit) b.h += 1;
+    pendingAdds += 1; // v5.18.205: フィードバックトースト用
     invalidateAgg();
 
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(function(){ saveLearn(); try{ renderLearnCard(); }catch(e){} }, 400);
+    saveTimer = setTimeout(function(){
+      saveLearn();
+      try{ renderLearnCard(); }catch(e){}
+      try{ showLearnToast(); }catch(e){}
+    }, 400);
   }
 
   // ── 補正係数 ───────────────────────────────
@@ -17114,47 +17150,56 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   //            → ④クラス(組込み)（開催場集約） → ⑤クラス(組集約) → ⑥オッズ帯別 → ⑦券種別 → ⑧なし
   function bucketMult(b){
     if(!b || b.n < 1 || !(b.sp > 0)) return null;
+    var P = lp();
     var calib = b.h / b.sp;
-    var w = b.n / (b.n + SHRINK_N);
-    return Math.max(MULT_LO, Math.min(MULT_HI, 1 + w * (calib - 1)));
+    var w = b.n / (b.n + P.SHRINK_N);
+    return Math.max(P.LO, Math.min(P.HI, 1 + w * (calib - 1)));
   }
-  function learnMult(kind, type, odds, cls, ven){
+  var LEVEL_LABEL = {
+    1: '場×クラス(組)×帯', 2: '場×クラス×帯', 3: '場×帯',
+    4: 'クラス(組)×帯', 5: 'クラス×帯', 6: 'オッズ帯', 7: '券種', 0: '補正なし'
+  };
+  // v5.18.205: 補正倍率に加えて「どの階層のバケット（サンプル数n）が採用されたか」を返す
+  function learnMultInfo(kind, type, odds, cls, ven){
     cls = cls || '不明';
     ven = ven || '不明';
+    var P = lp();
     var band = oddsBand(odds);
     var base = classBase(cls);
     var m;
     if(!aggCache) buildAgg();
     // ①開催場×クラス（組込み）×オッズ帯（最細＝生バケット）
     var b0 = learn.buckets[bKey(kind, type, band, cls, ven)];
-    if(b0 && b0.n >= MIN_BUCKET_N){ m = bucketMult(b0); if(m != null) return m; }
+    if(b0 && b0.n >= P.MIN_BUCKET_N){ m = bucketMult(b0); if(m != null) return { m: m, level: 1, n: b0.n }; }
     if(ven !== '不明'){
       // ②開催場×クラス（組を集約）×オッズ帯
       if(base && base !== cls){
         var bv = aggCache.vbase[kind + '|' + type + '|' + band + '|' + base + '|' + ven];
-        if(bv && bv.n >= MIN_BUCKET_N){ m = bucketMult(bv); if(m != null) return m; }
+        if(bv && bv.n >= P.MIN_BUCKET_N){ m = bucketMult(bv); if(m != null) return { m: m, level: 2, n: bv.n }; }
       }
       // ③開催場×オッズ帯（クラス集約）
       var bw = aggCache.vband[kind + '|' + type + '|' + band + '|' + ven];
-      if(bw && bw.n >= MIN_BUCKET_N){ m = bucketMult(bw); if(m != null) return m; }
+      if(bw && bw.n >= P.MIN_BUCKET_N){ m = bucketMult(bw); if(m != null) return { m: m, level: 3, n: bw.n }; }
     }
     // ④クラス（組込み）×オッズ帯（開催場集約）
     var b1 = aggCache.cls[kind + '|' + type + '|' + band + '|' + cls];
-    if(b1 && b1.n >= MIN_BUCKET_N){ m = bucketMult(b1); if(m != null) return m; }
+    if(b1 && b1.n >= P.MIN_BUCKET_N){ m = bucketMult(b1); if(m != null) return { m: m, level: 4, n: b1.n }; }
     // ⑤クラス（組を集約）×オッズ帯
     if(base && base !== cls){
       var b2 = aggCache.base[kind + '|' + type + '|' + band + '|' + base];
-      if(b2 && b2.n >= MIN_BUCKET_N){ m = bucketMult(b2); if(m != null) return m; }
+      if(b2 && b2.n >= P.MIN_BUCKET_N){ m = bucketMult(b2); if(m != null) return { m: m, level: 5, n: b2.n }; }
     }
     // ⑥オッズ帯（クラス・開催場集約）
     var b3 = aggCache.band[kind + '|' + type + '|' + band];
-    if(b3 && b3.n >= MIN_BUCKET_N){ m = bucketMult(b3); if(m != null) return m; }
+    if(b3 && b3.n >= P.MIN_BUCKET_N){ m = bucketMult(b3); if(m != null) return { m: m, level: 6, n: b3.n }; }
     // ⑦券種
     var b4 = aggCache.type[kind + '|' + type];
-    if(b4 && b4.n >= MIN_TYPE_N){ m = bucketMult(b4); if(m != null) return m; }
-    return 1;
+    if(b4 && b4.n >= P.MIN_TYPE_N){ m = bucketMult(b4); if(m != null) return { m: m, level: 7, n: b4.n }; }
+    return { m: 1, level: 0, n: 0 };
   }
-  window.tkLearnMult = learnMult; // デバッグ・検証用に公開（第4引数cls・第5引数ven省略可）
+  function learnMult(kind, type, odds, cls, ven){ return learnMultInfo(kind, type, odds, cls, ven).m; }
+  window.tkLearnMult = learnMult;         // デバッグ・検証用に公開（第4引数cls・第5引数ven省略可）
+  window.tkLearnMultInfo = learnMultInfo; // v5.18.205: 適用階層つき
 
   // ── モード登録 ─────────────────────────────
   try{
@@ -17179,13 +17224,16 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       var ven = activeVenueKey(); // 予想対象レースの開催場（v5.18.204）
       var adj = [];
       (recs || []).forEach(function(r){
-        var m = learnMult(kind, r.type, r.odds, cls, ven);
+        var info = learnMultInfo(kind, r.type, r.odds, cls, ven);
+        var m = info.m;
         var ev2 = Number(r.ev || 0) * m;
         var mv = (settings.minEVByType && settings.minEVByType[r.type]) || (typeof DEFAULT_MIN_EV !== 'undefined' && DEFAULT_MIN_EV[r.type]) || 1.05;
         if(ev2 < mv) return; // 補正後EVが券種別閾値未満は除外
         var c = Object.assign({}, r);
         c.evRaw = r.ev;
         c.learnAdj = m;
+        c.learnLevel = info.level;
+        c.learnN = info.n;
         c.learnClass = cls;
         c.learnVenue = ven;
         c.ev = ev2;
@@ -17213,8 +17261,84 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         used[uk2] = 1;
         picked.push(r2);
       }
+      // v5.18.205: 学習フィードバック（どの買い目にどの階層の補正が効いたか）を保存
+      try{
+        window.tkLearnFeedback = {
+          t: Date.now(), kind: kind, cls: cls, ven: ven, strength: learnStrength(),
+          candTotal: (recs || []).length, candPass: adj.length,
+          items: picked.map(function(r){
+            return { type: r.type, nums: (r.nums || []).join('-'), mult: r.learnAdj,
+                     level: r.learnLevel, n: r.learnN, evRaw: r.evRaw, ev: r.ev };
+          })
+        };
+      }catch(e){}
       return picked;
     };
+  }
+
+  // ── v5.18.205: 結果画面への学習フィードバック表示 ──
+  //    renderResult 直後に「補正内訳」パネルを推奨買い目の下へ差し込む。
+  function injectLearnFeedback(){
+    var fb = window.tkLearnFeedback;
+    if(!fb || typeof settings === 'undefined' || settings.mode !== LMODE) return;
+    if(Date.now() - fb.t > 15000) return; // 直近の予想以外は表示しない
+    var tl = document.getElementById('ticketList');
+    if(!tl || document.getElementById('learnFeedbackPanel')) return;
+    var P = lp();
+    var html = '<div id="learnFeedbackPanel" style="margin-top:10px;padding:8px 10px;border:1px solid rgba(96,165,250,.35);border-radius:10px;background:rgba(96,165,250,.06)">';
+    html += '<div style="font-size:12px;font-weight:800;margin-bottom:4px">🧠 学習フィードバック' +
+      '<span style="font-weight:400;font-size:10px;opacity:.7;margin-left:6px">強度: ' + esc(P.label) +
+      '　対象: ' + esc(fb.ven) + '／' + esc(fb.cls) + '　候補 ' + fb.candTotal + '点 → 閾値通過 ' + fb.candPass + '点</span></div>';
+    if(!fb.items.length){
+      html += '<div style="font-size:11px;opacity:.75">補正後EVが閾値を超える買い目がありませんでした。</div>';
+    } else {
+      html += '<table style="width:100%;border-collapse:collapse;font-size:11px">';
+      html += '<tr style="opacity:.7"><td style="padding:2px 4px">買い目</td><td style="padding:2px 4px;text-align:right">素EV</td><td style="padding:2px 4px;text-align:right">補正</td><td style="padding:2px 4px;text-align:right">補正後EV</td><td style="padding:2px 4px">適用階層(n)</td></tr>';
+      fb.items.forEach(function(it){
+        var col = it.mult > 1.02 ? 'var(--green)' : it.mult < 0.98 ? 'var(--red)' : 'var(--muted)';
+        html += '<tr><td style="padding:2px 4px">' + esc(it.type) + ' ' + esc(it.nums) + '</td>' +
+          '<td style="padding:2px 4px;text-align:right">' + Number(it.evRaw || 0).toFixed(2) + '</td>' +
+          '<td style="padding:2px 4px;text-align:right;color:' + col + ';font-weight:700">×' + Number(it.mult || 1).toFixed(2) + '</td>' +
+          '<td style="padding:2px 4px;text-align:right">' + Number(it.ev || 0).toFixed(2) + '</td>' +
+          '<td style="padding:2px 4px">' + esc(LEVEL_LABEL[it.level] || '-') + (it.n ? '（n=' + it.n + '）' : '') + '</td></tr>';
+      });
+      html += '</table>';
+    }
+    html += '</div>';
+    tl.insertAdjacentHTML('beforeend', html);
+  }
+  var _rr = window.renderResult;
+  if(typeof _rr === 'function'){
+    window.renderResult = function(){
+      var out = _rr.apply(this, arguments);
+      try{ injectLearnFeedback(); }catch(e){}
+      return out;
+    };
+  }
+
+  // ── v5.18.205: 精算時の学習トースト（何件蓄積されたか） ──
+  var pendingAdds = 0;
+  var toastTimer = null;
+  function showLearnToast(){
+    if(pendingAdds <= 0) return;
+    var added = pendingAdds;
+    pendingAdds = 0;
+    var total = 0;
+    for(var k in learn.buckets) total += learn.buckets[k].n;
+    var el = document.getElementById('learnToast');
+    if(!el){
+      el = document.createElement('div');
+      el.id = 'learnToast';
+      el.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:9999;' +
+        'background:rgba(15,23,42,.92);border:1px solid rgba(96,165,250,.5);color:#e2e8f0;' +
+        'padding:7px 14px;border-radius:20px;font-size:12px;font-weight:700;pointer-events:none;' +
+        'box-shadow:0 4px 16px rgba(0,0,0,.4);transition:opacity .3s';
+      document.body.appendChild(el);
+    }
+    el.textContent = '🧠 学習 +' + added.toLocaleString() + '件（累計 ' + total.toLocaleString() + '件）';
+    el.style.opacity = '1';
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function(){ el.style.opacity = '0'; }, 2500);
   }
 
   // ── UI：モードボタン追加 ────────────────────
@@ -17261,6 +17385,10 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       'サンプルが少ないうちは 開催場×クラス→開催場→クラス→オッズ帯→券種 の順に広い集計へフォールバックします。' +
       '</div>' +
       '<div class="settings-row"><label>精算結果を学習に記録する</label><input type="checkbox" id="learnEnableChk"></div>' +
+      '<div class="settings-row"><label>学習強度</label><select id="learnStrengthSel">' +
+      '<option value="std">標準（慎重：n≥8・×0.55〜1.60）</option>' +
+      '<option value="aggr">アグレッシブ（n≥3で即補正・×0.35〜2.20）</option>' +
+      '</select></div>' +
       '<div id="learnStats" style="margin-top:8px"></div>' +
       '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">' +
       '<button class="btn-sm" onclick="tkLearnExport()">📤 学習データJSON出力</button>' +
@@ -17274,6 +17402,12 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     chk.checked = learnEnabled();
     chk.onchange = function(){
       try{ localStorage.setItem(LS_ON, chk.checked ? '1' : '0'); }catch(e){}
+    };
+    var sel = card.querySelector('#learnStrengthSel');
+    sel.value = learnStrength();
+    sel.onchange = function(){
+      try{ localStorage.setItem(LS_STR, sel.value); }catch(e){}
+      renderLearnCard(); // 表示中の係数・注記を新パラメータで再計算
     };
     var fileEl = card.querySelector('#learnImportFile');
     fileEl.addEventListener('change', function(){
@@ -17302,9 +17436,10 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
   function statRow(label, t){
     var expRate = t.sp / t.n, actRate = t.h / t.n;
+    var P = lp();
     var calib = t.sp > 0 ? t.h / t.sp : 0;
-    var w = t.n / (t.n + SHRINK_N);
-    var mult = Math.max(MULT_LO, Math.min(MULT_HI, 1 + w * (calib - 1)));
+    var w = t.n / (t.n + P.SHRINK_N);
+    var mult = Math.max(P.LO, Math.min(P.HI, 1 + w * (calib - 1)));
     var col = mult > 1.02 ? 'var(--green)' : mult < 0.98 ? 'var(--red)' : 'var(--muted)';
     return '<tr><td style="padding:2px 6px">' + esc(label) + '</td>' +
       '<td style="padding:2px 6px;text-align:right">' + t.n + '</td>' +
@@ -17381,7 +17516,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         }
       }
     });
-    html += '<div style="font-size:10px;opacity:.6;margin-top:4px">較正係数＝実的中数÷推定確率合計。1超＝推定が控えめだったカテゴリ。学習モードのEV補正は「開催場×クラス(組込み)×オッズ帯 → 開催場×クラス×オッズ帯 → 開催場×オッズ帯（各n≥' + MIN_BUCKET_N + '）→ クラス(組込み)×オッズ帯 → クラス×オッズ帯 → オッズ帯別（各n≥' + MIN_BUCKET_N + '）→ 券種別（n≥' + MIN_TYPE_N + '）→ 補正なし」の順で適用。旧バージョンの蓄積データはクラス・開催場「不明」として広い集計に寄与します。</div>';
+    var Pf = lp();
+    html += '<div style="font-size:10px;opacity:.6;margin-top:4px">較正係数＝実的中数÷推定確率合計。1超＝推定が控えめだったカテゴリ。現在の学習強度: <b>' + esc(Pf.label) + '</b>（重みn/(n+' + Pf.SHRINK_N + ')・補正範囲×' + Pf.LO.toFixed(2) + '〜' + Pf.HI.toFixed(2) + '）。学習モードのEV補正は「開催場×クラス(組込み)×オッズ帯 → 開催場×クラス×オッズ帯 → 開催場×オッズ帯（各n≥' + Pf.MIN_BUCKET_N + '）→ クラス(組込み)×オッズ帯 → クラス×オッズ帯 → オッズ帯別（各n≥' + Pf.MIN_BUCKET_N + '）→ 券種別（n≥' + Pf.MIN_TYPE_N + '）→ 補正なし」の順で適用。旧バージョンの蓄積データはクラス・開催場「不明」として広い集計に寄与します。</div>';
     el.innerHTML = html;
   }
 
@@ -17429,12 +17565,12 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
   // ── 表示バージョン更新（このスクリプトが最後に実行されるためここで確定） ──
   try{
-    window.APP_VERSION = 'v5.18.204 VenueLearning';
+    window.APP_VERSION = 'v5.18.205 AggressiveLearning';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     else document.addEventListener('DOMContentLoaded', function(){ try{ window.setAppVersionLabel(); }catch(e){} });
   }catch(e){}
 
-  console.log('[v5.18.204] VenueLearning: 学習バケットを開催場対応に拡張（JRA/NAR×券種×オッズ帯×クラス×開催場）');
+  console.log('[v5.18.205] AggressiveLearning: 学習強度=' + learnStrength() + ' / 予想時フィードバックパネル＋精算時トースト有効');
 })();
 </script>
 

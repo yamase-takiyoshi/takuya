@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.199 LearningPredictMode</span>
+    <span class="ver">v5.18.201 TicketTypeAmountRecord</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -757,7 +757,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.200 PredictJSONVerify';
+window.APP_VERSION = 'v5.18.201 TicketTypeAmountRecord';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -1112,7 +1112,7 @@ function pgjRecordFromHistory(x, source, i){
   const ret = pgjNum(x && (x.ret ?? x.return ?? x.payout ?? x.払戻));
   const profit = (x && x.profit != null) ? pgjNum(x.profit) : (ret - bet);
   const roi = bet ? Math.round(ret / bet * 1000) / 10 : 0;
-  return {
+  const rec = {
     日付: pgjDateOnly(x && (x.date || x.createdAt || x.日付)),
     場: (x && (x.venueName || x.venue || x.place || x.場)) || p.venue,
     R: (x && (x.raceNo || x.no || x.R || x.race)) ? String(x.raceNo || x.no || x.R || x.race).replace(/R?$/,'') + 'R' : p.race,
@@ -1126,6 +1126,20 @@ function pgjRecordFromHistory(x, source, i){
     source: source,
     sourceIndex: i
   };
+  // v5.18.201: byType（券種別の購入額・払戻額）があれば、券種名と内訳を明細に含める。
+  // 内訳キーは解析ツール(Profit Graph Switcher)の明細判定キー(投資/払戻/収支)と
+  // 衝突しない 購入額/払戻額 を使い、二重集計を防ぐ。
+  if(x && x.byType && typeof x.byType === 'object'){
+    const keys = Object.keys(x.byType);
+    if(keys.length){
+      rec['券種'] = keys.join('+');
+      rec['内訳'] = keys.map(k => {
+        const v = x.byType[k] || {};
+        return { 券種名: k, 点数: pgjNum(v.count), 購入額: pgjNum(v.bet), 払戻額: pgjNum(v.ret), 的中: pgjNum(v.hit) };
+      });
+    }
+  }
+  return rec;
 }
 function pgjRecordsFromRangeRows(){
   try{
@@ -1134,7 +1148,7 @@ function pgjRecordsFromRangeRows(){
       .filter(r => r && r.status === 'ok' && Number(r.bet || 0) > 0)
       .map((r,i) => {
         const bet = pgjNum(r.bet), ret = pgjNum(r.ret), profit = (r.profit != null) ? pgjNum(r.profit) : ret - bet;
-        return {
+        const rec = {
           日付: pgjDateOnly(r.date),
           場: r.venueName || r.venueCode || '未分類',
           R: r.no ? String(r.no) + 'R' : '',
@@ -1148,6 +1162,10 @@ function pgjRecordsFromRangeRows(){
           source: '期間横断シミュレーション',
           sourceIndex: i
         };
+        // v5.18.201: 買い目単位の内訳（券種別の購入額・払戻額）があればそのまま含める
+        if(Array.isArray(r.ticketDetails) && r.ticketDetails.length) rec['内訳'] = r.ticketDetails;
+        else if(Array.isArray(r.ticketTypeBreakdown) && r.ticketTypeBreakdown.length) rec['内訳'] = r.ticketTypeBreakdown;
+        return rec;
       });
   }catch(e){ return []; }
 }
@@ -1176,6 +1194,29 @@ function buildProfitGraphJSONSnapshot(){
   const totalBet = list.reduce((s,r)=>s+Number(r.投資||0),0);
   const totalReturn = list.reduce((s,r)=>s+Number(r.払戻||0),0);
   const totalProfit = list.reduce((s,r)=>s+Number(r.収支||0),0);
+  // v5.18.201: 券種別集計（各明細の内訳＝券種ごとの購入額・払戻額から集計）。
+  // 内訳が無い旧レコードは行の券種でまとめる。オブジェクト形式にして明細と誤認されないようにする。
+  const byTicket = {};
+  const tkAgg = k => byTicket[k] || (byTicket[k] = { '点数':0, '的中数':0, '投資合計':0, '払戻合計':0, '収支合計':0, '回収率':0 });
+  list.forEach(r => {
+    const det = r['内訳'];
+    if(Array.isArray(det) && det.length){
+      det.forEach(d => {
+        const g = tkAgg(String(d['券種名'] || '不明'));
+        const b = Number(d['購入額'] || 0), p = Number(d['払戻額'] || 0);
+        g['点数'] += Number(d['点数'] || 1); g['的中数'] += Number(d['的中'] || 0);
+        g['投資合計'] += b; g['払戻合計'] += p; g['収支合計'] += p - b;
+      });
+    }else{
+      const g = tkAgg(String(r['券種'] || '不明'));
+      g['点数'] += 1; if(Number(r['払戻'] || 0) > 0) g['的中数'] += 1;
+      g['投資合計'] += Number(r['投資'] || 0); g['払戻合計'] += Number(r['払戻'] || 0); g['収支合計'] += Number(r['収支'] || 0);
+    }
+  });
+  Object.keys(byTicket).forEach(k => {
+    const g = byTicket[k];
+    g['回収率'] = g['投資合計'] ? Math.round(g['払戻合計'] / g['投資合計'] * 1000) / 10 : 0;
+  });
   return {
     product: 'The競馬 EV分析',
     schema: 'keiba-profit-graph-v1',
@@ -1190,6 +1231,7 @@ function buildProfitGraphJSONSnapshot(){
       ROI: totalBet ? Math.round(totalReturn / totalBet * 1000) / 10 : 0
     },
     収支明細: list,
+    券種別集計: byTicket, // v5.18.201: 券種ごとの購入額・払戻額を分けて集計
     仕様: {
       graphs: ['収支構成比','開催場別収支','券種別収支','累計収支変動'],
       chartSwitch: ['円グラフ','棒グラフ','折れ線グラフ'],
@@ -2559,7 +2601,44 @@ function simGetTicketsFromEdit(){
 }
 
 // ─── シミュレーション専用収支履歴 ───────────────────────────
-let simHistory = [];  // [{raceId, raceName, bet, ret, profit, roi, hitCount, total, date}]
+// v5.18.201 TicketTypeAmountRecord:
+//   byType（券種別の購入額・払戻額）を各レコードに保存する。
+//   byType = { '単勝': {bet, ret, hit, count}, '馬連': {...}, ... }
+let simHistory = [];  // [{raceId, raceName, bet, ret, profit, roi, hitCount, total, date, byType}]
+
+// v5.18.201: 券種別内訳を共通形式 { 券種: {bet, ret, hit, count} } に正規化する。
+// 受け付ける形式：
+//  1) renderSimulation の typeMap / asw_captureTicketBreakdown の byType … {bet, ret, hit, count}
+//  2) rsOneShotBreakdown の ticketTypeBreakdown 配列 … [{券種名, 点数, 購入額, 払戻額, 的中}]
+//  3) pts_settleRace の detail 配列 … [{type, amount, ret, hit}]
+function tkNormalizeByType(src){
+  try{
+    if(!src) return null;
+    const out = {};
+    const add = (k, bet, ret, hit, count) => {
+      const key = String(k || '不明');
+      const m = out[key] || (out[key] = { bet: 0, ret: 0, hit: 0, count: 0 });
+      m.bet += Number(bet || 0); m.ret += Number(ret || 0);
+      m.hit += Number(hit || 0); m.count += Number(count || 0);
+    };
+    if(Array.isArray(src)){
+      src.forEach(d => {
+        if(!d) return;
+        add(d.券種名 ?? d.type,
+            d.購入額 ?? d.bet ?? d.amount,
+            d.払戻額 ?? d.ret,
+            (d.的中 != null) ? Number(d.的中) : (d.hit ? 1 : 0),
+            d.点数 ?? d.count ?? 1);
+      });
+    }else if(typeof src === 'object'){
+      Object.entries(src).forEach(([k, v]) => {
+        if(!v) return;
+        add(k, v.bet ?? v.購入額, v.ret ?? v.払戻額, v.hit ?? v.的中, v.count ?? v.点数 ?? 1);
+      });
+    }
+    return Object.keys(out).length ? out : null;
+  }catch(e){ return null; }
+}
 
 function loadSimHistory(){
   try {
@@ -2577,7 +2656,8 @@ function saveSimHistory(){
 }
 
 // 精算結果を simHistory に記録（race_id が同じなら上書き）
-function simRecordProfit(autoRecord, bet, ret, hitCount, total, sourceLabel){
+// v5.18.201: byType（券種別の購入額・払戻額）を第7引数で受け取り、レコードに保存する。
+function simRecordProfit(autoRecord, bet, ret, hitCount, total, sourceLabel, byType){
   bet = Number(bet || 0);
   ret = Number(ret || 0);
   const raceId  = currentRaceId || '';
@@ -2604,6 +2684,9 @@ function simRecordProfit(autoRecord, bet, ret, hitCount, total, sourceLabel){
   const roi     = bet ? ret / bet * 100 : 0;
   const entry   = { raceId, raceName, bet, ret, profit, roi, hitCount, total,
                     date: new Date().toISOString(), source: sourceLabel || '手入力' };
+  // v5.18.201: 券種別内訳（購入額・払戻額）を分けて記録
+  const nb = tkNormalizeByType(byType);
+  if(nb) entry.byType = nb;
   if(raceId){
     const idx = simHistory.findIndex(x => x.raceId === raceId);
     if(idx >= 0){
@@ -2755,11 +2838,22 @@ function renderSimProfitChart(){
       const cls = x.profit >= 0 ? 'win' : 'lose';
       const sign = x.profit >= 0 ? '+' : '';
       const dt = x.date ? new Date(x.date).toLocaleDateString('ja-JP',{month:'numeric',day:'numeric'}) : '';
+      // v5.18.201: 券種別の購入額→払戻額を分けて表示
+      let byTypeHtml = '';
+      if(x.byType && typeof x.byType === 'object'){
+        const parts = Object.entries(x.byType).map(([ty, v]) => {
+          const b = Number(v && v.bet || 0), r = Number(v && v.ret || 0);
+          const col = r >= b ? 'var(--green)' : 'var(--muted)';
+          return `<span style="white-space:nowrap"><span class="chip ${CHIP_CLASS[ty]||''}" style="font-size:9px;padding:1px 5px">${escapeHtml(ty)}</span> ${b.toLocaleString()}円→<span style="color:${col}">${r.toLocaleString()}円</span></span>`;
+        });
+        if(parts.length) byTypeHtml = `<div style="grid-column:1 / -1;display:flex;flex-wrap:wrap;gap:4px 10px;font-size:10px;color:var(--muted);padding:2px 0 0 8px">${parts.join('')}</div>`;
+      }
       return `<div class="sim-hist-row ${cls}">
         <span>${dt} ${escapeHtml(x.raceName||x.raceId||'-')}</span>
         <span>${Number(x.bet||0).toLocaleString()}円</span>
         <span>${sign}${Number(x.profit||0).toLocaleString()}円</span>
         <span>${Number(x.roi||0).toFixed(0)}%</span>
+        ${byTypeHtml}
       </div>`;
     }).join('') || '<div class="empty">記録なし</div>';
   }
@@ -3009,11 +3103,11 @@ function renderSimulation(finish, payouts, sourceLabel){
     // ボタンのonclickを最新値に差し替え
     const recBtn = recRow.querySelector('button');
     if(recBtn){
-      recBtn.onclick = () => simRecordProfit(false, totalBet, totalReturn, hitCount, activeTickets.length, sourceLabel);
+      recBtn.onclick = () => simRecordProfit(false, totalBet, totalReturn, hitCount, activeTickets.length, sourceLabel, typeMap); // v5.18.201 券種別内訳
     }
   }
   // 自動で収支記録（race_id がある場合は上書き、なければ毎回）
-  simRecordProfit(true, totalBet, totalReturn, hitCount, activeTickets.length, sourceLabel);
+  simRecordProfit(true, totalBet, totalReturn, hitCount, activeTickets.length, sourceLabel, typeMap); // v5.18.201 券種別内訳
 }
 
 async function runSimulationFromResult(){
@@ -9927,7 +10021,7 @@ if(horses.length === 0){
 
           // 5) 既存のシミュ収支グラフへ記録（race_id単位で上書き）
           if(row.hasFinish){
-            try{ simRecordProfit(true, s.bet, s.ret, s.hit, s.count, currentRaceName); }catch(e){}
+            try{ simRecordProfit(true, s.bet, s.ret, s.hit, s.count, currentRaceName, row.byType || row.ticketDetails); }catch(e){} // v5.18.201 券種別内訳
           }
         }catch(e){
           row.status = 'error';
@@ -10529,6 +10623,9 @@ if(horses.length === 0){
         hitCount: r.hit || 0, total: r.count || 0,
         date: new Date().toISOString(), source: '期間横断シミュレーション'
       };
+      // v5.18.201: 券種別内訳（購入額・払戻額）も転記する
+      const nb = (typeof tkNormalizeByType === 'function') ? tkNormalizeByType(r.byType || r.ticketTypeBreakdown || r.ticketDetails) : null;
+      if(nb) entry.byType = nb;
       const idx = r.rid ? simHistory.findIndex(x => x.raceId === r.rid) : -1;
       if(idx >= 0) simHistory[idx] = entry; else simHistory.push(entry);
     });
@@ -10742,7 +10839,7 @@ if(horses.length === 0){
               asw_captureTicketBreakdown(row, simTickets, finish, payouts); // v5.18.188 券種内訳
 
               if(row.hasFinish && recordToChart){
-                try{ simRecordProfit(true, s.bet, s.ret, s.hit, s.count, `${date} ${vn} ${currentRaceName}`); }catch(e){}
+                try{ simRecordProfit(true, s.bet, s.ret, s.hit, s.count, `${date} ${vn} ${currentRaceName}`, row.byType || row.ticketDetails); }catch(e){} // v5.18.201 券種別内訳
               }
             }catch(e){
               row.status = 'error';
@@ -11035,7 +11132,7 @@ if(horses.length === 0){
               try{
                 currentRaceId = r.rid || '';
                 currentRaceName = `${r.date} ${r.venueName || ''} ${r.raceName || (r.no + 'R')}`;
-                simRecordProfit(true, r.bet, r.ret, r.hit, r.count, '期間横断一発モード');
+                simRecordProfit(true, r.bet, r.ret, r.hit, r.count, '期間横断一発モード', r.byType || r.ticketTypeBreakdown || r.ticketDetails); // v5.18.201 券種別内訳
               }catch(e){}
             }
           });
@@ -12455,7 +12552,7 @@ if(horses.length === 0){
             try{
               currentRaceId = rid;
               currentRaceName = row.raceName;
-              simRecordProfit(true, s.bet, s.ret, s.hit, r.tickets.length, '予想テキスト精算');
+              simRecordProfit(true, s.bet, s.ret, s.hit, r.tickets.length, '予想テキスト精算', s.detail); // v5.18.201 券種別内訳
             }catch(e){ console.warn('[pts] 収支記録失敗', e); }
           }
         }catch(e){
@@ -13583,7 +13680,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.200 PredictJSONVerify';
+  window.APP_VERSION = 'v5.18.201 TicketTypeAmountRecord';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -14012,7 +14109,7 @@ function json(obj, status = 200) {
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.200 PredictJSONVerify';
+  window.APP_VERSION = 'v5.18.201 TicketTypeAmountRecord';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -14309,7 +14406,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.200 PredictJSONVerify';
+  window.APP_VERSION = 'v5.18.201 TicketTypeAmountRecord';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -14527,7 +14624,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.200 PredictJSONVerify';
+    window.APP_VERSION = 'v5.18.201 TicketTypeAmountRecord';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -14827,7 +14924,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.200 PredictJSONVerify';
+  window.APP_VERSION = 'v5.18.201 TicketTypeAmountRecord';
   try{
     const ver = document.querySelector('.ver');
     if(ver){

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.203 DirectGraphLink</title>
+<title>The競馬 EV分析 v5.18.204 VenueLearning</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.203 DirectGraphLink</span>
+    <span class="ver">v5.18.204 VenueLearning</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -16834,6 +16834,19 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script>
 /* ═══════════════════════════════════════════════════════════════
+   v5.18.204 VenueLearning（学習機能：開催場対応）
+   ・v5.18.200 の学習モードをさらに拡張し、蓄積バケットを
+     JRA/NAR × 券種 × オッズ帯 × クラス × 開催場 に細分化。
+     開催場は currentRaceId（YYYY+場コード2桁+…）の場コードから
+     JRA_VENUES / NAR_VENUES を逆引きして名前で保持（判定不能は「不明」）。
+   ・EV補正の適用順（サンプル数が足りる最も細かい層を採用）：
+       ①開催場×クラス(組込み)×オッズ帯 → ②開催場×クラス(組集約)×オッズ帯
+       → ③開催場×オッズ帯 → ④クラス(組込み)×オッズ帯（開催場集約）
+       → ⑤クラス(組集約)×オッズ帯 → ⑥オッズ帯別 → ⑦券種別 → ⑧補正なし
+   ・既存の学習データ（3階層・4階層キー）は読込時に開催場「不明」へ
+     自動移行し、④〜⑦の集計にそのまま寄与する（退行なし）。
+   ・設定タブの学習カードに「開催場別」集計表を追加。
+   ─────────────────────────────────────────
    v5.18.200 ClassGradeLearning（学習機能：クラス・組・グレード対応）
    ・v5.18.199 の学習モードを拡張し、蓄積バケットを
      JRA/NAR × 券種 × オッズ帯 × クラス に細分化。
@@ -16949,13 +16962,36 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   }
   function activeClassKey(){ return parseClassKey(activeRaceName()); }
 
+  // ── 開催場の取得（v5.18.204） ─────────────────
+  //    currentRaceId の 5-6桁目（場コード）から開催場名を逆引き。
+  //    01-10=JRA、それ以外=NAR。判定不能は「不明」。
+  function activeVenueKey(){
+    try{
+      var id = String((typeof currentRaceId !== 'undefined' && currentRaceId) || window.currentRaceId || '');
+      if(id.length >= 6){
+        var code = id.slice(4, 6);
+        if(/^[0-9]{2}$/.test(code)){
+          var kind = (Number(code) >= 1 && Number(code) <= 10) ? 'JRA' : 'NAR';
+          if(typeof venueName === 'function'){
+            var n = venueName(kind, code);
+            if(n) return String(n);
+          }
+          return code;
+        }
+      }
+    }catch(e){}
+    return '不明';
+  }
+
   // ── 学習ストア ─────────────────────────────
-  //    旧形式（kind|type|band）のキーは「|不明」クラスへ自動移行。
+  //    旧形式（kind|type|band / kind|type|band|cls）のキーは
+  //    クラス・開催場「不明」へ自動移行（5階層へ揃える）。
   function migrateBuckets(buckets){
     var out = {}, changed = false;
     for(var k in buckets){
       var parts = String(k).split('|');
-      var nk = parts.length >= 4 ? k : (k + '|不明');
+      while(parts.length < 5) parts.push('不明');
+      var nk = parts.slice(0, 5).join('|');
       if(nk !== k) changed = true;
       var b = buckets[k] || {};
       var o = out[nk] || (out[nk] = { n: 0, sp: 0, h: 0 });
@@ -16994,7 +17030,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     if(o < 100) return '50-99';
     return '100+';
   }
-  function bKey(kind, type, band, cls){ return kind + '|' + type + '|' + band + '|' + (cls || '不明'); }
+  function bKey(kind, type, band, cls, ven){ return kind + '|' + type + '|' + band + '|' + (cls || '不明') + '|' + (ven || '不明'); }
 
   // ── 集計キャッシュ（クラス集約・オッズ帯集約・券種集約）──
   var aggCache = null;
@@ -17004,11 +17040,14 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     o.n += b.n; o.sp += b.sp; o.h += b.h;
   }
   function buildAgg(){
-    var c = { base: {}, band: {}, type: {} };
+    var c = { vbase: {}, vband: {}, cls: {}, base: {}, band: {}, type: {} };
     for(var k in learn.buckets){
       var p = k.split('|');
-      var kind = p[0], type = p[1], band = p[2], cls = p[3] || '不明';
+      var kind = p[0], type = p[1], band = p[2], cls = p[3] || '不明', ven = p[4] || '不明';
       var b = learn.buckets[k];
+      aggAdd(c.vbase, kind + '|' + type + '|' + band + '|' + classBase(cls) + '|' + ven, b); // 開催場×クラス基底
+      aggAdd(c.vband, kind + '|' + type + '|' + band + '|' + ven, b);                        // 開催場×オッズ帯
+      aggAdd(c.cls,  kind + '|' + type + '|' + band + '|' + cls, b);                         // クラス（開催場集約）
       aggAdd(c.base, kind + '|' + type + '|' + band + '|' + classBase(cls), b);
       aggAdd(c.band, kind + '|' + type + '|' + band, b);
       aggAdd(c.type, kind + '|' + type, b);
@@ -17058,7 +17097,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
     var kind = (typeof isNAR === 'function' && isNAR()) ? 'NAR' : 'JRA';
     var cls = activeClassKey();
-    var k = bKey(kind, t.type, oddsBand(odds), cls);
+    var ven = activeVenueKey();
+    var k = bKey(kind, t.type, oddsBand(odds), cls, ven);
     var b = learn.buckets[k] || (learn.buckets[k] = { n: 0, sp: 0, h: 0 });
     b.n += 1; b.sp += p; if(hit) b.h += 1;
     invalidateAgg();
@@ -17070,36 +17110,51 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   // ── 補正係数 ───────────────────────────────
   //    calibRaw = 的中数 ÷ 推定確率合計（1より大＝過小評価していた）
   //    mult = 1 + w×(calibRaw−1), w = n/(n+40)。クランプで暴走防止。
-  //    適用順: ①クラス(組込み)別 → ②クラス別(組集約) → ③オッズ帯別 → ④券種別 → ⑤なし
+  //    適用順: ①開催場×クラス(組込み) → ②開催場×クラス(組集約) → ③開催場×オッズ帯
+  //            → ④クラス(組込み)（開催場集約） → ⑤クラス(組集約) → ⑥オッズ帯別 → ⑦券種別 → ⑧なし
   function bucketMult(b){
     if(!b || b.n < 1 || !(b.sp > 0)) return null;
     var calib = b.h / b.sp;
     var w = b.n / (b.n + SHRINK_N);
     return Math.max(MULT_LO, Math.min(MULT_HI, 1 + w * (calib - 1)));
   }
-  function learnMult(kind, type, odds, cls){
+  function learnMult(kind, type, odds, cls, ven){
     cls = cls || '不明';
+    ven = ven || '不明';
     var band = oddsBand(odds);
-    var m;
-    // ①クラス（組込み）×オッズ帯
-    var b1 = learn.buckets[bKey(kind, type, band, cls)];
-    if(b1 && b1.n >= MIN_BUCKET_N){ m = bucketMult(b1); if(m != null) return m; }
-    if(!aggCache) buildAgg();
-    // ②クラス（組を集約）×オッズ帯
     var base = classBase(cls);
+    var m;
+    if(!aggCache) buildAgg();
+    // ①開催場×クラス（組込み）×オッズ帯（最細＝生バケット）
+    var b0 = learn.buckets[bKey(kind, type, band, cls, ven)];
+    if(b0 && b0.n >= MIN_BUCKET_N){ m = bucketMult(b0); if(m != null) return m; }
+    if(ven !== '不明'){
+      // ②開催場×クラス（組を集約）×オッズ帯
+      if(base && base !== cls){
+        var bv = aggCache.vbase[kind + '|' + type + '|' + band + '|' + base + '|' + ven];
+        if(bv && bv.n >= MIN_BUCKET_N){ m = bucketMult(bv); if(m != null) return m; }
+      }
+      // ③開催場×オッズ帯（クラス集約）
+      var bw = aggCache.vband[kind + '|' + type + '|' + band + '|' + ven];
+      if(bw && bw.n >= MIN_BUCKET_N){ m = bucketMult(bw); if(m != null) return m; }
+    }
+    // ④クラス（組込み）×オッズ帯（開催場集約）
+    var b1 = aggCache.cls[kind + '|' + type + '|' + band + '|' + cls];
+    if(b1 && b1.n >= MIN_BUCKET_N){ m = bucketMult(b1); if(m != null) return m; }
+    // ⑤クラス（組を集約）×オッズ帯
     if(base && base !== cls){
       var b2 = aggCache.base[kind + '|' + type + '|' + band + '|' + base];
       if(b2 && b2.n >= MIN_BUCKET_N){ m = bucketMult(b2); if(m != null) return m; }
     }
-    // ③オッズ帯（クラス集約）
+    // ⑥オッズ帯（クラス・開催場集約）
     var b3 = aggCache.band[kind + '|' + type + '|' + band];
     if(b3 && b3.n >= MIN_BUCKET_N){ m = bucketMult(b3); if(m != null) return m; }
-    // ④券種
+    // ⑦券種
     var b4 = aggCache.type[kind + '|' + type];
     if(b4 && b4.n >= MIN_TYPE_N){ m = bucketMult(b4); if(m != null) return m; }
     return 1;
   }
-  window.tkLearnMult = learnMult; // デバッグ・検証用に公開（第4引数cls省略可）
+  window.tkLearnMult = learnMult; // デバッグ・検証用に公開（第4引数cls・第5引数ven省略可）
 
   // ── モード登録 ─────────────────────────────
   try{
@@ -17121,9 +17176,10 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       if(mode !== LMODE) return _core(recs, mode, max);
       var kind = (typeof isNAR === 'function' && isNAR()) ? 'NAR' : 'JRA';
       var cls = activeClassKey(); // 予想対象レースのクラス・組・グレード
+      var ven = activeVenueKey(); // 予想対象レースの開催場（v5.18.204）
       var adj = [];
       (recs || []).forEach(function(r){
-        var m = learnMult(kind, r.type, r.odds, cls);
+        var m = learnMult(kind, r.type, r.odds, cls, ven);
         var ev2 = Number(r.ev || 0) * m;
         var mv = (settings.minEVByType && settings.minEVByType[r.type]) || (typeof DEFAULT_MIN_EV !== 'undefined' && DEFAULT_MIN_EV[r.type]) || 1.05;
         if(ev2 < mv) return; // 補正後EVが券種別閾値未満は除外
@@ -17131,6 +17187,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         c.evRaw = r.ev;
         c.learnAdj = m;
         c.learnClass = cls;
+        c.learnVenue = ven;
         c.ev = ev2;
         c.p = Math.max(0.0001, Math.min(0.98, Number(r.p || 0) * m));
         c.expectedReturn = ev2 * (c.unit || 100);
@@ -17196,11 +17253,12 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       '<h2>🧠 学習機能（予想モード用）</h2>' +
       '<div class="proxy-note" style="font-size:11px;line-height:1.6;margin-bottom:8px">' +
       '精算（手動・自動・全レース一括・期間横断シミュ・予想テキスト精算）のたびに、買い目ごとの' +
-      '<b>推定確率と実際の的中/不的中</b>を JRA/NAR × 券種 × オッズ帯 × <b>クラス</b> で自動蓄積します。' +
+      '<b>推定確率と実際の的中/不的中</b>を JRA/NAR × 券種 × オッズ帯 × <b>クラス</b> × <b>開催場</b> で自動蓄積します。' +
       'クラスはレース名から自動判定：グレード（G1〜G3・Jpn・J・G・南関S・L）、' +
       'JRA条件（新馬・未勝利・1勝〜3勝・OP・特別）、NARクラス（A1〜C4、組があれば「C2-3組」まで細分化）。' +
-      'モード「🧠 学習」で予想すると、そのレースのクラスに合った較正係数でEVを補正した買い目を選びます。' +
-      'サンプルが少ないうちは組→クラス→オッズ帯→券種の順に広い集計へフォールバックします。' +
+      '開催場は race_id の場コードから自動判定（東京・大井・盛岡…）。' +
+      'モード「🧠 学習」で予想すると、そのレースの<b>開催場とクラス</b>に合った較正係数でEVを補正した買い目を選びます。' +
+      'サンプルが少ないうちは 開催場×クラス→開催場→クラス→オッズ帯→券種 の順に広い集計へフォールバックします。' +
       '</div>' +
       '<div class="settings-row"><label>精算結果を学習に記録する</label><input type="checkbox" id="learnEnableChk"></div>' +
       '<div id="learnStats" style="margin-top:8px"></div>' +
@@ -17232,7 +17290,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
           invalidateAgg();
           saveLearn();
           renderLearnCard();
-          alert('✅ 学習データを読み込みました' + (mig.changed ? '（旧形式をクラス対応形式へ移行）' : ''));
+          alert('✅ 学習データを読み込みました' + (mig.changed ? '（旧形式をクラス・開催場対応形式へ移行）' : ''));
         }catch(e){ alert('❌ 読込失敗: ' + (e && e.message || e)); }
         fileEl.value = '';
       };
@@ -17264,17 +17322,21 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     if(!el) return;
     var kinds = { JRA: {}, NAR: {} };
     var classAgg = { JRA: {}, NAR: {} };
+    var venueAgg = { JRA: {}, NAR: {} };
     var totalN = 0;
     for(var k in learn.buckets){
       var parts = k.split('|');
-      var kind = parts[0], type = parts[1], cls = parts[3] || '不明';
+      var kind = parts[0], type = parts[1], cls = parts[3] || '不明', ven = parts[4] || '不明';
       if(!kinds[kind]) kinds[kind] = {};
       if(!classAgg[kind]) classAgg[kind] = {};
+      if(!venueAgg[kind]) venueAgg[kind] = {};
       var b = learn.buckets[k];
       var t = kinds[kind][type] || (kinds[kind][type] = { n: 0, sp: 0, h: 0 });
       t.n += b.n; t.sp += b.sp; t.h += b.h;
       var c = classAgg[kind][cls] || (classAgg[kind][cls] = { n: 0, sp: 0, h: 0 });
       c.n += b.n; c.sp += b.sp; c.h += b.h;
+      var v = venueAgg[kind][ven] || (venueAgg[kind][ven] = { n: 0, sp: 0, h: 0 });
+      v.n += b.n; v.sp += b.sp; v.h += b.h;
       totalN += b.n;
     }
     if(!totalN){
@@ -17290,6 +17352,20 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       html += statHead('券種');
       types.sort().forEach(function(type){ html += statRow(type, kinds[kind][type]); });
       html += '</table></div>';
+      // 開催場別集計（n の多い順・上位16件）v5.18.204
+      var venKeys = Object.keys(venueAgg[kind] || {});
+      if(venKeys.length){
+        venKeys.sort(function(a, b){ return venueAgg[kind][b].n - venueAgg[kind][a].n; });
+        var vShown = venKeys.slice(0, 16);
+        html += '<div style="font-weight:700;font-size:11px;margin:4px 0 2px;opacity:.8">' + kind + '：開催場別</div>';
+        html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
+        html += statHead('開催場');
+        vShown.forEach(function(ven){ html += statRow(ven, venueAgg[kind][ven]); });
+        html += '</table></div>';
+        if(venKeys.length > vShown.length){
+          html += '<div style="font-size:10px;opacity:.55">…ほか ' + (venKeys.length - vShown.length) + ' 場</div>';
+        }
+      }
       // クラス別集計（n の多い順・上位14件）
       var clsKeys = Object.keys(classAgg[kind] || {});
       if(clsKeys.length){
@@ -17305,7 +17381,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         }
       }
     });
-    html += '<div style="font-size:10px;opacity:.6;margin-top:4px">較正係数＝実的中数÷推定確率合計。1超＝推定が控えめだったカテゴリ。学習モードのEV補正は「クラス(組込み)×オッズ帯（n≥' + MIN_BUCKET_N + '）→クラス×オッズ帯（n≥' + MIN_BUCKET_N + '）→オッズ帯別（n≥' + MIN_BUCKET_N + '）→券種別（n≥' + MIN_TYPE_N + '）→補正なし」の順で適用。旧バージョンの蓄積データはクラス「不明」として集計に寄与します。</div>';
+    html += '<div style="font-size:10px;opacity:.6;margin-top:4px">較正係数＝実的中数÷推定確率合計。1超＝推定が控えめだったカテゴリ。学習モードのEV補正は「開催場×クラス(組込み)×オッズ帯 → 開催場×クラス×オッズ帯 → 開催場×オッズ帯（各n≥' + MIN_BUCKET_N + '）→ クラス(組込み)×オッズ帯 → クラス×オッズ帯 → オッズ帯別（各n≥' + MIN_BUCKET_N + '）→ 券種別（n≥' + MIN_TYPE_N + '）→ 補正なし」の順で適用。旧バージョンの蓄積データはクラス・開催場「不明」として広い集計に寄与します。</div>';
     el.innerHTML = html;
   }
 
@@ -17351,7 +17427,14 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     }, 300);
   }
 
-  console.log('[v5.18.200] ClassGradeLearning: 学習バケットをクラス・組・グレード対応に拡張');
+  // ── 表示バージョン更新（このスクリプトが最後に実行されるためここで確定） ──
+  try{
+    window.APP_VERSION = 'v5.18.204 VenueLearning';
+    if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
+    else document.addEventListener('DOMContentLoaded', function(){ try{ window.setAppVersionLabel(); }catch(e){} });
+  }catch(e){}
+
+  console.log('[v5.18.204] VenueLearning: 学習バケットを開催場対応に拡張（JRA/NAR×券種×オッズ帯×クラス×開催場）');
 })();
 </script>
 

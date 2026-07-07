@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.200 PredictJSONVerify</title>
+<title>The競馬 EV分析 v5.18.202 TicketBreakdownDisplay</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.201 TicketTypeAmountRecord</span>
+    <span class="ver">v5.18.202 TicketBreakdownDisplay</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -757,7 +757,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.201 TicketTypeAmountRecord';
+window.APP_VERSION = 'v5.18.202 TicketBreakdownDisplay';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -9953,6 +9953,13 @@ if(horses.length === 0){
         <td style="padding:6px 4px;text-align:right;color:${profitColor}">${r.hasFinish ? ((r.profit||0)>=0?'+':'')+(r.profit||0).toLocaleString() : '-'}</td>
         <td style="padding:6px 4px;text-align:right;color:${roiColor}">${r.hasFinish && (r.bet||0) ? r.roi.toFixed(0)+'%' : '-'}</td>
       </tr>`;
+      // v5.18.202: どの券種を何円買ったか（買い目内訳）を直下のサブ行で表示
+      const tkHtml = (typeof rsTicketPartsHtml === 'function') ? rsTicketPartsHtml(r) : '';
+      if(tkHtml){
+        h += `<tr${r.hit>0?' style="background:rgba(0,255,136,0.06)"':''}>
+          <td colspan="8" style="padding:0 4px 6px 22px;font-size:10px;line-height:1.7">${tkHtml}</td>
+        </tr>`;
+      }
     });
     h += `</tbody></table></div>`;
     box.innerHTML = h;
@@ -10335,18 +10342,61 @@ if(horses.length === 0){
     return lines.join('\n');
   }
 
+  // ── v5.18.202 TicketBreakdownDisplay ──
+  // 精算時に記録済みの券種内訳（row.ticketDetails / ticketTypeBreakdown / byType）を
+  // 「どの券種を何円買ったか」が一目で分かる表示用パーツ列へ変換する。
+  // 優先順位: 買い目単位の明細 → 券種別集計 → byType（古いデータの後方互換）。
+  function rsTicketParts(r){
+    try{
+      if(Array.isArray(r.ticketDetails) && r.ticketDetails.length){
+        return r.ticketDetails.map(d => ({
+          text: `${d.券種名 || '?'} ${d.買い目 || ''} ${(Number(d.購入額) || 0).toLocaleString()}円`
+              + (d.的中 ? `→${(Number(d.払戻額) || 0).toLocaleString()}円` : ''),
+          hit: !!d.的中
+        }));
+      }
+      if(Array.isArray(r.ticketTypeBreakdown) && r.ticketTypeBreakdown.length){
+        return r.ticketTypeBreakdown.map(d => ({
+          text: `${d.券種名 || '?'}×${Number(d.点数) || 0}点 ${(Number(d.購入額) || 0).toLocaleString()}円`
+              + ((Number(d.的中) || 0) > 0 ? `→${(Number(d.払戻額) || 0).toLocaleString()}円` : ''),
+          hit: (Number(d.的中) || 0) > 0
+        }));
+      }
+      if(r.byType && typeof r.byType === 'object'){
+        return Object.entries(r.byType).map(([ty, v]) => ({
+          text: `${ty}×${Number(v && v.count) || 0}点 ${(Number(v && v.bet) || 0).toLocaleString()}円`
+              + ((Number(v && v.hit) || 0) > 0 ? `→${(Number(v && v.ret) || 0).toLocaleString()}円` : ''),
+          hit: (Number(v && v.hit) || 0) > 0
+        }));
+      }
+    }catch(e){}
+    return [];
+  }
+  // コピー用テキスト（TSVの1セルに収まるよう「 / 」区切り、的中は✓付き）
+  function rsTicketPartsText(r){
+    return rsTicketParts(r).map(p => p.text + (p.hit ? '✓' : '')).join(' / ');
+  }
+  // 表示用HTML（明細行の直下に差し込むサブ行の中身）。的中買い目は緑で強調。
+  function rsTicketPartsHtml(r){
+    const parts = rsTicketParts(r);
+    if(!parts.length) return '';
+    return parts.map(p =>
+      `<span style="white-space:nowrap;${p.hit ? 'color:var(--green);font-weight:700' : 'color:var(--muted)'}">🎫 ${asw_esc(p.text)}${p.hit ? ' ✓' : ''}</span>`
+    ).join('<span style="color:var(--border)">　</span>');
+  }
+
   function rsBuildDetailText(rows){
     const raceRows = (rows || []).filter(r => r && (r.status === 'ok' || r.status === 'error'));
     if(!raceRows.length) return '';
     const lines = [];
     lines.push('🔎 レース別明細');
-    lines.push(['日付','場','R','レース名','着順','点','投資','払戻','収支','ROI'].join('\t'));
+    lines.push(['日付','場','R','レース名','着順','点','投資','払戻','収支','ROI','買い目内訳'].join('\t'));
     raceRows.forEach(r => {
       if(r.status === 'error'){
         lines.push([
           r.date, r.venueName || '', r.no + 'R',
           '⚠️ ' + (r.error || '取得失敗'),
-          '', '', '', '', '', ''
+          '', '', '', '', '', '', ''
         ].join('\t'));
         return;
       }
@@ -10362,7 +10412,8 @@ if(horses.length === 0){
         rsFmtNum(r.bet || 0),
         r.hasFinish ? rsFmtNum(r.ret || 0) : '-',
         r.hasFinish ? ((r.profit || 0) >= 0 ? '+' : '') + rsFmtNum(r.profit || 0) : '-',
-        (r.hasFinish && (r.bet || 0)) ? r.roi.toFixed(0) + '%' : '-'
+        (r.hasFinish && (r.bet || 0)) ? r.roi.toFixed(0) + '%' : '-',
+        rsTicketPartsText(r) // v5.18.202: どの券種を何円買ったか
       ].join('\t'));
     });
     return lines.join('\n');
@@ -10516,6 +10567,13 @@ if(horses.length === 0){
           <td style="padding:4px;text-align:right;color:${pc}">${r.hasFinish ? ((r.profit||0)>=0?'+':'')+(r.profit||0).toLocaleString() : '-'}</td>
           <td style="padding:4px;text-align:right;color:${rc}">${r.hasFinish && (r.bet||0) ? r.roi.toFixed(0)+'%' : '-'}</td>
         </tr>`;
+        // v5.18.202: どの券種を何円買ったか（買い目内訳）を直下のサブ行で表示
+        const tkHtml = rsTicketPartsHtml(r);
+        if(tkHtml){
+          h += `<tr${r.hit>0?' style="background:rgba(0,255,136,0.06)"':''}>
+            <td colspan="10" style="padding:0 4px 5px 26px;font-size:10px;line-height:1.7">${tkHtml}</td>
+          </tr>`;
+        }
       });
       h += `</tbody></table></div></details>`;
     }
@@ -13680,7 +13738,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.201 TicketTypeAmountRecord';
+  window.APP_VERSION = 'v5.18.202 TicketBreakdownDisplay';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -14109,7 +14167,7 @@ function json(obj, status = 200) {
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.201 TicketTypeAmountRecord';
+  window.APP_VERSION = 'v5.18.202 TicketBreakdownDisplay';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -14406,7 +14464,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.201 TicketTypeAmountRecord';
+  window.APP_VERSION = 'v5.18.202 TicketBreakdownDisplay';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -14624,7 +14682,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.201 TicketTypeAmountRecord';
+    window.APP_VERSION = 'v5.18.202 TicketBreakdownDisplay';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -14924,7 +14982,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.201 TicketTypeAmountRecord';
+  window.APP_VERSION = 'v5.18.202 TicketBreakdownDisplay';
   try{
     const ver = document.querySelector('.ver');
     if(ver){

@@ -699,6 +699,7 @@ body{
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <button class="btn-sm" onclick="exportStateJSON()">💾 JSON保存</button>
         <button class="btn-sm" onclick="exportProfitGraphJSON()">📊 収支分析JSON出力</button>
+        <button class="btn-sm" onclick="openProfitGraphDirect()">🔗 グラフを直接開く</button>
         <button class="btn-sm" onclick="triggerImportJSON()">📂 JSON読込</button>
         <button class="btn-sm" onclick="clearHorsesConfirm()">🧹 馬データをクリア</button>
         <button class="btn-sm" onclick="resetSettingsToDefault()">♻️ 設定を初期化</button>
@@ -711,6 +712,7 @@ body{
         &nbsp;&nbsp;iPad/iPhoneでは<b>共有シート</b>が開くので「ファイルに保存」から<b>保存先フォルダを選択</b>できます。PCのChrome/Edgeでは保存ダイアログで場所を選べます。<br>
         <b>JSON読込</b>：保存したファイルから一括復元します。<br>
         <b>収支分析JSON出力</b>：収支グラフ切替HTMLで読める形式（収支明細配列）を書き出します。開催場別・券種別・構成比・変動グラフ用です。<br>
+        <b>グラフを直接開く</b>：収支分析JSONをファイル保存せず、同じサイト上のグラフHTMLへlocalStorage経由で直接渡して開きます（両HTMLが同一オリジンにある場合のみ）。<br>
         <b>設定を初期化</b>：各種設定を初期値に戻します（プロキシURLは保持）。
       </div>
     </div>
@@ -757,7 +759,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.202 TicketBreakdownDisplay';
+window.APP_VERSION = 'v5.18.203 DirectGraphLink';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -1283,6 +1285,40 @@ async function exportProfitGraphJSON(){
   a.href = url; a.download = fileName; document.body.appendChild(a); a.click();
   setTimeout(()=>{ try{ document.body.removeChild(a); }catch(e){} URL.revokeObjectURL(url); }, 1500);
   dataIoStatus(`📊 収支分析JSONを保存しました: ${fileName}`, true);
+}
+
+// v5.18.203: 収支分析グラフHTMLへの直リンク（同一オリジンのlocalStorage経由。ファイル保存/読込を省略）
+const PROFIT_GRAPH_BRIDGE_KEY = 'keibaProfitGraphBridge_v1';
+// ★ 同じGitHub Pages上に置いたグラフHTMLのファイル名に合わせて変更してください
+const PROFIT_GRAPH_URL = 'keiba_profit_spec_chart_switcher_candle_v22.html';
+function openProfitGraphDirect(){
+  let snap;
+  try{
+    snap = buildProfitGraphJSONSnapshot();
+    if(!snap.収支明細.length){
+      dataIoStatus('送信できる収支履歴がありません。シミュレーション精算または収支記録後に実行してください。', false);
+      return;
+    }
+    localStorage.setItem(PROFIT_GRAPH_BRIDGE_KEY, JSON.stringify({
+      savedAt: new Date().toISOString(),
+      fileName: buildProfitGraphExportFileName(),
+      data: snap
+    }));
+  }catch(e){
+    if(e && (e.name === 'QuotaExceededError' || e.code === 22)){
+      dataIoStatus('データ量が大きく直リンクできません。「📊 収支分析JSON出力」でファイル保存→グラフHTMLで読込してください。', false);
+    }else{
+      dataIoStatus('直リンクの準備に失敗しました: ' + ((e && e.message) || e), false);
+    }
+    return;
+  }
+  const url = PROFIT_GRAPH_URL + (PROFIT_GRAPH_URL.includes('?') ? '&' : '?') + 'src=bridge';
+  const w = window.open(url, 'keibaProfitGraph');
+  if(!w){
+    dataIoStatus(`🔗 データは送信済みです（${snap.収支明細.length}件）。ポップアップがブロックされたため、グラフHTMLを開いて「🔗 直リンク読込」を押してください。`, false);
+    return;
+  }
+  dataIoStatus(`🔗 収支分析グラフへ直接送信しました（${snap.収支明細.length}件）`, true);
 }
 
 function triggerImportJSON(){
@@ -13738,7 +13774,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.202 TicketBreakdownDisplay';
+  window.APP_VERSION = 'v5.18.203 DirectGraphLink';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -14167,7 +14203,7 @@ function json(obj, status = 200) {
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.202 TicketBreakdownDisplay';
+  window.APP_VERSION = 'v5.18.203 DirectGraphLink';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -14464,7 +14500,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.202 TicketBreakdownDisplay';
+  window.APP_VERSION = 'v5.18.203 DirectGraphLink';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -14682,7 +14718,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.202 TicketBreakdownDisplay';
+    window.APP_VERSION = 'v5.18.203 DirectGraphLink';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -14982,7 +15018,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.202 TicketBreakdownDisplay';
+  window.APP_VERSION = 'v5.18.203 DirectGraphLink';
   try{
     const ver = document.querySelector('.ver');
     if(ver){

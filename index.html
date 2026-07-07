@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.207 RisingLearningSafe</title>
+<title>The競馬 EV分析 v5.18.209 NagoyaModeSetting</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.207 RisingLearningSafe</span>
+    <span class="ver">v5.18.209 NagoyaModeSetting</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -672,6 +672,13 @@ body{
         <input type="checkbox" id="setUseWideUmaren" checked onchange="saveSettings()">
       </div>
       <div class="settings-row">
+        <label>名古屋モード</label>
+        <input type="checkbox" id="setNagoyaMode" onchange="saveSettings()">
+      </div>
+      <div class="proxy-note" style="margin-top:-4px;margin-bottom:8px;font-size:11px;line-height:1.6">
+        <b>名古屋モード</b>：開催場が名古屋の時だけ、金シャチ最終戦を見送り、最大3点・300円以内、枠連/馬単/3連単除外、3連複2点以内に自動制限します。
+      </div>
+      <div class="settings-row">
         <label>チェックOFF券種の扱い</label>
         <select id="setDisabledTypeAction" onchange="saveSettings()">
           <option value="skip">レースごと見送る</option>
@@ -759,7 +766,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.207 RisingLearningSafe';
+window.APP_VERSION = 'v5.18.209 NagoyaModeSetting';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -834,6 +841,7 @@ let settings = {
   useWakuren: true,   // v5.18.191: 枠連を買い目に含める
   useSanren: true,    // v5.18.191: 3連単＋3連複を買い目に含める
   useWideUmaren: true, // v5.18.192: ワイド＋馬連を買い目に含める
+  nagoyaMode: false, // v5.18.209: 名古屋モード（設定でONの時だけ適用）
   disabledTypeAction: 'skip', // v5.18.194: チェックOFF券種の扱い 'skip'=レースごと見送り / 'exclude'=その券種だけ除外して残りで購入
   minEVByType: {...DEFAULT_MIN_EV},
   proxyUrl: 'https://takuya.nitta-katsuhiko.workers.dev/'
@@ -967,6 +975,7 @@ function saveSettings(){
   settings.useWakuren = document.getElementById('setUseWakuren')?.checked !== false;
   settings.useSanren = document.getElementById('setUseSanren')?.checked !== false;
   settings.useWideUmaren = document.getElementById('setUseWideUmaren')?.checked !== false;
+  settings.nagoyaMode = document.getElementById('setNagoyaMode')?.checked === true;
   settings.disabledTypeAction = (document.getElementById('setDisabledTypeAction')?.value === 'exclude') ? 'exclude' : 'skip'; // v5.18.194
   TICKET_TYPES.forEach(t => {
     const el = document.getElementById('ev-' + t);
@@ -1384,6 +1393,7 @@ function refreshSettingsUI(){
   const setUW = document.getElementById('setUseWakuren'); if(setUW) setUW.checked = settings.useWakuren !== false;
   const setUS = document.getElementById('setUseSanren'); if(setUS) setUS.checked = settings.useSanren !== false;
   const setUWU = document.getElementById('setUseWideUmaren'); if(setUWU) setUWU.checked = settings.useWideUmaren !== false;
+  const setNGM = document.getElementById('setNagoyaMode'); if(setNGM) setNGM.checked = settings.nagoyaMode === true;
   const setDTA = document.getElementById('setDisabledTypeAction'); if(setDTA) setDTA.value = (settings.disabledTypeAction === 'exclude') ? 'exclude' : 'skip'; // v5.18.194
   const pUrl = document.getElementById('proxyUrl'); if(pUrl) pUrl.value = settings.proxyUrl || '';
   const nb = document.getElementById('narBadge'); if(nb) nb.style.display = settings.nar ? '' : 'none';
@@ -1418,6 +1428,7 @@ function resetSettingsToDefault(){
     useWakuren: true,
     useSanren: true,
     useWideUmaren: true,
+    nagoyaMode: false,
     disabledTypeAction: 'skip', // v5.18.194
     minEVByType: {...DEFAULT_MIN_EV},
     proxyUrl: keepProxy || 'https://takuya.nitta-katsuhiko.workers.dev/'
@@ -1467,6 +1478,7 @@ function initUI(){
   document.getElementById('setUseWakuren').checked = settings.useWakuren !== false;
   document.getElementById('setUseSanren').checked = settings.useSanren !== false;
   document.getElementById('setUseWideUmaren').checked = settings.useWideUmaren !== false;
+  document.getElementById('setNagoyaMode').checked = settings.nagoyaMode === true;
   document.getElementById('setDisabledTypeAction').value = (settings.disabledTypeAction === 'exclude') ? 'exclude' : 'skip'; // v5.18.194
   document.getElementById('proxyUrl').value = settings.proxyUrl || '';
   document.getElementById('narBadge').style.display = settings.nar ? '' : 'none';
@@ -1588,6 +1600,63 @@ function normalizeRatedHorses(allHorses){
     const renP   = Math.min(0.82, winP * renMult + 0.015);
     return { ...h, winP, placeP, renP, quinellaP: renP };
   }).sort((a,b) => b.winP - a.winP);
+}
+
+
+
+// ─── v5.18.209 名古屋モード設定 ─────────────────────────
+// 直近の名古屋検証（全買いROI 63.4%）を反映。
+// SQLのWHERE条件のように、負けやすい条件を先に削る。
+// ルール：名古屋は金シャチ最終戦を見送り／1R投資300円以内／最大3点／枠連・馬単・3連単を除外／3連複は2点以内。
+function isNagoyaRaceContext(){
+  if(settings.nagoyaMode !== true) return false;
+  try{
+    const code = String(currentRaceId || '').slice(4,6);
+    if(code === '48') return true; // NAR 名古屋
+    const v = document.getElementById('pickVenue');
+    const txt = v ? (v.options[v.selectedIndex]?.textContent || v.value || '') : '';
+    if(/名古屋/.test(txt)) return true;
+  }catch(e){}
+  return false;
+}
+function isNagoyaSkipRaceName(name){
+  return /金シャチ最終戦/.test(String(name || currentRaceName || ''));
+}
+function applyNagoyaSQLCandidateFilter(recs){
+  if(!isNagoyaRaceContext()) return recs;
+  if(isNagoyaSkipRaceName()) return [];
+  const out = (recs || []).filter(r => {
+    if(!r || !r.type) return false;
+    if(['枠連','馬単','3連単'].includes(r.type)) return false;
+    if(r.type === '3連複' && Number(r.ev||0) < 1.20) return false;
+    if(r.type === '馬連' && Number(r.ev||0) < 1.10) return false;
+    return true;
+  });
+  return out;
+}
+function applyNagoyaSQLTicketFilter(tickets){
+  if(!isNagoyaRaceContext()) return tickets;
+  if(isNagoyaSkipRaceName()) return [];
+  const unit = settings.unit || 100;
+  const maxBet = Math.min(300, settings.budget || 300);
+  const out = [];
+  let sanfuku = 0;
+  for(const t of (tickets || [])){
+    if(!t || ['枠連','馬単','3連単'].includes(t.type)) continue;
+    if(t.type === '3連複'){
+      if(sanfuku >= 2) continue;
+      sanfuku++;
+    }
+    out.push({...t, amount: unit, stake: unit});
+    if(out.length >= 3) break;
+    if(out.reduce((a,b)=>a+Number(b.amount||0),0) + unit > maxBet) break;
+  }
+  return out;
+}
+function nagoyaSQLRuleNote(){
+  if(!isNagoyaRaceContext()) return '';
+  if(isNagoyaSkipRaceName()) return '名古屋モード：金シャチ最終戦は見送り';
+  return '名古屋モード：最大3点・300円以内・枠連/馬単/3連単除外・3連複2点以内';
 }
 
 function generateCandidates(allHorses){
@@ -2189,9 +2258,11 @@ function isTrigami(ticket, totalBet){
 // 買い目生成
 function buildTickets(recs){
   const mode = settings.mode;
-  const max = settings.maxTickets || 5;
+  const nagoya = isNagoyaRaceContext();
+  const max = nagoya ? Math.min(settings.maxTickets || 5, 3) : (settings.maxTickets || 5);
   const unit = settings.unit || 100;
-  const budget = settings.budget || 500;
+  const budget = nagoya ? Math.min(settings.budget || 500, 300) : (settings.budget || 500);
+  recs = applyNagoyaSQLCandidateFilter(recs);
   let picked = selectByMode(recs, mode, max);
 
   // 均等配分
@@ -2202,6 +2273,7 @@ function buildTickets(recs){
     picked.pop();
   }
 
+  picked = applyNagoyaSQLTicketFilter(picked);
   return picked;
 }
 
@@ -2279,16 +2351,20 @@ function renderResult(valid, rated){
 
   // 推奨買い目
   const tl = document.getElementById('ticketList');
+  const ngNote = nagoyaSQLRuleNote();
   if(!lastTickets.length){
     if(lastModeSkipTypes && lastModeSkipTypes.length){
       // v5.18.193: 券種設定オフによる見送り
       tl.innerHTML = `<div class="empty">🛑 このレースは見送りです。<br>推奨買い目にOFF設定の券種（${lastModeSkipTypes.join('・')}）が含まれるため、代替購入せず見送ります。</div>`;
     } else {
-      tl.innerHTML = '<div class="empty">推奨買い目がありません。<br>モードやEV閾値を調整してみてください。</div>';
+      tl.innerHTML = ngNote ? `<div class="empty">🛑 ${escapeHtml(ngNote)}<br>このレースは買いません。</div>` : '<div class="empty">推奨買い目がありません。<br>モードやEV閾値を調整してみてください。</div>';
     }
   } else {
     const warns = lastTickets.filter(t => isTrigami(t, totalBet));
     let html = '';
+    if(ngNote){
+      html += `<div class="url-status ok">✅ ${escapeHtml(ngNote)}</div>`;
+    }
     if(warns.length && settings.antigami){
       html += `<div class="antigami-warn">⚠️ トリガミ注意: ${warns.map(t=>t.type+t.nums.join('-')).join('、')} は的中してもトリガミになる可能性があります</div>`;
     }
@@ -9864,7 +9940,7 @@ if(horses.length === 0){
       ret += r;
     });
 
-    // v5.18.207 RisingLearningSafe:
+    // v5.18.209 NagoyaModeSetting:
     // 学習モードでは、確定済みシミュレーションの累計ROIが前回値を下回る購入は見送り扱いにする。
     // 期間横断・一発モード・全レース一括はこの精算関数を通るため、実績ベースの収支線が右肩下がりにならない。
     try{
@@ -13802,7 +13878,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.207 RisingLearningSafe';
+  window.APP_VERSION = 'v5.18.209 NagoyaModeSetting';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -14231,7 +14307,7 @@ function json(obj, status = 200) {
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.207 RisingLearningSafe';
+  window.APP_VERSION = 'v5.18.209 NagoyaModeSetting';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -14528,7 +14604,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.207 RisingLearningSafe';
+  window.APP_VERSION = 'v5.18.209 NagoyaModeSetting';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -14746,7 +14822,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.207 RisingLearningSafe';
+    window.APP_VERSION = 'v5.18.209 NagoyaModeSetting';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -15046,7 +15122,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.207 RisingLearningSafe';
+  window.APP_VERSION = 'v5.18.209 NagoyaModeSetting';
   try{
     const ver = document.querySelector('.ver');
     if(ver){
@@ -16862,7 +16938,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script>
 /* ═══════════════════════════════════════════════════════════════
-   v5.18.207 RisingLearningSafe（学習強度＋結果フィードバック）
+   v5.18.209 NagoyaModeSetting（学習強度＋結果フィードバック）
    ・学習強度を「標準／アグレッシブ」で切替可能に（設定タブ・学習カード）。
      既定はアグレッシブ。
        標準:        重みn/(n+40)、バケット採用n≥8、券種n≥15、補正×0.55〜1.60
@@ -16921,7 +16997,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   var LLABEL = '🧠 学習（精算結果から補正）';
   var LS_DATA = 'tk-learn-v1';
   var LS_ON   = 'tk-learn-enabled';
-  // v5.18.207 RisingLearningSafe: 学習強度をパラメータセットとして切替可能に
+  // v5.18.209 NagoyaModeSetting: 学習強度をパラメータセットとして切替可能に
   //   標準       … 従来どおり（SHRINK 40 / n≥8 / n≥15 / ×0.55〜1.60）
   //   アグレッシブ … 少サンプルで細かい層を早く採用し、補正の効きも強く広く
   var LS_STR = 'tk-learn-strength';
@@ -17593,7 +17669,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
   // ── 表示バージョン更新（このスクリプトが最後に実行されるためここで確定） ──
   try{
-    window.APP_VERSION = 'v5.18.207 RisingLearningSafe';
+    window.APP_VERSION = 'v5.18.209 NagoyaModeSetting';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     else document.addEventListener('DOMContentLoaded', function(){ try{ window.setAppVersionLabel(); }catch(e){} });
   }catch(e){}
@@ -17606,7 +17682,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script>
 /* ═══════════════════════════════════════════════════════════════
-   v5.18.207 RisingLearningSafe
+   v5.18.209 NagoyaModeSetting
    学習モード専用：累計回収率を下げる買い目を自動見送り。
    ・予想時：期待値ベースで、現在の累計ROIを下げる組み合わせを買わない。
    ・確定シミュレーション時：実績ベースで、累計ROIが下がるレースを投資0円扱いにする。
@@ -17707,9 +17783,9 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   }
 
   try{
-    window.APP_VERSION = 'v5.18.207 RisingLearningSafe';
+    window.APP_VERSION = 'v5.18.209 NagoyaModeSetting';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
-    document.title = 'The競馬 EV分析 v5.18.207 RisingLearningSafe';
+    document.title = 'The競馬 EV分析 v5.18.209 NagoyaModeSetting';
   }catch(e){}
   console.log('[v5.18.206] RisingLearning guard enabled');
 })();

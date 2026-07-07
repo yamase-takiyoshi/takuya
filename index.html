@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.205 AggressiveLearning</title>
+<title>The競馬 EV分析 v5.18.207 RisingLearningSafe</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.205 AggressiveLearning</span>
+    <span class="ver">v5.18.207 RisingLearningSafe</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -759,7 +759,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.203 DirectGraphLink';
+window.APP_VERSION = 'v5.18.207 RisingLearningSafe';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -9863,6 +9863,34 @@ if(horses.length === 0){
       if(isHit) hit++;
       ret += r;
     });
+
+    // v5.18.207 RisingLearningSafe:
+    // 学習モードでは、確定済みシミュレーションの累計ROIが前回値を下回る購入は見送り扱いにする。
+    // 期間横断・一発モード・全レース一括はこの精算関数を通るため、実績ベースの収支線が右肩下がりにならない。
+    try{
+      if(typeof settings !== 'undefined' && settings && settings.mode === 'learning' && hasFinish && bet > 0){
+        let st = window.tkRisingLearningState;
+        if(!st){
+          let baseBet = 0, baseRet = 0;
+          try{
+            if(Array.isArray(window.simHistory)){
+              window.simHistory.forEach(x => { baseBet += Number(x && x.bet || 0); baseRet += Number(x && x.ret || 0); });
+            }
+          }catch(e){}
+          st = window.tkRisingLearningState = { bet: baseBet, ret: baseRet, skipped: 0, accepted: 0 };
+        }
+        const beforeRoi = st.bet > 0 ? st.ret / st.bet : 1.0;
+        const afterRoi  = (st.bet + bet) > 0 ? (st.ret + ret) / (st.bet + bet) : 1.0;
+        if(afterRoi + 1e-9 < beforeRoi){
+          (tickets || []).forEach(t => { t.amount = 0; t.stake = 0; t.risingLearningSkipped = true; });
+          st.skipped = Number(st.skipped || 0) + 1;
+          return { bet: 0, ret: 0, hit: 0, profit: 0, roi: 0, count: 0, hasFinish, risingLearningSkipped: true,
+                   risingLearningReason: '累計ROI低下回避', beforeRoi: beforeRoi * 100, afterRoi: afterRoi * 100 };
+        }
+        st.bet += bet; st.ret += ret; st.accepted = Number(st.accepted || 0) + 1;
+      }
+    }catch(e){}
+
     return { bet, ret, hit, profit: ret - bet, roi: bet ? ret / bet * 100 : 0, count: tickets.length, hasFinish };
   }
 
@@ -13774,7 +13802,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.203 DirectGraphLink';
+  window.APP_VERSION = 'v5.18.207 RisingLearningSafe';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -14203,7 +14231,7 @@ function json(obj, status = 200) {
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.203 DirectGraphLink';
+  window.APP_VERSION = 'v5.18.207 RisingLearningSafe';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -14500,7 +14528,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.203 DirectGraphLink';
+  window.APP_VERSION = 'v5.18.207 RisingLearningSafe';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -14718,7 +14746,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.203 DirectGraphLink';
+    window.APP_VERSION = 'v5.18.207 RisingLearningSafe';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -15018,7 +15046,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.203 DirectGraphLink';
+  window.APP_VERSION = 'v5.18.207 RisingLearningSafe';
   try{
     const ver = document.querySelector('.ver');
     if(ver){
@@ -16834,7 +16862,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script>
 /* ═══════════════════════════════════════════════════════════════
-   v5.18.205 AggressiveLearning（学習強度＋結果フィードバック）
+   v5.18.207 RisingLearningSafe（学習強度＋結果フィードバック）
    ・学習強度を「標準／アグレッシブ」で切替可能に（設定タブ・学習カード）。
      既定はアグレッシブ。
        標準:        重みn/(n+40)、バケット採用n≥8、券種n≥15、補正×0.55〜1.60
@@ -16893,7 +16921,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   var LLABEL = '🧠 学習（精算結果から補正）';
   var LS_DATA = 'tk-learn-v1';
   var LS_ON   = 'tk-learn-enabled';
-  // v5.18.205 AggressiveLearning: 学習強度をパラメータセットとして切替可能に
+  // v5.18.207 RisingLearningSafe: 学習強度をパラメータセットとして切替可能に
   //   標準       … 従来どおり（SHRINK 40 / n≥8 / n≥15 / ×0.55〜1.60）
   //   アグレッシブ … 少サンプルで細かい層を早く採用し、補正の効きも強く広く
   var LS_STR = 'tk-learn-strength';
@@ -17565,12 +17593,125 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
   // ── 表示バージョン更新（このスクリプトが最後に実行されるためここで確定） ──
   try{
-    window.APP_VERSION = 'v5.18.205 AggressiveLearning';
+    window.APP_VERSION = 'v5.18.207 RisingLearningSafe';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     else document.addEventListener('DOMContentLoaded', function(){ try{ window.setAppVersionLabel(); }catch(e){} });
   }catch(e){}
 
-  console.log('[v5.18.205] AggressiveLearning: 学習強度=' + learnStrength() + ' / 予想時フィードバックパネル＋精算時トースト有効');
+  console.log('[v5.18.206] RisingLearning: 学習強度=' + learnStrength() + ' / 予想時フィードバックパネル＋精算時トースト有効');
+})();
+</script>
+
+
+
+<script>
+/* ═══════════════════════════════════════════════════════════════
+   v5.18.207 RisingLearningSafe
+   学習モード専用：累計回収率を下げる買い目を自動見送り。
+   ・予想時：期待値ベースで、現在の累計ROIを下げる組み合わせを買わない。
+   ・確定シミュレーション時：実績ベースで、累計ROIが下がるレースを投資0円扱いにする。
+   ═══════════════════════════════════════════════════════════════ */
+(function(){
+  'use strict';
+
+  function isLearningMode(){
+    try{ return typeof settings !== 'undefined' && settings && settings.mode === 'learning'; }catch(e){ return false; }
+  }
+  function histBase(){
+    var bet = 0, ret = 0;
+    try{
+      if(Array.isArray(window.simHistory)){
+        window.simHistory.forEach(function(x){ bet += Number(x && x.bet || 0); ret += Number(x && x.ret || 0); });
+      }
+    }catch(e){}
+    return { bet: bet, ret: ret, roi: bet > 0 ? ret / bet : 1.0 };
+  }
+  function ticketExpectedReturn(t){
+    var a = Number(t && (t.amount || t.stake) || 0);
+    var ev = Number(t && t.ev || 0);
+    if(a > 0 && ev > 0) return a * ev;
+    var p = Number(t && t.p || 0), o = Number(t && t.odds || 0);
+    return a * p * o;
+  }
+  function markMsg(msg){
+    try{
+      window.tkRisingLearningMessage = msg;
+      var fb = window.tkLearnFeedback;
+      if(fb) fb.rising = msg;
+    }catch(e){}
+  }
+
+  var originalBuildTickets = window.buildTickets || (typeof buildTickets === 'function' ? buildTickets : null);
+  if(typeof originalBuildTickets === 'function'){
+    var risingBuildTickets = function(recs){
+      var tickets = originalBuildTickets.apply(this, arguments);
+      if(!isLearningMode()) return tickets;
+      var base = histBase();
+      var curBet = base.bet, curRet = base.ret;
+      var curRoi = curBet > 0 ? curRet / curBet : 1.0;
+      var kept = [], skipped = 0;
+      (tickets || []).forEach(function(t){
+        var a = Number(t && t.amount || 0);
+        if(a <= 0) return;
+        var er = ticketExpectedReturn(t);
+        var nextRoi = (curBet + a) > 0 ? (curRet + er) / (curBet + a) : 1.0;
+        if(nextRoi + 1e-9 >= curRoi){
+          kept.push(t);
+          curBet += a; curRet += er; curRoi = nextRoi;
+        }else{
+          skipped++;
+        }
+      });
+      if(skipped){
+        markMsg('📈 RisingLearning: 累計期待ROIを下げる買い目を ' + skipped + '点見送りました。');
+      }else{
+        markMsg('📈 RisingLearning: 累計期待ROIを維持できる買い目だけを購入対象にしました。');
+      }
+      return kept;
+    };
+    window.buildTickets = risingBuildTickets;
+    try{ buildTickets = risingBuildTickets; }catch(e){}
+  }
+
+  function resetRunState(){
+    try{
+      var b = histBase();
+      window.tkRisingLearningState = { bet: b.bet, ret: b.ret, skipped: 0, accepted: 0 };
+    }catch(e){ window.tkRisingLearningState = { bet: 0, ret: 0, skipped: 0, accepted: 0 }; }
+  }
+  ['runAllRacesSimulation','runRangeVenueSimulation','runRangeVenueSimulationOneShot','runUnsettledPredictionSimulation','runSelectedRacePredictionSimulation'].forEach(function(name){
+    var fn = window[name];
+    if(typeof fn !== 'function') return;
+    window[name] = function(){
+      if(isLearningMode()) resetRunState();
+      return fn.apply(this, arguments);
+    };
+    try{ eval(name + ' = window[name]'); }catch(e){}
+  });
+
+  var rr = window.renderResult;
+  if(typeof rr === 'function'){
+    window.renderResult = function(){
+      var out = rr.apply(this, arguments);
+      try{
+        if(isLearningMode() && window.tkRisingLearningMessage){
+          var tl = document.getElementById('ticketList');
+          if(tl && !document.getElementById('risingLearningPanel')){
+            tl.insertAdjacentHTML('beforeend', '<div id="risingLearningPanel" style="margin-top:10px;padding:8px 10px;border:1px solid rgba(0,255,136,.35);border-radius:10px;background:rgba(0,255,136,.07);font-size:12px;line-height:1.6;color:#d9ffe8"><b>📈 回収率右肩上がりガード</b><br>' + String(window.tkRisingLearningMessage).replace(/[&<>]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c];}) + '<br><span style="font-size:11px;opacity:.75">現在の累計ROIを基準に、購入後の期待累計ROIが下がる買い目は自動で見送ります。</span></div>');
+          }
+        }
+      }catch(e){}
+      return out;
+    };
+    try{ renderResult = window.renderResult; }catch(e){}
+  }
+
+  try{
+    window.APP_VERSION = 'v5.18.207 RisingLearningSafe';
+    if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
+    document.title = 'The競馬 EV分析 v5.18.207 RisingLearningSafe';
+  }catch(e){}
+  console.log('[v5.18.206] RisingLearning guard enabled');
 })();
 </script>
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.214 RaceIdPrimary</title>
+<title>The競馬 EV分析 v5.18.217 ProfitabilityGuard</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.214 RaceIdPrimary</span>
+    <span class="ver">v5.18.217 ProfitabilityGuard</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -766,7 +766,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.215 HitRecovery';
+window.APP_VERSION = 'v5.18.217 ProfitabilityGuard';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -13908,7 +13908,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.215 HitRecovery';
+  window.APP_VERSION = 'v5.18.217 ProfitabilityGuard';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -14337,7 +14337,7 @@ function json(obj, status = 200) {
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.215 HitRecovery';
+  window.APP_VERSION = 'v5.18.217 ProfitabilityGuard';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -14634,7 +14634,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.215 HitRecovery';
+  window.APP_VERSION = 'v5.18.217 ProfitabilityGuard';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -14852,7 +14852,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.215 HitRecovery';
+    window.APP_VERSION = 'v5.18.217 ProfitabilityGuard';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -15152,7 +15152,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.215 HitRecovery';
+  window.APP_VERSION = 'v5.18.217 ProfitabilityGuard';
   try{
     const ver = document.querySelector('.ver');
     if(ver){
@@ -17245,6 +17245,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   if(typeof _judge === 'function'){
     window.judgeTicketHit = function(ticket, finish){
       var hit = _judge(ticket, finish);
+      try{ recordTypeProfitSample(ticket, finish, hit); }catch(e){}
       try{ recordSample(ticket, finish, hit); }catch(e){}
       return hit;
     };
@@ -17346,6 +17347,270 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   window.tkLearnMult = learnMult;         // デバッグ・検証用に公開（第4引数cls・第5引数ven省略可）
   window.tkLearnMultInfo = learnMultInfo; // v5.18.205: 適用階層つき
 
+
+  // ═══════════════════════════════════════════════════════════════
+  // v5.18.217 ProfitabilityGuard（券種の採算見込みガード）
+  //   「赤字券種を絶対買わない」ではなく、精算履歴から券種ごとの実ROIを蓄積し、
+  //   サンプルが十分あり、シュリンク後ROIが下限未満の券種だけを学習系モードで控える。
+  //   既存の的中率較正（n/sp/h）とは別に、投資額・払戻額を保持する。
+  // ═══════════════════════════════════════════════════════════════
+  var TPG_DATA  = 'tk-type-profit-guard-v1';
+  var TPG_ON    = 'tk-type-profit-guard-enabled';
+  var TPG_SCOPE = 'tk-type-profit-guard-scope';
+  var TPG_FLOOR = 'tk-type-profit-guard-floor';
+  var TPG_MIN_N = 'tk-type-profit-guard-min-n';
+  var TPG_SHRINK_N = 20;
+  var TPG_SEEN_MAX = 8000;
+  var typeProfit = loadTypeProfit();
+  var typeProfitSeenSet = null;
+  var typeProfitPending = {};
+  var typeProfitLastPending = null;
+  var typeProfitSaveTimer = null;
+
+  function loadTypeProfit(){
+    try{
+      var d = JSON.parse(localStorage.getItem(TPG_DATA) || 'null');
+      if(d && d.buckets && typeof d.buckets === 'object'){
+        return { buckets: d.buckets, seen: Array.isArray(d.seen) ? d.seen : [] };
+      }
+    }catch(e){}
+    return { buckets: {}, seen: [] };
+  }
+  function saveTypeProfit(){
+    try{
+      if(typeProfit.seen.length > TPG_SEEN_MAX) typeProfit.seen = typeProfit.seen.slice(typeProfit.seen.length - TPG_SEEN_MAX);
+      localStorage.setItem(TPG_DATA, JSON.stringify({ buckets: typeProfit.buckets, seen: typeProfit.seen, savedAt: new Date().toISOString() }));
+    }catch(e){}
+  }
+  function scheduleTypeProfitSave(){
+    clearTimeout(typeProfitSaveTimer);
+    typeProfitSaveTimer = setTimeout(function(){
+      saveTypeProfit();
+      try{ renderLearnCard(); }catch(e){}
+    }, 450);
+  }
+  function typeProfitGuardEnabled(){
+    try{ return localStorage.getItem(TPG_ON) !== '0'; }catch(e){ return true; }
+  }
+  function typeProfitScope(){
+    try{ var v = localStorage.getItem(TPG_SCOPE); if(v === 'kind_type' || v === 'venue_type') return v; }catch(e){}
+    return 'venue_type';
+  }
+  function typeProfitFloor(){
+    try{ var v = parseFloat(localStorage.getItem(TPG_FLOOR)); if(isFinite(v) && v >= 0.50 && v <= 1.50) return v; }catch(e){}
+    return 1.00;
+  }
+  function typeProfitMinN(){
+    try{ var v = parseInt(localStorage.getItem(TPG_MIN_N), 10); if(isFinite(v) && v >= 3 && v <= 200) return v; }catch(e){}
+    return 10;
+  }
+  function tpgSeenHas(k){
+    if(!typeProfitSeenSet){ typeProfitSeenSet = {}; for(var i = 0; i < typeProfit.seen.length; i++) typeProfitSeenSet[typeProfit.seen[i]] = 1; }
+    return !!typeProfitSeenSet[k];
+  }
+  function tpgSeenAdd(k){ if(!typeProfitSeenSet) tpgSeenHas(''); typeProfitSeenSet[k] = 1; typeProfit.seen.push(k); }
+  function tpgBucketKey(scope, kind, type, ven){
+    if(scope === 'V') return 'V|' + kind + '|' + (ven || '不明') + '|' + type;
+    return 'T|' + kind + '|' + type;
+  }
+  function tpgBucket(scope, kind, type, ven){
+    var k = tpgBucketKey(scope, kind, type, ven);
+    return typeProfit.buckets[k] || (typeProfit.buckets[k] = { n: 0, bet: 0, ret: 0, hit: 0 });
+  }
+  function tpgTicketSig(t){
+    var a = Number(t && (t.amount || t.stake) || 0);
+    return String(t && t.type || '') + '|' + ((t && t.nums) || []).join('-') + '|' + a;
+  }
+  function tpgEstimatePer100(t){
+    var o = Number(t && t.odds || 0);
+    if(!(o > 0)) return 0;
+    return Math.max(0, Math.round((o * 100) / 10) * 10);
+  }
+  function tpgTotalSamples(){
+    var n = 0;
+    for(var k in typeProfit.buckets){
+      if(String(k).indexOf('T|') === 0) n += Number(typeProfit.buckets[k].n || 0);
+    }
+    return n;
+  }
+
+  // 精算時に券種別の実ROIを蓄積する。的中時はまずオッズ推定で仮記録し、
+  // 直後の payoutForTicket() で実払戻が取れたら差額補正する。
+  function recordTypeProfitSample(t, finish, hit){
+    if(!learnEnabled() || !t || !t.type || !finish || finish.length < 2) return;
+    var amount = Number(t.amount || t.stake || (typeof settings !== 'undefined' && settings && settings.unit) || 100);
+    if(!(amount > 0)) return;
+    var fin = '';
+    for(var i = 0; i < Math.min(5, finish.length); i++) fin += (finish[i] && finish[i].horseNo != null ? finish[i].horseNo : '?') + ',';
+    var rid = (typeof currentRaceId !== 'undefined' && currentRaceId) ? String(currentRaceId) : '';
+    var hn = (typeof horses !== 'undefined' && horses && horses.length) ? (horses.length + ':' + (horses[0].name || '')) : '';
+    var key = 'TPG|' + rid + '|' + hn + '|' + fin + '|' + t.type + '|' + (t.nums || []).join('-') + '|' + amount;
+    if(tpgSeenHas(key)){ typeProfitLastPending = null; return; }
+    tpgSeenAdd(key);
+
+    var kind = (typeof isNAR === 'function' && isNAR()) ? 'NAR' : 'JRA';
+    var ven = activeVenueKey();
+    var keys = [tpgBucketKey('T', kind, t.type, ven), tpgBucketKey('V', kind, t.type, ven)];
+    var per100 = hit ? tpgEstimatePer100(t) : 0;
+    var ret = hit ? Math.floor(amount / 100) * per100 : 0;
+    keys.forEach(function(bk){
+      var b = typeProfit.buckets[bk] || (typeProfit.buckets[bk] = { n: 0, bet: 0, ret: 0, hit: 0 });
+      b.n += 1;
+      b.bet += amount;
+      b.ret += ret;
+      if(hit) b.hit += 1;
+    });
+    if(hit){
+      typeProfitPending[key] = { keys: keys, estRet: ret, amount: amount, sig: tpgTicketSig(t), finalized: false };
+      typeProfitLastPending = key;
+    }else{
+      typeProfitLastPending = null;
+    }
+    scheduleTypeProfitSave();
+  }
+
+  function finalizeTypeProfitReturn(t, payInfo){
+    if(!typeProfitLastPending) return;
+    var p = typeProfitPending[typeProfitLastPending];
+    if(!p || p.finalized) return;
+    if(p.sig !== tpgTicketSig(t)) return;
+    var per100 = Number(payInfo && payInfo.amount || 0);
+    if(!(per100 >= 0)) return;
+    var exactRet = Math.floor(Number(p.amount || 0) / 100) * per100;
+    var delta = exactRet - Number(p.estRet || 0);
+    if(delta){
+      (p.keys || []).forEach(function(bk){
+        var b = typeProfit.buckets[bk];
+        if(b) b.ret += delta;
+      });
+    }
+    p.finalized = true;
+    typeProfitLastPending = null;
+    scheduleTypeProfitSave();
+  }
+
+  var _payoutForTypeProfit = window.payoutForTicket;
+  if(typeof _payoutForTypeProfit === 'function'){
+    window.payoutForTicket = function(ticket, payouts){
+      var out = _payoutForTypeProfit.apply(this, arguments);
+      try{ finalizeTypeProfitReturn(ticket, out); }catch(e){}
+      return out;
+    };
+    try{ payoutForTicket = window.payoutForTicket; }catch(e){}
+  }
+
+  function typeProfitRoiInfo(kind, type, ven){
+    var minN = typeProfitMinN();
+    var scope = typeProfitScope();
+    var b = null, level = '';
+    if(scope === 'venue_type' && ven && ven !== '不明'){
+      var vb = typeProfit.buckets[tpgBucketKey('V', kind, type, ven)];
+      if(vb && vb.n >= minN){ b = vb; level = '開催場×券種'; }
+    }
+    if(!b){
+      var tb = typeProfit.buckets[tpgBucketKey('T', kind, type, ven)];
+      if(tb && tb.n >= minN){ b = tb; level = '券種'; }
+    }
+    if(!b) return { hasData: false, pass: true, level: 'サンプル不足', n: 0, roi: 1, roiAdj: 1 };
+    var roi = b.bet > 0 ? b.ret / b.bet : 0;
+    var w = b.n / (b.n + TPG_SHRINK_N);
+    var roiAdj = 1 + w * (roi - 1);
+    var floor = typeProfitFloor();
+    return {
+      hasData: true,
+      pass: roiAdj + 1e-9 >= floor,
+      level: level,
+      n: b.n,
+      bet: b.bet,
+      ret: b.ret,
+      hit: b.hit,
+      roi: roi,
+      roiAdj: roiAdj,
+      floor: floor
+    };
+  }
+  window.tkTypeProfitInfo = typeProfitRoiInfo;
+
+  function typeProfitFilterCandidates(recs, kind, ven){
+    var src = Array.isArray(recs) ? recs : [];
+    var out = [];
+    var blockedMap = {}, seenInfo = {};
+    if(!typeProfitGuardEnabled()){
+      return { enabled: false, candTotal: src.length, candPass: src.length, blockedCount: 0, blockedTypes: [], recs: src };
+    }
+    src.forEach(function(r){
+      var type = r && r.type || '不明';
+      var info = seenInfo[type] || (seenInfo[type] = typeProfitRoiInfo(kind, type, ven));
+      if(info.hasData && !info.pass){
+        blockedMap[type] = info;
+        return;
+      }
+      out.push(r);
+    });
+    var blockedTypes = Object.keys(blockedMap).map(function(type){
+      var x = blockedMap[type];
+      return { type: type, level: x.level, n: x.n, roi: x.roi, roiAdj: x.roiAdj, floor: x.floor, bet: x.bet, ret: x.ret, hit: x.hit };
+    });
+    return {
+      enabled: true,
+      scope: typeProfitScope(),
+      floor: typeProfitFloor(),
+      minN: typeProfitMinN(),
+      candTotal: src.length,
+      candPass: out.length,
+      blockedCount: src.length - out.length,
+      blockedTypes: blockedTypes,
+      recs: out
+    };
+  }
+
+  function typeProfitStatsHtml(){
+    var keys = Object.keys(typeProfit.buckets || {});
+    if(!keys.length) return '';
+    var kindType = [];
+    keys.forEach(function(k){
+      if(k.indexOf('T|') !== 0) return;
+      var b = typeProfit.buckets[k] || {};
+      var p = k.split('|');
+      var kind = p[1] || '', type = p[2] || '';
+      var roi = b.bet > 0 ? b.ret / b.bet : 0;
+      var w = Number(b.n || 0) / (Number(b.n || 0) + TPG_SHRINK_N);
+      var roiAdj = 1 + w * (roi - 1);
+      kindType.push({ kind: kind, type: type, n: Number(b.n || 0), bet: Number(b.bet || 0), ret: Number(b.ret || 0), hit: Number(b.hit || 0), roi: roi, roiAdj: roiAdj });
+    });
+    if(!kindType.length) return '';
+    kindType.sort(function(a, b){ return (a.kind + a.type).localeCompare(b.kind + b.type, 'ja'); });
+    var floor = typeProfitFloor();
+    var html = '<div style="font-weight:800;font-size:12px;margin:10px 0 3px">🧯 券種の採算見込みガード</div>';
+    html += '<div style="font-size:10px;opacity:.72;margin-bottom:3px">実ROI＝払戻÷投資。判定は n/(n+' + TPG_SHRINK_N + ') で100%へ寄せたシュリンク後ROIを使用。下限 ' + Math.round(floor * 100) + '%、最小n=' + typeProfitMinN() + '。</div>';
+    html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
+    html += '<tr style="opacity:.7"><td style="padding:2px 6px">区分</td><td style="padding:2px 6px">券種</td><td style="padding:2px 6px;text-align:right">n</td><td style="padding:2px 6px;text-align:right">的中</td><td style="padding:2px 6px;text-align:right">投資</td><td style="padding:2px 6px;text-align:right">払戻</td><td style="padding:2px 6px;text-align:right">実ROI</td><td style="padding:2px 6px;text-align:right">判定ROI</td><td style="padding:2px 6px">判定</td></tr>';
+    kindType.forEach(function(x){
+      var judge = x.n >= typeProfitMinN() ? (x.roiAdj + 1e-9 >= floor ? '通過' : '控える') : '保留';
+      var col = judge === '控える' ? 'var(--red)' : judge === '通過' ? 'var(--green)' : 'var(--muted)';
+      html += '<tr><td style="padding:2px 6px">' + esc(x.kind) + '</td><td style="padding:2px 6px">' + esc(x.type) + '</td>' +
+        '<td style="padding:2px 6px;text-align:right">' + x.n + '</td>' +
+        '<td style="padding:2px 6px;text-align:right">' + x.hit + '</td>' +
+        '<td style="padding:2px 6px;text-align:right">' + Math.round(x.bet).toLocaleString() + '</td>' +
+        '<td style="padding:2px 6px;text-align:right">' + Math.round(x.ret).toLocaleString() + '</td>' +
+        '<td style="padding:2px 6px;text-align:right">' + (x.roi * 100).toFixed(1) + '%</td>' +
+        '<td style="padding:2px 6px;text-align:right;font-weight:700">' + (x.roiAdj * 100).toFixed(1) + '%</td>' +
+        '<td style="padding:2px 6px;color:' + col + ';font-weight:700">' + judge + '</td></tr>';
+    });
+    html += '</table></div>';
+    return html;
+  }
+
+  window.tkTypeProfitReset = function(){
+    if(!confirm('券種の採算見込みガード用データ（' + Object.keys(typeProfit.buckets || {}).length + 'バケット）を削除します。通常の的中率学習データは残します。よろしいですか？')) return;
+    typeProfit = { buckets: {}, seen: [] };
+    typeProfitSeenSet = null;
+    typeProfitPending = {};
+    typeProfitLastPending = null;
+    saveTypeProfit();
+    try{ renderLearnCard(); }catch(e){}
+  };
+
   // ── モード登録 ─────────────────────────────
   try{
     if(typeof MODE_OPTIONS !== 'undefined' && !MODE_OPTIONS.some(function(o){ return o[0] === LMODE; })){
@@ -17367,6 +17632,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       var kind = (typeof isNAR === 'function' && isNAR()) ? 'NAR' : 'JRA';
       var cls = activeClassKey(); // 予想対象レースのクラス・組・グレード
       var ven = activeVenueKey(); // 予想対象レースの開催場（v5.18.204）
+      var typeGuard = typeProfitFilterCandidates(recs, kind, ven);
+      recs = typeGuard.recs;
       var adj = [];
       (recs || []).forEach(function(r){
         var info = learnMultInfo(kind, r.type, r.odds, cls, ven);
@@ -17410,7 +17677,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       try{
         window.tkLearnFeedback = {
           t: Date.now(), kind: kind, cls: cls, ven: ven, strength: learnStrength(),
-          candTotal: (recs || []).length, candPass: adj.length,
+          candTotal: typeGuard.candTotal, candPass: adj.length, typeGuard: typeGuard,
           items: picked.map(function(r){
             return { type: r.type, nums: (r.nums || []).join('-'), mult: r.learnAdj,
                      level: r.learnLevel, n: r.learnN, evRaw: r.evRaw, ev: r.ev };
@@ -17438,8 +17705,17 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     html += '<div style="font-size:12px;font-weight:800;margin-bottom:4px">' + title +
       '<span style="font-weight:400;font-size:10px;opacity:.7;margin-left:6px">強度: ' + esc(P.label) +
       '　対象: ' + esc(fb.ven) + '／' + esc(fb.cls) + floorNote + '　候補 ' + fb.candTotal + '点 → 通過 ' + fb.candPass + '点</span></div>';
+    if(fb.typeGuard && fb.typeGuard.enabled){
+      if(fb.typeGuard.blockedTypes && fb.typeGuard.blockedTypes.length){
+        html += '<div style="font-size:11px;margin:4px 0 6px;padding:5px 7px;border-radius:7px;background:rgba(248,113,113,.08);border:1px solid rgba(248,113,113,.22);color:#fecaca">🧯 採算見込みガード：' +
+          fb.typeGuard.blockedTypes.map(function(x){ return esc(x.type) + '（' + esc(x.level) + ' n=' + x.n + ' / 判定ROI ' + (Number(x.roiAdj || 0) * 100).toFixed(1) + '%）'; }).join('、') +
+          ' は今回控えました。</div>';
+      }else{
+        html += '<div style="font-size:10px;opacity:.65;margin:3px 0 5px">🧯 採算見込みガード：控える券種はありません。</div>';
+      }
+    }
     if(!fb.items.length){
-      html += '<div style="font-size:11px;opacity:.75">' + (isHit ? '回収フロア・的中フロアを両方満たす買い目がありませんでした（見送り）。' : '補正後EVが閾値を超える買い目がありませんでした。') + '</div>';
+      html += '<div style="font-size:11px;opacity:.75">' + (isHit ? '回収フロア・的中フロア・採算見込みを満たす買い目がありませんでした（見送り）。' : '補正後EVまたは採算見込みを満たす買い目がありませんでした。') + '</div>';
     } else {
       html += '<table style="width:100%;border-collapse:collapse;font-size:11px">';
       html += '<tr style="opacity:.7"><td style="padding:2px 4px">買い目</td>' +
@@ -17542,11 +17818,17 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       '<option value="std">標準（慎重：n≥8・×0.55〜1.60）</option>' +
       '<option value="aggr">アグレッシブ（n≥3で即補正・×0.35〜2.20）</option>' +
       '</select></div>' +
+      '<div class="settings-row"><label>採算見込みの薄い券種を控える</label><input type="checkbox" id="typeProfitEnableChk"></div>' +
+      '<div class="settings-row"><label>券種採算の判定単位</label><select id="typeProfitScopeSel"><option value="venue_type">開催場×券種（不足時は券種へフォールバック）</option><option value="kind_type">JRA/NAR×券種</option></select></div>' +
+      '<div class="settings-row"><label>採算下限ROI（%）</label><input type="number" id="typeProfitFloorInput" min="50" max="150" step="1"></div>' +
+      '<div class="settings-row"><label>判定に必要な最小サンプル数</label><input type="number" id="typeProfitMinNInput" min="3" max="200" step="1"></div>' +
+      '<div class="proxy-note" style="font-size:11px;line-height:1.6;margin:6px 0 8px">採算見込みガードは学習系モードだけで動きます。サンプル不足の券種は従来どおり通し、十分な精算履歴があり、シュリンク後ROIが下限を下回る券種だけを控えます。</div>' +
       '<div id="learnStats" style="margin-top:8px"></div>' +
       '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">' +
       '<button class="btn-sm" onclick="tkLearnExport()">📤 学習データJSON出力</button>' +
       '<button class="btn-sm" onclick="tkLearnImportPick()">📥 JSON読込</button>' +
       '<button class="btn-sm" style="border-color:rgba(248,113,113,.4);color:#fca5a5" onclick="tkLearnReset()">🗑 学習リセット</button>' +
+      '<button class="btn-sm" style="border-color:rgba(248,113,113,.32);color:#fca5a5" onclick="tkTypeProfitReset()">🧯 券種採算データリセット</button>' +
       '</div>' +
       '<input type="file" id="learnImportFile" accept="application/json,.json" style="display:none">';
     modeCard.parentNode.insertBefore(card, modeCard.nextSibling);
@@ -17562,6 +17844,36 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       try{ localStorage.setItem(LS_STR, sel.value); }catch(e){}
       renderLearnCard(); // 表示中の係数・注記を新パラメータで再計算
     };
+    var tpgChk = card.querySelector('#typeProfitEnableChk');
+    if(tpgChk){
+      tpgChk.checked = typeProfitGuardEnabled();
+      tpgChk.onchange = function(){ try{ localStorage.setItem(TPG_ON, tpgChk.checked ? '1' : '0'); }catch(e){} renderLearnCard(); };
+    }
+    var tpgScope = card.querySelector('#typeProfitScopeSel');
+    if(tpgScope){
+      tpgScope.value = typeProfitScope();
+      tpgScope.onchange = function(){ try{ localStorage.setItem(TPG_SCOPE, tpgScope.value); }catch(e){} renderLearnCard(); };
+    }
+    var tpgFloor = card.querySelector('#typeProfitFloorInput');
+    if(tpgFloor){
+      tpgFloor.value = Math.round(typeProfitFloor() * 100);
+      tpgFloor.onchange = function(){
+        var v = Math.max(50, Math.min(150, Number(tpgFloor.value || 100)));
+        tpgFloor.value = v;
+        try{ localStorage.setItem(TPG_FLOOR, String(v / 100)); }catch(e){}
+        renderLearnCard();
+      };
+    }
+    var tpgMin = card.querySelector('#typeProfitMinNInput');
+    if(tpgMin){
+      tpgMin.value = typeProfitMinN();
+      tpgMin.onchange = function(){
+        var v = Math.max(3, Math.min(200, parseInt(tpgMin.value || 10, 10)));
+        tpgMin.value = v;
+        try{ localStorage.setItem(TPG_MIN_N, String(v)); }catch(e){}
+        renderLearnCard();
+      };
+    }
     var fileEl = card.querySelector('#learnImportFile');
     fileEl.addEventListener('change', function(){
       var f = fileEl.files && fileEl.files[0];
@@ -17573,6 +17885,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
           if(!d || typeof d.buckets !== 'object') throw new Error('buckets がありません');
           var mig = migrateBuckets(d.buckets); // 旧形式キーも自動移行
           learn = { buckets: mig.buckets, seen: Array.isArray(d.seen) ? d.seen : [] };
+          if(d.typeProfit && d.typeProfit.buckets){
+            typeProfit = { buckets: d.typeProfit.buckets, seen: Array.isArray(d.typeProfit.seen) ? d.typeProfit.seen : [] };
+            typeProfitSeenSet = null;
+            saveTypeProfit();
+          }
           seenSet = null;
           invalidateAgg();
           saveLearn();
@@ -17627,7 +17944,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       v.n += b.n; v.sp += b.sp; v.h += b.h;
       totalN += b.n;
     }
-    if(!totalN){
+    if(!totalN && !tpgTotalSamples()){
       el.innerHTML = '<div class="empty" style="padding:10px;font-size:12px">まだ学習データがありません。精算（シミュレーション含む）を行うと自動で蓄積されます。</div>';
       return;
     }
@@ -17671,12 +17988,13 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     });
     var Pf = lp();
     html += '<div style="font-size:10px;opacity:.6;margin-top:4px">較正係数＝実的中数÷推定確率合計。1超＝推定が控えめだったカテゴリ。現在の学習強度: <b>' + esc(Pf.label) + '</b>（重みn/(n+' + Pf.SHRINK_N + ')・補正範囲×' + Pf.LO.toFixed(2) + '〜' + Pf.HI.toFixed(2) + '）。学習モードのEV補正は「開催場×クラス(組込み)×オッズ帯 → 開催場×クラス×オッズ帯 → 開催場×オッズ帯（各n≥' + Pf.MIN_BUCKET_N + '）→ クラス(組込み)×オッズ帯 → クラス×オッズ帯 → オッズ帯別（各n≥' + Pf.MIN_BUCKET_N + '）→ 券種別（n≥' + Pf.MIN_TYPE_N + '）→ 補正なし」の順で適用。旧バージョンの蓄積データはクラス・開催場「不明」として広い集計に寄与します。</div>';
+    html += typeProfitStatsHtml();
     el.innerHTML = html;
   }
 
   window.tkLearnExport = function(){
     try{
-      var json = JSON.stringify({ buckets: learn.buckets, seen: learn.seen, exportedAt: new Date().toISOString(), version: window.APP_VERSION || '' }, null, 2);
+      var json = JSON.stringify({ buckets: learn.buckets, seen: learn.seen, typeProfit: { buckets: typeProfit.buckets, seen: typeProfit.seen }, exportedAt: new Date().toISOString(), version: window.APP_VERSION || '' }, null, 2);
       var name = 'keiba-learn_' + new Date().toISOString().slice(0, 10) + '.json';
       if(typeof askNameAndSave === 'function'){
         askNameAndSave(name, function(){ return json; }, function(){});
@@ -17703,7 +18021,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   };
 
   // ═══════════════════════════════════════════════════════════════
-  // v5.18.215 HitRecovery（高的中×回収底上げモード）
+  // v5.18.217 ProfitabilityGuard（高的中×回収底上げモード）
   //   既存の学習バケット（n=試行 / sp=推定確率合計 / h=的中数）をそのまま流用。
   //   ・回収フロア：学習補正後EV(=ev×補正) が下限以上（既定110%）
   //   ・的中フロア：学習補正後の的中確率 が下限以上（既定40%）
@@ -17777,6 +18095,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       var kind = (typeof isNAR === 'function' && isNAR()) ? 'NAR' : 'JRA';
       var cls = activeClassKey();
       var ven = activeVenueKey();
+      var typeGuard = typeProfitFilterCandidates(recs, kind, ven);
+      recs = typeGuard.recs;
       var FLOOR = hitFloor(), PMIN = hitPmin();
       var minN = lp().MIN_BUCKET_N;
       var adj = [];
@@ -17816,7 +18136,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         window.tkLearnFeedback = {
           t: Date.now(), hitMode: true, floor: FLOOR, pmin: PMIN,
           kind: kind, cls: cls, ven: ven, strength: learnStrength(),
-          candTotal: (recs || []).length, candPass: adj.length,
+          candTotal: typeGuard.candTotal, candPass: adj.length, typeGuard: typeGuard,
           items: picked.map(function(r){
             return { type: r.type, nums: (r.nums || []).join('-'), mult: r.learnAdj,
                      level: r.learnLevel, n: r.learnN, evRaw: r.evRaw, ev: r.ev, p: r.p };
@@ -17918,12 +18238,12 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
   // ── 表示バージョン更新（このスクリプトが最後に実行されるためここで確定） ──
   try{
-    window.APP_VERSION = 'v5.18.215 HitRecovery';
+    window.APP_VERSION = 'v5.18.217 ProfitabilityGuard';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     else document.addEventListener('DOMContentLoaded', function(){ try{ window.setAppVersionLabel(); }catch(e){} });
   }catch(e){}
 
-  console.log('[v5.18.206] RisingLearning: 学習強度=' + learnStrength() + ' / 予想時フィードバックパネル＋精算時トースト有効');
+  console.log('[v5.18.217] ProfitabilityGuard: 学習強度=' + learnStrength() + ' / 採算見込みガード=' + (typeProfitGuardEnabled() ? 'ON' : 'OFF'));
 })();
 </script>
 
@@ -18298,13 +18618,13 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 </script>
 
 <!-- ============================================================
-     v5.18.214 RaceIdPrimary
+     v5.18.217 ProfitabilityGuard
      race_id を主キーにして、選択・取得・保存・収支履歴を同期
      ============================================================ -->
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.214 RaceIdPrimary';
+  var VERSION = 'v5.18.217 ProfitabilityGuard';
   var STORE_KEY = 'tk-raceid-primary-db';
 
   function $(id){ return document.getElementById(id); }

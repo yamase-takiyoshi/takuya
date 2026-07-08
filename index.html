@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.211 iPhoneUrlOnlyWorker</title>
+<title>The競馬 EV分析 v5.18.213 DirectBridge</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.211 iPhoneUrlOnlyWorker</span>
+    <span class="ver">v5.18.213 DirectBridge</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -766,7 +766,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.211 iPhoneUrlOnlyWorker';
+window.APP_VERSION = 'v5.18.213 DirectBridge';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -4304,6 +4304,8 @@ function looksBlockedHtml(text){
 
 // v5.18.132: ブリッジ準備フラグ(🌉)を立てる共通処理。'ready' を取りこぼしても実取得成功で立てる。
 function markBridgeReady87(){
+  // v5.18.204: 生存確認できたら「不在」判定を必ず解除（早期タイムアウトの後遺症を断つ）。
+  window.__bridgeAbsent = false;
   if(window.__NAR_BRIDGE_READY__) return;
   window.__NAR_BRIDGE_READY__ = true;
   try{ const v = document.querySelector('.ver'); if(v && !/🌉/.test(v.textContent)) v.textContent = v.textContent + ' 🌉'; }catch(e){}
@@ -9211,6 +9213,9 @@ if(horses.length === 0){
     window.addEventListener('message', function(ev){
       const d = ev && ev.data;
       if(!d || !d.__narBridge) return;
+      // v5.18.204: 種類を問わず __narBridge メッセージが届いた＝Userscript生存。
+      // 早期タイムアウトで立った不在フラグをここで解除し、セッション全体の「未検出」固定を防ぐ。
+      if(window.__bridgeAbsent === true){ window.__bridgeAbsent = false; console.log('[narBridge] 生存確認 → 不在フラグ解除'); }
       if(d.__narBridge === 'ready'){
         if(!window.__NAR_BRIDGE_READY__){
           window.__NAR_BRIDGE_READY__ = true;
@@ -9231,6 +9236,25 @@ if(horses.length === 0){
         catch(e){ clearTimeout(to); delete pending[id]; reject(e); }
       });
     };
+
+    // v5.18.213 DirectBridge: UserscriptがunsafeWindowでページwindowに直接生やした
+    // __narBridgeDirect があれば、postMessage版を捨ててそれを最優先で採用する。
+    // iPhone Safari等でpostMessageがサンドボックス境界を越えない環境でも確実に動く。
+    // Userscriptは@run-at document-startで先に走るため、この時点で既に存在するはず。
+    // 取りこぼし対策として一定時間ポーリングもする（注入が僅かに遅れる場合に備える）。
+    function adoptDirectBridge(){
+      if(typeof window.__narBridgeDirect === 'function' && window.__narBridgeHasDirect){
+        window.__narBridgeFetch = window.__narBridgeDirect;
+        if(typeof markBridgeReady87 === 'function') markBridgeReady87();
+        console.log('[narBridge] direct(unsafeWindow)経路を採用');
+        return true;
+      }
+      return false;
+    }
+    if(!adoptDirectBridge()){
+      let tries = 0;
+      const iv = setInterval(function(){ tries++; if(adoptDirectBridge() || tries >= 20) clearInterval(iv); }, 300);
+    }
   })();
 
   // NAR用の低レベル取得：ブリッジ優先、無ければワーカー。{ok,status,text()} を返す。
@@ -9940,7 +9964,7 @@ if(horses.length === 0){
       ret += r;
     });
 
-    // v5.18.211 iPhoneUrlOnlyWorker:
+    // v5.18.213 DirectBridge:
     // 学習モードでは、確定済みシミュレーションの累計ROIが前回値を下回る購入は見送り扱いにする。
     // 期間横断・一発モード・全レース一括はこの精算関数を通るため、実績ベースの収支線が右肩下がりにならない。
     try{
@@ -13878,7 +13902,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.211 iPhoneUrlOnlyWorker';
+  window.APP_VERSION = 'v5.18.213 DirectBridge';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -14307,7 +14331,7 @@ function json(obj, status = 200) {
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.211 iPhoneUrlOnlyWorker';
+  window.APP_VERSION = 'v5.18.213 DirectBridge';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -14604,7 +14628,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.211 iPhoneUrlOnlyWorker';
+  window.APP_VERSION = 'v5.18.213 DirectBridge';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -14822,7 +14846,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.211 iPhoneUrlOnlyWorker';
+    window.APP_VERSION = 'v5.18.213 DirectBridge';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -15122,7 +15146,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.211 iPhoneUrlOnlyWorker';
+  window.APP_VERSION = 'v5.18.213 DirectBridge';
   try{
     const ver = document.querySelector('.ver');
     if(ver){
@@ -16938,7 +16962,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script>
 /* ═══════════════════════════════════════════════════════════════
-   v5.18.211 iPhoneUrlOnlyWorker（学習強度＋結果フィードバック）
+   v5.18.213 DirectBridge（学習強度＋結果フィードバック）
    ・学習強度を「標準／アグレッシブ」で切替可能に（設定タブ・学習カード）。
      既定はアグレッシブ。
        標準:        重みn/(n+40)、バケット採用n≥8、券種n≥15、補正×0.55〜1.60
@@ -16997,7 +17021,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   var LLABEL = '🧠 学習（精算結果から補正）';
   var LS_DATA = 'tk-learn-v1';
   var LS_ON   = 'tk-learn-enabled';
-  // v5.18.211 iPhoneUrlOnlyWorker: 学習強度をパラメータセットとして切替可能に
+  // v5.18.213 DirectBridge: 学習強度をパラメータセットとして切替可能に
   //   標準       … 従来どおり（SHRINK 40 / n≥8 / n≥15 / ×0.55〜1.60）
   //   アグレッシブ … 少サンプルで細かい層を早く採用し、補正の効きも強く広く
   var LS_STR = 'tk-learn-strength';
@@ -17669,7 +17693,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
   // ── 表示バージョン更新（このスクリプトが最後に実行されるためここで確定） ──
   try{
-    window.APP_VERSION = 'v5.18.211 iPhoneUrlOnlyWorker';
+    window.APP_VERSION = 'v5.18.213 DirectBridge';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     else document.addEventListener('DOMContentLoaded', function(){ try{ window.setAppVersionLabel(); }catch(e){} });
   }catch(e){}
@@ -17682,7 +17706,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script>
 /* ═══════════════════════════════════════════════════════════════
-   v5.18.211 iPhoneUrlOnlyWorker
+   v5.18.213 DirectBridge
    学習モード専用：累計回収率を下げる買い目を自動見送り。
    ・予想時：期待値ベースで、現在の累計ROIを下げる組み合わせを買わない。
    ・確定シミュレーション時：実績ベースで、累計ROIが下がるレースを投資0円扱いにする。
@@ -17783,22 +17807,22 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   }
 
   try{
-    window.APP_VERSION = 'v5.18.211 iPhoneUrlOnlyWorker';
+    window.APP_VERSION = 'v5.18.213 DirectBridge';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
-    document.title = 'The競馬 EV分析 v5.18.211 iPhoneUrlOnlyWorker';
+    document.title = 'The競馬 EV分析 v5.18.213 DirectBridge';
   }catch(e){}
   console.log('[v5.18.206] RisingLearning guard enabled');
 })();
 </script>
 
 <!-- ============================================================
-     v5.18.211 iPhoneUrlOnlyWorker
+     v5.18.213 DirectBridge
      iPhone SafariでWorker呼び出しが素の workers.dev だけになる事故を防止
      ============================================================ -->
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.211 iPhoneUrlOnlyWorker';
+  var VERSION = 'v5.18.213 DirectBridge';
   function $(id){ return document.getElementById(id); }
   function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
   function cleanBase(){
@@ -17922,11 +17946,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 
 
-<!-- v5.18.211 iPhoneUrlOnlyWorker: iPhone Safari向け 最終取得経路パッチ -->
+<!-- v5.18.213 DirectBridge: iPhone Safari向け 最終取得経路パッチ -->
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.211 iPhoneUrlOnlyWorker';
+  var VERSION = 'v5.18.213 DirectBridge';
   function el(id){ return document.getElementById(id); }
   function esc211(s){ return String(s == null ? '' : s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
   function base211(){

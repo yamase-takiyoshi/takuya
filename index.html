@@ -9968,7 +9968,13 @@ if(horses.length === 0){
     // 学習モードでは、確定済みシミュレーションの累計ROIが前回値を下回る購入は見送り扱いにする。
     // 期間横断・一発モード・全レース一括はこの精算関数を通るため、実績ベースの収支線が右肩下がりにならない。
     try{
-      if(typeof settings !== 'undefined' && settings && settings.mode === 'learning' && hasFinish && bet > 0){
+      // v5.18.216 NormalLearning: 学習強度が「ノーマル」ならガードOFF（累計ROI低下でも見送りしない）。
+      let _rlGuardOff = false;
+      try{
+        if(typeof window.tkLearnGuardOff === 'function') _rlGuardOff = !!window.tkLearnGuardOff();
+        else _rlGuardOff = (localStorage.getItem('tk-learn-strength') === 'norm');
+      }catch(e){ _rlGuardOff = false; }
+      if(typeof settings !== 'undefined' && settings && settings.mode === 'learning' && !_rlGuardOff && hasFinish && bet > 0){
         let st = window.tkRisingLearningState;
         if(!st){
           let baseBet = 0, baseRet = 0;
@@ -17027,7 +17033,12 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   var LS_STR = 'tk-learn-strength';
   var LPARAMS = {
     std:  { label: '標準',         SHRINK_N: 40, MIN_BUCKET_N: 8, MIN_TYPE_N: 15, LO: 0.55, HI: 1.60 },
-    aggr: { label: 'アグレッシブ', SHRINK_N: 10, MIN_BUCKET_N: 3, MIN_TYPE_N: 5,  LO: 0.35, HI: 2.20 }
+    aggr: { label: 'アグレッシブ', SHRINK_N: 10, MIN_BUCKET_N: 3, MIN_TYPE_N: 5,  LO: 0.35, HI: 2.20 },
+    // v5.18.216 NormalLearning: 見送りを大幅に減らした素直な学習。
+    //   ・下振れ補正を弱め（LO=0.85）、少サンプルでも補正を効かせる（n≥5）。
+    //   ・回収率右肩上がりガード（累計ROIを下げる買い目/レースの自動見送り）を無効化（guardOff）。
+    //     → 選出フィルタ（補正後EV<券種閾値）以外の見送りは行わず、ほぼ全買い目を購入対象にする。
+    norm: { label: 'ノーマル',     SHRINK_N: 20, MIN_BUCKET_N: 5, MIN_TYPE_N: 10, LO: 0.85, HI: 1.60, guardOff: true }
   };
   function learnStrength(){
     try{
@@ -17037,6 +17048,12 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     return 'aggr'; // 既定はアグレッシブ
   }
   function lp(){ return LPARAMS[learnStrength()]; }
+  // v5.18.216 NormalLearning: 学習強度・パラメータ・ガード無効フラグを他ブロックからも参照できるよう公開。
+  try{
+    window.tkLearnStrength = learnStrength;
+    window.tkLearnParams   = lp;
+    window.tkLearnGuardOff = function(){ try{ var p = lp(); return !!(p && p.guardOff); }catch(e){ return false; } };
+  }catch(e){}
   var SEEN_MAX = 6000;
 
   // ── クラス・組・グレード判定 ─────────────────
@@ -17521,6 +17538,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       '</div>' +
       '<div class="settings-row"><label>精算結果を学習に記録する</label><input type="checkbox" id="learnEnableChk"></div>' +
       '<div class="settings-row"><label>学習強度</label><select id="learnStrengthSel">' +
+      '<option value="norm">ノーマル（見送り大幅減：n≥5・×0.85〜1.60・ROIガードOFF）</option>' +
       '<option value="std">標準（慎重：n≥8・×0.55〜1.60）</option>' +
       '<option value="aggr">アグレッシブ（n≥3で即補正・×0.35〜2.20）</option>' +
       '</select></div>' +
@@ -17924,6 +17942,12 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   function isLearningMode(){
     try{ return typeof settings !== 'undefined' && settings && settings.mode === 'learning'; }catch(e){ return false; }
   }
+  // v5.18.216 NormalLearning: 学習強度が「ノーマル」のときは回収率右肩上がりガードを無効化（見送りしない）。
+  function guardOff(){
+    try{ if(typeof window.tkLearnGuardOff === 'function') return !!window.tkLearnGuardOff(); }catch(e){}
+    try{ return localStorage.getItem('tk-learn-strength') === 'norm'; }catch(e){}
+    return false;
+  }
   function histBase(){
     var bet = 0, ret = 0;
     try{
@@ -17953,6 +17977,10 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     var risingBuildTickets = function(recs){
       var tickets = originalBuildTickets.apply(this, arguments);
       if(!isLearningMode()) return tickets;
+      if(guardOff()){ // ノーマル：見送りせず、全買い目を購入対象にする
+        markMsg('🟢 ノーマル学習：回収率右肩上がりガードOFF（見送りなしで全買い目を購入対象）。');
+        return tickets;
+      }
       var base = histBase();
       var curBet = base.bet, curRet = base.ret;
       var curRoi = curBet > 0 ? curRet / curBet : 1.0;
@@ -18014,11 +18042,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   }
 
   try{
-    window.APP_VERSION = 'v5.18.215 HitRecovery';
+    window.APP_VERSION = 'v5.18.216 NormalLearning';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
-    document.title = 'The競馬 EV分析 v5.18.213 DirectBridge';
+    document.title = 'The競馬 EV分析 v5.18.216 NormalLearning';
   }catch(e){}
-  console.log('[v5.18.206] RisingLearning guard enabled');
+  console.log('[v5.18.216] NormalLearning strength enabled');
 })();
 </script>
 

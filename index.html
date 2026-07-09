@@ -226,7 +226,26 @@ body{
 .reserve-meta{font-size:11px;color:var(--muted)}
 .reserve-tickets{margin-top:6px;padding:7px 8px;border-radius:8px;background:rgba(0,0,0,.16);font-family:Menlo,Consolas,monospace;font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere}
 .reserve-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
-@media(max-width:560px){.reserve-grid{grid-template-columns:1fr}.reserve-head{align-items:flex-start;flex-direction:column}}
+/* v5.18.220 LiveClockReserve: リアルタイム時計・次予約カウントダウン */
+.ra-clockbar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;border:1px solid rgba(52,211,153,.28);background:linear-gradient(135deg,rgba(6,20,16,.65),rgba(15,23,42,.5));border-radius:12px;padding:10px 12px;margin-bottom:10px}
+.ra-clock{font-family:Menlo,Consolas,monospace;font-weight:900;font-size:26px;line-height:1;letter-spacing:.5px;color:#eafff4;text-shadow:0 0 10px rgba(52,211,153,.25);font-variant-numeric:tabular-nums}
+.ra-clock .ra-sec{color:var(--green);font-size:20px}
+.ra-clock-date{font-size:11px;color:var(--muted);margin-top:3px}
+.ra-clock-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);margin-right:6px;box-shadow:0 0 6px rgba(52,211,153,.8);animation:ra-blink 1s steps(2,start) infinite;vertical-align:middle}
+.ra-next{text-align:right;min-width:0}
+.ra-next-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.ra-next-name{font-size:12px;font-weight:800;color:#d9ffe8;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:2px 0}
+.ra-next-cd{font-family:Menlo,Consolas,monospace;font-weight:900;font-size:20px;line-height:1;color:#a7f3d0;font-variant-numeric:tabular-nums}
+.ra-next.soon .ra-next-cd{color:#fde68a}
+.ra-next.imminent .ra-next-cd{color:#fca5a5;animation:ra-pulse 1s ease-in-out infinite}
+.ra-next.due .ra-next-cd{color:#fff;animation:ra-pulse .7s ease-in-out infinite}
+.ra-next-empty{font-size:12px;color:var(--muted)}
+.reserve-badge.soon{border-color:rgba(251,191,36,.45);background:rgba(251,191,36,.13);color:#fde68a}
+.reserve-badge.imminent{border-color:rgba(248,113,113,.5);background:rgba(248,113,113,.14);color:#fca5a5;animation:ra-pulse 1s ease-in-out infinite}
+.reserve-row.imminent{border-color:rgba(248,113,113,.5);background:rgba(248,113,113,.08)}
+@keyframes ra-blink{0%,49%{opacity:1}50%,100%{opacity:.25}}
+@keyframes ra-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.55;transform:scale(1.06)}}
+@media(max-width:560px){.reserve-grid{grid-template-columns:1fr}.reserve-head{align-items:flex-start;flex-direction:column}.ra-clockbar{flex-direction:column;align-items:stretch}.ra-next{text-align:left}.ra-next-name{max-width:none}}
 
 </style>
 </head>
@@ -237,7 +256,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.219 ReserveTextSettle</span>
+    <span class="ver">v5.18.220 LiveClockReserve</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -609,6 +628,17 @@ body{
       <div class="section-header">
         <h2>⏰ 予約購入補助</h2>
         <button class="btn-sm" type="button" onclick="raRenderReservations()">更新</button>
+      </div>
+      <!-- v5.18.220 LiveClockReserve: リアルタイム時計＋次予約カウントダウン -->
+      <div class="ra-clockbar" id="raClockBar">
+        <div>
+          <div class="ra-clock" id="raClock"><span class="ra-clock-dot"></span>--:--:--</div>
+          <div class="ra-clock-date" id="raClockDate"></div>
+        </div>
+        <div class="ra-next" id="raNext">
+          <div class="ra-next-label">次の予約</div>
+          <div class="ra-next-empty" id="raNextBody">予約なし</div>
+        </div>
       </div>
       <div class="reserve-grid">
         <div class="field" style="margin-bottom:0">
@@ -19078,7 +19108,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.219 ReserveTextSettle';
+  var VERSION = 'v5.18.220 LiveClockReserve';
   var KEY = 'tk-sim-reservations-v1';
   var alerted = {};
 
@@ -19175,6 +19205,48 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     if(mins >= 60) return { due:false, label:'あと' + Math.floor(mins/60) + '時間' + (mins%60) + '分' };
     return { due:false, label:'あと' + mins + '分' };
   }
+  // v5.18.220 LiveClockReserve: 1秒刻みのカウントダウン状態（時計と連動）
+  function liveState(r){
+    var d = parseLocalDate(r.reserveAt);
+    if(!d) return { due:false, label:'時刻未設定', level:'none', secs:null };
+    var diff = d.getTime() - Date.now();
+    if(diff <= 0){
+      var over = Math.floor(-diff / 1000);
+      return { due:true, level:'due', secs:0, over:over,
+               label:'🔔 時刻到来' + (over > 0 ? '（+' + fmtDur(over) + '）' : '') };
+    }
+    var secs = Math.ceil(diff / 1000);
+    var level = secs <= 60 ? 'imminent' : (secs <= 300 ? 'soon' : 'normal');
+    return { due:false, level:level, secs:secs, label:'あと ' + fmtDur(secs) };
+  }
+  // 残り秒を h:mm:ss / mm:ss / ss秒 に整形
+  function fmtDur(secs){
+    secs = Math.max(0, Math.floor(secs));
+    var h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
+    if(h > 0) return h + ':' + pad(m) + ':' + pad(s);
+    if(secs < 60) return secs + '秒';
+    return m + ':' + pad(s);
+  }
+  var beepCtx = null, lastBeepAt = 0;
+  function alertBeep(){
+    // 予約時刻の到来を音＋バイブで知らせる（通知ONのときのみ / iOSはユーザー操作後に有効）
+    var now = Date.now(); if(now - lastBeepAt < 1500) return; lastBeepAt = now;
+    try{ if(navigator.vibrate) navigator.vibrate([120, 80, 120]); }catch(e){}
+    try{
+      var AC = window.AudioContext || window.webkitAudioContext; if(!AC) return;
+      if(!beepCtx) beepCtx = new AC();
+      if(beepCtx.state === 'suspended') beepCtx.resume();
+      [0, 0.22].forEach(function(t){
+        var o = beepCtx.createOscillator(), g = beepCtx.createGain();
+        o.type = 'sine'; o.frequency.value = 880;
+        g.gain.setValueAtTime(0.0001, beepCtx.currentTime + t);
+        g.gain.exponentialRampToValueAtTime(0.28, beepCtx.currentTime + t + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, beepCtx.currentTime + t + 0.18);
+        o.connect(g); g.connect(beepCtx.destination);
+        o.start(beepCtx.currentTime + t); o.stop(beepCtx.currentTime + t + 0.2);
+      });
+    }catch(e){}
+  }
   window.raAddReservation = function(){
     try{
       var source = ($('raTicketSource') && $('raTicketSource').value) || 'sim';
@@ -19203,11 +19275,12 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     var list = load().sort(function(a,b){ return String(a.reserveAt || '').localeCompare(String(b.reserveAt || '')); });
     if(!list.length){ box.innerHTML = '<div class="empty" style="padding:12px">予約はまだありません。</div>'; return; }
     box.innerHTML = list.map(function(r){
-      var st = dueState(r);
+      var st = r.done ? { due:false, level:'none', label:'✅ 確認済み' } : liveState(r);
       var title = [r.date, r.kind, r.venue, r.raceNo].filter(Boolean).join(' ') + (r.raceName ? ' ' + r.raceName : '');
-      var cls = 'reserve-row' + (st.due ? ' due' : '') + (r.done ? ' done' : '');
-      return '<div class="'+cls+'">'
-        + '<div class="reserve-head"><div class="reserve-title">'+esc(title || r.raceId || '予約レース')+'</div><span class="reserve-badge '+(st.due?'due':'')+'">'+esc(st.label)+'</span></div>'
+      var cls = 'reserve-row' + (st.due ? ' due' : '') + (st.level === 'imminent' ? ' imminent' : '') + (r.done ? ' done' : '');
+      var badgeCls = 'reserve-badge' + (st.due ? ' due' : (st.level === 'imminent' ? ' imminent' : (st.level === 'soon' ? ' soon' : '')));
+      return '<div class="'+cls+'" data-ra-row="'+esc(r.id)+'">'
+        + '<div class="reserve-head"><div class="reserve-title">'+esc(title || r.raceId || '予約レース')+'</div><span class="'+badgeCls+'" data-ra-badge="'+esc(r.id)+'">'+esc(st.label)+'</span></div>'
         + '<div class="reserve-meta">予約時刻: '+esc(r.reserveAt || '-')+' / 合計 '+yen(r.total)+'円 / race_id '+esc(r.raceId || '')+'</div>'
         + '<div class="reserve-tickets">'+esc(ticketsText(r.tickets))+'</div>'
         + '<div class="reserve-actions">'
@@ -19235,26 +19308,92 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     if(!('Notification' in window)){ setStatus('⚠️ このブラウザは通知に対応していません。画面上の時刻到来表示を使ってください。', false); return; }
     Notification.requestPermission().then(function(p){ setStatus(p === 'granted' ? '✅ 通知を許可しました。ページを開いている間だけ通知できます。' : '⚠️ 通知は許可されませんでした。', p === 'granted'); });
   };
+  // v5.18.220: リアルタイム時計（端末ローカル時刻＝JST）。予約時刻と同じ基準で表示。
+  var WD = ['日','月','火','水','木','金','土'];
+  function updateClock(){
+    var el = $('raClock'); if(!el) return;
+    var d = new Date();
+    el.innerHTML = '<span class="ra-clock-dot"></span>' + pad(d.getHours()) + ':' + pad(d.getMinutes())
+      + '<span class="ra-sec">:' + pad(d.getSeconds()) + '</span>';
+    var de = $('raClockDate');
+    if(de) de.textContent = d.getFullYear() + '/' + pad(d.getMonth()+1) + '/' + pad(d.getDate())
+      + '（' + WD[d.getDay()] + '）端末時刻';
+  }
+  // 次にやってくる未確認の予約を大きく表示（時計と連動してカウントダウン）
+  function updateNext(list){
+    var wrap = $('raNext'); var body = $('raNextBody'); if(!wrap || !body) return;
+    var upcoming = (list || []).filter(function(r){ return !r.done && parseLocalDate(r.reserveAt); })
+      .map(function(r){ return { r:r, st:liveState(r) }; })
+      .filter(function(x){ return x.st.secs !== null; })
+      .sort(function(a,b){
+        var ad = a.st.due ? -1 : a.st.secs, bd = b.st.due ? -1 : b.st.secs;
+        return ad - bd;
+      });
+    wrap.className = 'ra-next';
+    if(!upcoming.length){ body.className = 'ra-next-empty'; body.textContent = '予約なし'; return; }
+    var top = upcoming[0], r = top.r, st = top.st;
+    wrap.classList.add(st.due ? 'due' : st.level);
+    var name = [r.venue, r.raceNo].filter(Boolean).join(' ') + (r.raceName ? ' ' + r.raceName : '');
+    body.className = '';
+    body.innerHTML = '<div class="ra-next-name">' + esc(name || r.raceId || '予約レース') + '</div>'
+      + '<div class="ra-next-cd">' + esc(st.label) + '</div>';
+  }
+  // 各予約バッジを1秒ごとにその場で更新（全体再描画せず滑らかに）
+  function liveRefresh(list){
+    (list || []).forEach(function(r){
+      var badge = document.querySelector('[data-ra-badge="' + (window.CSS && CSS.escape ? CSS.escape(r.id) : r.id) + '"]');
+      var row = document.querySelector('[data-ra-row="' + (window.CSS && CSS.escape ? CSS.escape(r.id) : r.id) + '"]');
+      if(!badge) return;
+      if(r.done){
+        badge.textContent = '✅ 確認済み'; badge.className = 'reserve-badge';
+        if(row) row.className = 'reserve-row done';
+        return;
+      }
+      var st = liveState(r);
+      badge.textContent = st.label;
+      badge.className = 'reserve-badge' + (st.due ? ' due' : (st.level === 'imminent' ? ' imminent' : (st.level === 'soon' ? ' soon' : '')));
+      if(row) row.className = 'reserve-row' + (st.due ? ' due' : '') + (st.level === 'imminent' ? ' imminent' : '');
+    });
+  }
   function tick(){
+    updateClock();
     var notify = !!($('raNotify') && $('raNotify').checked);
     var list = load();
-    var changed = false;
+    var structural = false, fired = false;
     list.forEach(function(r){
-      var st = dueState(r);
+      var st = liveState(r);
       if(st.due && !r.done && !alerted[r.id]){
-        alerted[r.id] = true; changed = true;
-        setStatus('🔔 予約時刻です：'+esc([r.venue, r.raceNo, r.raceName].filter(Boolean).join(' '))+' / 合計 '+yen(r.total)+'円', true);
-        if(notify && 'Notification' in window && Notification.permission === 'granted'){
-          try{ new Notification('投票予約の時刻です', { body: [r.venue, r.raceNo, r.raceName, yen(r.total)+'円'].filter(Boolean).join(' ') }); }catch(e){}
+        alerted[r.id] = true; structural = true; fired = true;
+        setStatus('🔔 予約時刻です：'+esc([r.venue, r.raceNo, r.raceName].filter(Boolean).join(' '))+' / 合計 '+yen(r.total)+'円　※投票サイトで本人確認のうえ購入してください。', true);
+        if(notify){
+          alertBeep();
+          if('Notification' in window && Notification.permission === 'granted'){
+            try{ new Notification('投票予約の時刻です', { body: [r.venue, r.raceNo, r.raceName, yen(r.total)+'円'].filter(Boolean).join(' ') }); }catch(e){}
+          }
         }
       }
     });
-    if(changed || Date.now() % 60000 < 2100) raRenderReservations();
+    updateNext(list);
+    if(structural) raRenderReservations(); // 到来で行の並び／状態が変わったら描画し直す
+    else liveRefresh(list);                // 通常は各バッジだけ1秒刻みで更新
+  }
+  function unlockAudio(){
+    try{
+      var AC = window.AudioContext || window.webkitAudioContext; if(!AC) return;
+      if(!beepCtx) beepCtx = new AC();
+      if(beepCtx.state === 'suspended') beepCtx.resume();
+    }catch(e){}
   }
   function init(){
     if($('raReserveAt') && !$('raReserveAt').value) $('raReserveAt').value = nowLocalInput(10);
+    updateClock();
     raRenderReservations();
+    updateNext(load());
     setVersion();
+    // iOS Safari は最初のタップ後でないと音を鳴らせないため、任意の操作で解錠
+    var card = $('reserveAssistCard');
+    if(card) card.addEventListener('click', unlockAudio, { once:false });
+    document.addEventListener('touchstart', unlockAudio, { once:true, passive:true });
   }
   function setVersion(){
     try{
@@ -19281,7 +19420,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.219 ReserveTextSettle';
+  var VERSION = 'v5.18.220 LiveClockReserve';
   var RA_KEY = 'tk-sim-reservations-v1';
   var TEXT_KEY = 'tk-sim-reservation-settle-text-v1';
   var GROUP_KEY = 'tk-sim-reservation-settle-groups-v1';

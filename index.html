@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.217 ProfitabilityGuard</title>
+<title>The競馬 EV分析 v5.18.218 SimReserveAssist</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -209,6 +209,25 @@ body{
 .sim-payout-ok{color:var(--green);font-weight:800}.sim-payout-est{color:var(--yellow);font-weight:800}
 @media(max-width:560px){.sim-toolbar,.sim-finish-picker{grid-template-columns:1fr}}
 
+
+/* ============================================================
+   v5.18.218 Simulation Reservation Assist / 予約購入補助
+   ============================================================ */
+.reserve-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;align-items:end;margin-bottom:10px}
+.reserve-note{font-size:11px;color:var(--muted);line-height:1.65;margin-top:6px}
+.reserve-list{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.reserve-row{border:1px solid rgba(148,163,184,.22);border-radius:12px;background:rgba(15,23,42,.42);padding:10px;font-size:12px;line-height:1.55}
+.reserve-row.due{border-color:rgba(251,191,36,.55);background:rgba(251,191,36,.09)}
+.reserve-row.done{opacity:.72}
+.reserve-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.reserve-title{font-weight:900;color:#d9ffe8}
+.reserve-badge{display:inline-flex;align-items:center;gap:4px;border:1px solid rgba(0,255,136,.24);background:rgba(0,255,136,.10);color:#a7f3d0;border-radius:999px;padding:3px 8px;font-size:11px;font-weight:900;white-space:nowrap}
+.reserve-badge.due{border-color:rgba(251,191,36,.45);background:rgba(251,191,36,.13);color:#fde68a}
+.reserve-meta{font-size:11px;color:var(--muted)}
+.reserve-tickets{margin-top:6px;padding:7px 8px;border-radius:8px;background:rgba(0,0,0,.16);font-family:Menlo,Consolas,monospace;font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere}
+.reserve-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+@media(max-width:560px){.reserve-grid{grid-template-columns:1fr}.reserve-head{align-items:flex-start;flex-direction:column}}
+
 </style>
 </head>
 <body>
@@ -218,7 +237,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.217 ProfitabilityGuard</span>
+    <span class="ver">v5.18.218 SimReserveAssist</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -581,6 +600,44 @@ body{
           <div class="empty" style="padding:12px">先にEV計算を実行してください</div>
         </div>
       </div>
+    </div>
+
+
+
+    <!-- v5.18.218: シミュレーション連動 予約購入補助カード -->
+    <div class="card" style="margin-top:12px" id="reserveAssistCard">
+      <div class="section-header">
+        <h2>⏰ 予約購入補助</h2>
+        <button class="btn-sm" type="button" onclick="raRenderReservations()">更新</button>
+      </div>
+      <div class="reserve-grid">
+        <div class="field" style="margin-bottom:0">
+          <label>予約時刻（発走前の確認時刻）</label>
+          <input type="datetime-local" id="raReserveAt">
+        </div>
+        <div class="field" style="margin-bottom:0">
+          <label>予約対象</label>
+          <select id="raTicketSource">
+            <option value="sim" selected>現在のシミュレーション買い目</option>
+            <option value="recommend">推奨買い目から自動読込</option>
+          </select>
+        </div>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:8px;cursor:pointer;user-select:none">
+        <input type="checkbox" id="raNotify" checked style="width:18px;height:18px;accent-color:var(--green)">
+        <span>時刻になったら画面上で通知する（ページを開いている時のみ）</span>
+      </label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-primary" type="button" style="width:auto;flex:1;min-width:190px" onclick="raAddReservation()">⏰ この買い目を予約</button>
+        <button class="btn-sm" type="button" onclick="raRequestNotification()">🔔 通知許可</button>
+        <button class="btn-sm" type="button" onclick="raCopyAllReservations()">📋 全予約コピー</button>
+        <button class="btn-sm" type="button" onclick="raClearReservations()">🗑 全クリア</button>
+      </div>
+      <div id="raStatus" style="margin-top:8px"></div>
+      <div class="reserve-note">
+        ※これは実購入の自動実行ではなく、買い目・金額を予約保存し、指定時刻に投票ページを開きやすくする補助機能です。ログイン・金額入力・購入確定は必ず本人が投票サイトで確認してください。iPhone/iPadではバックグラウンド通知や自動ページ遷移は保証されません。
+      </div>
+      <div id="raReserveList" class="reserve-list"></div>
     </div>
 
     <div class="card" style="margin-top:12px">
@@ -18987,6 +19044,208 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 })();
 </script>
 
+
+
+<script>
+/* ============================================================
+   v5.18.218 SimReserveAssist
+   シミュレーション買い目を予約保存し、時刻到来時に手動投票確認へ誘導する。
+   実購入・ログイン・購入確定の自動操作は行わない。
+   ============================================================ */
+(function(){
+  'use strict';
+  var VERSION = 'v5.18.218 SimReserveAssist';
+  var KEY = 'tk-sim-reservations-v1';
+  var alerted = {};
+
+  function $(id){ return document.getElementById(id); }
+  function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]; }); }
+  function yen(n){ return Number(n || 0).toLocaleString(); }
+  function pad(n){ return String(n).padStart(2,'0'); }
+  function ridOf(s){ var m = String(s || '').match(/race_id=(\d{10,14})|\b(\d{10,14})\b/); return m ? (m[1] || m[2] || '') : ''; }
+  function nowLocalInput(minAdd){ var d = new Date(Date.now() + Number(minAdd || 0) * 60000); return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes()); }
+  function parseLocalDate(v){ if(!v) return null; var d = new Date(v); return isNaN(d.getTime()) ? null : d; }
+  function getKind(){ return (($('pickKind') && $('pickKind').value) || 'JRA').toUpperCase(); }
+  function getHost(kind){ return String(kind || '').toUpperCase() === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com'; }
+  function getBetUrl(kind, rid){
+    var h = getHost(kind);
+    return h + '/odds/index.html?race_id=' + encodeURIComponent(rid || '') + '&rf=race_submenu';
+  }
+  function getRaceUrl(kind, rid){
+    var h = getHost(kind);
+    return h + '/race/shutuba.html?race_id=' + encodeURIComponent(rid || '') + '&rf=race_submenu';
+  }
+  function safeOptionText(sel){ try{ return sel && sel.selectedIndex >= 0 ? (sel.options[sel.selectedIndex].textContent || '').trim() : ''; }catch(e){ return ''; } }
+  function currentMeta(){
+    var kind = getKind();
+    var rid = ridOf(($('raceUrl') && $('raceUrl').value) || '') || ridOf(($('simResultUrl') && $('simResultUrl').value) || '') || ridOf(($('raceSelect') && $('raceSelect').value) || '');
+    var raceText = (($('raceTitleBox') && $('raceTitleBox').textContent) || safeOptionText($('raceSelect')) || '').replace(/URL反映/g,'').trim();
+    var venue = safeOptionText($('pickVenue')) || '';
+    var date = ($('pickDate') && $('pickDate').value) || '';
+    var raceNo = '';
+    var m = raceText.match(/(\d{1,2})R/); if(m) raceNo = m[1] + 'R';
+    if(!raceNo && rid) raceNo = String(Number(rid.slice(-2)) || '') + 'R';
+    return { kind:kind, raceId:rid, raceName:raceText, venue:venue, date:date, raceNo:raceNo, betUrl: rid ? getBetUrl(kind, rid) : '', raceUrl: rid ? getRaceUrl(kind, rid) : '' };
+  }
+  function cloneTickets(list){
+    return (list || []).map(function(t){
+      return {
+        type: String(t.type || t.券種名 || t.ticketType || ''),
+        nums: Array.isArray(t.nums) ? t.nums.map(Number).filter(Boolean) : String(t.nums || t['買い目'] || '').split(/[-,\s]+/).map(Number).filter(Boolean),
+        amount: Number(t.amount || t.購入額 || t.bet || 0),
+        odds: Number(t.odds || 0),
+        ev: Number(t.ev || 0),
+        p: Number(t.p || 0)
+      };
+    }).filter(function(t){ return t.type && t.nums.length && t.amount > 0; });
+  }
+  function getActiveTickets(){
+    var arr = [];
+    try{ if(typeof simGetTicketsFromEdit === 'function') arr = simGetTicketsFromEdit() || []; }catch(e){}
+    try{ if((!arr || !arr.length) && typeof simTickets !== 'undefined' && Array.isArray(simTickets)) arr = simTickets; }catch(e){}
+    try{ if((!arr || !arr.length) && typeof lastTickets !== 'undefined' && Array.isArray(lastTickets)) arr = lastTickets; }catch(e){}
+    return cloneTickets(arr);
+  }
+  function load(){ try{ var a = JSON.parse(localStorage.getItem(KEY) || '[]'); return Array.isArray(a) ? a : []; }catch(e){ return []; } }
+  function save(a){ localStorage.setItem(KEY, JSON.stringify((a || []).slice(-200))); }
+  function sumTickets(tickets){ return (tickets || []).reduce(function(s,t){ return s + Number(t.amount || 0); }, 0); }
+  function ticketsText(tickets){
+    return (tickets || []).map(function(t){
+      var ev = Number(t.ev || 0) ? ' / EV' + Number(t.ev || 0).toFixed(2) : '';
+      var odds = Number(t.odds || 0) ? ' / ' + Number(t.odds || 0).toFixed(1) + '倍' : '';
+      return t.type + ' ' + (t.nums || []).join('-') + ' ' + yen(t.amount) + '円' + odds + ev;
+    }).join('\n');
+  }
+  function reservationText(r){
+    var title = [r.date, r.kind, r.venue, r.raceNo, r.raceName].filter(Boolean).join(' ');
+    return [
+      '【投票予約・本人確認用】',
+      title || 'レース未設定',
+      'race_id: ' + (r.raceId || ''),
+      '予約時刻: ' + (r.reserveAt || ''),
+      '合計: ' + yen(r.total) + '円',
+      '',
+      ticketsText(r.tickets),
+      '',
+      'netkeiba: ' + (r.betUrl || r.raceUrl || ''),
+      '※購入確定は投票サイトで本人が確認。'
+    ].join('\n');
+  }
+  function copyText(text, cb){
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(function(){ cb && cb(true); }).catch(function(){ fallback(); });
+    }else fallback();
+    function fallback(){
+      try{
+        var ta = document.createElement('textarea'); ta.value = text; ta.style.position='fixed'; ta.style.left='-9999px'; document.body.appendChild(ta); ta.focus(); ta.select(); var ok = document.execCommand('copy'); document.body.removeChild(ta); cb && cb(ok);
+      }catch(e){ cb && cb(false); }
+    }
+  }
+  function setStatus(html, ok){ var el = $('raStatus'); if(el) el.innerHTML = '<div class="url-status '+(ok?'ok':'err')+'">'+html+'</div>'; }
+  function dueState(r){
+    var d = parseLocalDate(r.reserveAt);
+    if(!d) return { due:false, label:'時刻未設定' };
+    var diff = d.getTime() - Date.now();
+    if(diff <= 0) return { due:true, label:'🔔 時刻到来' };
+    var mins = Math.ceil(diff / 60000);
+    if(mins >= 60) return { due:false, label:'あと' + Math.floor(mins/60) + '時間' + (mins%60) + '分' };
+    return { due:false, label:'あと' + mins + '分' };
+  }
+  window.raAddReservation = function(){
+    try{
+      var source = ($('raTicketSource') && $('raTicketSource').value) || 'sim';
+      if(source === 'recommend'){
+        try{ if(typeof simLoadFromRecommend === 'function') simLoadFromRecommend(); }catch(e){}
+      }
+      var tickets = getActiveTickets();
+      if(!tickets.length){
+        try{ if(typeof simAutoAddCandidates === 'function') simAutoAddCandidates(); }catch(e){}
+        tickets = getActiveTickets();
+      }
+      if(!tickets.length){ setStatus('⚠️ 予約できる買い目がありません。先にEV計算または候補自動追加を実行してください。', false); return; }
+      var meta = currentMeta();
+      if(!meta.raceId){ setStatus('⚠️ race_id が取れません。先にレースURLを反映してください。', false); return; }
+      var at = ($('raReserveAt') && $('raReserveAt').value) || nowLocalInput(10);
+      var list = load();
+      var id = meta.raceId + '-' + Date.now();
+      var r = Object.assign({}, meta, { id:id, reserveAt:at, tickets:tickets, total:sumTickets(tickets), createdAt:new Date().toISOString(), done:false });
+      list = list.filter(function(x){ return !(String(x.raceId) === String(r.raceId) && String(x.reserveAt) === String(r.reserveAt)); });
+      list.push(r); save(list); raRenderReservations();
+      setStatus('✅ '+esc(meta.raceNo || '')+' '+esc(meta.raceName || '')+' を '+yen(r.total)+'円で予約しました。', true);
+    }catch(e){ console.error(e); setStatus('❌ 予約失敗: '+esc(e.message || e), false); }
+  };
+  window.raRenderReservations = function(){
+    var box = $('raReserveList'); if(!box) return;
+    var list = load().sort(function(a,b){ return String(a.reserveAt || '').localeCompare(String(b.reserveAt || '')); });
+    if(!list.length){ box.innerHTML = '<div class="empty" style="padding:12px">予約はまだありません。</div>'; return; }
+    box.innerHTML = list.map(function(r){
+      var st = dueState(r);
+      var title = [r.date, r.kind, r.venue, r.raceNo].filter(Boolean).join(' ') + (r.raceName ? ' ' + r.raceName : '');
+      var cls = 'reserve-row' + (st.due ? ' due' : '') + (r.done ? ' done' : '');
+      return '<div class="'+cls+'">'
+        + '<div class="reserve-head"><div class="reserve-title">'+esc(title || r.raceId || '予約レース')+'</div><span class="reserve-badge '+(st.due?'due':'')+'">'+esc(st.label)+'</span></div>'
+        + '<div class="reserve-meta">予約時刻: '+esc(r.reserveAt || '-')+' / 合計 '+yen(r.total)+'円 / race_id '+esc(r.raceId || '')+'</div>'
+        + '<div class="reserve-tickets">'+esc(ticketsText(r.tickets))+'</div>'
+        + '<div class="reserve-actions">'
+        + '<button class="btn-sm" type="button" onclick="raOpenBet(\''+esc(r.id)+'\')">🎫 netkeibaを開く</button>'
+        + '<button class="btn-sm" type="button" onclick="raCopyReservation(\''+esc(r.id)+'\')">📋 コピー</button>'
+        + '<button class="btn-sm" type="button" onclick="raMarkDone(\''+esc(r.id)+'\')">✅ 確認済み</button>'
+        + '<button class="btn-sm" type="button" onclick="raRemoveReservation(\''+esc(r.id)+'\')">削除</button>'
+        + '</div></div>';
+    }).join('');
+  };
+  function findById(id){ return load().find(function(r){ return String(r.id) === String(id); }); }
+  window.raOpenBet = function(id){
+    var r = findById(id); if(!r) return;
+    var url = r.betUrl || r.raceUrl;
+    if(!url){ setStatus('⚠️ 開くURLがありません。race_idを確認してください。', false); return; }
+    window.open(url, '_blank', 'noopener');
+    copyText(reservationText(r), function(){ setStatus('✅ netkeibaを開き、買い目テキストをコピーしました。購入確定は投票サイトで本人確認してください。', true); });
+  };
+  window.raCopyReservation = function(id){ var r = findById(id); if(!r) return; copyText(reservationText(r), function(ok){ setStatus(ok ? '✅ 予約買い目をコピーしました。' : '⚠️ コピーできませんでした。', ok); }); };
+  window.raMarkDone = function(id){ var list = load().map(function(r){ if(String(r.id)===String(id)) r.done = !r.done; return r; }); save(list); raRenderReservations(); };
+  window.raRemoveReservation = function(id){ save(load().filter(function(r){ return String(r.id)!==String(id); })); raRenderReservations(); };
+  window.raClearReservations = function(){ if(confirm('予約をすべて削除しますか？')){ save([]); alerted = {}; raRenderReservations(); setStatus('✅ 予約をクリアしました。', true); } };
+  window.raCopyAllReservations = function(){ var list = load(); if(!list.length){ setStatus('⚠️ コピーする予約がありません。', false); return; } copyText(list.map(reservationText).join('\n\n------------------------------\n\n'), function(ok){ setStatus(ok ? '✅ 全予約をコピーしました。' : '⚠️ コピーできませんでした。', ok); }); };
+  window.raRequestNotification = function(){
+    if(!('Notification' in window)){ setStatus('⚠️ このブラウザは通知に対応していません。画面上の時刻到来表示を使ってください。', false); return; }
+    Notification.requestPermission().then(function(p){ setStatus(p === 'granted' ? '✅ 通知を許可しました。ページを開いている間だけ通知できます。' : '⚠️ 通知は許可されませんでした。', p === 'granted'); });
+  };
+  function tick(){
+    var notify = !!($('raNotify') && $('raNotify').checked);
+    var list = load();
+    var changed = false;
+    list.forEach(function(r){
+      var st = dueState(r);
+      if(st.due && !r.done && !alerted[r.id]){
+        alerted[r.id] = true; changed = true;
+        setStatus('🔔 予約時刻です：'+esc([r.venue, r.raceNo, r.raceName].filter(Boolean).join(' '))+' / 合計 '+yen(r.total)+'円', true);
+        if(notify && 'Notification' in window && Notification.permission === 'granted'){
+          try{ new Notification('投票予約の時刻です', { body: [r.venue, r.raceNo, r.raceName, yen(r.total)+'円'].filter(Boolean).join(' ') }); }catch(e){}
+        }
+      }
+    });
+    if(changed || Date.now() % 60000 < 2100) raRenderReservations();
+  }
+  function init(){
+    if($('raReserveAt') && !$('raReserveAt').value) $('raReserveAt').value = nowLocalInput(10);
+    raRenderReservations();
+    setVersion();
+  }
+  function setVersion(){
+    try{
+      window.APP_VERSION = VERSION;
+      var ver = document.querySelector('.ver'); if(ver) ver.textContent = VERSION;
+      document.title = 'The競馬 EV分析 ' + VERSION;
+    }catch(e){}
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
+  document.addEventListener('click', function(ev){ if(ev.target && ev.target.closest && ev.target.closest('[data-tab="sim"]')) setTimeout(raRenderReservations, 50); });
+  setInterval(tick, 1000);
+  [0, 500, 1500, 3000, 7000].forEach(function(ms){ setTimeout(setVersion, ms); });
+  console.log('[' + VERSION + '] enabled: simulation reservation assist');
+})();
+</script>
 
 </body>
 </html>

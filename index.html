@@ -243,6 +243,9 @@ body{
 .reserve-badge.soon{border-color:rgba(251,191,36,.45);background:rgba(251,191,36,.13);color:#fde68a}
 .reserve-badge.imminent{border-color:rgba(248,113,113,.5);background:rgba(248,113,113,.14);color:#fca5a5;animation:ra-pulse 1s ease-in-out infinite}
 .reserve-row.imminent{border-color:rgba(248,113,113,.5);background:rgba(248,113,113,.08)}
+.sw-chip{display:inline-flex;align-items:center;gap:5px;font-size:12px;border:1px solid var(--border);border-radius:999px;padding:5px 10px;cursor:pointer;user-select:none;background:rgba(15,23,42,.4);color:var(--text)}
+.sw-chip input{width:15px;height:15px;accent-color:var(--green);margin:0}
+.sw-chip.on{border-color:rgba(52,211,153,.5);background:rgba(52,211,153,.10);color:#d9ffe8}
 @keyframes ra-blink{0%,49%{opacity:1}50%,100%{opacity:.25}}
 @keyframes ra-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.55;transform:scale(1.06)}}
 @media(max-width:560px){.reserve-grid{grid-template-columns:1fr}.reserve-head{align-items:flex-start;flex-direction:column}.ra-clockbar{flex-direction:column;align-items:stretch}.ra-next{text-align:left}.ra-next-name{max-width:none}}
@@ -256,7 +259,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.220 LiveClockReserve</span>
+    <span class="ver">v5.18.221 VenueSweepAuto</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -621,6 +624,47 @@ body{
       </div>
     </div>
 
+
+
+    <!-- v5.18.221: 開催場スイープ自動購入補助カード -->
+    <div class="card" style="margin-top:12px" id="sweepCard">
+      <div class="section-header">
+        <h2>🏟️ 開催場スイープ自動購入</h2>
+        <span style="font-size:10px;color:var(--muted)">発走時刻を自動取得</span>
+      </div>
+      <div class="sweep-note" style="font-size:11px;color:var(--muted);line-height:1.65;margin-bottom:10px">
+        選んだ開催場（複数可）の <b>今より後のレース</b> を発走時刻順にキューへ積み、各レースの <b>発走5分前</b> に買い目を自動生成して鳴動通知します。<br>
+        ※iOS Safariは自動でページを開けないため、通知後に <b>🎫を1タップ</b>→投票サイトで <b>金額入力・購入確定は本人</b> が行ってください。無人でお金は出ません。
+      </div>
+      <div class="reserve-grid">
+        <div class="field" style="margin-bottom:0">
+          <label>開催日</label>
+          <input type="date" id="swDate">
+        </div>
+        <div class="field" style="margin-bottom:0">
+          <label>発走何分前に準備</label>
+          <select id="swBefore">
+            <option value="10">10分前</option>
+            <option value="5" selected>5分前</option>
+            <option value="3">3分前</option>
+          </select>
+        </div>
+      </div>
+      <div style="margin:6px 0 2px;display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <label style="font-size:12px;color:var(--muted)">開催場（複数選択可）</label>
+        <button class="btn-sm" type="button" onclick="swToggleAllVenues()">全選択 / 解除</button>
+      </div>
+      <div id="swVenueBox" class="sw-venue-box" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-primary" type="button" style="width:auto;flex:1;min-width:220px" onclick="swBuildSweep()">🏟️ スイープ予約を作成（今より後の全R）</button>
+        <button class="btn-sm" type="button" onclick="swPrepDueNow()">⚡ 今すぐ準備分を生成</button>
+        <button class="btn-sm" type="button" onclick="swClearSweep()">🗑 スイープ予約だけ削除</button>
+      </div>
+      <div id="swStatus" style="margin-top:8px"></div>
+      <div class="sweep-note" style="font-size:11px;color:var(--muted);line-height:1.65;margin-top:6px">
+        作成した予約は下の「⏰ 予約購入補助」リストに発走時刻順で並び、時計・カウントダウンと連動します。買い目は各レースの準備時刻に自動で入ります。
+      </div>
+    </div>
 
 
     <!-- v5.18.218: シミュレーション連動 予約購入補助カード -->
@@ -11762,6 +11806,7 @@ if(horses.length === 0){
 
   // 公開
   window.runAllRacesSimulation = runAllRacesSimulation;
+  window.asw_loadHorses = asw_loadHorses; // v5.18.221 VenueSweepAuto: スイープ自動購入から再利用
   window.runRangeVenueSimulation = runRangeVenueSimulation;
   window.runRangeVenueSimulationOneShot = runRangeVenueSimulationOneShot;
   window.importRangeVenueSimulationJSON = importRangeVenueSimulationJSON;
@@ -19281,8 +19326,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       var badgeCls = 'reserve-badge' + (st.due ? ' due' : (st.level === 'imminent' ? ' imminent' : (st.level === 'soon' ? ' soon' : '')));
       return '<div class="'+cls+'" data-ra-row="'+esc(r.id)+'">'
         + '<div class="reserve-head"><div class="reserve-title">'+esc(title || r.raceId || '予約レース')+'</div><span class="'+badgeCls+'" data-ra-badge="'+esc(r.id)+'">'+esc(st.label)+'</span></div>'
-        + '<div class="reserve-meta">予約時刻: '+esc(r.reserveAt || '-')+' / 合計 '+yen(r.total)+'円 / race_id '+esc(r.raceId || '')+'</div>'
-        + '<div class="reserve-tickets">'+esc(ticketsText(r.tickets))+'</div>'
+        + '<div class="reserve-meta">予約時刻: '+esc(r.reserveAt || '-')+(r.postTime ? ' / 発走 '+esc(r.postTime) : '')+' / 合計 '+yen(r.total)+'円 / race_id '+esc(r.raceId || '')+'</div>'
+        + '<div class="reserve-tickets">'+((r.sweep && !(r.tickets && r.tickets.length)) ? (r.prepError ? '⚠️ 買い目の自動生成に失敗: '+esc(r.prepError)+'（🎫を開いて手動で。再試行中）' : '⏳ 発走約'+((r.prepBefore!=null)?r.prepBefore:5)+'分前に買い目を自動生成します') : esc(ticketsText(r.tickets)))+'</div>'
         + '<div class="reserve-actions">'
         + '<button class="btn-sm" type="button" onclick="raOpenBet(\''+esc(r.id)+'\')">🎫 netkeibaを開く</button>'
         + '<button class="btn-sm" type="button" onclick="raCopyReservation(\''+esc(r.id)+'\')">📋 コピー</button>'
@@ -19654,6 +19699,278 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
   [0, 500, 1500, 3500, 8000].forEach(function(ms){ setTimeout(function(){ setVersion(); saveTextFromReservations(false); }, ms); });
   console.log('[' + VERSION + '] enabled: reserve text auto-save and settlement bridge');
+})();
+</script>
+<script>
+/* ============================================================
+   v5.18.221 VenueSweepAuto / 開催場スイープ自動購入補助
+   選んだ開催場（複数可）の「今より後」のレースを発走時刻順にキュー化し、
+   各レースの発走N分前に買い目を自動生成（EV計算）して鳴動通知する。
+   既存の予約ストア(tk-sim-reservations-v1)へ積むので、時計・カウントダウンと連動する。
+   ※実購入・ログイン・購入確定の自動操作は行わない（iOSは自動でページも開けない）。
+   ============================================================ */
+(function(){
+  'use strict';
+  var VERSION = 'v5.18.221 VenueSweepAuto';
+  var KEY = 'tk-sim-reservations-v1';
+  var prepping = false;
+
+  function $(id){ return document.getElementById(id); }
+  function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]; }); }
+  function yen(n){ return Number(n || 0).toLocaleString(); }
+  function pad(n){ return String(n).padStart(2,'0'); }
+  function sleep(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
+  function getKind(){ return (($('pickKind') && $('pickKind').value) || 'JRA').toUpperCase(); }
+  function host(kind){ return String(kind).toUpperCase() === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com'; }
+  function getBetUrl(kind, rid){ return host(kind) + '/odds/index.html?race_id=' + encodeURIComponent(rid) + '&rf=race_submenu'; }
+  function getRaceUrl(kind, rid){ return host(kind) + '/race/shutuba.html?race_id=' + encodeURIComponent(rid) + '&rf=race_submenu'; }
+  function venuesFor(kind){
+    try{ return kind === 'NAR' ? NAR_VENUES : JRA_VENUES; }catch(e){ return []; }
+  }
+  function vname(kind, code){ try{ return venueName(kind, code); }catch(e){ return code; } }
+  function hasProxy(){ try{ return !!(typeof settings !== 'undefined' && settings && settings.proxyUrl); }catch(e){ return false; } }
+  function todayStr(){ try{ return todayYmd(); }catch(e){ var d=new Date(); return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()); } }
+  function load(){ try{ var a = JSON.parse(localStorage.getItem(KEY) || '[]'); return Array.isArray(a) ? a : []; }catch(e){ return []; } }
+  function save(a){ try{ localStorage.setItem(KEY, JSON.stringify((a || []).slice(-200))); }catch(e){} }
+  function setStatus(html, ok){ var el = $('swStatus'); if(el) el.innerHTML = '<div class="url-status '+(ok?'ok':'err')+'">'+html+'</div>'; }
+  function reRender(){ try{ if(typeof window.raRenderReservations === 'function') window.raRenderReservations(); }catch(e){} }
+
+  function fmtLocalInput(d){ return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes()); }
+  function toDateTime(dateStr, hhmm){
+    var p = String(dateStr).split('-'), t = String(hhmm).split(':');
+    return new Date(Number(p[0]), Number(p[1])-1, Number(p[2]), Number(t[0]), Number(t[1]), 0, 0);
+  }
+  function postMs(r){ var d = r.postTime ? toDateTime(r.date, r.postTime) : null; return d ? d.getTime() : Infinity; }
+  function prepAtMs(r){ var d = r.reserveAt ? new Date(r.reserveAt) : null; return (d && !isNaN(d.getTime())) ? d.getTime() : Infinity; }
+
+  // レース一覧HTMLから race_id → "HH:MM"（発走時刻）を抽出。
+  // 一覧は開催日でスコープ済みなので、race_idは年＋開催場コードだけで判定する
+  // （JRAのrace_idは6-9桁目が開催回/日でMMDDではないため、日付照合は使わない）。
+  function parsePostTimes(html, dateStr, venueCode){
+    var map = {};
+    var d = String(dateStr).replace(/-/g,''), yyyy = d.slice(0,4), vc = String(venueCode).padStart(2,'0');
+    try{
+      var doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
+      var anchors = doc.querySelectorAll('a[href*="race_id="]');
+      anchors.forEach(function(a){
+        var m = (a.getAttribute('href') || '').match(/race_id=(\d{12})/);
+        if(!m) return;
+        var rid = m[1];
+        if(rid.slice(0,4)!==yyyy || rid.slice(4,6)!==vc) return;
+        if(map[rid]) return;
+        var box = a.closest('li,dl,dd,dt,tr,td,.RaceList_DataItem,.RaceList_Item,.RaceList_Box,[class*="RaceList_Data"],[class*="RaceList_Item"]') || a.parentElement || a;
+        var timeEl = box.querySelector && box.querySelector('.RaceList_Itemtime,[class*="Itemtime"],[class*="RaceTime"],.Race_Time');
+        var txt = (timeEl && timeEl.textContent) || (box.textContent || '');
+        var tm = String(txt).match(/([01]?\d|2[0-3])\s*[:：]\s*([0-5]\d)/);
+        if(tm) map[rid] = pad(tm[1]) + ':' + tm[2];
+      });
+    }catch(e){}
+    return map;
+  }
+
+  // ── 買い目自動生成（既存エンジンをそのまま再利用）──
+  async function prepRace(rec){
+    if(typeof window.asw_loadHorses !== 'function') throw new Error('取得エンジン未ロード');
+    if(typeof generateCandidates !== 'function' || typeof buildTickets !== 'function') throw new Error('買い目生成関数なし');
+    var prevH = null, prevRid = '', prevName = '';
+    try{ prevH = (typeof horses !== 'undefined') ? horses : null; }catch(e){}
+    try{ prevRid = (typeof currentRaceId !== 'undefined') ? currentRaceId : ''; }catch(e){}
+    try{ prevName = (typeof currentRaceName !== 'undefined') ? currentRaceName : ''; }catch(e){}
+    try{
+      var loaded = await window.asw_loadHorses(rec.kind, rec.raceId);
+      var hs = (loaded && loaded.horses) || [];
+      var valid = hs.filter(function(h){ return Number(h.num) > 0 && h.name; });
+      if(valid.length < 2) throw new Error('有効出走馬が2頭未満（未確定/発売前の可能性）');
+      var nm = (loaded && loaded.raceName) || rec.raceName || '';
+      // 開催場別自動最適化が currentRaceId を参照するため一時セット
+      try{ horses = hs; }catch(e){}
+      try{ currentRaceId = rec.raceId; }catch(e){}
+      try{ currentRaceName = nm; }catch(e){}
+      var made = generateCandidates(valid);
+      var recs = (made && made.recs) ? made.recs : [];
+      var tickets = buildTickets(recs) || [];
+      var norm = tickets.map(function(t){
+        return { type:String(t.type||''), nums:Array.isArray(t.nums)?t.nums.map(Number).filter(Boolean):[], amount:Number(t.amount||0), odds:Number(t.odds||0), ev:Number(t.ev||0), p:Number(t.p||0) };
+      }).filter(function(t){ return t.type && t.nums.length && t.amount>0; });
+      return { tickets:norm, raceName:nm };
+    } finally {
+      try{ if(prevH !== null) horses = prevH; }catch(e){}
+      try{ currentRaceId = prevRid; }catch(e){}
+      try{ currentRaceName = prevName; }catch(e){}
+    }
+  }
+  function updateRec(id, fn){
+    var list = load(), hit = false;
+    list = list.map(function(r){ if(String(r.id)===String(id)){ hit = true; fn(r); } return r; });
+    if(hit) save(list);
+    return hit;
+  }
+  function labelOf(r){ return [r.venue, r.raceNo, r.raceName].filter(Boolean).join(' ') || r.raceId; }
+  var swCtx = null, swLastBeep = 0;
+  function beep(){
+    var notify = !!($('raNotify') && $('raNotify').checked);
+    if(!notify) return;
+    var now = Date.now(); if(now - swLastBeep < 1500) return; swLastBeep = now;
+    try{ if(navigator.vibrate) navigator.vibrate([90,60,90,60,140]); }catch(e){}
+    try{
+      var AC = window.AudioContext || window.webkitAudioContext; if(!AC) return;
+      if(!swCtx) swCtx = new AC(); if(swCtx.state==='suspended') swCtx.resume();
+      [0,0.18,0.36].forEach(function(t){
+        var o=swCtx.createOscillator(), g=swCtx.createGain();
+        o.type='sine'; o.frequency.value=t<0.36?988:1318;
+        g.gain.setValueAtTime(0.0001, swCtx.currentTime+t);
+        g.gain.exponentialRampToValueAtTime(0.3, swCtx.currentTime+t+0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, swCtx.currentTime+t+0.15);
+        o.connect(g); g.connect(swCtx.destination);
+        o.start(swCtx.currentTime+t); o.stop(swCtx.currentTime+t+0.17);
+      });
+    }catch(e){}
+  }
+
+  // ── スケジューラ：準備時刻に達したスイープ予約の買い目を自動生成 ──
+  async function schedulerTick(){
+    if(prepping) return;
+    var now = Date.now();
+    var due = load().filter(function(r){
+      return r.sweep && !r.prepared && !r.done && (r.prepTries||0) < 4 && prepAtMs(r) <= now && postMs(r) > now - 6*60000;
+    }).sort(function(a,b){ return postMs(a) - postMs(b); });
+    if(!due.length) return;
+    prepping = true;
+    try{
+      for(var i=0; i<due.length; i++){
+        var rec = due[i];
+        // 直前で確認済み/削除された場合に備え最新確認
+        var fresh = load().find(function(x){ return x.id===rec.id; });
+        if(!fresh || fresh.prepared || fresh.done) continue;
+        setStatus('⏳ '+esc(labelOf(rec))+' の買い目を自動生成中…', true);
+        try{
+          var res = await prepRace(rec);
+          var tot = res.tickets.reduce(function(s,t){ return s + t.amount; }, 0);
+          updateRec(rec.id, function(r){ r.tickets=res.tickets; r.total=tot; r.prepared=true; r.prepError=''; if(res.raceName) r.raceName=res.raceName; });
+          reRender(); beep();
+          setStatus('✅ '+esc(labelOf(rec))+'：買い目 '+res.tickets.length+'点 / '+yen(tot)+'円 を用意しました。🎫を開いて金額確認のうえ購入してください。', true);
+        }catch(e){
+          updateRec(rec.id, function(r){ r.prepTries=(r.prepTries||0)+1; r.prepError=(e&&e.message)||String(e); });
+          reRender();
+          setStatus('⚠️ '+esc(labelOf(rec))+' 生成失敗: '+esc((e&&e.message)||e)+'（少し後に再試行します）', false);
+        }
+        await sleep(400);
+      }
+    } finally { prepping = false; }
+  }
+
+  // ── 開催場チェックUI ──
+  function renderVenues(){
+    var box = $('swVenueBox'); if(!box) return;
+    var kind = getKind();
+    var prev = {}; try{ box.querySelectorAll('input[type=checkbox]').forEach(function(c){ prev[c.value]=c.checked; }); }catch(e){}
+    var list = venuesFor(kind);
+    box.innerHTML = list.map(function(v){
+      var on = prev[v[0]] ? ' on' : '';
+      var chk = prev[v[0]] ? ' checked' : '';
+      return '<label class="sw-chip'+on+'"><input type="checkbox" value="'+esc(v[0])+'"'+chk+' onchange="swChipToggle(this)"> '+esc(v[1])+'</label>';
+    }).join('');
+  }
+  window.swChipToggle = function(cb){ var l = cb.closest('.sw-chip'); if(l) l.classList.toggle('on', cb.checked); };
+  window.swToggleAllVenues = function(){
+    var box = $('swVenueBox'); if(!box) return;
+    var boxes = [].slice.call(box.querySelectorAll('input[type=checkbox]'));
+    var allOn = boxes.length && boxes.every(function(c){ return c.checked; });
+    boxes.forEach(function(c){ c.checked = !allOn; var l=c.closest('.sw-chip'); if(l) l.classList.toggle('on', c.checked); });
+  };
+  function selectedVenues(){
+    var box = $('swVenueBox'); if(!box) return [];
+    return [].slice.call(box.querySelectorAll('input[type=checkbox]:checked')).map(function(c){ return c.value; });
+  }
+
+  window.swBuildSweep = async function(){
+    var kind = getKind();
+    var date = ($('swDate') && $('swDate').value) || todayStr();
+    var before = Number(($('swBefore') && $('swBefore').value) || 5);
+    var venues = selectedVenues();
+    if(!venues.length){ setStatus('⚠️ 開催場を1つ以上選んでください。', false); return; }
+    if(!hasProxy()){ setStatus('⚠️ 先に「プロキシ」タブでCloudflare Worker URLを設定してください。', false); return; }
+    var btn = null; try{ btn = document.querySelector('#sweepCard .btn-primary'); }catch(e){}
+    if(btn){ btn.disabled = true; btn.textContent = '⏳ 取得中…'; }
+    var now = Date.now(), added = 0, past = 0, noTime = 0, list = load();
+    try{
+      for(var vi=0; vi<venues.length; vi++){
+        var vc = venues[vi];
+        setStatus('📡 '+esc(vname(kind,vc))+' の発走時刻を取得中…（'+(vi+1)+'/'+venues.length+'）', true);
+        var url; try{ url = raceListUrl(kind, date, vc); }catch(e){ url = ''; }
+        var html = '';
+        try{ html = await fetchHtmlViaProxy(url); }
+        catch(e){ setStatus('⚠️ '+esc(vname(kind,vc))+' の一覧取得に失敗: '+esc((e&&e.message)||e), false); await sleep(150); continue; }
+        var times = parsePostTimes(html, date, vc);
+        var rids = Object.keys(times);
+        if(!rids.length){ noTime++; await sleep(150); continue; }
+        rids.forEach(function(rid){
+          var hhmm = times[rid];
+          var post = toDateTime(date, hhmm);
+          if(post.getTime() <= now){ past++; return; } // 今より前（発走済み）は除外
+          var reserveAt = fmtLocalInput(new Date(post.getTime() - before*60000));
+          var no = Number(rid.slice(-2)) || 0;
+          var id = rid + '-sweep';
+          var keepPrepared = null;
+          list = list.filter(function(x){ if(x.id===id){ keepPrepared = x; return false; } return true; });
+          list.push({
+            id:id, kind:kind, raceId:rid, raceName:(keepPrepared && keepPrepared.raceName) || '', venue:vname(kind,vc), date:date, raceNo:(no?no+'R':''),
+            reserveAt:reserveAt, postTime:hhmm,
+            tickets:(keepPrepared && keepPrepared.tickets) || [], total:(keepPrepared && keepPrepared.total) || 0,
+            betUrl:getBetUrl(kind,rid), raceUrl:getRaceUrl(kind,rid),
+            createdAt:new Date().toISOString(), done:false,
+            sweep:true, prepared:!!(keepPrepared && keepPrepared.prepared), prepBefore:before, prepTries:0
+          });
+          added++;
+        });
+        await sleep(150);
+      }
+      save(list);
+      reRender();
+      var msg;
+      if(added){
+        msg = '✅ '+added+'レースを発走時刻順にキュー登録しました（発走'+before+'分前に自動生成）。';
+        if(past) msg += ' ／ 発走済み'+past+'件は除外。';
+        if(noTime) msg += ' ／ 発走時刻を取得できなかった開催場'+noTime+'件はスキップ。';
+      }else{
+        msg = '⚠️ 対象レースがありません。すべて発走済みか、発走時刻を取得できませんでした（ブリッジ🌉が有効か・開催日を確認してください）。';
+      }
+      setStatus(msg, added>0);
+      schedulerTick(); // 既に準備時刻を過ぎている分は即生成
+    } finally {
+      if(btn){ btn.disabled = false; btn.textContent = '🏟️ スイープ予約を作成（今より後の全R）'; }
+    }
+  };
+
+  window.swPrepDueNow = function(){
+    var now = Date.now();
+    var due = load().filter(function(r){ return r.sweep && !r.prepared && !r.done && prepAtMs(r) <= now; });
+    if(!due.length){ setStatus('ℹ️ いま準備時刻に達しているレースはありません。', true); return; }
+    setStatus('⏳ 準備時刻に達した '+due.length+' レースの買い目を生成します…', true);
+    schedulerTick();
+  };
+  window.swClearSweep = function(){
+    var list = load(), before = list.length;
+    var kept = list.filter(function(r){ return !r.sweep; });
+    if(before === kept.length){ setStatus('ℹ️ 削除するスイープ予約はありません。', true); return; }
+    if(!confirm('スイープで作成した予約（'+(before-kept.length)+'件）を削除しますか？手動予約は残ります。')) return;
+    save(kept); reRender();
+    setStatus('✅ スイープ予約を削除しました（手動予約は保持）。', true);
+  };
+
+  function setVer(){ try{ window.APP_VERSION = VERSION; var ver=document.querySelector('.ver'); if(ver) ver.textContent=VERSION; document.title='The競馬 EV分析 '+VERSION; }catch(e){} }
+  function init(){
+    var sd = $('swDate'); if(sd && !sd.value) sd.value = todayStr();
+    renderVenues();
+    var pk = $('pickKind'); if(pk) pk.addEventListener('change', function(){ renderVenues(); });
+    // シミュレーションタブを開いた時に開催場を最新化
+    document.addEventListener('click', function(ev){ if(ev.target && ev.target.closest && ev.target.closest('[data-tab="sim"]')) setTimeout(renderVenues, 60); });
+    setVer();
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
+  [0, 600, 1800, 4000, 9000].forEach(function(ms){ setTimeout(function(){ setVer(); try{ if(!$('swVenueBox') || !$('swVenueBox').children.length) renderVenues(); }catch(e){} }, ms); });
+  setInterval(schedulerTick, 5000);
+  console.log('[' + VERSION + '] enabled: venue sweep auto-purchase assist');
 })();
 </script>
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.217 ProfitabilityGuard</title>
+<title>The競馬 EV分析 v5.18.218 NarOfficialDirect</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -218,7 +218,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.217 ProfitabilityGuard</span>
+    <span class="ver">v5.18.218 NarOfficialDirect</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -18987,6 +18987,461 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 })();
 </script>
 
+
+
+
+<!-- ============================================================
+     v5.18.218 NarOfficialDirect
+     ・NAR実取得を nar.netkeiba.com / nar.sp.netkeiba.com から切り離し、
+       地方競馬公式PC（www.keiba.go.jp）の DebaTable / RaceMarkTable へ固定。
+     ・race_id主キーは維持。URL反映/出馬表URL/結果URL/レースデータ取得を
+       keiba.go.jp 公式PC版URLで統一。
+     ・既存JRA処理は一切変更しない。
+     ============================================================ -->
+<script>
+(function(){
+  'use strict';
+  var VERSION = 'v5.18.218 NarOfficialDirect';
+  var NAR_BABA_MAP = {
+    '30':'36', // 門別
+    '35':'10', // 盛岡
+    '36':'11', // 水沢
+    '42':'18', // 浦和
+    '43':'19', // 船橋
+    '44':'20', // 大井
+    '45':'21', // 川崎
+    '46':'22', // 金沢
+    '47':'23', // 笠松
+    '48':'24', // 名古屋
+    '50':'27', // 園田
+    '51':'28', // 姫路
+    '54':'31', // 高知
+    '55':'32', // 佐賀
+    '65':'3'   // 帯広
+  };
+
+  function $(id){ return document.getElementById(id); }
+  function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+  function ridOf(v){ return (String(v || '').match(/(?:race_id=|\b)(\d{10,14})(?:\b|[^0-9])/) || [])[1] || ''; }
+  function isNarRid(rid){ return !/^(0[1-9]|10)$/.test(String(rid || '').slice(4,6)); }
+  function codeOf(rid){ return String(rid || '').slice(4,6); }
+  function raceNoOf(rid){ return Number(String(rid || '').slice(-2)) || 0; }
+  function ymdOfNarRid(rid){ rid = String(rid || ''); return rid.slice(0,4) + '-' + rid.slice(6,8) + '-' + rid.slice(8,10); }
+  function datePath(date){ var d = String(date || '').replace(/[^0-9]/g,''); return d.slice(0,4) + '%2F' + d.slice(4,6) + '%2F' + d.slice(6,8); }
+  function dateFromRidPath(rid){ return String(rid || '').slice(0,4) + '%2F' + String(rid || '').slice(6,8) + '%2F' + String(rid || '').slice(8,10); }
+  function babaOf(code){ return NAR_BABA_MAP[String(code || '').padStart(2,'0')] || ''; }
+  function venueNameOf(code){
+    try{ if(typeof venueName === 'function') return venueName('NAR', String(code).padStart(2,'0')); }catch(e){}
+    try{
+      if(typeof NAR_VENUES !== 'undefined'){
+        var hit = NAR_VENUES.find(function(v){ return v[0] === String(code).padStart(2,'0'); });
+        if(hit) return hit[1];
+      }
+    }catch(e){}
+    return String(code || '');
+  }
+  function officialRaceUrlFromRid(rid, page){
+    rid = String(rid || '').replace(/\D/g,'');
+    var code = codeOf(rid), baba = babaOf(code), no = raceNoOf(rid);
+    var type = page === 'result' ? 'RaceMarkTable' : 'DebaTable';
+    return 'https://www.keiba.go.jp/KeibaWeb/TodayRaceInfo/' + type +
+      '?k_babaCode=' + encodeURIComponent(baba) +
+      '&k_raceDate=' + dateFromRidPath(rid) +
+      '&k_raceNo=' + encodeURIComponent(no);
+  }
+  function officialRaceUrlFromMeta(date, code, no, page){
+    var rid = String(date || '').replace(/[^0-9]/g,'').slice(0,4) + String(code || '').padStart(2,'0') + String(date || '').replace(/[^0-9]/g,'').slice(4,8) + String(no || '').padStart(2,'0');
+    return officialRaceUrlFromRid(rid, page);
+  }
+  function isOfficialNarUrl(u){ return /\/KeibaWeb\/TodayRaceInfo\/(DebaTable|RaceMarkTable)\?/i.test(String(u || '')); }
+  function pageFromUrl(u){ return /RaceMarkTable|result\.html|race_result\.html/i.test(String(u || '')) ? 'result' : 'shutuba'; }
+
+  function setVersion(){
+    try{ window.APP_VERSION = VERSION; }catch(e){}
+    try{ document.title = 'The競馬 EV分析 ' + VERSION; }catch(e){}
+    try{ var v = document.querySelector('.ver'); if(v) v.textContent = VERSION; }catch(e){}
+  }
+
+  function plainFromDoc(doc){
+    var root = doc && (doc.body || doc.documentElement);
+    var t = root ? (root.innerText || root.textContent || '') : '';
+    return String(t || '')
+      .replace(/\u00a0/g,' ')
+      .replace(/[０-９]/g, function(ch){ return String.fromCharCode(ch.charCodeAt(0)-0xFEE0); })
+      .replace(/，/g, ',')
+      .replace(/\r/g,'\n')
+      .replace(/[\t ]+/g,' ')
+      .replace(/\n[ \t]+/g,'\n')
+      .replace(/[ \t]+\n/g,'\n')
+      .replace(/\n{2,}/g,'\n')
+      .trim();
+  }
+  function cleanName(s){
+    var t = String(s || '').replace(/[\s　]+/g,'').trim();
+    if(!t || t.length > 28) return '';
+    if(/^(JRA|北海道|岩手|浦和|船橋|大井|川崎|金沢|笠松|愛知|兵庫|高知|佐賀|ばんえい|牡|牝|セン|セ)$/.test(t)) return '';
+    if(/[0-9０-９]/.test(t) && !/[ァ-ヶー一-龥ぁ-ん]/.test(t)) return '';
+    if(!/[ァ-ヶー一-龥ぁ-んA-Za-z]/.test(t)) return '';
+    return t;
+  }
+  function extractRaceTitleOfficial(doc, fallbackNo){
+    var sels = ['h1','h2','h3','.raceName','.race-name','[class*="RaceName"]','[class*="raceName"]'];
+    for(var i=0;i<sels.length;i++){
+      var els = Array.prototype.slice.call(doc.querySelectorAll(sels[i]));
+      for(var j=0;j<els.length;j++){
+        var t = String(els[j].textContent || '').replace(/\s+/g,' ').trim();
+        if(t && /[ァ-ヶー一-龥ぁ-ん]/.test(t) && !/地方競馬情報サイト|出馬表|競走成績|レース情報|オッズ/.test(t) && t.length <= 60) return t;
+      }
+    }
+    var text = plainFromDoc(doc);
+    var m = text.match(/###\s*([^\n]{2,60})/) || text.match(/第\d+競走[^\n]*\n(?:[^\n]*\n){0,3}([^\n]{2,60})/);
+    if(m){
+      var r = String(m[1] || '').replace(/^#+\s*/,'').trim();
+      if(r && !/出馬表|競走成績|オッズ|払戻/.test(r)) return r;
+    }
+    return fallbackNo ? (String(fallbackNo) + 'R') : '';
+  }
+
+  function officialHorseAnchors(doc){
+    var links = Array.prototype.slice.call(doc.querySelectorAll('a'));
+    return links.filter(function(a){
+      var href = a.getAttribute('href') || '';
+      var text = cleanName(a.textContent || '');
+      if(!text) return false;
+      if(/騎手|調教師|厩舎|レース|出馬|競走|オッズ|映像|払戻|印刷|対戦|開催|馬場|騎乗|成績/.test(text)) return false;
+      return /Horse|horse|Uma|uma|k_lineage|Lineage|DataRoom|Ketto|\buma/i.test(href) || /HorseDetail|HorseProfile/i.test(href);
+    });
+  }
+
+  function parseOfficialDebaHorses(doc){
+    var text = plainFromDoc(doc);
+    var list = [];
+    var seen = {};
+
+    // DOMアンカー周辺から抽出（地方競馬公式PCの通常HTML用）
+    officialHorseAnchors(doc).forEach(function(a){
+      var name = cleanName(a.textContent || '');
+      if(!name) return;
+      var row = a.closest('tr, li, div') || a.parentElement;
+      var chunk = '';
+      var p = row;
+      for(var depth=0; p && depth<3; depth++, p=p.parentElement){
+        var tt = plainFromDoc({body:p});
+        if(tt && tt.length > chunk.length) chunk = tt;
+        if(/\([1-9][0-9]?人気\)|人気/.test(tt) && /\d{1,4}\.\d/.test(tt)) break;
+      }
+      var idx = chunk.indexOf(name);
+      var before = idx >= 0 ? chunk.slice(Math.max(0, idx-30), idx) : chunk.slice(0,60);
+      var after  = idx >= 0 ? chunk.slice(idx, idx+180) : chunk.slice(0,220);
+      var nums = before.match(/(?:^|\s)([1-8])\s+([1-9]|1[0-8])\s*$/) || chunk.match(/(?:^|\s)([1-8])\s+([1-9]|1[0-8])\s+/);
+      if(!nums) return;
+      var frame = Number(nums[1]), num = Number(nums[2]);
+      if(!(num>=1 && num<=18) || seen[num]) return;
+      var odds = 0, pop = 0;
+      var mo = after.match(/(?:^|\s)(\d{1,4}\.\d)(?:\s|\n|$)/);
+      if(mo) odds = Number(mo[1]);
+      var mp = after.match(/\(([1-9]|1[0-8])人気\)/) || after.match(/(?:^|\s)([1-9]|1[0-8])人気/);
+      if(mp) pop = Number(mp[1]);
+      seen[num] = true;
+      list.push({ frame:frame, num:num, name:name, odds:odds || 0, pop:pop || 0 });
+    });
+
+    if(list.length >= 2) return list.sort(function(a,b){ return a.num-b.num; });
+
+    // プレーンテキスト fallback。例：1 1 シャマル 川須栄 （JRA） 20.7 (5人気)
+    seen = {}; list = [];
+    var re = /(?:^|\n|\s)([1-8])\s+([1-9]|1[0-8])\s+([ァ-ヶー一-龥ぁ-んA-Za-z][^\s\n]{1,28})\s+[\s\S]{0,120}?(\d{1,4}\.\d)\s*\(([1-9]|1[0-8])人気\)/g;
+    var m;
+    while((m = re.exec(text))){
+      var frame2 = Number(m[1]), num2 = Number(m[2]);
+      var name2 = cleanName(m[3]);
+      if(!name2 || seen[num2]) continue;
+      var odds2 = Number(m[4]), pop2 = Number(m[5]);
+      seen[num2] = true;
+      list.push({ frame:frame2, num:num2, name:name2, odds:odds2 || 0, pop:pop2 || 0 });
+      if(list.length >= 18) break;
+    }
+    return list.sort(function(a,b){ return a.num-b.num; });
+  }
+
+  function parseOfficialResultHorses(doc){
+    var text = plainFromDoc(doc);
+    var list = [];
+    var seen = {};
+
+    // DOMテーブル優先。公式RaceMarkTableは「着順 枠 馬番 馬名 ... 人気 単勝オッズ」構成。
+    Array.prototype.slice.call(doc.querySelectorAll('tr')).forEach(function(tr){
+      var tt = plainFromDoc({body:tr});
+      if(!tt || !/(^|\s)(?:取消|除外|中止|失格|[1-9][0-9]?)(\s|$)/.test(tt)) return;
+      var a = Array.prototype.slice.call(tr.querySelectorAll('a')).map(function(x){ return cleanName(x.textContent || ''); }).find(Boolean);
+      var m = tt.match(/^(?:\s*)(取消|除外|中止|失格|[1-9][0-9]?)\s+([1-8])\s+([1-9]|1[0-8])\s+(.+?)\s+(?:北海道|岩手|浦和|船橋|大井|川崎|金沢|笠松|愛知|兵庫|高知|佐賀|ばんえい|JRA|ＪＲＡ|所属)/);
+      if(!m) return;
+      var num = Number(m[3]);
+      if(!(num>=1 && num<=18) || seen[num]) return;
+      var name = a || cleanName(m[4]);
+      if(!name) return;
+      var tail = tt.slice(tt.indexOf(m[4]) + m[4].length);
+      var ints = tail.match(/\s([1-9]|1[0-8])\s*$/);
+      var pop = ints ? Number(ints[1]) : 0;
+      var odds = 0;
+      var mo = tail.match(/\s(\d{1,4}\.\d)\s*$/);
+      if(mo) odds = Number(mo[1]);
+      seen[num] = true;
+      list.push({ frame:Number(m[2]), num:num, name:name, odds:odds, pop:pop });
+    });
+    if(list.length >= 2) return list.sort(function(a,b){ return a.num-b.num; });
+
+    // プレーンテキスト fallback。人気は取れるが単勝オッズが省略表示される場合があるので0許容。
+    var re = /(?:^|\n)(取消|除外|中止|失格|[1-9][0-9]?)\s+([1-8])\s+([1-9]|1[0-8])\s+([ァ-ヶー一-龥ぁ-んA-Za-z][^\s\n]{1,28})\s+(?:北海道|岩手|浦和|船橋|大井|川崎|金沢|笠松|愛知|兵庫|高知|佐賀|ばんえい|JRA|ＪＲＡ)\b[^\n]*/g;
+    var mm;
+    while((mm = re.exec(text))){
+      var n = Number(mm[3]);
+      if(!(n>=1 && n<=18) || seen[n]) continue;
+      var nm = cleanName(mm[4]);
+      if(!nm) continue;
+      var line = mm[0];
+      var mp = line.match(/\s([1-9]|1[0-8])\s*$/);
+      seen[n] = true;
+      list.push({ frame:Number(mm[2]), num:n, name:nm, odds:0, pop:mp ? Number(mp[1]) : 0 });
+    }
+    return list.sort(function(a,b){ return a.num-b.num; });
+  }
+
+  function parseOfficialFinish(doc){
+    var text = plainFromDoc(doc);
+    var out = [];
+    var re = /(?:^|\n)([1-9][0-9]?)\s+([1-8])\s+([1-9]|1[0-8])\s+([ァ-ヶー一-龥ぁ-んA-Za-z][^\s\n]{1,28})\s+(?:北海道|岩手|浦和|船橋|大井|川崎|金沢|笠松|愛知|兵庫|高知|佐賀|ばんえい|JRA|ＪＲＡ)\b[^\n]*/g;
+    var m;
+    while((m = re.exec(text))){
+      var pos = Number(m[1]), frame = Number(m[2]), num = Number(m[3]);
+      if(pos >= 1 && pos <= 30 && num >= 1 && num <= 18){
+        out.push({ pos:pos, horseNo:num, num:num, frame:frame, name:cleanName(m[4]) || m[4] });
+      }
+    }
+    out.sort(function(a,b){ return a.pos-b.pos; });
+    return out;
+  }
+
+  function parseOfficialPayouts(doc){
+    var text = plainFromDoc(doc).replace(/,/g,'');
+    var payouts = {};
+    function add(type, nums, amount){
+      if(!amount || !nums || !nums.length) return;
+      var keyNums = nums.map(Number).filter(Boolean).sort(function(a,b){ return a-b; });
+      if(type === '馬単' || type === '3連単') keyNums = nums.map(Number).filter(Boolean);
+      var key = type + ':' + keyNums.join('-');
+      payouts[key] = Number(amount);
+    }
+    var lines = text.split('\n').map(function(x){ return x.trim(); }).filter(Boolean);
+    for(var i=0;i<lines.length;i++){
+      var line = lines[i];
+      var m;
+      if((m = line.match(/^単勝\s+([1-9]|1[0-8])\s+(\d+)円/))) add('単勝',[m[1]],m[2]);
+      if((m = line.match(/^複勝\s+([1-9]|1[0-8])\s+(\d+)円/))) add('複勝',[m[1]],m[2]);
+      if((m = line.match(/^枠連(?:複)?\s+([1-8])-([1-8])\s+(\d+)円/))) add('枠連',[m[1],m[2]],m[3]);
+      if((m = line.match(/^馬連(?:複)?\s+([1-9]|1[0-8])-([1-9]|1[0-8])\s+(\d+)円/))) add('馬連',[m[1],m[2]],m[3]);
+      if((m = line.match(/^馬連単\s+([1-9]|1[0-8])-([1-9]|1[0-8])\s+(\d+)円/))) add('馬単',[m[1],m[2]],m[3]);
+      if((m = line.match(/^ワイド\s+([1-9]|1[0-8])-([1-9]|1[0-8])\s+(\d+)円/))) add('ワイド',[m[1],m[2]],m[3]);
+      if((m = line.match(/^三連複\s+([1-9]|1[0-8])-([1-9]|1[0-8])-([1-9]|1[0-8])\s+(\d+)円/))) add('3連複',[m[1],m[2],m[3]],m[4]);
+      if((m = line.match(/^三連単\s+([1-9]|1[0-8])-([1-9]|1[0-8])-([1-9]|1[0-8])\s+(\d+)円/))) add('3連単',[m[1],m[2],m[3]],m[4]);
+    }
+    return payouts;
+  }
+
+  function syncNarByRid(rid, page, keepUrl){
+    var code = codeOf(rid), no = raceNoOf(rid), date = ymdOfNarRid(rid);
+    var meta = {
+      raceId:rid, race_id:rid, primaryKey:rid, kind:'NAR', venueCode:code,
+      venueName:venueNameOf(code), raceNo:no, R:(no ? no + 'R' : ''), date:date,
+      shutubaUrl:officialRaceUrlFromRid(rid, 'shutuba'),
+      resultUrl:officialRaceUrlFromRid(rid, 'result')
+    };
+    try{ window.currentRaceId = rid; currentRaceId = rid; }catch(e){}
+    try{ window.tkCurrentRaceMeta = Object.assign({}, window.tkCurrentRaceMeta || {}, meta); }catch(e){}
+    try{ if($('pickKind')) $('pickKind').value = 'NAR'; }catch(e){}
+    try{ if($('setNar')) $('setNar').value = '1'; }catch(e){}
+    try{ if(settings){ settings.nar = true; if(typeof saveSettings === 'function') saveSettings(); } }catch(e){}
+    try{ if($('pickDate')) $('pickDate').value = date; }catch(e){}
+    try{
+      var pv = $('pickVenue');
+      if(pv){
+        var has = Array.prototype.slice.call(pv.options).some(function(o){ return o.value === code; });
+        if(!has){ var opt = document.createElement('option'); opt.value = code; opt.textContent = meta.venueName + '（race_id由来）'; pv.insertBefore(opt, pv.firstChild || null); }
+        pv.value = code;
+      }
+    }catch(e){}
+    try{ if($('raceIdPrimaryInput')) $('raceIdPrimaryInput').value = rid; }catch(e){}
+    try{ if(!keepUrl && $('raceUrl')) $('raceUrl').value = page === 'result' ? meta.resultUrl : meta.shutubaUrl; }catch(e){}
+    try{ var nb = $('narBadge'); if(nb) nb.style.display = ''; }catch(e){}
+    try{
+      var pk = $('raceIdPrimaryStatus');
+      if(pk) pk.innerHTML = '<span style="color:var(--green);font-weight:700">race_id同期済み</span>：NAR ' + esc(meta.venueName) + ' ' + esc(meta.R) + '（公式PC）';
+    }catch(e){}
+    return meta;
+  }
+
+  // URL生成を最終上書き：NARだけ地方競馬公式PCへ固定。JRAは既存関数へ委譲。
+  var prevShutuba = window.shutubaUrl || (typeof shutubaUrl === 'function' ? shutubaUrl : null);
+  window.shutubaUrl = function(kind, raceId){
+    if(String(kind).toUpperCase() === 'NAR') return officialRaceUrlFromRid(raceId, 'shutuba');
+    return prevShutuba ? prevShutuba.apply(this, arguments) : 'https://race.netkeiba.com/race/shutuba.html?race_id=' + encodeURIComponent(raceId) + '&rf=race_submenu';
+  };
+  try{ shutubaUrl = window.shutubaUrl; }catch(e){}
+
+  var prevResult = window.resultUrl || (typeof resultUrl === 'function' ? resultUrl : null);
+  window.resultUrl = function(kind, raceId){
+    if(String(kind).toUpperCase() === 'NAR') return officialRaceUrlFromRid(raceId, 'result');
+    return prevResult ? prevResult.apply(this, arguments) : 'https://race.netkeiba.com/race/result.html?race_id=' + encodeURIComponent(raceId) + '&rf=race_submenu';
+  };
+  try{ resultUrl = window.resultUrl; }catch(e){}
+
+  var prevTkApplyPrimary = window.tkApplyRaceIdPrimary;
+  window.tkApplyRaceIdPrimary = function(page){
+    var rid = (($('raceIdPrimaryInput') && $('raceIdPrimaryInput').value) || ridOf(($('raceUrl') && $('raceUrl').value) || '') || '').replace(/\D/g,'');
+    if(rid && isNarRid(rid)){
+      return syncNarByRid(rid, page === 'result' ? 'result' : 'shutuba', false);
+    }
+    return typeof prevTkApplyPrimary === 'function' ? prevTkApplyPrimary.apply(this, arguments) : null;
+  };
+
+  var prevApply = window.applySelectedRaceUrl || (typeof applySelectedRaceUrl === 'function' ? applySelectedRaceUrl : null);
+  window.applySelectedRaceUrl = function(){
+    var kind = $('pickKind') ? $('pickKind').value : 'JRA';
+    var sel = $('raceSelect');
+    var opt = sel && sel.options ? sel.options[sel.selectedIndex] : null;
+    var rid = opt ? (opt.dataset.raceId || ridOf(opt.value) || ridOf(opt.textContent)) : '';
+    if(kind === 'NAR' && rid){
+      var page = pageFromUrl(opt.value || '');
+      var meta = syncNarByRid(rid, page, false);
+      var name = opt.dataset.raceName || '';
+      try{ window.currentRaceName = name || meta.R; currentRaceName = window.currentRaceName; }catch(e){}
+      var box = $('raceTitleBox');
+      if(box){ box.style.display = 'block'; box.innerHTML = '🔑 主キー: <b>' + esc(rid) + '</b> / NAR / ' + esc(meta.venueName) + ' / ' + esc(meta.R) + (name ? ' / ' + esc(name) : ''); }
+      return;
+    }
+    if(prevApply) return prevApply.apply(this, arguments);
+  };
+  try{ applySelectedRaceUrl = window.applySelectedRaceUrl; }catch(e){}
+
+  // レース一覧生成後にNAR option valueを公式PC URLへ正規化。
+  var prevLoadRaceList = window.loadRaceList || (typeof loadRaceList === 'function' ? loadRaceList : null);
+  if(typeof prevLoadRaceList === 'function'){
+    window.loadRaceList = async function(){
+      var ret = await prevLoadRaceList.apply(this, arguments);
+      try{
+        if(($('pickKind') && $('pickKind').value) === 'NAR'){
+          var sel = $('raceSelect');
+          if(sel){
+            Array.prototype.slice.call(sel.options).forEach(function(o){
+              var rid = o.dataset.raceId || ridOf(o.value) || ridOf(o.textContent);
+              if(rid){ o.dataset.raceId = rid; o.value = officialRaceUrlFromRid(rid, 'shutuba'); }
+            });
+            if(sel.options.length) window.applySelectedRaceUrl();
+          }
+        }
+      }catch(e){ console.warn('[NarOfficialDirect] option normalize failed', e); }
+      return ret;
+    };
+    try{ loadRaceList = window.loadRaceList; }catch(e){}
+  }
+
+  // NAR実取得本体。JRAは既存fetchRaceへ委譲。
+  var prevFetchRace = window.fetchRace || (typeof fetchRace === 'function' ? fetchRace : null);
+  window.fetchRace = async function(){
+    var raw = ($('raceUrl') && $('raceUrl').value || '').trim();
+    var rid = ridOf(raw) || (($('raceIdPrimaryInput') && $('raceIdPrimaryInput').value || '').replace(/\D/g,''));
+    var kind = $('pickKind') ? $('pickKind').value : (rid && isNarRid(rid) ? 'NAR' : 'JRA');
+    if(kind !== 'NAR'){
+      return prevFetchRace ? await prevFetchRace.apply(this, arguments) : undefined;
+    }
+    if(!rid){ alert('race_idを入力してください。'); return; }
+    if(!isNarRid(rid)){ return prevFetchRace ? await prevFetchRace.apply(this, arguments) : undefined; }
+    var status = $('urlStatus');
+    var progress = $('fetchProgress');
+    if(progress) progress.classList.add('show');
+    try{
+      var page = pageFromUrl(raw);
+      var meta = syncNarByRid(rid, page, false);
+      var fetchUrl = page === 'result' ? meta.resultUrl : meta.shutubaUrl;
+      if(status) status.innerHTML = '<div class="url-status">📡 地方競馬公式PCから取得中：' + esc(meta.venueName) + ' ' + esc(meta.R) + '</div>';
+      var html = await fetchHtmlViaProxy(fetchUrl);
+      if(!html || /^\s*\{\s*"ok"\s*:\s*false/i.test(html) || /Access Denied|Just a moment|Reference\s*#|Pardon Our Interruption|akamai|Incapsula/i.test(html)){
+        throw new Error('地方競馬公式PCページを取得できませんでした（Worker応答が空または遮断ページ）');
+      }
+      var doc = new DOMParser().parseFromString(html, 'text/html');
+      var list = page === 'result' ? parseOfficialResultHorses(doc) : parseOfficialDebaHorses(doc);
+      // resultで馬一覧が薄い場合はDebaTableにも戻す。
+      if(list.length < 2 && page === 'result'){
+        var debaHtml = await fetchHtmlViaProxy(meta.shutubaUrl);
+        var debaDoc = new DOMParser().parseFromString(debaHtml, 'text/html');
+        list = parseOfficialDebaHorses(debaDoc);
+        doc = debaDoc;
+        fetchUrl = meta.shutubaUrl;
+        page = 'shutuba';
+      }
+      if(list.length < 2){
+        var txtLen = plainFromDoc(doc).length;
+        throw new Error('地方競馬公式PCから出走馬を十分に解析できませんでした（HTML文字数 ' + txtLen + ' / 解析 ' + list.length + '頭）');
+      }
+      try{ horses = list; }catch(e){ window.horses = list; }
+      var title = extractRaceTitleOfficial(doc, meta.raceNo);
+      try{ window.currentRaceName = title || meta.R; currentRaceName = window.currentRaceName; }catch(e){}
+      try{ window.currentRaceId = rid; currentRaceId = rid; }catch(e){}
+      if($('raceUrl')) $('raceUrl').value = fetchUrl;
+      try{
+        if(typeof fillNarPopularityFromOdds === 'function') horses = fillNarPopularityFromOdds(horses);
+        var oddsGot = horses.filter(function(h){ return Number(h.odds) >= 1; }).length;
+        if(oddsGot < 2 && typeof fillProvisionalOddsPopularityForPrediction === 'function') horses = fillProvisionalOddsPopularityForPrediction(horses);
+      }catch(e){}
+      if(typeof renderHorseRows === 'function') renderHorseRows();
+      var box = $('raceTitleBox');
+      if(box){ box.style.display='block'; box.innerHTML = '🔑 主キー: <b>' + esc(rid) + '</b> / NAR / ' + esc(meta.venueName) + ' / ' + esc(meta.R) + ' / ' + esc(window.currentRaceName || title || meta.R); }
+      var oddsCount = (horses || list).filter(function(h){ return Number(h.odds) >= 1; }).length;
+      var popCount = (horses || list).filter(function(h){ return Number(h.pop) >= 1; }).length;
+      var frameCount = (horses || list).filter(function(h){ return Number(h.frame) >= 1; }).length;
+      if(status) status.innerHTML = '<div class="url-status ok">✅ 地方競馬公式PCから取得成功：' + esc(window.currentRaceName || title || meta.R) + ' / ' + list.length + '頭 / 単勝オッズ ' + oddsCount + '件 / 人気 ' + popCount + '件 / 枠番 ' + frameCount + '件<br><span style="font-size:11px;opacity:.85">NAR実取得は nar.netkeiba を使わず keiba.go.jp 固定</span></div>';
+      try{
+        document.querySelectorAll('.tab-btn').forEach(function(b){ b.classList.remove('active'); });
+        var tb = document.querySelector('[data-tab="horses"]'); if(tb) tb.classList.add('active');
+        document.querySelectorAll('[id^="tab-"]').forEach(function(t){ t.style.display = 'none'; });
+        if($('tab-horses')) $('tab-horses').style.display = '';
+      }catch(e){}
+    }catch(e){
+      console.error('[NarOfficialDirect fetchRace]', e);
+      if(status) status.innerHTML = '<div class="url-status err">❌ 取得失敗: ' + esc(e && e.message ? e.message : e) + '<br><span style="font-size:11px;color:var(--muted)">NARは地方競馬公式PC（keiba.go.jp）へ固定しています。接続テストで「地方競馬公式PC」がHTTP 200か確認してください。</span></div>';
+    }finally{
+      if(progress) progress.classList.remove('show');
+    }
+  };
+  try{ fetchRace = window.fetchRace; }catch(e){}
+
+  // 公式結果ページの着順/払戻を既存シミュレーション系から使えるように公開。
+  window.tkParseOfficialNarFinish = parseOfficialFinish;
+  window.tkParseOfficialNarPayouts = parseOfficialPayouts;
+  window.tkOfficialNarUrlFromRaceId = officialRaceUrlFromRid;
+
+  // 既存の結果URL自動入力もNARは公式 RaceMarkTable にする。
+  var prevFillSim = window.fillSimResultUrl || (typeof fillSimResultUrl === 'function' ? fillSimResultUrl : null);
+  if(typeof prevFillSim === 'function'){
+    window.fillSimResultUrl = function(){
+      var rid = '';
+      try{ rid = currentRaceId || ''; }catch(e){}
+      rid = rid || ridOf(($('raceUrl') && $('raceUrl').value) || '') || ridOf(($('raceIdPrimaryInput') && $('raceIdPrimaryInput').value) || '');
+      if(rid && isNarRid(rid)){
+        if($('simResultUrl')) $('simResultUrl').value = officialRaceUrlFromRid(rid, 'result');
+        return;
+      }
+      return prevFillSim.apply(this, arguments);
+    };
+    try{ fillSimResultUrl = window.fillSimResultUrl; }catch(e){}
+  }
+
+  setVersion();
+  setTimeout(setVersion, 200);
+  setTimeout(setVersion, 1000);
+  console.log('[' + VERSION + '] NAR official PC direct fetch enabled');
+})();
+</script>
 
 </body>
 </html>

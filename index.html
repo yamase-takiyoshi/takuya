@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.219 NetkeibaKeepBridge</title>
+<title>The競馬 EV分析 v5.18.220 NetkeibaBuyLink</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -69,6 +69,18 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
 .ticket-row .info { flex: 1; font-size: 12px; }
 .ticket-row .stake { font-size: 13px; font-weight: 700; color: var(--green); }
 .antigami-warn { background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.3); border-radius: 8px; padding: 8px 10px; font-size: 12px; color: var(--red); margin-bottom: 6px; }
+/* netkeiba 購入連携（スマホ版誘導：iPhone/iPad両対応） */
+.nk-buy-note { font-size: 12px; color: var(--text); background: rgba(59,130,246,0.08); border: 1px solid rgba(59,130,246,0.28); border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; line-height: 1.55; }
+.nk-buy-btn { width: 100%; margin-bottom: 8px; text-decoration: none; }
+.nk-buy-btn2 { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+.nk-buy-list-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; font-weight: 700; color: var(--muted); margin: 4px 0 8px; }
+.nk-buy-list { display: flex; flex-direction: column; gap: 6px; }
+.nk-buy-row { display: flex; align-items: center; gap: 8px; padding: 9px 10px; background: rgba(52,211,153,0.06); border: 1px solid rgba(52,211,153,0.2); border-radius: 8px; text-decoration: none; color: var(--text); }
+.nk-buy-row:active { opacity: 0.7; }
+.nk-buy-combo { flex: 1; font-size: 14px; letter-spacing: 0.03em; font-weight: 700; }
+.nk-buy-amt { font-size: 13px; font-weight: 700; color: var(--green); white-space: nowrap; }
+.nk-buy-open { font-size: 11px; color: var(--accent); font-weight: 800; margin-left: 2px; white-space: nowrap; }
+.nk-buy-caution { font-size: 11px; color: var(--muted); margin-top: 10px; line-height: 1.55; }
 .summary-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
 .summary-item { text-align: center; padding: 10px 6px; background: var(--surface); border-radius: 8px; }
 .summary-item .val { font-size: 17px; font-weight: 800; }
@@ -218,7 +230,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.219 NetkeibaKeepBridge</span>
+    <span class="ver">v5.18.220 NetkeibaBuyLink</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -320,6 +332,11 @@ body{
     <div class="card">
       <h2>🎯 推奨買い目</h2>
       <div id="ticketList"></div>
+    </div>
+
+    <div class="card" id="netkeibaBuyCard" style="display:none">
+      <h2>🎫 netkeibaで購入</h2>
+      <div id="netkeibaBuyBody"></div>
     </div>
 
     <div class="card">
@@ -766,7 +783,7 @@ body{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.219 NetkeibaKeepBridge';
+window.APP_VERSION = 'v5.18.220 NetkeibaBuyLink';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -2405,6 +2422,127 @@ function renderResult(valid, rated){
   const betEl = document.getElementById('profitBet');
   if(betEl) betEl.value = totalBet || 0;
   renderProfitChart();
+  try{ renderNetkeibaBuy(); }catch(e){}
+}
+
+// ─── netkeiba 投票（購入）連携 v5.18.220 ───────────────────────────
+// タブレット(iPad)でもiPhoneでも購入できるよう、必ずスマホ版(sp)へ誘導する。
+//  ・iPadのSafariは既定でPC版netkeiba(race.netkeiba.com)を開くが、PC版は
+//    地方(NAR)を購入できず、レイアウトも width=1000 でタブレットでは扱いづらい。
+//  ・スマホ版(race.sp.netkeiba.com / nar.sp.netkeiba.com)は width=device-width で
+//    iPhone・iPadどちらも快適に操作でき、中央・地方どちらも購入できる。
+//  ・netkeibaはURLで買い目を自動入力できない仕様のため、券種タブへ直接誘導しつつ、
+//    買い目(券種・馬番・金額)をコピーで転記補助する。
+const NK_TYPE_PARAM = {
+  '単勝':'b1','複勝':'b1','枠連':'b3','馬連':'b4',
+  'ワイド':'b5','馬単':'b6','3連複':'b7','3連単':'b8'
+};
+
+// race_idの開催場コード(5〜6桁目)でJRA/NARを判定。JRAは01〜10、それ以外(30+)はNAR。
+function nkBuyKind(){
+  const code = String(currentRaceId || '').replace(/[^\d]/g, '').slice(4, 6);
+  if(code){
+    const n = Number(code);
+    if(n >= 1 && n <= 10) return 'JRA';
+    return 'NAR';
+  }
+  return isNAR() ? 'NAR' : 'JRA';
+}
+
+// スマホ版の購入エンドポイント。oddsは券種typeを付けると該当タブで開く。
+function nkBuyEndpoints(rid, kind){
+  if(kind === 'NAR'){
+    return {
+      odds: (type) => `https://nar.sp.netkeiba.com/odds/?race_id=${rid}` + (type ? `&type=${type}&housiki=c1` : ''),
+      bet:  `https://nar.sp.netkeiba.com/ipat/bet.html?race_id=${rid}`,
+      top:  `https://nar.sp.netkeiba.com/top/race_list.html`
+    };
+  }
+  return {
+    odds: (type) => `https://race.sp.netkeiba.com/?pid=odds_view&race_id=${rid}` + (type ? `&type=${type}` : ''),
+    bet:  `https://race.sp.netkeiba.com/?pid=bet&race_id=${rid}`,
+    top:  `https://race.sp.netkeiba.com/?pid=race_list`
+  };
+}
+
+// 買い目をコピー用テキストに整形（netkeiba画面を見ながら転記する用）
+function nkBuyListText(){
+  const rid = String(currentRaceId || '').replace(/[^\d]/g, '');
+  const lines = [];
+  const head = [currentRaceName || '', rid ? `race_id:${rid}` : ''].filter(Boolean).join(' / ');
+  if(head) lines.push(head);
+  let total = 0;
+  lastTickets.forEach(t => {
+    const amt = Number(t.amount || 0); total += amt;
+    lines.push(`${t.type} ${t.nums.join('-')}  ${amt.toLocaleString()}円`);
+  });
+  lines.push(`合計 ${total.toLocaleString()}円`);
+  return lines.join('\n');
+}
+
+async function copyNetkeibaBuylist(btn){
+  const text = nkBuyListText();
+  let ok = false;
+  try{
+    await navigator.clipboard.writeText(text);
+    ok = true;
+  }catch(e){
+    // iPad/Safariでclipboardが使えない場合のフォールバック
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    try{ ok = document.execCommand('copy'); }catch(e2){}
+    document.body.removeChild(ta);
+  }
+  if(btn){
+    const orig = btn.textContent;
+    btn.textContent = ok ? '✅ コピーしました' : '⚠️ コピー失敗';
+    setTimeout(() => { btn.textContent = orig; }, 1800);
+  }
+}
+
+function renderNetkeibaBuy(){
+  const card = document.getElementById('netkeibaBuyCard');
+  const body = document.getElementById('netkeibaBuyBody');
+  if(!card || !body) return;
+  if(!lastTickets.length){ card.style.display = 'none'; return; }
+  card.style.display = '';
+
+  const rid = String(currentRaceId || '').replace(/[^\d]/g, '');
+  const kind = nkBuyKind();
+  const ep = nkBuyEndpoints(rid, kind);
+  const total = lastTickets.reduce((a, b) => a + Number(b.amount || 0), 0);
+
+  let html = '';
+  html += `<div class="nk-buy-note">📱 <b>${kind}</b>のスマホ版オッズ・購入画面を開きます（iPhone・iPad どちらも対応${kind === 'NAR' ? '／地方競馬もOK' : ''}）。<br>netkeibaはURLで買い目を自動入力できないため、下の買い目を見ながら選択してください（券種をタップでそのタブへ／全部コピーも可）。</div>`;
+
+  if(!rid){
+    html += `<div class="url-status err">⚠️ レースURL未取得のため個別レースを開けません。先に「🌐 netkeibaから自動取得」でレースを読み込むと、そのレースの購入画面へ直接飛べます。</div>`;
+    html += `<a class="btn btn-primary nk-buy-btn" href="${ep.top}" target="_blank" rel="noopener">🌐 netkeiba（スマホ版）を開く</a>`;
+  }else{
+    html += `<a class="btn btn-primary nk-buy-btn" href="${ep.odds('')}" target="_blank" rel="noopener">🎫 netkeibaオッズ・購入を開く</a>`;
+    html += `<a class="btn nk-buy-btn nk-buy-btn2" href="${ep.bet}" target="_blank" rel="noopener">🧾 IPAT連携（投票画面）を開く</a>`;
+  }
+
+  html += `<div class="nk-buy-list-head"><span>買い目 ${lastTickets.length}点 ／ 合計 ${total.toLocaleString()}円</span><button class="btn-sm" onclick="copyNetkeibaBuylist(this)">📋 全部コピー</button></div>`;
+  html += '<div class="nk-buy-list">';
+  lastTickets.forEach(t => {
+    const type = t.type;
+    const param = NK_TYPE_PARAM[type] || '';
+    const combo = escapeHtml(t.nums.join('-'));
+    const amt = Number(t.amount || 0).toLocaleString();
+    const inner = `<span class="chip ${CHIP_CLASS[type] || ''}">${escapeHtml(type)}</span><b class="nk-buy-combo">${combo}</b><span class="nk-buy-amt">${amt}円</span>`;
+    if(rid){
+      html += `<a class="nk-buy-row" href="${ep.odds(param)}" target="_blank" rel="noopener" title="${escapeHtml(type)}のオッズ画面を開く">${inner}<span class="nk-buy-open">開く ›</span></a>`;
+    }else{
+      html += `<div class="nk-buy-row">${inner}</div>`;
+    }
+  });
+  html += '</div>';
+
+  html += `<div class="nk-buy-caution">⚠️ 実際の購入・入出金は JRA-IPAT・各地方競馬の投票サイトで行われます。券種・馬番・金額は投票確定前に必ずご自身でご確認ください。netkeibaへのログインとIPAT連携設定が必要です。</div>`;
+
+  body.innerHTML = html;
 }
 
 function escapeHtml(v){
@@ -13908,7 +14046,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.219 NetkeibaKeepBridge';
+  window.APP_VERSION = 'v5.18.220 NetkeibaBuyLink';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -14337,7 +14475,7 @@ function json(obj, status = 200) {
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.219 NetkeibaKeepBridge';
+  window.APP_VERSION = 'v5.18.220 NetkeibaBuyLink';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -14634,7 +14772,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.219 NetkeibaKeepBridge';
+  window.APP_VERSION = 'v5.18.220 NetkeibaBuyLink';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -14852,7 +14990,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.219 NetkeibaKeepBridge';
+    window.APP_VERSION = 'v5.18.220 NetkeibaBuyLink';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -15152,7 +15290,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.219 NetkeibaKeepBridge';
+  window.APP_VERSION = 'v5.18.220 NetkeibaBuyLink';
   try{
     const ver = document.querySelector('.ver');
     if(ver){
@@ -18238,7 +18376,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
   // ── 表示バージョン更新（このスクリプトが最後に実行されるためここで確定） ──
   try{
-    window.APP_VERSION = 'v5.18.219 NetkeibaKeepBridge';
+    window.APP_VERSION = 'v5.18.220 NetkeibaBuyLink';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     else document.addEventListener('DOMContentLoaded', function(){ try{ window.setAppVersionLabel(); }catch(e){} });
   }catch(e){}
@@ -18618,13 +18756,13 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 </script>
 
 <!-- ============================================================
-     v5.18.219 NetkeibaKeepBridge
+     v5.18.220 NetkeibaBuyLink
      race_id を主キーにして、選択・取得・保存・収支履歴を同期
      ============================================================ -->
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.219 NetkeibaKeepBridge';
+  var VERSION = 'v5.18.220 NetkeibaBuyLink';
   var STORE_KEY = 'tk-raceid-primary-db';
 
   function $(id){ return document.getElementById(id); }
@@ -18991,7 +19129,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script>
 /* ============================================================
-   v5.18.219 NetkeibaKeepBridge
+   v5.18.220 NetkeibaBuyLink
    ・NARの表示URL/主キーURL/結果URLは netkeiba.com を維持する。
    ・keiba.go.jp は開催場・レース一覧確認の補助だけに限定し、実取得URLを
      公式PCへ置き換えない。
@@ -18999,7 +19137,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.219 NetkeibaKeepBridge';
+  var VERSION = 'v5.18.220 NetkeibaBuyLink';
   var STORE_KEY = 'tk-raceid-primary-db';
 
   function $(id){ return document.getElementById(id); }

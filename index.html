@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.218 SimReserveAssist</title>
+<title>The競馬 EV分析 v5.18.219 ReserveTextSettle</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -237,7 +237,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.218 SimReserveAssist</span>
+    <span class="ver">v5.18.219 ReserveTextSettle</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -638,6 +638,30 @@ body{
         ※これは実購入の自動実行ではなく、買い目・金額を予約保存し、指定時刻に投票ページを開きやすくする補助機能です。ログイン・金額入力・購入確定は必ず本人が投票サイトで確認してください。iPhone/iPadではバックグラウンド通知や自動ページ遷移は保証されません。
       </div>
       <div id="raReserveList" class="reserve-list"></div>
+      <div id="raSavedTextBox" style="margin-top:12px;border-top:1px solid rgba(148,163,184,.18);padding-top:12px">
+        <div class="section-header" style="margin-bottom:6px">
+          <h2 style="margin-bottom:0">📝 予約テキスト自動保存・精算</h2>
+          <button class="btn-sm" type="button" onclick="raUpdateSavedTextNow()">更新</button>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:8px;cursor:pointer;user-select:none">
+          <input type="checkbox" id="raAutoTextSave" checked style="width:18px;height:18px;accent-color:var(--green)">
+          <span>予約時に「予想テキスト精算」形式で自動保存する</span>
+        </label>
+        <textarea id="raSavedText" readonly rows="8" spellcheck="false"
+          placeholder="予約すると、後で精算できる予想テキスト形式でここへ自動保存されます。"
+          style="width:100%;box-sizing:border-box;background:rgba(15,23,42,0.55);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px;font-size:12px;font-family:Menlo,Consolas,monospace;line-height:1.5;resize:vertical"></textarea>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+          <button class="btn-sm" type="button" onclick="raCopySavedSettleText()">📋 精算テキストコピー</button>
+          <button class="btn-sm" type="button" onclick="raSendSavedTextToPts()">📥 精算欄へ送る</button>
+          <button class="btn btn-primary" type="button" style="width:auto;flex:1;min-width:190px" onclick="raRunSavedTextSettlement()">⚡ リアルタイム精算</button>
+          <button class="btn-sm" type="button" onclick="raDownloadSavedSettleText()">💾 テキスト保存</button>
+          <button class="btn-sm" type="button" onclick="raClearSavedSettleText()">🧹 テキスト消去</button>
+        </div>
+        <div id="raTextStatus" style="margin-top:8px"></div>
+        <div class="reserve-note">
+          ※保存テキストは既存の「📋 予想テキスト読み込み精算」と互換です。リアルタイム精算は現在の結果ページを取得し、未確定なら未確定として残します。後日このテキストを精算欄へ送れば、同じ買い目で再精算できます。
+        </div>
+      </div>
     </div>
 
     <div class="card" style="margin-top:12px">
@@ -19048,13 +19072,13 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script>
 /* ============================================================
-   v5.18.218 SimReserveAssist
+   v5.18.219 ReserveTextSettle
    シミュレーション買い目を予約保存し、時刻到来時に手動投票確認へ誘導する。
    実購入・ログイン・購入確定の自動操作は行わない。
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.218 SimReserveAssist';
+  var VERSION = 'v5.18.219 ReserveTextSettle';
   var KEY = 'tk-sim-reservations-v1';
   var alerted = {};
 
@@ -19244,6 +19268,253 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   setInterval(tick, 1000);
   [0, 500, 1500, 3000, 7000].forEach(function(ms){ setTimeout(setVersion, ms); });
   console.log('[' + VERSION + '] enabled: simulation reservation assist');
+})();
+</script>
+
+
+
+<script>
+/* ============================================================
+   v5.18.219 ReserveTextSettle
+   予約購入補助の買い目を、既存「予想テキスト読み込み精算」形式で自動保存し、
+   そのままリアルタイム精算・後日精算へ渡す追加レイヤー。
+   ============================================================ */
+(function(){
+  'use strict';
+  var VERSION = 'v5.18.219 ReserveTextSettle';
+  var RA_KEY = 'tk-sim-reservations-v1';
+  var TEXT_KEY = 'tk-sim-reservation-settle-text-v1';
+  var GROUP_KEY = 'tk-sim-reservation-settle-groups-v1';
+  var AUTO_KEY = 'tk-sim-reservation-auto-text-save-v1';
+  var running = false;
+
+  function $(id){ return document.getElementById(id); }
+  function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]; }); }
+  function yen(n){ return Number(n || 0).toLocaleString(); }
+  function safeJsonGet(key, fallback){ try{ var v = JSON.parse(localStorage.getItem(key) || ''); return v == null ? fallback : v; }catch(e){ return fallback; } }
+  function loadReservations(){ var a = safeJsonGet(RA_KEY, []); return Array.isArray(a) ? a : []; }
+  function setTextStatus(html, ok){ var el = $('raTextStatus'); if(el) el.innerHTML = '<div class="url-status '+(ok?'ok':'err')+'">'+html+'</div>'; }
+  function normalizeDate(d){
+    d = String(d || '').trim().replace(/[\/\.]/g, '-');
+    var m = d.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    return m ? (m[1]+'-'+String(m[2]).padStart(2,'0')+'-'+String(m[3]).padStart(2,'0')) : d;
+  }
+  function cleanRaceNo(r){
+    var rn = String(r && r.raceNo || '').trim();
+    var m = rn.match(/(\d{1,2})\s*R/i);
+    if(m) return Number(m[1]) + 'R';
+    var rid = String(r && r.raceId || '');
+    if(/^\d{10,14}$/.test(rid)) return String(Number(rid.slice(-2))) + 'R';
+    return rn || '1R';
+  }
+  function raceNoNumber(r){ var m = cleanRaceNo(r).match(/\d+/); return m ? Number(m[0]) : 0; }
+  function cleanRaceName(r){
+    var s = String(r && r.raceName || '').replace(/\s*\/\s*\d{10,14}.*$/,'').trim();
+    s = s.replace(/^\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}\s*/,'');
+    if(r && r.venue) s = s.replace(new RegExp('^' + String(r.venue).replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + '\\s*'), '');
+    s = s.replace(/^\d{1,2}\s*R\s*/i,'').trim();
+    if(!s || s.length > 80) s = cleanRaceNo(r);
+    return s;
+  }
+  function ticketLine(t){
+    var type = String(t && (t.type || t.ticketType || t['券種名']) || '').trim();
+    var nums = Array.isArray(t && t.nums) ? t.nums : String((t && (t.nums || t['買い目'])) || '').split(/[-,\s]+/);
+    nums = nums.map(function(x){ return Number(x); }).filter(function(n){ return n >= 1 && n <= 18; });
+    var amount = Number((t && (t.amount || t.bet || t['購入額'])) || 0);
+    var odds = Number((t && t.odds) || 0);
+    var ev = Number((t && t.ev) || 0);
+    if(!type || !nums.length || amount <= 0) return '';
+    var tail = [];
+    if(odds > 0) tail.push('想定' + odds.toFixed(1) + '倍');
+    if(ev > 0) tail.push('EV' + ev.toFixed(2));
+    return '  ' + type + ' ' + nums.join('-') + ' ' + yen(amount) + '円' + (tail.length ? ' (' + tail.join(' / ') + ')' : '');
+  }
+  function groupKey(r){
+    return [normalizeDate(r.date), String(r.kind || '').toUpperCase() || 'JRA', String(r.venue || '').trim() || '開催場未設定'].join('|');
+  }
+  function buildGroups(list){
+    var map = {};
+    (list || []).forEach(function(r){
+      if(!r) return;
+      var k = groupKey(r);
+      if(!map[k]) map[k] = { key:k, date:normalizeDate(r.date), kind:String(r.kind || '').toUpperCase() || 'JRA', venue:String(r.venue || '').trim() || '開催場未設定', races:[] };
+      map[k].races.push(r);
+    });
+    return Object.keys(map).sort().map(function(k){
+      var g = map[k];
+      g.races.sort(function(a,b){ return raceNoNumber(a) - raceNoNumber(b) || String(a.reserveAt || '').localeCompare(String(b.reserveAt || '')); });
+      g.text = buildPredictionText(g);
+      return g;
+    });
+  }
+  function buildPredictionText(g){
+    var lines = [];
+    lines.push('🔮 レース予想 ' + (g.date || '日付未設定') + ' ' + (g.kind || 'JRA') + ' ' + (g.venue || '開催場未設定') + '（モード:予約購入）');
+    lines.push('');
+    g.races.forEach(function(r){
+      lines.push('■ ' + cleanRaceNo(r) + ' ' + cleanRaceName(r));
+      var tickets = (r.tickets || []).map(ticketLine).filter(Boolean);
+      if(tickets.length) Array.prototype.push.apply(lines, tickets);
+      else lines.push('  見送り');
+      var total = Number(r.total || 0) || (r.tickets || []).reduce(function(s,t){ return s + Number(t.amount || 0); }, 0);
+      lines.push('  投資' + yen(total) + '円 → 期待未計算');
+      lines.push('');
+    });
+    return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
+  function saveTextFromReservations(showStatus){
+    var auto = $('raAutoTextSave');
+    if(auto){ localStorage.setItem(AUTO_KEY, auto.checked ? '1' : '0'); }
+    if(auto && !auto.checked && !showStatus) return getSavedText();
+    var list = loadReservations();
+    var groups = buildGroups(list);
+    var combined = groups.map(function(g){ return g.text; }).join('\n\n------------------------------\n\n');
+    localStorage.setItem(TEXT_KEY, combined);
+    localStorage.setItem(GROUP_KEY, JSON.stringify(groups.map(function(g){ return { key:g.key, date:g.date, kind:g.kind, venue:g.venue, text:g.text, raceCount:g.races.length }; })));
+    var ta = $('raSavedText'); if(ta) ta.value = combined;
+    if(showStatus){
+      if(groups.length) setTextStatus('✅ 予約精算テキストを自動保存しました。' + groups.length + 'グループ / ' + list.filter(function(r){ return !!r; }).length + '予約', true);
+      else setTextStatus('⚠️ 保存対象の未確認予約がありません。', false);
+    }
+    return combined;
+  }
+  function getSavedText(){
+    var text = localStorage.getItem(TEXT_KEY) || '';
+    var ta = $('raSavedText'); if(ta && ta.value !== text) ta.value = text;
+    return text;
+  }
+  function getSavedGroups(){
+    var groups = safeJsonGet(GROUP_KEY, []);
+    if(!Array.isArray(groups) || !groups.length){
+      saveTextFromReservations(false);
+      groups = safeJsonGet(GROUP_KEY, []);
+    }
+    return Array.isArray(groups) ? groups : [];
+  }
+  function copyText(text, cb){
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(function(){ cb && cb(true); }).catch(function(){ fallback(); });
+    }else fallback();
+    function fallback(){
+      try{
+        var ta = document.createElement('textarea'); ta.value = text; ta.style.position='fixed'; ta.style.left='-9999px'; document.body.appendChild(ta); ta.focus(); ta.select(); var ok = document.execCommand('copy'); document.body.removeChild(ta); cb && cb(ok);
+      }catch(e){ cb && cb(false); }
+    }
+  }
+  async function downloadText(text){
+    var name = '予約購入_精算テキスト_' + new Date().toISOString().slice(0,16).replace(/[-:T]/g,'') + '.txt';
+    var blob = new Blob([text], { type:'text/plain;charset=utf-8' });
+    try{
+      if(navigator.share && window.File){
+        var file = new File([blob], name, { type:'text/plain' });
+        if(!navigator.canShare || navigator.canShare({ files:[file] })){ await navigator.share({ files:[file], title:name }); return true; }
+      }
+    }catch(e){}
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click();
+    setTimeout(function(){ URL.revokeObjectURL(a.href); try{ a.remove(); }catch(e){} }, 1000);
+    return true;
+  }
+  window.raUpdateSavedTextNow = function(){ saveTextFromReservations(true); };
+  window.raCopySavedSettleText = function(){
+    var text = saveTextFromReservations(false) || getSavedText();
+    if(!text){ setTextStatus('⚠️ コピーする予約精算テキストがありません。', false); return; }
+    copyText(text, function(ok){ setTextStatus(ok ? '✅ 予約精算テキストをコピーしました。' : '⚠️ コピーできませんでした。', ok); });
+  };
+  window.raSendSavedTextToPts = function(){
+    var text = saveTextFromReservations(false) || getSavedText();
+    if(!text){ setTextStatus('⚠️ 精算欄へ送るテキストがありません。', false); return; }
+    var groups = getSavedGroups();
+    var first = (groups[0] && groups[0].text) || text.split(/\n\n-{10,}\n\n/)[0] || text;
+    var ta = $('ptsText');
+    if(!ta){ setTextStatus('⚠️ 予想テキスト精算欄が見つかりません。', false); return; }
+    ta.value = first;
+    try{ if(typeof window.ptsParsePreview === 'function') window.ptsParsePreview(); }catch(e){}
+    try{ var card = $('ptsCard'); if(card) card.scrollIntoView({ behavior:'smooth', block:'start' }); }catch(e){}
+    setTextStatus(groups.length > 1 ? '✅ 先頭グループを精算欄へ送りました。複数グループは「リアルタイム精算」で順番に処理できます。' : '✅ 保存テキストを精算欄へ送りました。', true);
+  };
+  window.raRunSavedTextSettlement = async function(){
+    if(running){ setTextStatus('⚠️ すでに精算中です。', false); return; }
+    if(typeof window.runPredictionTextSettlement !== 'function'){ setTextStatus('⚠️ 予想テキスト精算機能が見つかりません。', false); return; }
+    var groups = getSavedGroups();
+    if(!groups.length){ saveTextFromReservations(true); groups = getSavedGroups(); }
+    if(!groups.length){ setTextStatus('⚠️ 精算できる保存テキストがありません。', false); return; }
+    var ta = $('ptsText');
+    if(!ta){ setTextStatus('⚠️ 予想テキスト精算欄が見つかりません。', false); return; }
+    running = true;
+    var btn = document.querySelector('[onclick="raRunSavedTextSettlement()"]');
+    var oldLabel = btn ? btn.textContent : '';
+    if(btn){ btn.disabled = true; btn.textContent = '⏳ 精算中...'; }
+    try{
+      for(var i = 0; i < groups.length; i++){
+        var g = groups[i];
+        ta.value = g.text;
+        setTextStatus('💰 リアルタイム精算中 ' + (i+1) + '/' + groups.length + '：' + esc([g.date, g.kind, g.venue].filter(Boolean).join(' ')), true);
+        await window.runPredictionTextSettlement();
+        await new Promise(function(resolve){ setTimeout(resolve, 500); });
+      }
+      setTextStatus('✅ 保存済み予約テキストの精算シミュレーションが完了しました。後日も同じ保存テキストから再精算できます。', true);
+    }catch(e){
+      console.error('[raRunSavedTextSettlement]', e);
+      setTextStatus('❌ 精算失敗: ' + esc(e && e.message || e), false);
+    }finally{
+      running = false;
+      if(btn){ btn.disabled = false; btn.textContent = oldLabel || '⚡ リアルタイム精算'; }
+    }
+  };
+  window.raDownloadSavedSettleText = async function(){
+    var text = saveTextFromReservations(false) || getSavedText();
+    if(!text){ setTextStatus('⚠️ 保存する予約精算テキストがありません。', false); return; }
+    await downloadText(text);
+    setTextStatus('✅ 予約精算テキストをファイル保存へ送りました。', true);
+  };
+  window.raClearSavedSettleText = function(){
+    if(!confirm('保存済みの予約精算テキストだけを消去しますか？予約リストは残ります。')) return;
+    localStorage.removeItem(TEXT_KEY); localStorage.removeItem(GROUP_KEY);
+    var ta = $('raSavedText'); if(ta) ta.value = '';
+    setTextStatus('✅ 保存テキストを消去しました。予約リストは残っています。', true);
+  };
+
+  function wrapAfter(name){
+    var old = window[name];
+    if(typeof old !== 'function' || old.__ra219Wrapped) return;
+    var fn = function(){
+      var ret = old.apply(this, arguments);
+      setTimeout(function(){ saveTextFromReservations(false); }, 120);
+      return ret;
+    };
+    fn.__ra219Wrapped = true;
+    window[name] = fn;
+    try{ if(name === 'raAddReservation') raAddReservation = fn; }catch(e){}
+    try{ if(name === 'raRemoveReservation') raRemoveReservation = fn; }catch(e){}
+    try{ if(name === 'raClearReservations') raClearReservations = fn; }catch(e){}
+    try{ if(name === 'raMarkDone') raMarkDone = fn; }catch(e){}
+    try{ if(name === 'raRenderReservations') raRenderReservations = fn; }catch(e){}
+  }
+  function setVersion(){
+    try{
+      window.APP_VERSION = VERSION;
+      var ver = document.querySelector('.ver'); if(ver) ver.textContent = VERSION;
+      document.title = 'The競馬 EV分析 ' + VERSION;
+    }catch(e){}
+  }
+  function init(){
+    var auto = $('raAutoTextSave');
+    if(auto){
+      auto.checked = localStorage.getItem(AUTO_KEY) !== '0';
+      auto.addEventListener('change', function(){ localStorage.setItem(AUTO_KEY, auto.checked ? '1' : '0'); if(auto.checked) saveTextFromReservations(true); });
+    }
+    wrapAfter('raAddReservation');
+    wrapAfter('raRemoveReservation');
+    wrapAfter('raClearReservations');
+    wrapAfter('raMarkDone');
+    wrapAfter('raRenderReservations');
+    saveTextFromReservations(false);
+    setVersion();
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
+  [0, 500, 1500, 3500, 8000].forEach(function(ms){ setTimeout(function(){ setVersion(); saveTextFromReservations(false); }, ms); });
+  console.log('[' + VERSION + '] enabled: reserve text auto-save and settlement bridge');
 })();
 </script>
 

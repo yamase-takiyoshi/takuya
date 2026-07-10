@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.232 SafariFavicon</title>
+<title>The競馬 EV分析 v5.18.233 NARLiveFrame</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -268,6 +268,43 @@ body{
 .ra-clock-date.testing{color:#fbbf24;font-weight:800}
 .sw-test-badge{font-size:11px;line-height:1.5;color:#fde68a;border:1px dashed rgba(251,191,36,.5);background:rgba(251,191,36,.10);border-radius:8px;padding:6px 9px;margin:2px 0 10px}
 
+
+
+/* ============================================================
+   v5.18.233 NARLiveFrame / 地方競馬ライブ埋め込み
+   ============================================================ */
+.nar-live-note{
+  font-size:11px;color:var(--muted);line-height:1.7;margin-bottom:10px;
+  padding:9px 10px;border:1px solid rgba(52,211,153,.22);
+  background:rgba(52,211,153,.06);border-radius:10px;
+}
+.nar-live-controls{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+.nar-live-controls .field{margin-bottom:0}
+.nar-live-actions{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+.nar-live-actions .btn-primary{width:auto;flex:1;min-width:170px}
+.nar-live-status{font-size:11px;line-height:1.55;margin:0 0 8px;padding:7px 9px;border-radius:8px;background:rgba(15,23,42,.52);border:1px solid var(--border);color:var(--muted)}
+.nar-live-status.ok{color:#a7f3d0;border-color:rgba(52,211,153,.3);background:rgba(52,211,153,.08)}
+.nar-live-status.warn{color:#fde68a;border-color:rgba(251,191,36,.35);background:rgba(251,191,36,.08)}
+.nar-live-frame-wrap{
+  position:relative;width:100%;height:min(68vh,680px);min-height:430px;
+  overflow:hidden;border-radius:12px;border:1px solid rgba(52,211,153,.28);
+  background:#05080d;box-shadow:inset 0 0 0 1px rgba(255,255,255,.025),0 14px 34px rgba(0,0,0,.22);
+}
+.nar-live-frame-wrap iframe{width:100%;height:100%;border:0;background:#05080d;display:block}
+.nar-live-placeholder{
+  position:absolute;inset:0;z-index:2;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:8px;padding:24px;text-align:center;color:var(--muted);background:
+  radial-gradient(circle at 50% 25%,rgba(0,255,136,.10),transparent 36%),#07111d;
+}
+.nar-live-placeholder b{font-size:15px;color:#d9ffe8}
+.nar-live-placeholder .tv{font-size:42px;filter:drop-shadow(0 0 12px rgba(0,255,136,.28))}
+.nar-live-fallback{font-size:11px;color:var(--muted);line-height:1.65;margin-top:8px}
+@media(max-width:560px){
+  .nar-live-controls{grid-template-columns:1fr}
+  .nar-live-frame-wrap{height:62vh;min-height:400px}
+  .nar-live-actions .btn-primary{min-width:100%}
+}
+
 </style>
 </head>
 <body>
@@ -277,7 +314,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.232 SafariFavicon</span>
+    <span class="ver">v5.18.233 NARLiveFrame</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -289,6 +326,7 @@ body{
     <button class="tab-btn active" data-tab="horses">🐎 馬データ</button>
     <button class="tab-btn" data-tab="result">📊 推奨買い目</button>
     <button class="tab-btn" data-tab="sim">♞ シミュレーション</button>
+    <button class="tab-btn" data-tab="live">📺 地方ライブ</button>
     <button class="tab-btn" data-tab="settings">⚙️ 設定</button>
     <button class="tab-btn" data-tab="proxy">🌐 プロキシ</button>
   </div>
@@ -816,6 +854,85 @@ body{
       <div id="simProfitSummary" class="summary-grid" style="margin-bottom:10px"></div>
       <div class="chart-box"><canvas id="simProfitChart" width="560" height="220"></canvas></div>
       <div id="simHistoryList" style="margin-top:10px;max-height:200px;overflow-y:auto"></div>
+    </div>
+  </div>
+
+
+  <!-- v5.18.233 地方競馬ライブタブ -->
+  <div id="tab-live" style="display:none">
+    <div class="card">
+      <div class="section-header">
+        <h2>📺 地方競馬ライブ</h2>
+        <span class="nar-badge" style="display:inline-block">NAR LIVE</span>
+      </div>
+
+      <div class="nar-live-note">
+        公式の「映像専用版 地方競馬ライブ」を、この画面内のフレームに読み込みます。
+        開催場を選んで「ライブを表示」を押してください。iPadでは映像・音声の開始に画面内でのタップが必要です。
+      </div>
+
+      <div class="nar-live-controls">
+        <div class="field">
+          <label>開催場</label>
+          <select id="narLiveTrack" onchange="narLiveTrackChanged()">
+            <option value="">本日の開催場一覧</option>
+            <option value="monbetsu">門別</option>
+            <option value="obihiro">帯広</option>
+            <option value="morioka">盛岡</option>
+            <option value="mizusawa">水沢</option>
+            <option value="urawa">浦和</option>
+            <option value="funabashi">船橋</option>
+            <option value="ooi">大井</option>
+            <option value="kawasaki">川崎</option>
+            <option value="kanazawa">金沢</option>
+            <option value="kasamatsu">笠松</option>
+            <option value="nagoya">名古屋</option>
+            <option value="sonoda">園田</option>
+            <option value="himeji">姫路</option>
+            <option value="kochi">高知</option>
+            <option value="saga">佐賀</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>表示ページ</label>
+          <select id="narLiveSource" onchange="narLiveSourceChanged()">
+            <option value="simple">映像専用版（推奨）</option>
+            <option value="normal">通常版</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="nar-live-actions">
+        <button class="btn btn-primary" type="button" onclick="narLiveLoad()">▶️ ライブを表示</button>
+        <button class="btn-sm" type="button" onclick="narLiveSyncVenue()">🎯 選択中の開催場を反映</button>
+        <button class="btn-sm" type="button" onclick="narLiveReload()">🔄 再読込</button>
+        <button class="btn-sm" type="button" onclick="narLiveOpenExternal()">↗️ 別タブで開く</button>
+        <button class="btn-sm" type="button" onclick="narLiveClose()">⏹ 閉じる</button>
+      </div>
+
+      <div id="narLiveStatus" class="nar-live-status">「ライブを表示」を押すと読み込みます。</div>
+
+      <div class="nar-live-frame-wrap" id="narLiveFrameWrap">
+        <div class="nar-live-placeholder" id="narLivePlaceholder">
+          <div class="tv">📺</div>
+          <b>地方競馬ライブ</b>
+          <div>開催場を選び、ライブを表示してください。</div>
+        </div>
+        <iframe
+          id="narLiveFrame"
+          src="about:blank"
+          title="地方競馬ライブ"
+          allow="autoplay; fullscreen; picture-in-picture"
+          allowfullscreen
+          webkitallowfullscreen
+          referrerpolicy="strict-origin-when-cross-origin">
+        </iframe>
+      </div>
+
+      <div class="nar-live-fallback">
+        ※公式サイト側のセキュリティ設定やブラウザ判定により、フレーム内表示を拒否される場合があります。
+        その場合は「別タブで開く」を使用してください。映像URLを抜き出して再配信する方式ではなく、公式ページをそのまま表示します。
+      </div>
     </div>
   </div>
 
@@ -7053,7 +7170,7 @@ function parseHorsesFromDbDoc(doc){
 }
 
 // ============================================================
-// v5.18.232 SafariFavicon
+// v5.18.233 NARLiveFrame
 // NAR/JRAのresult.htmlがSP版・JS描画版で馬リンクを含まない場合でも、
 // 1) result.html本体の着順・払戻を先に読む
 // 2) db.netkeiba.com/race/{race_id}/ の静的結果へフォールバック
@@ -11997,7 +12114,7 @@ if(horses.length === 0){
   // 公開
   window.runAllRacesSimulation = runAllRacesSimulation;
   window.asw_loadHorses = asw_loadHorses; // v5.18.221 VenueSweepAuto: スイープ自動購入から再利用
-  window.asw_collectRaces = rsCollectRaces; // v5.18.232 SafariFavicon: 期間横断と同じrace_id列挙を公開
+  window.asw_collectRaces = rsCollectRaces; // v5.18.233 NARLiveFrame: 期間横断と同じrace_id列挙を公開
   window.runRangeVenueSimulation = runRangeVenueSimulation;
   window.runRangeVenueSimulationOneShot = runRangeVenueSimulationOneShot;
   window.importRangeVenueSimulationJSON = importRangeVenueSimulationJSON;
@@ -19353,7 +19470,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.232 SafariFavicon';
+  var VERSION = 'v5.18.233 NARLiveFrame';
   var KEY = 'tk-sim-reservations-v1';
   var alerted = {};
 
@@ -19710,7 +19827,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.232 SafariFavicon';
+  var VERSION = 'v5.18.233 NARLiveFrame';
   var RA_KEY = 'tk-sim-reservations-v1';
   var TEXT_KEY = 'tk-sim-reservation-settle-text-v1';
   var GROUP_KEY = 'tk-sim-reservation-settle-groups-v1';
@@ -19956,7 +20073,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.232 SafariFavicon';
+  var VERSION = 'v5.18.233 NARLiveFrame';
   var KEY = 'tk-sim-reservations-v1';
   var IMMEDIATE_KEY = 'tk-sweep-immediate-all-v1';
   var prepping = false;
@@ -20550,7 +20667,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 
 <!-- ============================================================
-     v5.18.232 SafariFavicon
+     v5.18.233 NARLiveFrame
      ・予約テキスト／リアルタイム精算の確定結果を、期間横断カードの
        既存グラフ領域へ累計収支グラフとして自動表示する。
      ・文章や明細はグラフ領域へ追加せず、グラフだけを表示する。
@@ -20559,7 +20676,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 <script>
 (function(){
   'use strict';
-  var VERSION230 = 'v5.18.232 SafariFavicon';
+  var VERSION230 = 'v5.18.233 NARLiveFrame';
 
   function byId(id){ return document.getElementById(id); }
 
@@ -20742,6 +20859,166 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   });
   window.drawReservationSettlementGraph230=drawReservationSettlementGraph230;
   console.log('['+VERSION230+'] enabled: reservation settlement results -> existing cumulative profit graph');
+})();
+</script>
+
+
+<script>
+/* ============================================================
+   v5.18.233 NARLiveFrame / 公式地方競馬ライブの遅延iframe読込
+   ============================================================ */
+(function(){
+  'use strict';
+  var VERSION_LIVE = 'v5.18.233 NARLiveFrame';
+  var SIMPLE_BASE = 'https://simple.keiba-lv-st.jp/';
+  var NORMAL_BASE = 'https://keiba-lv-st.jp/';
+  var TRACK_MAP = {
+    '門別':'monbetsu','帯広':'obihiro','盛岡':'morioka','水沢':'mizusawa',
+    '浦和':'urawa','船橋':'funabashi','大井':'ooi','川崎':'kawasaki',
+    '金沢':'kanazawa','笠松':'kasamatsu','名古屋':'nagoya','園田':'sonoda',
+    '姫路':'himeji','高知':'kochi','佐賀':'saga'
+  };
+  var currentUrl = '';
+  var loadSerial = 0;
+
+  function $(id){ return document.getElementById(id); }
+  function setVersion(){
+    try{
+      window.APP_VERSION = VERSION_LIVE;
+      var ver = document.querySelector('.header .ver');
+      if(ver) ver.textContent = VERSION_LIVE;
+      document.title = 'The競馬 EV分析 ' + VERSION_LIVE;
+    }catch(e){}
+  }
+  function status(message, kind){
+    var el = $('narLiveStatus');
+    if(!el) return;
+    el.className = 'nar-live-status' + (kind ? ' ' + kind : '');
+    el.textContent = message;
+  }
+  function selectedLabel(){
+    var sel = $('narLiveTrack');
+    if(!sel || sel.selectedIndex < 0) return '本日の開催場一覧';
+    return sel.options[sel.selectedIndex].textContent || '本日の開催場一覧';
+  }
+  function buildUrl(){
+    var source = $('narLiveSource') ? $('narLiveSource').value : 'simple';
+    var track = $('narLiveTrack') ? $('narLiveTrack').value : '';
+    if(source === 'normal') return NORMAL_BASE;
+    return track ? SIMPLE_BASE + '?track=' + encodeURIComponent(track) : SIMPLE_BASE;
+  }
+  function remember(){
+    try{
+      localStorage.setItem('tk-nar-live-track', $('narLiveTrack') ? $('narLiveTrack').value : '');
+      localStorage.setItem('tk-nar-live-source', $('narLiveSource') ? $('narLiveSource').value : 'simple');
+    }catch(e){}
+  }
+  function restore(){
+    try{
+      var t = localStorage.getItem('tk-nar-live-track');
+      var s = localStorage.getItem('tk-nar-live-source');
+      if(t !== null && $('narLiveTrack')) $('narLiveTrack').value = t;
+      if(s && $('narLiveSource')) $('narLiveSource').value = s;
+    }catch(e){}
+  }
+  function findCurrentVenueSlug(){
+    var venue = $('pickVenue');
+    if(!venue || venue.selectedIndex < 0) return '';
+    var text = String(venue.options[venue.selectedIndex].textContent || '').replace(/[\s　]/g,'');
+    var keys = Object.keys(TRACK_MAP);
+    for(var i=0;i<keys.length;i++){
+      if(text.indexOf(keys[i]) >= 0) return TRACK_MAP[keys[i]];
+    }
+    return '';
+  }
+
+  window.narLiveTrackChanged = function(){
+    remember();
+    status(selectedLabel() + 'を選択しました。「ライブを表示」を押してください。');
+  };
+  window.narLiveSourceChanged = function(){
+    remember();
+    var source = $('narLiveSource') ? $('narLiveSource').value : 'simple';
+    if(source === 'normal') status('通常版を選択しました。通常版では開催場指定は公式画面内で行います。','warn');
+    else status(selectedLabel() + 'の映像専用版を表示できます。');
+  };
+  window.narLiveSyncVenue = function(silent){
+    var slug = findCurrentVenueSlug();
+    var track = $('narLiveTrack');
+    if(slug && track){
+      track.value = slug;
+      remember();
+      if(!silent) status('馬データで選択中の開催場「' + selectedLabel() + '」を反映しました。','ok');
+      return true;
+    }
+    if(!silent) status('馬データ側でNARの開催場を選択してから反映してください。','warn');
+    return false;
+  };
+  window.narLiveLoad = function(){
+    var frame = $('narLiveFrame');
+    var ph = $('narLivePlaceholder');
+    if(!frame) return;
+    remember();
+    currentUrl = buildUrl();
+    loadSerial++;
+    var serial = loadSerial;
+    if(ph) ph.style.display = 'none';
+    status(selectedLabel() + 'の公式ライブを読み込み中…','ok');
+    frame.onload = function(){
+      if(serial !== loadSerial || frame.src === 'about:blank') return;
+      status('公式ライブを読み込みました。映像が始まらない場合は、フレーム内を一度タップしてください。','ok');
+    };
+    frame.src = currentUrl;
+  };
+  window.narLiveReload = function(){
+    var frame = $('narLiveFrame');
+    if(!frame) return;
+    if(!currentUrl || frame.src === 'about:blank'){
+      window.narLiveLoad();
+      return;
+    }
+    loadSerial++;
+    var url = buildUrl();
+    currentUrl = url;
+    status('公式ライブを再読み込み中…','ok');
+    frame.src = 'about:blank';
+    setTimeout(function(){ frame.src = url; }, 80);
+  };
+  window.narLiveOpenExternal = function(){
+    remember();
+    var url = buildUrl();
+    var w = window.open(url, '_blank', 'noopener');
+    if(!w) location.href = url;
+  };
+  window.narLiveClose = function(){
+    var frame = $('narLiveFrame');
+    var ph = $('narLivePlaceholder');
+    loadSerial++;
+    currentUrl = '';
+    if(frame){ frame.onload = null; frame.src = 'about:blank'; }
+    if(ph) ph.style.display = 'flex';
+    status('ライブ画面を閉じました。音声・通信も停止します。');
+  };
+
+  function init(){
+    restore();
+    setVersion();
+    var liveBtn = document.querySelector('.tab-btn[data-tab="live"]');
+    if(liveBtn){
+      liveBtn.addEventListener('click', function(){
+        if(!$('narLiveTrack').value) window.narLiveSyncVenue(true);
+        var frame = $('narLiveFrame');
+        if(frame && (frame.getAttribute('src') === 'about:blank' || !currentUrl)){
+          // タブを押した操作をユーザー操作として利用し、初回だけ自動読込。
+          setTimeout(window.narLiveLoad, 0);
+        }
+      });
+    }
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+  [300,1200,3000,7000].forEach(function(ms){ setTimeout(setVersion,ms); });
+  console.log('[' + VERSION_LIVE + '] enabled: official NAR live iframe tab');
 })();
 </script>
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.229 ResultSettlementFallback</title>
+<title>The競馬 EV分析 v5.18.230 ReservationSettlementGraph</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -272,7 +272,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.229 ResultSettlementFallback</span>
+    <span class="ver">v5.18.230 ReservationSettlementGraph</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -522,7 +522,7 @@ body{
       <div id="rsSummary" style="margin-top:10px"></div>
       <div id="rsChartWrap" style="margin-top:12px;display:none">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:6px">
-          <div style="font-size:12px;color:var(--muted)">📈 期間内 累計収支グラフ（投資あり確定レースのみ）</div>
+          <div id="rsChartTitle" style="font-size:12px;color:var(--muted)">📈 期間内 累計収支グラフ（投資あり確定レースのみ）</div>
           <button class="btn-sm" type="button" id="rsToGlobalBtn" onclick="rsExportToGlobalChart()">📤 シミュレーション収支グラフへ転記</button>
         </div>
         <div class="chart-box"><canvas id="rsChart" width="560" height="220"></canvas></div>
@@ -7048,7 +7048,7 @@ function parseHorsesFromDbDoc(doc){
 }
 
 // ============================================================
-// v5.18.229 ResultSettlementFallback
+// v5.18.230 ReservationSettlementGraph
 // NAR/JRAのresult.htmlがSP版・JS描画版で馬リンクを含まない場合でも、
 // 1) result.html本体の着順・払戻を先に読む
 // 2) db.netkeiba.com/race/{race_id}/ の静的結果へフォールバック
@@ -11992,7 +11992,7 @@ if(horses.length === 0){
   // 公開
   window.runAllRacesSimulation = runAllRacesSimulation;
   window.asw_loadHorses = asw_loadHorses; // v5.18.221 VenueSweepAuto: スイープ自動購入から再利用
-  window.asw_collectRaces = rsCollectRaces; // v5.18.229 ResultSettlementFallback: 期間横断と同じrace_id列挙を公開
+  window.asw_collectRaces = rsCollectRaces; // v5.18.230 ReservationSettlementGraph: 期間横断と同じrace_id列挙を公開
   window.runRangeVenueSimulation = runRangeVenueSimulation;
   window.runRangeVenueSimulationOneShot = runRangeVenueSimulationOneShot;
   window.importRangeVenueSimulationJSON = importRangeVenueSimulationJSON;
@@ -19348,7 +19348,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.229 ResultSettlementFallback';
+  var VERSION = 'v5.18.230 ReservationSettlementGraph';
   var KEY = 'tk-sim-reservations-v1';
   var alerted = {};
 
@@ -19705,7 +19705,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.229 ResultSettlementFallback';
+  var VERSION = 'v5.18.230 ReservationSettlementGraph';
   var RA_KEY = 'tk-sim-reservations-v1';
   var TEXT_KEY = 'tk-sim-reservation-settle-text-v1';
   var GROUP_KEY = 'tk-sim-reservation-settle-groups-v1';
@@ -19951,7 +19951,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.229 ResultSettlementFallback';
+  var VERSION = 'v5.18.230 ReservationSettlementGraph';
   var KEY = 'tk-sim-reservations-v1';
   var IMMEDIATE_KEY = 'tk-sweep-immediate-all-v1';
   var prepping = false;
@@ -20540,6 +20540,159 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   [0, 600, 1800, 4000, 9000].forEach(function(ms){ setTimeout(function(){ setVer(); try{ if(!$('swVenueBox') || !$('swVenueBox').children.length) renderVenues(); refreshModeStatus(); }catch(e){} try{ window.swReflectTestClock(false); }catch(e){} }, ms); });
   setInterval(schedulerTick, 5000);
   console.log('[' + VERSION + '] enabled: venue sweep auto-purchase assist + direct NAR race_id fallback');
+})();
+</script>
+
+
+<!-- ============================================================
+     v5.18.230 ReservationSettlementGraph
+     ・予約テキスト／リアルタイム精算の確定結果を、期間横断カードの
+       既存グラフ領域へ累計収支グラフとして自動表示する。
+     ・文章や明細はグラフ領域へ追加せず、グラフだけを表示する。
+     ・投資0円・未確定レースはグラフ対象外。race_id単位の記録を使用。
+     ============================================================ -->
+<script>
+(function(){
+  'use strict';
+  var VERSION230 = 'v5.18.230 ReservationSettlementGraph';
+
+  function byId(id){ return document.getElementById(id); }
+
+  function reservationSettlementSeries230(){
+    var list = Array.isArray(window.simHistory) ? window.simHistory :
+      (typeof simHistory !== 'undefined' && Array.isArray(simHistory) ? simHistory : []);
+    return list.filter(function(x){
+      if(!x || Number(x.bet || 0) <= 0) return false;
+      var source = String(x.source || '');
+      return /予想テキスト精算|予約テキスト|リアルタイム精算/.test(source);
+    }).slice().sort(function(a,b){
+      var ar = String(a.raceId || '');
+      var br = String(b.raceId || '');
+      if(ar && br && ar !== br) return ar.localeCompare(br, 'ja', {numeric:true});
+      return String(a.date || '').localeCompare(String(b.date || ''));
+    });
+  }
+
+  function drawReservationSettlementGraph230(){
+    var wrap = byId('rsChartWrap');
+    var canvas = byId('rsChart');
+    var title = byId('rsChartTitle');
+    if(!wrap || !canvas) return false;
+
+    var series = reservationSettlementSeries230();
+    if(!series.length) return false;
+
+    wrap.style.display = '';
+    if(title) title.textContent = '📈 予約テキスト精算 累計収支グラフ（投資あり確定レースのみ）';
+
+    var ctx = canvas.getContext('2d');
+    var w = canvas.width, h = canvas.height;
+    ctx.clearRect(0,0,w,h);
+    ctx.fillStyle = '#0d1b2a';
+    ctx.fillRect(0,0,w,h);
+
+    var cumulative = 0;
+    var pts = [0];
+    series.forEach(function(x){
+      cumulative += Number(x.profit != null ? x.profit : (Number(x.ret||0)-Number(x.bet||0)));
+      pts.push(cumulative);
+    });
+
+    var minY = Math.min.apply(null, pts);
+    var maxY = Math.max.apply(null, pts);
+    var pad = Math.max(200, (maxY-minY)*0.15);
+    var lo = minY-pad, hi=maxY+pad;
+    var N=pts.length;
+    var xOf=function(i){ return 36 + (N<=1 ? 0 : i*(w-50)/(N-1)); };
+    var yOf=function(v){ return 16 + (hi-v)*(h-38)/(hi-lo || 1); };
+
+    ctx.strokeStyle='rgba(51,65,85,0.5)';
+    ctx.lineWidth=1;
+    for(var i=0;i<=4;i++){
+      var gy=16+i*(h-38)/4;
+      ctx.beginPath(); ctx.moveTo(36,gy); ctx.lineTo(w-8,gy); ctx.stroke();
+    }
+
+    var zeroY=yOf(0);
+    ctx.strokeStyle='rgba(100,116,139,0.8)';
+    ctx.setLineDash([4,3]);
+    ctx.beginPath(); ctx.moveTo(36,zeroY); ctx.lineTo(w-8,zeroY); ctx.stroke();
+    ctx.setLineDash([]);
+
+    var finalProfit=pts[pts.length-1];
+    var positive=finalProfit>=0;
+    var grad=ctx.createLinearGradient(0,16,0,h-22);
+    grad.addColorStop(0, positive ? 'rgba(0,230,118,0.22)' : 'rgba(248,113,113,0.18)');
+    grad.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=grad;
+    ctx.beginPath();
+    ctx.moveTo(xOf(0),yOf(0));
+    pts.forEach(function(v,idx){ ctx.lineTo(xOf(idx),yOf(v)); });
+    ctx.lineTo(xOf(N-1),yOf(0));
+    ctx.closePath(); ctx.fill();
+
+    ctx.strokeStyle=positive ? '#00e676' : '#f87171';
+    ctx.lineWidth=2.5;
+    ctx.beginPath();
+    pts.forEach(function(v,idx){ var x=xOf(idx), y=yOf(v); if(idx) ctx.lineTo(x,y); else ctx.moveTo(x,y); });
+    ctx.stroke();
+
+    pts.forEach(function(v,idx){
+      var x=xOf(idx), y=yOf(v), last=idx===N-1;
+      ctx.beginPath(); ctx.arc(x,y,last?5:2,0,Math.PI*2);
+      ctx.fillStyle=last ? (positive?'#00e676':'#f87171') : 'rgba(148,163,184,0.55)';
+      ctx.fill();
+    });
+
+    ctx.fillStyle='#64748b';
+    ctx.font='10px -apple-system,sans-serif';
+    ctx.textAlign='right';
+    ctx.fillText((hi-pad).toLocaleString(),34,22);
+    ctx.fillText((lo+pad).toLocaleString(),34,h-6);
+    ctx.fillText('0',34,zeroY-3);
+    ctx.textAlign='left';
+    ctx.fillStyle='#475569';
+    ctx.fillText('累計収支(円) '+(finalProfit>=0?'+':'')+finalProfit.toLocaleString(),40,14);
+    return true;
+  }
+
+  function wrapSettlement230(){
+    var old = window.runPredictionTextSettlement;
+    if(typeof old !== 'function' || old.__reservationGraph230) return;
+    var wrapped = async function(){
+      var rec = byId('ptsRecord');
+      if(rec) rec.checked = true;
+      var result = await old.apply(this, arguments);
+      try{ drawReservationSettlementGraph230(); }catch(e){ console.warn('[ReservationSettlementGraph]',e); }
+      return result;
+    };
+    wrapped.__reservationGraph230=true;
+    window.runPredictionTextSettlement=wrapped;
+    try{ runPredictionTextSettlement=wrapped; }catch(e){}
+  }
+
+  function setVersion230(){
+    try{
+      window.APP_VERSION=VERSION230;
+      var ver=document.querySelector('.ver');
+      if(ver) ver.textContent=VERSION230;
+      document.title='The競馬 EV分析 '+VERSION230;
+    }catch(e){}
+  }
+
+  function init230(){
+    wrapSettlement230();
+    setVersion230();
+    setTimeout(drawReservationSettlementGraph230,120);
+  }
+
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',init230);
+  else init230();
+  [500,1600,3500,6500,10500].forEach(function(ms){
+    setTimeout(function(){ wrapSettlement230(); setVersion230(); },ms);
+  });
+  window.drawReservationSettlementGraph230=drawReservationSettlementGraph230;
+  console.log('['+VERSION230+'] enabled: reservation settlement results -> existing cumulative profit graph');
 })();
 </script>
 

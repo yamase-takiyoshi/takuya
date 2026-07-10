@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.238 RangePurchaseClipboard</title>
+<title>The競馬 EV分析 v5.18.239 NarSpFallbackFix</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -271,7 +271,7 @@ body{
 
 
 /* ============================================================
-   v5.18.238 RangePurchaseClipboard / 地方競馬ライブ埋め込み
+   v5.18.239 NarSpFallbackFix / 地方競馬ライブ埋め込み
    ============================================================ */
 .nar-live-note{
   font-size:11px;color:var(--muted);line-height:1.7;margin-bottom:10px;
@@ -308,7 +308,7 @@ body{
 
 
 /* ============================================================
-   v5.18.238 RangePurchaseClipboard / JRA公式ライブ埋め込み
+   v5.18.239 NarSpFallbackFix / JRA公式ライブ埋め込み
    ============================================================ */
 .jra-live-note{
   font-size:11px;color:var(--muted);line-height:1.7;margin-bottom:10px;
@@ -344,7 +344,7 @@ body{
 
 
 /* ============================================================
-   v5.18.238 RangePurchaseClipboard / ライブ縦並び・横並び切替
+   v5.18.239 NarSpFallbackFix / ライブ縦並び・横並び切替
    ============================================================ */
 .live-layout-toolbar{
   display:none;align-items:center;justify-content:space-between;gap:10px;
@@ -408,7 +408,7 @@ body{
 
 
 /* ============================================================
-   v5.18.238 RangePurchaseClipboard / 楽天競馬ライブ埋め込み
+   v5.18.239 NarSpFallbackFix / 楽天競馬ライブ埋め込み
    ============================================================ */
 .rakuten-live-note{
   font-size:11px;color:var(--muted);line-height:1.7;margin-bottom:10px;
@@ -472,7 +472,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.238 RangePurchaseClipboard</span>
+    <span class="ver">v5.18.239 NarSpFallbackFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -4876,6 +4876,12 @@ function buildWorkerRequestUrl(targetUrl){
   const u = String(targetUrl || '');
   const rid = (u.match(/race_id=(\d{10,14})/) || [])[1] || '';
 
+  // v5.18.239: nar.sp.netkeiba.com は kind=NAR の通常APIへ変換すると
+  // Worker側で nar.netkeiba.com に戻ってしまうため、URL直送でSP経路を維持する。
+  if(/\/\/nar\.sp\.netkeiba\.com\//i.test(u)){
+    return base + '?url=' + encodeURIComponent(u);
+  }
+
   // v5.18.14: race_idで直接取れるページはWorkersのtype/race_id APIを使う。
   // これによりHTML本体は出馬表・オッズ・結果を明確に分離し、
   // shutuba.htmlの斤量セルを単勝オッズとして拾う事故を防ぐ。
@@ -4886,7 +4892,7 @@ function buildWorkerRequestUrl(targetUrl){
     else if(/shutuba\.html/.test(u)) type = 'shutuba';
 
     if(type){
-      const kind = /nar\.netkeiba/.test(u) ? 'NAR' : 'JRA';
+      const kind = /\/\/nar(?:\.sp)?\.netkeiba\.com\//i.test(u) ? 'NAR' : 'JRA';
       return `${base}?type=${encodeURIComponent(type)}&kind=${encodeURIComponent(kind)}&race_id=${encodeURIComponent(rid)}`;
     }
   }
@@ -4936,7 +4942,7 @@ async function fetchViaBridge(url){
   return null;
 }
 
-async function fetchHtmlViaProxy(url){
+async function fetchHtmlViaProxyBase(url){
   const isNetkeiba = /\/\/(nar|race|db)\.netkeiba\.com\//.test(String(url));
   const isRaceData = /\/race\/(shutuba|result)\.html|\/odds\//.test(String(url));
 
@@ -4981,6 +4987,48 @@ async function fetchHtmlViaProxy(url){
 
   window.__fetchPath = 'worker';
   return text;
+}
+
+// v5.18.239 NarSpFallbackFix
+// NARのPC版 nar.netkeiba.com が HTTP 400/403/502/503、空HTML、Akamai拒否になった場合、
+// 同じパスとクエリを nar.sp.netkeiba.com へ切り替えて再取得する。
+// nar.sp は buildWorkerRequestUrl() で url= 直送するため、Worker側でPC版へ戻されない。
+async function fetchHtmlViaProxy(url){
+  const originalUrl = String(url || '');
+  const isNarDesktop = /\/\/nar\.netkeiba\.com\//i.test(originalUrl);
+
+  try{
+    return await fetchHtmlViaProxyBase(originalUrl);
+  }catch(primaryError){
+    if(!isNarDesktop) throw primaryError;
+
+    const spUrl = originalUrl.replace(
+      /\/\/nar\.netkeiba\.com\//i,
+      '//nar.sp.netkeiba.com/'
+    );
+
+    try{
+      const status = document.getElementById('urlStatus');
+      if(status){
+        status.innerHTML =
+          '<div class="url-status">🔄 NAR PC版が取得できないため、SP版へ自動切替中...</div>';
+      }
+
+      const html = await fetchHtmlViaProxyBase(spUrl);
+      if(!html || (typeof looksBlockedHtml === 'function' && looksBlockedHtml(html))){
+        throw new Error('NAR SP版も拒否ページでした');
+      }
+
+      window.__fetchPath = 'nar-sp-fallback';
+      return html;
+    }catch(spError){
+      const p = (primaryError && primaryError.message) ? primaryError.message : String(primaryError);
+      const s = (spError && spError.message) ? spError.message : String(spError);
+      throw new Error(
+        'NARページを取得できませんでした（PC版: ' + p + ' / SP版: ' + s + '）'
+      );
+    }
+  }
 }
 
 async function verifyJraRaceDateByShutuba(date, raceId){
@@ -7439,7 +7487,7 @@ function parseHorsesFromDbDoc(doc){
 }
 
 // ============================================================
-// v5.18.238 RangePurchaseClipboard
+// v5.18.239 NarSpFallbackFix
 // NAR/JRAのresult.htmlがSP版・JS描画版で馬リンクを含まない場合でも、
 // 1) result.html本体の着順・払戻を先に読む
 // 2) db.netkeiba.com/race/{race_id}/ の静的結果へフォールバック
@@ -12397,7 +12445,7 @@ if(horses.length === 0){
   // 公開
   window.runAllRacesSimulation = runAllRacesSimulation;
   window.asw_loadHorses = asw_loadHorses; // v5.18.221 VenueSweepAuto: スイープ自動購入から再利用
-  window.asw_collectRaces = rsCollectRaces; // v5.18.238 RangePurchaseClipboard: 期間横断と同じrace_id列挙を公開
+  window.asw_collectRaces = rsCollectRaces; // v5.18.239 NarSpFallbackFix: 期間横断と同じrace_id列挙を公開
   window.runRangeVenueSimulation = runRangeVenueSimulation;
   window.runRangeVenueSimulationOneShot = runRangeVenueSimulationOneShot;
   window.importRangeVenueSimulationJSON = importRangeVenueSimulationJSON;
@@ -19753,7 +19801,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.238 RangePurchaseClipboard';
+  var VERSION = 'v5.18.239 NarSpFallbackFix';
   var KEY = 'tk-sim-reservations-v1';
   var alerted = {};
 
@@ -20114,7 +20162,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.238 RangePurchaseClipboard';
+  var VERSION = 'v5.18.239 NarSpFallbackFix';
   var RA_KEY = 'tk-sim-reservations-v1';
   var TEXT_KEY = 'tk-sim-reservation-settle-text-v1';
   var GROUP_KEY = 'tk-sim-reservation-settle-groups-v1';
@@ -20360,7 +20408,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.238 RangePurchaseClipboard';
+  var VERSION = 'v5.18.239 NarSpFallbackFix';
   var KEY = 'tk-sim-reservations-v1';
   var IMMEDIATE_KEY = 'tk-sweep-immediate-all-v1';
   var prepping = false;
@@ -20954,7 +21002,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 
 <!-- ============================================================
-     v5.18.238 RangePurchaseClipboard
+     v5.18.239 NarSpFallbackFix
      ・予約テキスト／リアルタイム精算の確定結果を、期間横断カードの
        既存グラフ領域へ累計収支グラフとして自動表示する。
      ・文章や明細はグラフ領域へ追加せず、グラフだけを表示する。
@@ -20963,7 +21011,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 <script>
 (function(){
   'use strict';
-  var VERSION230 = 'v5.18.238 RangePurchaseClipboard';
+  var VERSION230 = 'v5.18.239 NarSpFallbackFix';
 
   function byId(id){ return document.getElementById(id); }
 
@@ -21152,11 +21200,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script>
 /* ============================================================
-   v5.18.238 RangePurchaseClipboard / 公式地方競馬ライブの遅延iframe読込
+   v5.18.239 NarSpFallbackFix / 公式地方競馬ライブの遅延iframe読込
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION_LIVE = 'v5.18.238 RangePurchaseClipboard';
+  var VERSION_LIVE = 'v5.18.239 NarSpFallbackFix';
   var SIMPLE_BASE = 'https://simple.keiba-lv-st.jp/';
   var NORMAL_BASE = 'https://keiba-lv-st.jp/';
   var TRACK_MAP = {
@@ -21312,11 +21360,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script>
 /* ============================================================
-   v5.18.238 RangePurchaseClipboard / JRA公式ライブの遅延iframe読込
+   v5.18.239 NarSpFallbackFix / JRA公式ライブの遅延iframe読込
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION_JRA_LIVE = 'v5.18.238 RangePurchaseClipboard';
+  var VERSION_JRA_LIVE = 'v5.18.239 NarSpFallbackFix';
   var URLS = {
     youtube: 'https://www.youtube.com/embed/live_stream?channel=UCj6AKkCWS6FJqf0o5wP45eQ&autoplay=1&playsinline=1&rel=0',
     green: 'https://sp.gch.jp/jra',
@@ -21427,11 +21475,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script>
 /* ============================================================
-   v5.18.238 RangePurchaseClipboard / 楽天競馬公式ライブ遅延iframe読込
+   v5.18.239 NarSpFallbackFix / 楽天競馬公式ライブ遅延iframe読込
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION_RAKUTEN_LIVE='v5.18.238 RangePurchaseClipboard';
+  var VERSION_RAKUTEN_LIVE='v5.18.239 NarSpFallbackFix';
   var LIVE_URL='https://keiba.rakuten.co.jp/livemovie';
   var currentUrl='';
   var loadSerial=0;
@@ -21511,11 +21559,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script>
 /* ============================================================
-   v5.18.238 RangePurchaseClipboard / ライブ縦並び・横並び切替
+   v5.18.239 NarSpFallbackFix / ライブ縦並び・横並び切替
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION_LAYOUT='v5.18.238 RangePurchaseClipboard';
+  var VERSION_LAYOUT='v5.18.239 NarSpFallbackFix';
   var STORAGE_KEY='tk-live-layout';
   var currentLayout='horizontal';
 
@@ -21605,7 +21653,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 
 <!-- ============================================================
-     v5.18.238 RangePurchaseClipboard
+     v5.18.239 NarSpFallbackFix
      期間横断シミュレーション明細を馬名付き購入テキストへ変換し、
      クリップボードへ一発コピー＋予約購入補助へrace_id単位で転送する。
      ============================================================ -->

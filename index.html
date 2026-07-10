@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.225 ImmediateAllSweep</title>
+<title>The競馬 EV分析 v5.18.226 RangeFallbackSweep</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -272,7 +272,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.225 ImmediateAllSweep</span>
+    <span class="ver">v5.18.226 RangeFallbackSweep</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -647,6 +647,7 @@ body{
       </div>
       <div class="sweep-note" style="font-size:11px;color:var(--muted);line-height:1.65;margin-bottom:10px">
         選んだ開催場（複数可）の <b>全レース</b> を発走時刻順にキューへ積みます。通常は未来レースを設定した発走前時刻に、発走済みレースを即時に生成します。下のスイッチをONにすると、<b>予約時計より後の未来レースも含め、全レースを登録直後に即時生成</b>します。<br>
+        発走時刻を取得できない場合は、<b>期間横断シミュレーションと同じレース列挙経路</b>へ自動で切り替え、取得したrace_idの全Rを現在の予想モードで即時生成します。<br>
         ※iOS Safariは自動でページを開けないため、通知後に <b>🎫を1タップ</b>→投票サイトで <b>金額入力・購入確定は本人</b> が行ってください。無人でお金は出ません。
       </div>
       <div id="swModeStatus" style="margin:0 0 10px;padding:9px 11px;border:1px solid rgba(0,255,136,.28);background:rgba(0,255,136,.08);border-radius:10px;font-size:12px;line-height:1.6;color:#d9ffe8">
@@ -11845,6 +11846,7 @@ if(horses.length === 0){
   // 公開
   window.runAllRacesSimulation = runAllRacesSimulation;
   window.asw_loadHorses = asw_loadHorses; // v5.18.221 VenueSweepAuto: スイープ自動購入から再利用
+  window.asw_collectRaces = rsCollectRaces; // v5.18.226 RangeFallbackSweep: 期間横断と同じrace_id列挙を公開
   window.runRangeVenueSimulation = runRangeVenueSimulation;
   window.runRangeVenueSimulationOneShot = runRangeVenueSimulationOneShot;
   window.importRangeVenueSimulationJSON = importRangeVenueSimulationJSON;
@@ -19191,7 +19193,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.225 ImmediateAllSweep';
+  var VERSION = 'v5.18.226 RangeFallbackSweep';
   var KEY = 'tk-sim-reservations-v1';
   var alerted = {};
 
@@ -19548,7 +19550,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.225 ImmediateAllSweep';
+  var VERSION = 'v5.18.226 RangeFallbackSweep';
   var RA_KEY = 'tk-sim-reservations-v1';
   var TEXT_KEY = 'tk-sim-reservation-settle-text-v1';
   var GROUP_KEY = 'tk-sim-reservation-settle-groups-v1';
@@ -19794,7 +19796,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.225 ImmediateAllSweep';
+  var VERSION = 'v5.18.226 RangeFallbackSweep';
   var KEY = 'tk-sim-reservations-v1';
   var IMMEDIATE_KEY = 'tk-sweep-immediate-all-v1';
   var prepping = false;
@@ -19871,6 +19873,69 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       });
     }catch(e){}
     return map;
+  }
+
+  // v5.18.226: 発走時刻の抽出に失敗した場合は、期間横断シミュレーションと同じ
+  // loadRaceList → raceSelect の経路でrace_idを列挙する。時刻不明なので全R即時生成扱い。
+  async function collectRacesByRangeFallback(kind, date, venueCode){
+    var races = [];
+    if(typeof window.asw_collectRaces === 'function'){
+      races = await window.asw_collectRaces(kind, date, venueCode);
+    }else{
+      var kEl=$('pickKind'), dEl=$('pickDate'), vEl=$('pickVenue');
+      if(kEl) kEl.value=kind;
+      if(dEl) dEl.value=date;
+      if(vEl){
+        if(![].slice.call(vEl.options).some(function(o){ return o.value===venueCode; })){
+          var op=document.createElement('option'); op.value=venueCode; op.textContent=vname(kind,venueCode); vEl.appendChild(op);
+        }
+        vEl.value=venueCode;
+      }
+      if(typeof window.loadRaceList !== 'function') throw new Error('レース一覧取得関数なし');
+      await window.loadRaceList();
+      var sel=$('raceSelect');
+      if(sel){
+        [].slice.call(sel.querySelectorAll('option')).forEach(function(o){
+          if(!o.value || !/race_id=/.test(o.value)) return;
+          var rid=o.dataset.raceId || ((String(o.value).match(/race_id=(\d{10,14})/) || [])[1]) || '';
+          if(!rid) return;
+          var no=Number(o.dataset.raceNo || String(rid).slice(-2)) || races.length+1;
+          races.push({rid:rid,no:no,name:o.dataset.raceName || ''});
+        });
+      }
+    }
+    var yyyy=String(date).slice(0,4), vc=String(venueCode).padStart(2,'0'), seen={};
+    return (races || []).filter(function(r){
+      var rid=String(r && r.rid || '');
+      if(!/^\d{12}$/.test(rid)) return false;
+      if(rid.slice(0,4)!==yyyy || rid.slice(4,6)!==vc) return false;
+      if(seen[rid]) return false; seen[rid]=1; return true;
+    }).map(function(r){
+      return {rid:String(r.rid), no:Number(r.no || String(r.rid).slice(-2)) || 0, name:String(r.name || '')};
+    }).sort(function(a,b){ return a.no-b.no; });
+  }
+
+  function snapshotRaceUi(){
+    var sel=$('raceSelect'), box=$('raceTitleBox');
+    return {
+      kind:$('pickKind')?$('pickKind').value:'', date:$('pickDate')?$('pickDate').value:'', venue:$('pickVenue')?$('pickVenue').value:'',
+      raceHtml:sel?sel.innerHTML:'', raceValue:sel?sel.value:'', url:$('raceUrl')?$('raceUrl').value:'',
+      titleHtml:box?box.innerHTML:'', titleDisplay:box?box.style.display:''
+    };
+  }
+  function restoreRaceUi(x){
+    if(!x) return;
+    var k=$('pickKind'), d=$('pickDate'), v=$('pickVenue'), sel=$('raceSelect'), box=$('raceTitleBox');
+    if(k) k.value=x.kind; if(d) d.value=x.date;
+    if(v){
+      if(x.venue && ![].slice.call(v.options).some(function(o){ return o.value===x.venue; })){
+        var op=document.createElement('option'); op.value=x.venue; op.textContent=x.venue; v.appendChild(op);
+      }
+      v.value=x.venue;
+    }
+    if(sel){ sel.innerHTML=x.raceHtml; try{ sel.value=x.raceValue; }catch(e){} }
+    if($('raceUrl')) $('raceUrl').value=x.url;
+    if(box){ box.innerHTML=x.titleHtml; box.style.display=x.titleDisplay; }
   }
 
   // ── 買い目自動生成（既存エンジンをそのまま再利用）──
@@ -20033,63 +20098,105 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     if(!hasProxy()){ setStatus('⚠️ 先に「プロキシ」タブでCloudflare Worker URLを設定してください。', false); return; }
     var btn = null; try{ btn = document.querySelector('#sweepCard .btn-primary'); }catch(e){}
     if(btn){ btn.disabled = true; btn.textContent = '⏳ 取得中…'; }
-    var now = (window.raNowMs ? window.raNowMs() : Date.now()), added = 0, pastImmediate = 0, noTime = 0, list = load();
+    var now = (window.raNowMs ? window.raNowMs() : Date.now());
+    var added = 0, pastImmediate = 0, fallbackAdded = 0, fallbackVenues = 0, failedVenues = 0, list = load();
     var purchaseMode = selectedModeKey(), purchaseModeLabel = selectedModeLabel(purchaseMode);
+    var uiSnap = snapshotRaceUi();
     refreshModeStatus();
+
+    function upsertRace(vc, rid, no, raceName, hhmm, fallback){
+      rid=String(rid || ''); if(!/^\d{12}$/.test(rid)) return false;
+      var isPast=false, reserveAt='', forceImmediate=!!fallback;
+      if(hhmm){
+        var post=toDateTime(date,hhmm);
+        isPast=post.getTime()<=now;
+        reserveAt=fmtLocalInput(new Date(post.getTime()-before*60000));
+      }else{
+        reserveAt=fmtLocalInput(new Date(now));
+        isPast=true;
+      }
+      var id=rid+'-sweep', keepPrepared=null;
+      list=list.filter(function(x){ if(x.id===id){ keepPrepared=x; return false; } return true; });
+      var keepSameMode=!!(keepPrepared && keepPrepared.prepared && String(keepPrepared.mode || '')===String(purchaseMode));
+      list.push({
+        id:id, kind:kind, raceId:rid,
+        raceName:String(raceName || (keepPrepared && keepPrepared.raceName) || ''),
+        venue:vname(kind,vc), date:date, raceNo:(Number(no || rid.slice(-2)) ? Number(no || rid.slice(-2))+'R' : ''),
+        reserveAt:reserveAt, postTime:hhmm || '',
+        tickets:keepSameMode ? (keepPrepared.tickets || []) : [], total:keepSameMode ? (keepPrepared.total || 0) : 0,
+        mode:purchaseMode, modeLabel:purchaseModeLabel,
+        betUrl:getBetUrl(kind,rid), raceUrl:getRaceUrl(kind,rid),
+        createdAt:new Date().toISOString(), done:false,
+        sweep:true, prepared:keepSameMode, prepBefore:before, prepTries:0,
+        pastImmediate:isPast, immediateAll:(forceImmediate || immediateAll),
+        fallbackRange:!!fallback, fallbackReason:fallback ? '発走時刻取得失敗→期間横断方式' : ''
+      });
+      added++;
+      if(forceImmediate) fallbackAdded++;
+      else if(isPast) pastImmediate++;
+      return true;
+    }
+
     try{
       for(var vi=0; vi<venues.length; vi++){
-        var vc = venues[vi];
-        setStatus('📡 '+esc(vname(kind,vc))+' の発走時刻を取得中…（'+(vi+1)+'/'+venues.length+'）', true);
-        var url; try{ url = raceListUrl(kind, date, vc); }catch(e){ url = ''; }
-        var html = '';
-        try{ html = await fetchHtmlViaProxy(url); }
-        catch(e){ setStatus('⚠️ '+esc(vname(kind,vc))+' の一覧取得に失敗: '+esc((e&&e.message)||e), false); await sleep(150); continue; }
-        var times = parsePostTimes(html, date, vc);
-        var rids = Object.keys(times);
-        if(!rids.length){ noTime++; await sleep(150); continue; }
-        rids.forEach(function(rid){
-          var hhmm = times[rid];
-          var post = toDateTime(date, hhmm);
-          var isPast = post.getTime() <= now;
-          if(isPast) pastImmediate++; // 発走済みも除外せず、保存後に即時生成
-          var reserveAt = fmtLocalInput(new Date(post.getTime() - before*60000));
-          var no = Number(rid.slice(-2)) || 0;
-          var id = rid + '-sweep';
-          var keepPrepared = null;
-          list = list.filter(function(x){ if(x.id===id){ keepPrepared = x; return false; } return true; });
-          var keepSameMode = !!(keepPrepared && keepPrepared.prepared && String(keepPrepared.mode || '') === String(purchaseMode));
-          list.push({
-            id:id, kind:kind, raceId:rid, raceName:(keepPrepared && keepPrepared.raceName) || '', venue:vname(kind,vc), date:date, raceNo:(no?no+'R':''),
-            reserveAt:reserveAt, postTime:hhmm,
-            tickets:keepSameMode ? (keepPrepared.tickets || []) : [], total:keepSameMode ? (keepPrepared.total || 0) : 0,
-            mode:purchaseMode, modeLabel:purchaseModeLabel,
-            betUrl:getBetUrl(kind,rid), raceUrl:getRaceUrl(kind,rid),
-            createdAt:new Date().toISOString(), done:false,
-            sweep:true, prepared:keepSameMode, prepBefore:before, prepTries:0, pastImmediate:isPast, immediateAll:immediateAll
+        var vc=venues[vi], vn=vname(kind,vc), html='', times={}, directError='';
+        setStatus('📡 '+esc(vn)+' の発走時刻を取得中…（'+(vi+1)+'/'+venues.length+'）', true);
+        var url=''; try{ url=raceListUrl(kind,date,vc); }catch(e){}
+        try{
+          if(!url) throw new Error('開催一覧URLを生成できません');
+          html=await fetchHtmlViaProxy(url);
+          times=parsePostTimes(html,date,vc);
+        }catch(e){
+          directError=(e&&e.message)||String(e);
+          times={};
+        }
+
+        var rids=Object.keys(times);
+        if(rids.length){
+          rids.sort(function(a,b){ return Number(a.slice(-2))-Number(b.slice(-2)); }).forEach(function(rid){
+            upsertRace(vc,rid,Number(rid.slice(-2)) || 0,'',times[rid],false);
           });
-          added++;
-        });
+        }else{
+          fallbackVenues++;
+          setStatus('🔁 '+esc(vn)+' は発走時刻を取得できないため、期間横断方式でrace_idを列挙中…', true);
+          try{
+            var races=await collectRacesByRangeFallback(kind,date,vc);
+            if(!races.length) throw new Error('レース一覧0件'+(directError ? '／通常経路: '+directError : ''));
+            races.forEach(function(r){ upsertRace(vc,r.rid,r.no,r.name,'',true); });
+          }catch(e){
+            failedVenues++;
+            console.warn('[RangeFallbackSweep]',date,kind,vc,e);
+            setStatus('⚠️ '+esc(vn)+' は通常経路・期間横断方式とも取得できません: '+esc((e&&e.message)||e), false);
+          }
+        }
         await sleep(150);
       }
+
       save(list);
       reRender();
-      var msg;
+      var msg='';
       if(added){
-        if(immediateAll){
-          msg = '✅ '+added+'レースを「'+purchaseModeLabel+'」でキュー登録しました。予約時計より後の未来レースを含む全Rを、登録直後に即時生成します。';
-          msg += ' ／ 即時生成対象 '+added+'件。';
-        }else{
-          msg = '✅ '+added+'レースを「'+purchaseModeLabel+'」でキュー登録しました。未来レースは発走'+before+'分前、発走済みレースは即時に購入用買い目を生成します。';
-          if(pastImmediate) msg += ' ／ 即時生成対象 '+pastImmediate+'件。';
+        msg='✅ '+added+'レースを「'+purchaseModeLabel+'」でキュー登録しました。';
+        if(fallbackAdded){
+          msg+=' 発走時刻を取得できなかった'+fallbackVenues+'開催場は期間横断方式へ切り替え、'+fallbackAdded+'Rを即時生成対象にしました。';
         }
-        if(noTime) msg += ' ／ 発走時刻を取得できなかった開催場'+noTime+'件はスキップ。';
+        var normalAdded=added-fallbackAdded;
+        if(normalAdded){
+          if(immediateAll) msg+=' 通常取得できた'+normalAdded+'Rも未来を含め即時生成します。';
+          else{
+            msg+=' 通常取得できた'+normalAdded+'Rは未来が発走'+before+'分前、発走済みが即時生成です。';
+            if(pastImmediate) msg+=' 発走済み'+pastImmediate+'R。';
+          }
+        }
+        if(failedVenues) msg+=' 取得不能'+failedVenues+'開催場はエラーとしてスキップしました。';
       }else{
-        msg = '⚠️ 対象レースがありません。発走時刻を取得できませんでした（ブリッジ🌉が有効か・開催日を確認してください）。';
+        msg='⚠️ 対象レースがありません。通常の発走時刻取得と期間横断方式の両方でrace_idを取得できませんでした。ブリッジ🌉・開催日・開催場を確認してください。';
       }
-      setStatus(msg, added>0);
-      schedulerTick(); // 既に準備時刻を過ぎている分は即生成
+      setStatus(msg,added>0);
+      schedulerTick();
     } finally {
-      if(btn){ btn.disabled = false; btn.textContent = '🏟️ スイープ予約を作成（全R）'; }
+      restoreRaceUi(uiSnap);
+      if(btn){ btn.disabled=false; btn.textContent='🏟️ スイープ予約を作成（全R）'; }
     }
   };
 

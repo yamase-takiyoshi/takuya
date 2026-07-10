@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.219 ReserveTextSettle</title>
+<title>The競馬 EV分析 v5.18.223 PastRaceImmediate</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -272,7 +272,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.222 TestClock</span>
+    <span class="ver">v5.18.223 PastRaceImmediate</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -646,7 +646,7 @@ body{
         <span style="font-size:10px;color:var(--muted)">発走時刻を自動取得</span>
       </div>
       <div class="sweep-note" style="font-size:11px;color:var(--muted);line-height:1.65;margin-bottom:10px">
-        選んだ開催場（複数可）の <b>今より後のレース</b> を発走時刻順にキューへ積み、各レースの <b>発走5分前</b> に買い目を自動生成して鳴動通知します。<br>
+        選んだ開催場（複数可）の <b>全レース</b> を発走時刻順にキューへ積みます。未来のレースは <b>発走5分前</b>、発走時刻を過ぎたレースは <b>準備時刻に関係なく即時</b> に買い目を自動生成します。<br>
         ※iOS Safariは自動でページを開けないため、通知後に <b>🎫を1タップ</b>→投票サイトで <b>金額入力・購入確定は本人</b> が行ってください。無人でお金は出ません。
       </div>
       <div class="reserve-grid">
@@ -671,13 +671,13 @@ body{
       </div>
       <div id="swVenueBox" class="sw-venue-box" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-primary" type="button" style="width:auto;flex:1;min-width:220px" onclick="swBuildSweep()">🏟️ スイープ予約を作成（今より後の全R）</button>
+        <button class="btn btn-primary" type="button" style="width:auto;flex:1;min-width:220px" onclick="swBuildSweep()">🏟️ スイープ予約を作成（全R）</button>
         <button class="btn-sm" type="button" onclick="swPrepDueNow()">⚡ 今すぐ準備分を生成</button>
         <button class="btn-sm" type="button" onclick="swClearSweep()">🗑 スイープ予約だけ削除</button>
       </div>
       <div id="swStatus" style="margin-top:8px"></div>
       <div class="sweep-note" style="font-size:11px;color:var(--muted);line-height:1.65;margin-top:6px">
-        作成した予約は下の「⏰ 予約購入補助」リストに発走時刻順で並び、時計・カウントダウンと連動します。買い目は各レースの準備時刻に自動で入ります。
+        作成した予約は下の「⏰ 予約購入補助」リストに発走時刻順で並びます。未来レースは準備時刻に、過去レースは登録直後に買い目を自動生成します。
       </div>
     </div>
 
@@ -19177,7 +19177,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.222 TestClock';
+  var VERSION = 'v5.18.223 PastRaceImmediate';
   var KEY = 'tk-sim-reservations-v1';
   var alerted = {};
 
@@ -19524,7 +19524,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.222 TestClock';
+  var VERSION = 'v5.18.223 PastRaceImmediate';
   var RA_KEY = 'tk-sim-reservations-v1';
   var TEXT_KEY = 'tk-sim-reservation-settle-text-v1';
   var GROUP_KEY = 'tk-sim-reservation-settle-groups-v1';
@@ -19763,14 +19763,14 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 <script>
 /* ============================================================
    v5.18.221 VenueSweepAuto / 開催場スイープ自動購入補助
-   選んだ開催場（複数可）の「今より後」のレースを発走時刻順にキュー化し、
-   各レースの発走N分前に買い目を自動生成（EV計算）して鳴動通知する。
+   選んだ開催場（複数可）の全レースを発走時刻順にキュー化し、
+   未来レースは発走N分前、過去レースは準備時刻を待たず即時に買い目を自動生成（EV計算）する。
    既存の予約ストア(tk-sim-reservations-v1)へ積むので、時計・カウントダウンと連動する。
    ※実購入・ログイン・購入確定の自動操作は行わない（iOSは自動でページも開けない）。
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.222 TestClock';
+  var VERSION = 'v5.18.223 PastRaceImmediate';
   var KEY = 'tk-sim-reservations-v1';
   var prepping = false;
 
@@ -19890,13 +19890,13 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     }catch(e){}
   }
 
-  // ── スケジューラ：準備時刻に達したスイープ予約の買い目を自動生成 ──
+  // ── スケジューラ：未来は準備時刻、過去は準備時刻に関係なく即時生成 ──
   async function schedulerTick(){
     try{ window.swReflectTestClock(false); }catch(e){}
     if(prepping) return;
     var now = (window.raNowMs ? window.raNowMs() : Date.now()); // v5.18.222: テスト時計と共有
     var due = load().filter(function(r){
-      return r.sweep && !r.prepared && !r.done && (r.prepTries||0) < 4 && prepAtMs(r) <= now && postMs(r) > now - 6*60000;
+      return r.sweep && !r.prepared && !r.done && (r.prepTries||0) < 4 && (postMs(r) <= now || prepAtMs(r) <= now);
     }).sort(function(a,b){ return postMs(a) - postMs(b); });
     if(!due.length) return;
     prepping = true;
@@ -19960,7 +19960,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       if(testing){
         var d = new Date(nowMs());
         badge.style.display = '';
-        badge.textContent = '🧪 テスト時計に追従中：' + d.getFullYear()+'/'+pad(d.getMonth()+1)+'/'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes())+' 基準で「今より後」を判定します';
+        badge.textContent = '🧪 テスト時計に追従中：' + d.getFullYear()+'/'+pad(d.getMonth()+1)+'/'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes())+' 基準。発走済みレースは準備時刻を待たず即時生成します';
       }else{
         badge.style.display = 'none';
         badge.textContent = '';
@@ -19977,7 +19977,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     if(!hasProxy()){ setStatus('⚠️ 先に「プロキシ」タブでCloudflare Worker URLを設定してください。', false); return; }
     var btn = null; try{ btn = document.querySelector('#sweepCard .btn-primary'); }catch(e){}
     if(btn){ btn.disabled = true; btn.textContent = '⏳ 取得中…'; }
-    var now = (window.raNowMs ? window.raNowMs() : Date.now()), added = 0, past = 0, noTime = 0, list = load(); // v5.18.222: テスト時計と共有
+    var now = (window.raNowMs ? window.raNowMs() : Date.now()), added = 0, pastImmediate = 0, noTime = 0, list = load(); // v5.18.223: テスト時計と共有
     try{
       for(var vi=0; vi<venues.length; vi++){
         var vc = venues[vi];
@@ -19992,7 +19992,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         rids.forEach(function(rid){
           var hhmm = times[rid];
           var post = toDateTime(date, hhmm);
-          if(post.getTime() <= now){ past++; return; } // 今より前（発走済み）は除外
+          var isPast = post.getTime() <= now;
+          if(isPast) pastImmediate++; // 発走済みも除外せず、保存後に即時生成
           var reserveAt = fmtLocalInput(new Date(post.getTime() - before*60000));
           var no = Number(rid.slice(-2)) || 0;
           var id = rid + '-sweep';
@@ -20004,7 +20005,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
             tickets:(keepPrepared && keepPrepared.tickets) || [], total:(keepPrepared && keepPrepared.total) || 0,
             betUrl:getBetUrl(kind,rid), raceUrl:getRaceUrl(kind,rid),
             createdAt:new Date().toISOString(), done:false,
-            sweep:true, prepared:!!(keepPrepared && keepPrepared.prepared), prepBefore:before, prepTries:0
+            sweep:true, prepared:!!(keepPrepared && keepPrepared.prepared), prepBefore:before, prepTries:0, pastImmediate:isPast
           });
           added++;
         });
@@ -20014,24 +20015,24 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       reRender();
       var msg;
       if(added){
-        msg = '✅ '+added+'レースを発走時刻順にキュー登録しました（発走'+before+'分前に自動生成）。';
-        if(past) msg += ' ／ 発走済み'+past+'件は除外。';
+        msg = '✅ '+added+'レースを発走時刻順にキュー登録しました。未来レースは発走'+before+'分前、発走済みレースは即時に自動生成します。';
+        if(pastImmediate) msg += ' ／ 即時生成対象 '+pastImmediate+'件。';
         if(noTime) msg += ' ／ 発走時刻を取得できなかった開催場'+noTime+'件はスキップ。';
       }else{
-        msg = '⚠️ 対象レースがありません。すべて発走済みか、発走時刻を取得できませんでした（ブリッジ🌉が有効か・開催日を確認してください）。';
+        msg = '⚠️ 対象レースがありません。発走時刻を取得できませんでした（ブリッジ🌉が有効か・開催日を確認してください）。';
       }
       setStatus(msg, added>0);
       schedulerTick(); // 既に準備時刻を過ぎている分は即生成
     } finally {
-      if(btn){ btn.disabled = false; btn.textContent = '🏟️ スイープ予約を作成（今より後の全R）'; }
+      if(btn){ btn.disabled = false; btn.textContent = '🏟️ スイープ予約を作成（全R）'; }
     }
   };
 
   window.swPrepDueNow = function(){
     var now = (window.raNowMs ? window.raNowMs() : Date.now()); // v5.18.222: テスト時計と共有
-    var due = load().filter(function(r){ return r.sweep && !r.prepared && !r.done && prepAtMs(r) <= now; });
-    if(!due.length){ setStatus('ℹ️ いま準備時刻に達しているレースはありません。', true); return; }
-    setStatus('⏳ 準備時刻に達した '+due.length+' レースの買い目を生成します…', true);
+    var due = load().filter(function(r){ return r.sweep && !r.prepared && !r.done && (postMs(r) <= now || prepAtMs(r) <= now); });
+    if(!due.length){ setStatus('ℹ️ いま生成対象のレースはありません（未来レースは準備時刻まで待機します）。', true); return; }
+    setStatus('⏳ 準備時刻到来または発走済みの '+due.length+' レースを生成します…', true);
     schedulerTick();
   };
   window.swClearSweep = function(){

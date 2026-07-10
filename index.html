@@ -249,6 +249,18 @@ body{
 @keyframes ra-blink{0%,49%{opacity:1}50%,100%{opacity:.25}}
 @keyframes ra-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.55;transform:scale(1.06)}}
 @media(max-width:560px){.reserve-grid{grid-template-columns:1fr}.reserve-head{align-items:flex-start;flex-direction:column}.ra-clockbar{flex-direction:column;align-items:stretch}.ra-next{text-align:left}.ra-next-name{max-width:none}}
+/* v5.18.222 TestClock: 時計を過去/任意時刻へ切り替えて動作確認するUI */
+.ra-testrow{display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px;margin:-2px 0 10px;padding:8px 10px;border:1px dashed rgba(148,163,184,.35);border-radius:10px;background:rgba(15,23,42,.35)}
+.ra-testrow .field{margin-bottom:0;flex:1;min-width:180px}
+.ra-testrow label{font-size:11px;color:var(--muted);display:block;margin-bottom:3px}
+.ra-testrow input[type=datetime-local]{width:100%;box-sizing:border-box}
+.ra-testbtn{font-size:12px;padding:8px 10px;border-radius:8px;border:1px solid rgba(251,191,36,.45);background:rgba(251,191,36,.12);color:#fde68a;cursor:pointer;white-space:nowrap}
+.ra-testbtn.off{border-color:var(--border);background:rgba(15,23,42,.4);color:var(--text)}
+.ra-clockbar.testing{border-color:rgba(251,191,36,.6);background:linear-gradient(135deg,rgba(40,30,4,.6),rgba(30,22,4,.45));box-shadow:0 0 0 1px rgba(251,191,36,.22) inset}
+.ra-clockbar.testing .ra-clock{color:#fde68a;text-shadow:0 0 10px rgba(251,191,36,.3)}
+.ra-clockbar.testing .ra-clock .ra-sec{color:#fbbf24}
+.ra-clockbar.testing .ra-clock-dot{background:#fbbf24;box-shadow:0 0 6px rgba(251,191,36,.8)}
+.ra-clock-date.testing{color:#fbbf24;font-weight:800}
 
 </style>
 </head>
@@ -259,7 +271,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.221 VenueSweepAuto</span>
+    <span class="ver">v5.18.222 TestClock</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -683,6 +695,15 @@ body{
           <div class="ra-next-label">次の予約</div>
           <div class="ra-next-empty" id="raNextBody">予約なし</div>
         </div>
+      </div>
+      <!-- v5.18.222 TestClock: 時計を過去の開催日など任意時刻へ合わせて動作確認 -->
+      <div class="ra-testrow" id="raTestRow">
+        <div class="field">
+          <label>🧪 テスト時計（過去の開催日で予約・カウントダウンを試す）</label>
+          <input type="datetime-local" id="raTestAt">
+        </div>
+        <button class="ra-testbtn" type="button" onclick="raSetTestClock()">🧪 この時刻に合わせて進める</button>
+        <button class="ra-testbtn off" type="button" onclick="raClearTestClock()">⏱ 実時刻に戻す</button>
       </div>
       <div class="reserve-grid">
         <div class="field" style="margin-bottom:0">
@@ -19153,16 +19174,27 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.220 LiveClockReserve';
+  var VERSION = 'v5.18.222 TestClock';
   var KEY = 'tk-sim-reservations-v1';
   var alerted = {};
+
+  // v5.18.222 TestClock: 時計を過去の開催日など任意時刻へずらして動作確認する。
+  // 端末の実時刻との「差分(ms)」だけを保存するので、テスト開始後も秒針は実時間どおり前へ進む。
+  // ＝カウントダウン・鳴動・自動生成をそのまま検証できる。差分0＝実時刻（端末時刻）。
+  var OFFSET_KEY = 'tk-sim-clock-offset-v1';
+  function readOffset(){ try{ var v = Number(localStorage.getItem(OFFSET_KEY) || 0); return isFinite(v) ? v : 0; }catch(e){ return 0; } }
+  function writeOffset(ms){ try{ if(ms){ localStorage.setItem(OFFSET_KEY, String(Math.round(ms))); } else { localStorage.removeItem(OFFSET_KEY); } }catch(e){} }
+  function nowMs(){ return Date.now() + readOffset(); }
+  function nowDate(){ return new Date(nowMs()); }
+  // 開催場スイープなど他スクリプトからも同じテスト時刻を共有できるよう公開
+  try{ window.raNowMs = nowMs; window.raNowDate = nowDate; window.raClockOffset = readOffset; }catch(e){}
 
   function $(id){ return document.getElementById(id); }
   function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]; }); }
   function yen(n){ return Number(n || 0).toLocaleString(); }
   function pad(n){ return String(n).padStart(2,'0'); }
   function ridOf(s){ var m = String(s || '').match(/race_id=(\d{10,14})|\b(\d{10,14})\b/); return m ? (m[1] || m[2] || '') : ''; }
-  function nowLocalInput(minAdd){ var d = new Date(Date.now() + Number(minAdd || 0) * 60000); return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes()); }
+  function nowLocalInput(minAdd){ var d = new Date(nowMs() + Number(minAdd || 0) * 60000); return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes()); }
   function parseLocalDate(v){ if(!v) return null; var d = new Date(v); return isNaN(d.getTime()) ? null : d; }
   function getKind(){ return (($('pickKind') && $('pickKind').value) || 'JRA').toUpperCase(); }
   function getHost(kind){ return String(kind || '').toUpperCase() === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com'; }
@@ -19244,7 +19276,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   function dueState(r){
     var d = parseLocalDate(r.reserveAt);
     if(!d) return { due:false, label:'時刻未設定' };
-    var diff = d.getTime() - Date.now();
+    var diff = d.getTime() - nowMs();
     if(diff <= 0) return { due:true, label:'🔔 時刻到来' };
     var mins = Math.ceil(diff / 60000);
     if(mins >= 60) return { due:false, label:'あと' + Math.floor(mins/60) + '時間' + (mins%60) + '分' };
@@ -19254,7 +19286,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   function liveState(r){
     var d = parseLocalDate(r.reserveAt);
     if(!d) return { due:false, label:'時刻未設定', level:'none', secs:null };
-    var diff = d.getTime() - Date.now();
+    var diff = d.getTime() - nowMs();
     if(diff <= 0){
       var over = Math.floor(-diff / 1000);
       return { due:true, level:'due', secs:0, over:over,
@@ -19353,16 +19385,37 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     if(!('Notification' in window)){ setStatus('⚠️ このブラウザは通知に対応していません。画面上の時刻到来表示を使ってください。', false); return; }
     Notification.requestPermission().then(function(p){ setStatus(p === 'granted' ? '✅ 通知を許可しました。ページを開いている間だけ通知できます。' : '⚠️ 通知は許可されませんでした。', p === 'granted'); });
   };
+  // v5.18.222 TestClock: 入力した時刻へ時計を合わせて進める（過去の開催日の予約検証用）
+  window.raSetTestClock = function(){
+    var v = ($('raTestAt') && $('raTestAt').value) || '';
+    var d = parseLocalDate(v);
+    if(!d){ setStatus('⚠️ テスト時刻を入力してください（過去の開催日の日時など）。', false); return; }
+    writeOffset(d.getTime() - Date.now());
+    alerted = {}; // テスト開始時は鳴動履歴をリセット（到来を再検証できる）
+    updateClock(); raRenderReservations(); updateNext(load());
+    setStatus('🧪 時計を ' + esc(v.replace('T',' ')) + ' に合わせました。ここから実時間どおり進み、カウントダウン・鳴動をそのまま確認できます。戻すには「⏱ 実時刻に戻す」。', true);
+  };
+  window.raClearTestClock = function(){
+    if(!readOffset()){ setStatus('ℹ️ すでに実時刻（端末時刻）です。', true); return; }
+    writeOffset(0); alerted = {};
+    updateClock(); raRenderReservations(); updateNext(load());
+    setStatus('⏱ 実時刻（端末時刻）に戻しました。', true);
+  };
   // v5.18.220: リアルタイム時計（端末ローカル時刻＝JST）。予約時刻と同じ基準で表示。
   var WD = ['日','月','火','水','木','金','土'];
   function updateClock(){
     var el = $('raClock'); if(!el) return;
-    var d = new Date();
+    var testing = readOffset() !== 0;
+    var d = nowDate();
     el.innerHTML = '<span class="ra-clock-dot"></span>' + pad(d.getHours()) + ':' + pad(d.getMinutes())
       + '<span class="ra-sec">:' + pad(d.getSeconds()) + '</span>';
     var de = $('raClockDate');
-    if(de) de.textContent = d.getFullYear() + '/' + pad(d.getMonth()+1) + '/' + pad(d.getDate())
-      + '（' + WD[d.getDay()] + '）端末時刻';
+    if(de){
+      de.textContent = d.getFullYear() + '/' + pad(d.getMonth()+1) + '/' + pad(d.getDate())
+        + '（' + WD[d.getDay()] + '）' + (testing ? '🧪 テスト時刻（実時刻ではありません）' : '端末時刻');
+      de.classList.toggle('testing', testing);
+    }
+    var bar = $('raClockBar'); if(bar) bar.classList.toggle('testing', testing);
   }
   // 次にやってくる未確認の予約を大きく表示（時計と連動してカウントダウン）
   function updateNext(list){
@@ -19431,6 +19484,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   }
   function init(){
     if($('raReserveAt') && !$('raReserveAt').value) $('raReserveAt').value = nowLocalInput(10);
+    if($('raTestAt') && !$('raTestAt').value) $('raTestAt').value = nowLocalInput(0);
     updateClock();
     raRenderReservations();
     updateNext(load());
@@ -19465,7 +19519,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.220 LiveClockReserve';
+  var VERSION = 'v5.18.222 TestClock';
   var RA_KEY = 'tk-sim-reservations-v1';
   var TEXT_KEY = 'tk-sim-reservation-settle-text-v1';
   var GROUP_KEY = 'tk-sim-reservation-settle-groups-v1';
@@ -19711,7 +19765,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.221 VenueSweepAuto';
+  var VERSION = 'v5.18.222 TestClock';
   var KEY = 'tk-sim-reservations-v1';
   var prepping = false;
 
@@ -19830,7 +19884,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   // ── スケジューラ：準備時刻に達したスイープ予約の買い目を自動生成 ──
   async function schedulerTick(){
     if(prepping) return;
-    var now = Date.now();
+    var now = (window.raNowMs ? window.raNowMs() : Date.now()); // v5.18.222: テスト時計と共有
     var due = load().filter(function(r){
       return r.sweep && !r.prepared && !r.done && (r.prepTries||0) < 4 && prepAtMs(r) <= now && postMs(r) > now - 6*60000;
     }).sort(function(a,b){ return postMs(a) - postMs(b); });
@@ -19892,7 +19946,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     if(!hasProxy()){ setStatus('⚠️ 先に「プロキシ」タブでCloudflare Worker URLを設定してください。', false); return; }
     var btn = null; try{ btn = document.querySelector('#sweepCard .btn-primary'); }catch(e){}
     if(btn){ btn.disabled = true; btn.textContent = '⏳ 取得中…'; }
-    var now = Date.now(), added = 0, past = 0, noTime = 0, list = load();
+    var now = (window.raNowMs ? window.raNowMs() : Date.now()), added = 0, past = 0, noTime = 0, list = load(); // v5.18.222: テスト時計と共有
     try{
       for(var vi=0; vi<venues.length; vi++){
         var vc = venues[vi];
@@ -19943,7 +19997,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   };
 
   window.swPrepDueNow = function(){
-    var now = Date.now();
+    var now = (window.raNowMs ? window.raNowMs() : Date.now()); // v5.18.222: テスト時計と共有
     var due = load().filter(function(r){ return r.sweep && !r.prepared && !r.done && prepAtMs(r) <= now; });
     if(!due.length){ setStatus('ℹ️ いま準備時刻に達しているレースはありません。', true); return; }
     setStatus('⏳ 準備時刻に達した '+due.length+' レースの買い目を生成します…', true);

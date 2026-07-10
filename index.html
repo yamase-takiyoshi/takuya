@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.227 DirectRaceIdSweep</title>
+<title>The競馬 EV分析 v5.18.228 VerifiedTicketSweep</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -272,7 +272,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.227 DirectRaceIdSweep</span>
+    <span class="ver">v5.18.228 VerifiedTicketSweep</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -11847,7 +11847,7 @@ if(horses.length === 0){
   // 公開
   window.runAllRacesSimulation = runAllRacesSimulation;
   window.asw_loadHorses = asw_loadHorses; // v5.18.221 VenueSweepAuto: スイープ自動購入から再利用
-  window.asw_collectRaces = rsCollectRaces; // v5.18.227 DirectRaceIdSweep: 期間横断と同じrace_id列挙を公開
+  window.asw_collectRaces = rsCollectRaces; // v5.18.228 VerifiedTicketSweep: 期間横断と同じrace_id列挙を公開
   window.runRangeVenueSimulation = runRangeVenueSimulation;
   window.runRangeVenueSimulationOneShot = runRangeVenueSimulationOneShot;
   window.importRangeVenueSimulationJSON = importRangeVenueSimulationJSON;
@@ -19194,7 +19194,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.227 DirectRaceIdSweep';
+  var VERSION = 'v5.18.228 VerifiedTicketSweep';
   var KEY = 'tk-sim-reservations-v1';
   var alerted = {};
 
@@ -19551,7 +19551,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.227 DirectRaceIdSweep';
+  var VERSION = 'v5.18.228 VerifiedTicketSweep';
   var RA_KEY = 'tk-sim-reservations-v1';
   var TEXT_KEY = 'tk-sim-reservation-settle-text-v1';
   var GROUP_KEY = 'tk-sim-reservation-settle-groups-v1';
@@ -19797,7 +19797,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.227 DirectRaceIdSweep';
+  var VERSION = 'v5.18.228 VerifiedTicketSweep';
   var KEY = 'tk-sim-reservations-v1';
   var IMMEDIATE_KEY = 'tk-sweep-immediate-all-v1';
   var prepping = false;
@@ -19813,7 +19813,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   function refreshModeStatus(){
     var el = $('swModeStatus'); if(!el) return;
     var key = selectedModeKey(), label = selectedModeLabel(key);
-    el.innerHTML = '🎯 <b>購入に使う予想モード：</b>'+esc(label)+'<br><span style="color:var(--muted)">スイープ予約作成時にこのモードを各レースへ固定し、予想結果だけを購入用買い目にします。モード判定が見送りなら購入0点です。</span>';
+    el.innerHTML = '🎯 <b>購入に使う予想モード：</b>'+esc(label)+'<br><span style="color:var(--muted)">スイープ予約作成時にこのモードを各レースへ固定し、予想結果だけを購入用買い目にします。モード判定が見送り、出走馬取得失敗、通信失敗のレースは予約へ登録しません。</span>';
   }
   window.swRefreshModeStatus = refreshModeStatus;
   function host(kind){ return String(kind).toUpperCase() === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com'; }
@@ -20011,6 +20011,18 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     if(hit) save(list);
     return hit;
   }
+  function removeRec(id){
+    var list = load(), before = list.length;
+    list = list.filter(function(r){ return String(r.id)!==String(id); });
+    if(list.length!==before) save(list);
+    return before-list.length;
+  }
+  function appendDiagLine(line){
+    var el=$('swDiag'); if(!el) return;
+    var prev=String(el.textContent||'').trim();
+    el.style.display='block';
+    el.textContent=(prev ? prev+'\n' : '')+String(line||'');
+  }
   function labelOf(r){ return [r.venue, r.raceNo, r.raceName].filter(Boolean).join(' ') || r.raceId; }
   var swCtx = null, swLastBeep = 0;
   function beep(){
@@ -20037,35 +20049,45 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   async function schedulerTick(){
     try{ window.swReflectTestClock(false); }catch(e){}
     if(prepping) return;
-    var now = (window.raNowMs ? window.raNowMs() : Date.now()); // v5.18.222: テスト時計と共有
+    var now = (window.raNowMs ? window.raNowMs() : Date.now());
     var due = load().filter(function(r){
-      return r.sweep && !r.prepared && !r.done && (r.prepTries||0) < 4 && (r.immediateAll || postMs(r) <= now || prepAtMs(r) <= now);
+      return r.sweep && !r.prepared && !r.done && (r.immediateAll || postMs(r) <= now || prepAtMs(r) <= now);
     }).sort(function(a,b){ return postMs(a) - postMs(b); });
     if(!due.length) return;
     prepping = true;
     try{
       for(var i=0; i<due.length; i++){
         var rec = due[i];
-        // 直前で確認済み/削除された場合に備え最新確認
         var fresh = load().find(function(x){ return x.id===rec.id; });
         if(!fresh || fresh.prepared || fresh.done) continue;
-        setStatus('⏳ '+esc(labelOf(rec))+' の買い目を自動生成中…', true);
+        setStatus('⏳ '+esc(labelOf(rec))+' の買い目を確認中…', true);
         try{
           var res = await prepRace(rec);
-          var tot = res.tickets.reduce(function(s,t){ return s + t.amount; }, 0);
-          updateRec(rec.id, function(r){ r.tickets=res.tickets; r.total=tot; r.prepared=true; r.prepError=''; r.mode=res.mode || r.mode; r.modeLabel=res.modeLabel || r.modeLabel; if(res.raceName) r.raceName=res.raceName; });
-          reRender(); beep();
-          if(res.tickets.length){
-            setStatus('✅ '+esc(labelOf(rec))+'：'+esc(res.modeLabel || res.mode || '')+'の予想結果 '+res.tickets.length+'点 / '+yen(tot)+'円 を購入用買い目にしました。🎫を開いて金額確認のうえ購入してください。', true);
+          var tot = res.tickets.reduce(function(sum,t){ return sum + t.amount; }, 0);
+          if(!res.tickets.length || tot<=0){
+            removeRec(rec.id);
+            appendDiagLine(labelOf(rec)+'：見送り（購入0点）→予約なし');
+            reRender();
+            setStatus('🚫 '+esc(labelOf(rec))+'：'+esc(res.modeLabel || res.mode || '')+'の予想結果は見送りのため、予約しません。', true);
           }else{
-            setStatus('🚫 '+esc(labelOf(rec))+'：'+esc(res.modeLabel || res.mode || '')+'の予想結果は見送りです（購入0点）。', true);
+            updateRec(rec.id, function(r){
+              r.tickets=res.tickets; r.total=tot; r.prepared=true; r.prepError='';
+              r.mode=res.mode || r.mode; r.modeLabel=res.modeLabel || r.modeLabel;
+              if(res.raceName) r.raceName=res.raceName;
+              r.verifiedAt=new Date().toISOString();
+              r.unverifiedRaceId=false;
+            });
+            reRender(); beep();
+            setStatus('✅ '+esc(labelOf(rec))+'：'+esc(res.modeLabel || res.mode || '')+'の予想結果 '+res.tickets.length+'点 / '+yen(tot)+'円 を予約しました。🎫を開いて金額確認のうえ購入してください。', true);
           }
         }catch(e){
-          updateRec(rec.id, function(r){ r.prepTries=(r.prepTries||0)+1; r.prepError=(e&&e.message)||String(e); });
+          var msg=(e&&e.message)||String(e);
+          removeRec(rec.id);
+          appendDiagLine(labelOf(rec)+'：買い目生成失敗→予約なし（'+msg+'）');
           reRender();
-          setStatus('⚠️ '+esc(labelOf(rec))+' 生成失敗: '+esc((e&&e.message)||e)+'（少し後に再試行します）', false);
+          setStatus('⚠️ '+esc(labelOf(rec))+'：買い目生成に失敗したため予約しません。'+esc(msg), false);
         }
-        await sleep(400);
+        await sleep(350);
       }
     } finally { prepping = false; }
   }
@@ -20124,20 +20146,35 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     if(!venues.length){ setStatus('⚠️ 開催場を1つ以上選んでください。', false); return; }
     var transport=transportState(kind);
     if(!transport.usable){
-      setStatus('⚠️ Worker／Bridgeを検出できません。通信取得は失敗する可能性がありますが、NARはrace_id直接生成で予約キュー自体を作成します。', false);
+      setStatus('⚠️ Worker／Bridgeを検出できません。NARはrace_id直接候補を確認しますが、馬データを取得できない候補は予約しません。', false);
     }
     var btn = null; try{ btn = document.querySelector('#sweepCard .btn-primary'); }catch(e){}
-    if(btn){ btn.disabled = true; btn.textContent = '⏳ 取得中…'; }
+    if(btn){ btn.disabled = true; btn.textContent = '⏳ 候補確認中…'; }
     var now = (window.raNowMs ? window.raNowMs() : Date.now());
-    var added = 0, pastImmediate = 0, fallbackAdded = 0, fallbackVenues = 0, directAdded = 0, directVenues = 0, failedVenues = 0, list = load();
+    var list = load();
+    var staleRemoved=0;
+    list=list.filter(function(r){
+      var invalidSweep = r && r.sweep && ((r.unverifiedRaceId && !r.prepared) || (r.prepared && (!Array.isArray(r.tickets) || !r.tickets.length || Number(r.total||0)<=0)) || r.prepError);
+      if(invalidSweep){ staleRemoved++; return false; }
+      return true;
+    });
+
+    var candidateCount=0, queuedFuture=0, preparedSuccess=0, preserved=0;
+    var noBet=0, prepFailed=0, rangeCandidates=0, directCandidates=0;
+    var directSuccess=0, rangeSuccess=0, normalSuccess=0, failedVenues=0;
+    var immediateCandidates=[];
     var diag=['取得経路: '+transport.label,'基準日時: '+new Date(now).toLocaleString('ja-JP'),'予想モード: '+selectedModeLabel(selectedModeKey())];
+    if(staleRemoved) diag.push('旧版の未確認・失敗予約を削除: '+staleRemoved+'R');
     setDiag(diag);
     var purchaseMode = selectedModeKey(), purchaseModeLabel = selectedModeLabel(purchaseMode);
     var uiSnap = snapshotRaceUi();
     refreshModeStatus();
 
-    function upsertRace(vc, rid, no, raceName, hhmm, fallbackType){
+    function stageRace(vc, rid, no, raceName, hhmm, fallbackType){
       rid=String(rid || ''); if(!/^\d{12}$/.test(rid)) return false;
+      candidateCount++;
+      if(fallbackType==='range') rangeCandidates++;
+      if(fallbackType==='direct') directCandidates++;
       var isPast=false, reserveAt='', forceImmediate=!!fallbackType;
       if(hhmm){
         var post=toDateTime(date,hhmm);
@@ -20149,26 +20186,34 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       }
       var id=rid+'-sweep', keepPrepared=null;
       list=list.filter(function(x){ if(x.id===id){ keepPrepared=x; return false; } return true; });
-      var keepSameMode=!!(keepPrepared && keepPrepared.prepared && String(keepPrepared.mode || '')===String(purchaseMode));
-      list.push({
+      var keepValid=!!(keepPrepared && keepPrepared.prepared && Array.isArray(keepPrepared.tickets) && keepPrepared.tickets.length && Number(keepPrepared.total||0)>0 && String(keepPrepared.mode || '')===String(purchaseMode));
+      if(keepValid){
+        keepPrepared.unverifiedRaceId=false;
+        keepPrepared.prepError='';
+        list.push(keepPrepared);
+        preserved++;
+        return true;
+      }
+      var rec={
         id:id, kind:kind, raceId:rid,
-        raceName:String(raceName || (keepPrepared && keepPrepared.raceName) || ''),
-        venue:vname(kind,vc), date:date, raceNo:(Number(no || rid.slice(-2)) ? Number(no || rid.slice(-2))+'R' : ''),
-        reserveAt:reserveAt, postTime:hhmm || '',
-        tickets:keepSameMode ? (keepPrepared.tickets || []) : [], total:keepSameMode ? (keepPrepared.total || 0) : 0,
+        raceName:String(raceName || ''), venue:vname(kind,vc), date:date,
+        raceNo:(Number(no || rid.slice(-2)) ? Number(no || rid.slice(-2))+'R' : ''),
+        reserveAt:reserveAt, postTime:hhmm || '', tickets:[], total:0,
         mode:purchaseMode, modeLabel:purchaseModeLabel,
         betUrl:getBetUrl(kind,rid), raceUrl:getRaceUrl(kind,rid),
-        createdAt:new Date().toISOString(), done:false,
-        sweep:true, prepared:keepSameMode, prepBefore:before, prepTries:0,
-        pastImmediate:isPast, immediateAll:(forceImmediate || immediateAll),
+        createdAt:new Date().toISOString(), done:false, sweep:true, prepared:false,
+        prepBefore:before, prepTries:0, pastImmediate:isPast,
+        immediateAll:(forceImmediate || immediateAll),
         fallbackRange:fallbackType==='range', fallbackDirect:fallbackType==='direct',
         unverifiedRaceId:fallbackType==='direct',
         fallbackReason:fallbackType==='range' ? '発走時刻取得失敗→期間横断方式' : (fallbackType==='direct' ? '通常取得・期間横断とも失敗→NAR race_id直接生成' : '')
-      });
-      added++;
-      if(forceImmediate) fallbackAdded++;
-      if(fallbackType==='direct') directAdded++;
-      else if(isPast) pastImmediate++;
+      };
+      if(forceImmediate || immediateAll || isPast){
+        immediateCandidates.push(rec);
+      }else{
+        list.push(rec);
+        queuedFuture++;
+      }
       return true;
     }
 
@@ -20189,62 +20234,96 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         var rids=Object.keys(times);
         if(rids.length){
           rids.sort(function(a,b){ return Number(a.slice(-2))-Number(b.slice(-2)); }).forEach(function(rid){
-            upsertRace(vc,rid,Number(rid.slice(-2)) || 0,'',times[rid],'');
+            stageRace(vc,rid,Number(rid.slice(-2)) || 0,'',times[rid],'');
           });
           diag.push(vn+'：通常発走時刻経路 '+rids.length+'R');
         }else{
-          fallbackVenues++;
           setStatus('🔁 '+esc(vn)+' は発走時刻を取得できないため、期間横断方式でrace_idを列挙中…', true);
           try{
             var races=await collectRacesByRangeFallback(kind,date,vc);
             if(!races.length) throw new Error('レース一覧0件'+(directError ? '／通常経路: '+directError : ''));
-            races.forEach(function(r){ upsertRace(vc,r.rid,r.no,r.name,'','range'); });
-            diag.push(vn+'：期間横断経路 '+races.length+'R');
+            races.forEach(function(r){ stageRace(vc,r.rid,r.no,r.name,'','range'); });
+            diag.push(vn+'：期間横断候補 '+races.length+'R（買い目成功分だけ予約）');
           }catch(e){
-            console.warn('[DirectRaceIdSweep:range]',date,kind,vc,e);
+            console.warn('[VerifiedTicketSweep:range]',date,kind,vc,e);
             var directRaces=collectRacesByDirectRaceId(kind,date,vc);
             if(directRaces.length){
-              directVenues++;
-              directRaces.forEach(function(r){ upsertRace(vc,r.rid,r.no,r.name,'','direct'); });
-              diag.push(vn+'：NAR race_id直接生成 '+directRaces.length+'候補（実在確認は買い目生成時）');
-              setStatus('🧩 '+esc(vn)+' は通常取得・期間横断とも失敗したため、NAR race_idを1R〜12Rまで直接生成して予約へ登録しました。', true);
+              directRaces.forEach(function(r){ stageRace(vc,r.rid,r.no,r.name,'','direct'); });
+              diag.push(vn+'：NAR race_id直接候補 '+directRaces.length+'R（実在・買い目確認後に予約）');
+              setStatus('🧩 '+esc(vn)+' はNAR race_id候補を確認します。出走馬取得と買い目生成に成功したレースだけ予約します。', true);
             }else{
               failedVenues++;
-              diag.push(vn+'：取得失敗 '+((e&&e.message)||String(e)));
-              console.warn('[DirectRaceIdSweep:failed]',date,kind,vc,e);
-              setStatus('⚠️ '+esc(vn)+' は通常経路・期間横断方式とも取得できず、直接生成にも対応していません: '+esc((e&&e.message)||e), false);
+              diag.push(vn+'：候補取得失敗 '+((e&&e.message)||String(e)));
+              console.warn('[VerifiedTicketSweep:failed]',date,kind,vc,e);
             }
           }
         }
-        await sleep(150);
+        await sleep(120);
+      }
+
+      for(var pi=0; pi<immediateCandidates.length; pi++){
+        var rec=immediateCandidates[pi];
+        setStatus('🔎 '+esc(labelOf(rec))+' を確認中…（'+(pi+1)+'/'+immediateCandidates.length+'）', true);
+        try{
+          var res=await prepRace(rec);
+          var tot=res.tickets.reduce(function(sum,t){ return sum+t.amount; },0);
+          if(!res.tickets.length || tot<=0){
+            noBet++;
+            diag.push(labelOf(rec)+'：見送り（購入0点）→予約なし');
+          }else{
+            rec.tickets=res.tickets;
+            rec.total=tot;
+            rec.prepared=true;
+            rec.prepError='';
+            rec.mode=res.mode || rec.mode;
+            rec.modeLabel=res.modeLabel || rec.modeLabel;
+            rec.raceName=res.raceName || rec.raceName;
+            rec.unverifiedRaceId=false;
+            rec.verifiedAt=new Date().toISOString();
+            list.push(rec);
+            preparedSuccess++;
+            if(rec.fallbackDirect) directSuccess++;
+            else if(rec.fallbackRange) rangeSuccess++;
+            else normalSuccess++;
+          }
+        }catch(e){
+          prepFailed++;
+          diag.push(labelOf(rec)+'：取得・買い目生成失敗→予約なし（'+((e&&e.message)||String(e))+'）');
+        }
+        if((pi+1)%3===0 || pi===immediateCandidates.length-1){ save(list); reRender(); }
+        await sleep(180);
       }
 
       save(list);
       reRender();
+      var finalCount=queuedFuture+preparedSuccess+preserved;
       var msg='';
-      if(added){
-        msg='✅ '+added+'レースを「'+purchaseModeLabel+'」でキュー登録しました。';
-        if(fallbackAdded){
-          var rangeOnly=fallbackAdded-directAdded;
-          if(rangeOnly>0) msg+=' 発走時刻を取得できなかった開催場は期間横断方式へ切り替え、'+rangeOnly+'Rを即時生成対象にしました。';
-          if(directAdded>0) msg+=' さらに通常取得・期間横断とも失敗した'+directVenues+'開催場はNAR race_idを直接生成し、'+directAdded+'候補を予約へ登録しました。';
-        }
-        var normalAdded=added-fallbackAdded;
-        if(normalAdded){
-          if(immediateAll) msg+=' 通常取得できた'+normalAdded+'Rも未来を含め即時生成します。';
-          else{
-            msg+=' 通常取得できた'+normalAdded+'Rは未来が発走'+before+'分前、発走済みが即時生成です。';
-            if(pastImmediate) msg+=' 発走済み'+pastImmediate+'R。';
-          }
-        }
-        if(failedVenues) msg+=' 取得不能'+failedVenues+'開催場はエラーとしてスキップしました。';
+      if(finalCount){
+        msg='✅ 予約登録 '+finalCount+'R。';
+        if(preparedSuccess) msg+=' 買い目確認成功 '+preparedSuccess+'R（即時）。';
+        if(queuedFuture) msg+=' 発走前に確認する未来レース '+queuedFuture+'R。';
+        if(preserved) msg+=' 既存の確認済み予約を保持 '+preserved+'R。';
+        if(noBet) msg+=' 見送り '+noBet+'Rは予約していません。';
+        if(prepFailed) msg+=' 取得・生成失敗 '+prepFailed+'Rも予約していません。';
       }else{
-        msg='⚠️ 対象レースを作成できませんでした。JRAは日付からrace_idを直接構成できないため、Worker／一覧取得の復旧が必要です。';
+        msg='⚠️ 買い目を確認できたレースがないため、予約は0件です。';
+        if(noBet) msg+=' 見送り '+noBet+'R。';
+        if(prepFailed) msg+=' 取得・生成失敗 '+prepFailed+'R。';
       }
-      diag.push('キュー登録: '+added+'R','通常外フォールバック: '+fallbackAdded+'R','直接race_id候補: '+directAdded+'R','取得不能開催場: '+failedVenues);
+      if(failedVenues) msg+=' 候補取得不能 '+failedVenues+'開催場。';
+      diag.push(
+        '候補確認: '+candidateCount+'R',
+        '予約登録: '+finalCount+'R',
+        '即時買い目成功: '+preparedSuccess+'R（通常 '+normalSuccess+'／期間横断 '+rangeSuccess+'／直接race_id '+directSuccess+'）',
+        '未来待機: '+queuedFuture+'R',
+        '見送り・購入0点: '+noBet+'R（予約なし）',
+        '取得・生成失敗: '+prepFailed+'R（予約なし）',
+        '直接race_id候補: '+directCandidates+'R',
+        '期間横断候補: '+rangeCandidates+'R',
+        '候補取得不能開催場: '+failedVenues
+      );
       setDiag(diag);
-      setStatus(msg,added>0);
-      schedulerTick();
+      setStatus(msg,finalCount>0);
     } finally {
       restoreRaceUi(uiSnap);
       if(btn){ btn.disabled=false; btn.textContent='🏟️ スイープ予約を作成（全R）'; }
@@ -20290,6 +20369,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         setTimeout(schedulerTick, 80);
       }
     }
+    var cleanList=load(), cleanBefore=cleanList.length;
+    cleanList=cleanList.filter(function(r){
+      return !(r && r.sweep && ((r.unverifiedRaceId && !r.prepared) || (r.prepared && (!Array.isArray(r.tickets) || !r.tickets.length || Number(r.total||0)<=0)) || r.prepError));
+    });
+    if(cleanList.length!==cleanBefore){ save(cleanList); reRender(); setDiag(['旧版の未確認・失敗予約を自動削除: '+(cleanBefore-cleanList.length)+'R']); }
     renderVenues();
     refreshModeStatus();
     try{ window.swReflectTestClock(false); }catch(e){}

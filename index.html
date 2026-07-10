@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.228 VerifiedTicketSweep</title>
+<title>The競馬 EV分析 v5.18.229 ResultSettlementFallback</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -272,7 +272,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.228 VerifiedTicketSweep</span>
+    <span class="ver">v5.18.229 ResultSettlementFallback</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -3232,25 +3232,41 @@ function parsePayoutsFromResultDoc(doc){
   const types = ['単勝','複勝','枠連','馬連','ワイド','馬単','3連複','3連単'];
   const rows = [...doc.querySelectorAll('tr')];
   rows.forEach(tr => {
-    const rowText = normSimDigits(tr.textContent || '');
+    // v5.18.229: tr.textContent はセル境界を消し、"5"＋"1,230円"を
+    // "51,230円"に連結することがある。払戻額は必ずセル単位で先に抽出する。
+    const cellTexts = [...tr.querySelectorAll('th,td')].map(c => normSimDigits(c.textContent || ''));
+    const rowText = cellTexts.join(' ');
     const type = types.find(t => rowText.includes(t));
     if(!type) return;
-    const amounts = [...rowText.matchAll(/([\d,]+)\s*円/g)].map(m => Number(m[1].replace(/,/g,''))).filter(n => n > 0);
+
+    let amounts = [];
+    cellTexts.forEach(c => {
+      [...String(c).matchAll(/([\d,]+)\s*円/g)].forEach(m => {
+        const n = Number(m[1].replace(/,/g,''));
+        if(n > 0) amounts.push(n);
+      });
+    });
+    // セルが取れない特殊DOMだけ従来の行全体抽出へフォールバック。
+    if(!amounts.length){
+      amounts = [...rowText.matchAll(/([\d,]+)\s*円/g)].map(m => Number(m[1].replace(/,/g,''))).filter(n => n > 0);
+    }
     if(!amounts.length) return;
 
+    // 払戻額セルと券種セルを除いて組番だけを解析する。
+    const comboCells = cellTexts.filter(c => !/円/.test(c) && !types.some(t => c === t));
+    const comboText = comboCells.join(' ');
     let combos = [];
     if(type === '単勝' || type === '複勝'){
-      const cells = [...tr.querySelectorAll('td')].map(td => normSimDigits(td.textContent || ''));
       const nums = [];
-      cells.forEach(c => {
-        [...c.matchAll(/(?:^|[^\d])(\d{1,2})(?:[^\d]|$)/g)].forEach(m => {
+      comboCells.forEach(c => {
+        [...String(c).matchAll(/(?:^|[^\d])(\d{1,2})(?:[^\d]|$)/g)].forEach(m => {
           const n = Number(m[1]);
           if(n >= 1 && n <= 18 && !nums.includes(n)) nums.push(n);
         });
       });
       combos = nums.slice(0, amounts.length).map(n => [n]);
     }else{
-      [...rowText.matchAll(/(\d{1,2})\s*[-]\s*(\d{1,2})(?:\s*[-]\s*(\d{1,2}))?/g)].forEach(m => {
+      [...comboText.matchAll(/(\d{1,2})\s*[-]\s*(\d{1,2})(?:\s*[-]\s*(\d{1,2}))?/g)].forEach(m => {
         const a = [Number(m[1]), Number(m[2])];
         if(m[3]) a.push(Number(m[3]));
         if(a.every(n => n >= 1 && n <= 18)) combos.push(a);
@@ -7030,6 +7046,135 @@ function parseHorsesFromDbDoc(doc){
 
   return list.sort((a,b)=>a.num-b.num);
 }
+
+// ============================================================
+// v5.18.229 ResultSettlementFallback
+// NAR/JRAのresult.htmlがSP版・JS描画版で馬リンクを含まない場合でも、
+// 1) result.html本体の着順・払戻を先に読む
+// 2) db.netkeiba.com/race/{race_id}/ の静的結果へフォールバック
+// 3) 馬一覧が取れなくても着順が取れれば精算を継続
+// の順で結果データを復元する。精算処理で「出走馬取得」を必須条件にしない。
+// ============================================================
+function resultHorsesFromFinish(finish){
+  const seen = new Set();
+  return (Array.isArray(finish) ? finish : []).filter(x => {
+    const n = Number(x && x.horseNo || 0);
+    if(!(n >= 1 && n <= 18) || seen.has(n)) return false;
+    seen.add(n); return true;
+  }).map(x => ({
+    num: Number(x.horseNo),
+    frame: Number(x.frame || Math.min(8, Math.max(1, Math.ceil(Number(x.horseNo || 1) / 2)))),
+    name: `馬${Number(x.horseNo)}`,
+    odds: 0,
+    pop: 0,
+    resultOnly: true
+  })).sort((a,b) => a.num - b.num);
+}
+
+function inspectResultDoc229(doc, url, source){
+  if(!doc) return { doc:null, url, source, horses:[], realHorseCount:0, finish:[], payouts:{}, raceName:'', payoutCount:0 };
+  let hs = [];
+  try{
+    hs = /db\.netkeiba\.com/i.test(String(url || '')) ? parseHorsesFromDbDoc(doc) : parseHorsesFromDoc(doc, url);
+    if((!hs || hs.length < 2) && !/db\.netkeiba\.com/i.test(String(url || ''))){
+      // result.html内にdb版相当の静的テーブルが混在するケースも拾う。
+      const dbLike = parseHorsesFromDbDoc(doc);
+      if(dbLike && dbLike.length >= 2) hs = dbLike;
+    }
+  }catch(e){ hs = []; }
+
+  const bak = (typeof horses !== 'undefined' && Array.isArray(horses)) ? horses : [];
+  try{
+    if(hs && hs.length >= 2) horses = hs;
+    let finish = [];
+    let payouts = {};
+    try{ finish = parseFinishFromResultDoc(doc) || []; }catch(e){ finish = []; }
+    try{ payouts = parsePayoutsFromResultDoc(doc) || {}; }catch(e){ payouts = {}; }
+
+    const realHorseCount = Array.isArray(hs) ? hs.filter(h => h && !h.resultOnly).length : 0;
+    // 馬リンクがないSP/JS結果でも、着順行から精算に必要な馬番・枠を復元する。
+    if((!hs || hs.length < 2) && finish.length >= 2) hs = resultHorsesFromFinish(finish);
+
+    return {
+      doc, url, source,
+      horses: Array.isArray(hs) ? hs : [],
+      realHorseCount,
+      finish: Array.isArray(finish) ? finish : [],
+      payouts: payouts && typeof payouts === 'object' ? payouts : {},
+      payoutCount: payouts && typeof payouts === 'object' ? Object.keys(payouts).length : 0,
+      raceName: (typeof parseRaceTitleFromDoc === 'function' ? (parseRaceTitleFromDoc(doc) || '') : '')
+    };
+  }finally{
+    try{ horses = bak; }catch(e){}
+  }
+}
+
+async function loadResultBundleRobust(kind, rid, providedDoc){
+  kind = String(kind || 'JRA').toUpperCase();
+  rid = String(rid || '').replace(/[^0-9]/g, '');
+  if(!/^\d{10,14}$/.test(rid)) throw new Error('race_idが不正です');
+
+  const host = kind === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com';
+  const primaryUrl = `${host}/race/result.html?race_id=${rid}&rf=race_submenu`;
+  let primaryDoc = providedDoc || null;
+  let primaryError = '';
+  if(!primaryDoc){
+    try{
+      const html = await fetchHtmlViaProxy(primaryUrl);
+      primaryDoc = new DOMParser().parseFromString(html, 'text/html');
+    }catch(e){ primaryError = (e && e.message) || String(e); }
+  }
+  const primary = inspectResultDoc229(primaryDoc, primaryUrl, 'result.html');
+
+  // result.htmlで着順・払戻・馬一覧のいずれかが不足したら静的db版を追加取得。
+  let db = { doc:null, url:'', source:'db.netkeiba', horses:[], realHorseCount:0, finish:[], payouts:{}, payoutCount:0, raceName:'' };
+  let dbError = '';
+  if(primary.realHorseCount < 2 || primary.finish.length < 2 || primary.payoutCount < 1){
+    const dbUrl = `https://db.netkeiba.com/race/${rid}/`;
+    try{
+      const dbHtml = await fetchHtmlViaProxy(dbUrl);
+      const dbDoc = new DOMParser().parseFromString(dbHtml, 'text/html');
+      db = inspectResultDoc229(dbDoc, dbUrl, 'db.netkeiba');
+    }catch(e){ dbError = (e && e.message) || String(e); }
+  }
+
+  // 各要素ごとに、取得できた方を採用する。払戻は両方を併合しdbを補完に使う。
+  let hs = primary.realHorseCount >= 2 ? primary.horses : (db.realHorseCount >= 2 ? db.horses : (primary.horses.length >= 2 ? primary.horses : db.horses));
+  let finish = primary.finish.length >= 2 ? primary.finish : db.finish;
+  let payouts = { ...(db.payouts || {}), ...(primary.payouts || {}) };
+  let chosenDoc = primary.doc || db.doc;
+  let chosenUrl = primary.doc ? primary.url : db.url;
+  let source = primary.doc ? 'result.html' : 'db.netkeiba';
+
+  // dbの方が完全なら、馬名・頭数判定・最終オッズ用の基準docとしてdbを採用。
+  if(db.doc && db.realHorseCount >= 2 && primary.realHorseCount < 2){
+    chosenDoc = db.doc; chosenUrl = db.url; source = primary.doc ? 'result.html＋db.netkeiba' : 'db.netkeiba';
+  }else if(db.doc && (db.finish.length > primary.finish.length || db.payoutCount > primary.payoutCount)){
+    source = 'result.html＋db.netkeiba';
+  }
+
+  if((!hs || hs.length < 2) && finish && finish.length >= 2) hs = resultHorsesFromFinish(finish);
+  if(!Array.isArray(hs)) hs = [];
+  if(!Array.isArray(finish)) finish = [];
+
+  return {
+    kind, rid, url:chosenUrl || primaryUrl, doc:chosenDoc,
+    horses:hs, finish, payouts,
+    raceName: primary.raceName || db.raceName || '',
+    source,
+    diagnostics: {
+      primaryHorses: primary.realHorseCount,
+      primaryResultOnlyHorses: Math.max(0, primary.horses.length - primary.realHorseCount),
+      primaryFinish: primary.finish.length,
+      primaryPayouts: primary.payoutCount,
+      dbHorses: db.realHorseCount,
+      dbFinish: db.finish.length,
+      dbPayouts: db.payoutCount,
+      primaryError, dbError
+    }
+  };
+}
+
 // ─── プロキシテスト ──────────────────────────────
 async function testProxy(){
   const url = document.getElementById('proxyUrl').value.trim();
@@ -11847,7 +11992,7 @@ if(horses.length === 0){
   // 公開
   window.runAllRacesSimulation = runAllRacesSimulation;
   window.asw_loadHorses = asw_loadHorses; // v5.18.221 VenueSweepAuto: スイープ自動購入から再利用
-  window.asw_collectRaces = rsCollectRaces; // v5.18.228 VerifiedTicketSweep: 期間横断と同じrace_id列挙を公開
+  window.asw_collectRaces = rsCollectRaces; // v5.18.229 ResultSettlementFallback: 期間横断と同じrace_id列挙を公開
   window.runRangeVenueSimulation = runRangeVenueSimulation;
   window.runRangeVenueSimulationOneShot = runRangeVenueSimulationOneShot;
   window.importRangeVenueSimulationJSON = importRangeVenueSimulationJSON;
@@ -11956,16 +12101,18 @@ if(horses.length === 0){
   // ── v5.18.111: 確定済みレースの出走馬＋最終オッズ取得（result.html本体）──
   // ps_checkConfirmed で取得済みの resultDoc を使い回し、再フェッチしない。
   async function ps_loadHorsesFromResult(kind, rid, resultDoc){
-    const url = `${ps_host(kind)}/race/result.html?race_id=${rid}&rf=race_submenu`;
-    let doc = resultDoc;
-    if(!doc){
-      const html = await fetchHtmlViaProxy(url);
-      doc = new DOMParser().parseFromString(html, 'text/html');
+    const bundle = await loadResultBundleRobust(kind, rid, resultDoc);
+    let doc = bundle.doc;
+    let hs = bundle.horses || [];
+    // 確定済み予想では馬名・オッズが必要。着順だけから作った仮馬一覧は使用しない。
+    const realHs = hs.filter(h => h && !h.resultOnly && Number(h.num) > 0 && h.name);
+    if(realHs.length >= 2) hs = realHs;
+    if(!hs || hs.length < 2 || hs.every(h => h.resultOnly)){
+      const d = bundle.diagnostics || {};
+      throw new Error(`確定結果は取得しましたが、予想に必要な出走馬・最終オッズを復元できませんでした（result:${d.primaryHorses||0}頭 / db:${d.dbHorses||0}頭）`);
     }
-    let hs = parseHorsesFromDoc(doc, url);
-    if(!hs || hs.length < 2) throw new Error('結果ページから出走馬を取得できませんでした');
 
-    const raceName = parseRaceTitleFromDoc(doc) || '';
+    const raceName = bundle.raceName || (doc ? parseRaceTitleFromDoc(doc) : '') || '';
 
     // 結果ページの「最終単勝オッズ・最終人気」を最優先（v5.18.64と同方針）。
     const finalMap = parseFinalOddsPopularityFromResultDoc(doc, hs);
@@ -12375,16 +12522,14 @@ if(horses.length === 0){
     if(!row || row.status !== 'ok') return row;
     if(!row.rid) throw new Error(`${row.no || '?'}Rのrace_idがありません。`);
     const kind = ps_lastMeta?.kind || $('pickKind')?.value || 'JRA';
-    const url = `${ps_host(kind)}/race/result.html?race_id=${row.rid}&rf=race_submenu`;
-    const html = await fetchHtmlViaProxy(url);
-    const doc = new DOMParser().parseFromString(html, 'text/html');
-    const rHorses = parseHorsesFromDoc(doc, url);
-    if(!rHorses || rHorses.length < 2) throw new Error('結果ページから出走馬を取得できませんでした');
+    const bundle = await loadResultBundleRobust(kind, row.rid);
+    const doc = bundle.doc;
+    const rHorses = bundle.horses || [];
     const bak = horses; horses = rHorses;
     try{
-      const finish = parseFinishFromResultDoc(doc) || [];
+      const finish = bundle.finish || [];
       const hasFinish = finish.length >= 2;
-      const payouts = hasFinish ? parsePayoutsFromResultDoc(doc) : {};
+      const payouts = hasFinish ? (bundle.payouts || {}) : {};
       let bet = 0, ret = 0, hit = 0;
       const detail = (row.tickets || []).map(t => {
         const a = Number(t.amount || 0); bet += a;
@@ -12396,7 +12541,7 @@ if(horses.length === 0){
       });
       row.verify = {
         checkedAt: new Date().toISOString(), hasFinish,
-        raceName: parseRaceTitleFromDoc(doc) || row.raceName || '',
+        raceName: bundle.raceName || (doc ? parseRaceTitleFromDoc(doc) : '') || row.raceName || '',
         finishTop: hasFinish ? finish.slice(0,3).map(x => x.horseNo) : [],
         bet, ret, hit, profit: ret - bet, roi: bet ? ret / bet * 100 : 0, detail
       };
@@ -12685,19 +12830,24 @@ if(horses.length === 0){
 
   // ── 1レース精算：結果ページ取得 → 着順・払戻 → 買い目判定 ──
   async function pts_settleRace(kind, rid, tickets){
-    const url = `${pts_host(kind)}/race/result.html?race_id=${rid}&rf=race_submenu`;
-    const html = await fetchHtmlViaProxy(url);
-    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const bundle = await loadResultBundleRobust(kind, rid);
+    const doc = bundle.doc;
 
-    // parseFinishFromResultDoc / judgeTicketHit(複勝の頭数判定) は global horses を参照する
-    const rHorses = parseHorsesFromDoc(doc, url);
-    if(!rHorses || rHorses.length < 2) throw new Error('結果ページから出走馬を取得できませんでした');
+    // v5.18.229: 出走馬テーブルは精算の必須条件ではない。
+    // 着順が取れた場合は、着順行から復元した馬番・枠で的中判定を続行する。
+    const rHorses = bundle.horses || [];
     horses = rHorses;
 
-    const raceName = parseRaceTitleFromDoc(doc) || '';
-    const finish = parseFinishFromResultDoc(doc) || [];
+    const raceName = bundle.raceName || (doc ? parseRaceTitleFromDoc(doc) : '') || '';
+    const finish = bundle.finish || [];
     const hasFinish = finish.length >= 2;
-    const payouts = hasFinish ? parsePayoutsFromResultDoc(doc) : {};
+    const payouts = hasFinish ? (bundle.payouts || {}) : {};
+
+    // result.htmlもdb版も取得できず、着順も馬一覧もない場合だけ本当の解析失敗とする。
+    if(!doc && rHorses.length < 2 && !hasFinish){
+      const d = bundle.diagnostics || {};
+      throw new Error(`結果ページを取得・解析できませんでした${d.primaryError ? '（'+d.primaryError+'）' : ''}`);
+    }
 
     let bet = 0, ret = 0, hit = 0;
     const detail = tickets.map(t => {
@@ -12715,7 +12865,9 @@ if(horses.length === 0){
       raceName, hasFinish,
       finishTop: hasFinish ? finish.slice(0,3).map(x => x.horseNo) : [],
       bet, ret, hit, profit: ret - bet, roi: bet ? ret / bet * 100 : 0,
-      detail
+      detail,
+      resultSource: bundle.source || 'result.html',
+      resultDiagnostics: bundle.diagnostics || {}
     };
   }
 
@@ -12990,7 +13142,9 @@ if(horses.length === 0){
       const settled = rows.filter(x => x.status === 'ok' && x.hasFinish).length;
       const pending = rows.filter(x => x.status === 'ok' && !x.hasFinish).length;
       const errs    = rows.filter(x => x.status === 'error').length;
+      const fallbackCount = rows.filter(x => x.status === 'ok' && /db\.netkeiba/.test(String(x.resultSource || ''))).length;
       let msg = `✅ 完了：${settled}レースを精算しました`;
+      if(fallbackCount) msg += `（db静的結果フォールバック ${fallbackCount}R）`;
       const parts = [];
       if(pending) parts.push(`未確定 ${pending}R`);
       if(errs) parts.push(`失敗 ${errs}R`);
@@ -19194,7 +19348,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.228 VerifiedTicketSweep';
+  var VERSION = 'v5.18.229 ResultSettlementFallback';
   var KEY = 'tk-sim-reservations-v1';
   var alerted = {};
 
@@ -19551,7 +19705,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.228 VerifiedTicketSweep';
+  var VERSION = 'v5.18.229 ResultSettlementFallback';
   var RA_KEY = 'tk-sim-reservations-v1';
   var TEXT_KEY = 'tk-sim-reservation-settle-text-v1';
   var GROUP_KEY = 'tk-sim-reservation-settle-groups-v1';
@@ -19797,7 +19951,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.228 VerifiedTicketSweep';
+  var VERSION = 'v5.18.229 ResultSettlementFallback';
   var KEY = 'tk-sim-reservations-v1';
   var IMMEDIATE_KEY = 'tk-sweep-immediate-all-v1';
   var prepping = false;

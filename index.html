@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.237 TripleLiveFrame</title>
+<title>The競馬 EV分析 v5.18.238 RangePurchaseClipboard</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -271,7 +271,7 @@ body{
 
 
 /* ============================================================
-   v5.18.237 TripleLiveFrame / 地方競馬ライブ埋め込み
+   v5.18.238 RangePurchaseClipboard / 地方競馬ライブ埋め込み
    ============================================================ */
 .nar-live-note{
   font-size:11px;color:var(--muted);line-height:1.7;margin-bottom:10px;
@@ -308,7 +308,7 @@ body{
 
 
 /* ============================================================
-   v5.18.237 TripleLiveFrame / JRA公式ライブ埋め込み
+   v5.18.238 RangePurchaseClipboard / JRA公式ライブ埋め込み
    ============================================================ */
 .jra-live-note{
   font-size:11px;color:var(--muted);line-height:1.7;margin-bottom:10px;
@@ -344,7 +344,7 @@ body{
 
 
 /* ============================================================
-   v5.18.237 TripleLiveFrame / ライブ縦並び・横並び切替
+   v5.18.238 RangePurchaseClipboard / ライブ縦並び・横並び切替
    ============================================================ */
 .live-layout-toolbar{
   display:none;align-items:center;justify-content:space-between;gap:10px;
@@ -408,7 +408,7 @@ body{
 
 
 /* ============================================================
-   v5.18.237 TripleLiveFrame / 楽天競馬ライブ埋め込み
+   v5.18.238 RangePurchaseClipboard / 楽天競馬ライブ埋め込み
    ============================================================ */
 .rakuten-live-note{
   font-size:11px;color:var(--muted);line-height:1.7;margin-bottom:10px;
@@ -472,7 +472,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.237 TripleLiveFrame</span>
+    <span class="ver">v5.18.238 RangePurchaseClipboard</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -717,6 +717,7 @@ body{
         <button class="btn-sm" id="rsResumeOneShotBtn" onclick="runRangeVenueSimulationOneShot({resume:true})" type="button" style="display:none;background:rgba(255,196,0,.10);border-color:rgba(255,196,0,.3);color:#ffe9b3">🚄 続きを一発モードで</button>
         <button class="btn-sm" id="rsJsonExportBtn" onclick="exportRangeVenueSimulationJSON()" type="button">📊 期間横断JSON出力</button>
         <button class="btn-sm" id="rsJsonImportBtn" onclick="importRangeVenueSimulationJSON()" type="button">📥 期間横断JSON読込</button>
+        <button class="btn-sm" id="rsPurchaseCopyBtn" onclick="rsTransferPurchaseClipboard(event)" type="button" style="background:rgba(251,191,36,.14);border-color:rgba(251,191,36,.42);color:#fde68a;font-weight:900">🎫 明細を購入用へ一発転送</button>
         <input type="file" id="rsJsonImportFile" accept=".json,application/json,text/json" style="display:none">
       </div>
       <div id="rsProgress" style="margin-top:10px"></div>
@@ -7438,7 +7439,7 @@ function parseHorsesFromDbDoc(doc){
 }
 
 // ============================================================
-// v5.18.237 TripleLiveFrame
+// v5.18.238 RangePurchaseClipboard
 // NAR/JRAのresult.htmlがSP版・JS描画版で馬リンクを含まない場合でも、
 // 1) result.html本体の着順・払戻を先に読む
 // 2) db.netkeiba.com/race/{race_id}/ の静的結果へフォールバック
@@ -10735,8 +10736,14 @@ if(horses.length === 0){
   // 期間横断/一括シミュレーションのJSON出力で、券種別・買い目単位の詳細集計に使う。
   // 内訳のキー名は解析ツール(Profit Graph Switcher)の明細判定キー(投資/払戻/収支)と
   // 衝突しないよう 購入額/払戻額 を使い、二重集計を防ぐ。
-  function asw_captureTicketBreakdown(row, tickets, finish, payouts){
+  function asw_captureTicketBreakdown(row, tickets, finish, payouts, horseList){
     try{
+      const horseNameMap = {};
+      (horseList || []).forEach(h => {
+        const n = String(Number(h && h.num || 0));
+        if(n !== '0' && h && h.name) horseNameMap[n] = String(h.name);
+      });
+      row.horseNames = horseNameMap;
       const hasFinish = !!row.hasFinish;
       const details = [];
       const byType = {};
@@ -10746,7 +10753,8 @@ if(horses.length === 0){
         const pay = isHit ? payoutForTicket(t, payouts) : { amount: 0 };
         const r = isHit ? Math.floor(a / 100) * Number(pay.amount || 0) : 0;
         const ty = t.type || '不明';
-        details.push({ 券種名: ty, 買い目: (t.nums || []).join('-'), 購入額: a, 払戻額: r, 的中: isHit ? 1 : 0 });
+        const nameText = (t.nums || []).map(n => horseNameMap[String(Number(n))] || '').filter(Boolean).join('－');
+        details.push({ 券種名: ty, 買い目: (t.nums || []).join('-'), 馬名: nameText, 購入額: a, 払戻額: r, 的中: isHit ? 1 : 0 });
         const m = byType[ty] || (byType[ty] = { count: 0, bet: 0, ret: 0, hit: 0 });
         m.count++; m.bet += a; m.ret += r; if(isHit) m.hit++;
       });
@@ -10924,7 +10932,7 @@ if(horses.length === 0){
           const s = asw_settle(simTickets, finish, payouts);
           row.bet = s.bet; row.ret = s.ret; row.profit = s.profit; row.roi = s.roi; row.hit = s.hit;
           row.status = 'ok';
-          asw_captureTicketBreakdown(row, simTickets, finish, payouts); // v5.18.188 券種内訳
+          asw_captureTicketBreakdown(row, simTickets, finish, payouts, valid); // v5.18.238 馬名付き券種内訳
 
           // 5) 既存のシミュ収支グラフへ記録（race_id単位で上書き）
           if(row.hasFinish){
@@ -11250,7 +11258,7 @@ if(horses.length === 0){
     try{
       if(Array.isArray(r.ticketDetails) && r.ticketDetails.length){
         return r.ticketDetails.map(d => ({
-          text: `${d.券種名 || '?'} ${d.買い目 || ''} ${(Number(d.購入額) || 0).toLocaleString()}円`
+          text: `${d.券種名 || '?'} ${d.買い目 || ''}${d.馬名 ? `［${d.馬名}］` : ''} ${(Number(d.購入額) || 0).toLocaleString()}円`
               + (d.的中 ? `→${(Number(d.払戻額) || 0).toLocaleString()}円` : ''),
           hit: !!d.的中
         }));
@@ -11940,8 +11948,14 @@ if(horses.length === 0){
     });
     return { bet, ret, hit, profit: ret - bet, roi: bet ? ret / bet * 100 : 0, count: (tickets || []).length, hasFinish };
   }
-  function rsOneShotBreakdown(row, tickets, finish, payouts, localHorseCount){
+  function rsOneShotBreakdown(row, tickets, finish, payouts, localHorseCount, horseList){
     try{
+      const horseNameMap = {};
+      (horseList || []).forEach(h => {
+        const n = String(Number(h && h.num || 0));
+        if(n !== '0' && h && h.name) horseNameMap[n] = String(h.name);
+      });
+      row.horseNames = horseNameMap;
       const details = [];
       const byType = {};
       (tickets || []).forEach(t => {
@@ -11950,7 +11964,8 @@ if(horses.length === 0){
         const pay = isHit ? rsOneShotPayout(t, payouts) : { amount: 0 };
         const ret = isHit ? Math.floor(a / 100) * Number(pay.amount || 0) : 0;
         const nums = Array.isArray(t.nums) ? t.nums.join('-') : '';
-        details.push({ 券種名: t.type || '', 買い目: nums, 購入額: a, 払戻額: ret, 的中: isHit ? 1 : 0 });
+        const nameText = (t.nums || []).map(n => horseNameMap[String(Number(n))] || '').filter(Boolean).join('－');
+        details.push({ 券種名: t.type || '', 買い目: nums, 馬名: nameText, 購入額: a, 払戻額: ret, 的中: isHit ? 1 : 0 });
         const k = t.type || '不明';
         if(!byType[k]) byType[k] = { 券種名:k, 点数:0, 購入額:0, 払戻額:0, 的中:0 };
         byType[k].点数 += 1; byType[k].購入額 += a; byType[k].払戻額 += ret; if(isHit) byType[k].的中 += 1;
@@ -12016,7 +12031,7 @@ if(horses.length === 0){
       row.finishTop = row.hasFinish ? finish.slice(0, 3).map(x => x.horseNo) : [];
       const s = rsOneShotSettle(tickets, finish, payouts, valid.length);
       row.bet = s.bet; row.ret = s.ret; row.profit = s.profit; row.roi = s.roi; row.hit = s.hit; row.status = 'ok';
-      rsOneShotBreakdown(row, tickets, finish, payouts, valid.length);
+      rsOneShotBreakdown(row, tickets, finish, payouts, valid.length, valid);
     }catch(e){
       row.status = 'error';
       row.error = (e && e.message) || String(e);
@@ -12382,7 +12397,7 @@ if(horses.length === 0){
   // 公開
   window.runAllRacesSimulation = runAllRacesSimulation;
   window.asw_loadHorses = asw_loadHorses; // v5.18.221 VenueSweepAuto: スイープ自動購入から再利用
-  window.asw_collectRaces = rsCollectRaces; // v5.18.237 TripleLiveFrame: 期間横断と同じrace_id列挙を公開
+  window.asw_collectRaces = rsCollectRaces; // v5.18.238 RangePurchaseClipboard: 期間横断と同じrace_id列挙を公開
   window.runRangeVenueSimulation = runRangeVenueSimulation;
   window.runRangeVenueSimulationOneShot = runRangeVenueSimulationOneShot;
   window.importRangeVenueSimulationJSON = importRangeVenueSimulationJSON;
@@ -19738,7 +19753,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.237 TripleLiveFrame';
+  var VERSION = 'v5.18.238 RangePurchaseClipboard';
   var KEY = 'tk-sim-reservations-v1';
   var alerted = {};
 
@@ -19790,7 +19805,10 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         amount: Number(t.amount || t.購入額 || t.bet || 0),
         odds: Number(t.odds || 0),
         ev: Number(t.ev || 0),
-        p: Number(t.p || 0)
+        p: Number(t.p || 0),
+        horseNames: Array.isArray(t.horseNames)
+          ? t.horseNames.map(String).filter(Boolean)
+          : String(t.horseNames || t.馬名 || '').split(/[－—–|]/).map(function(x){ return x.trim(); }).filter(Boolean)
       };
     }).filter(function(t){ return t.type && t.nums.length && t.amount > 0; });
   }
@@ -19808,7 +19826,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     return (tickets || []).map(function(t){
       var ev = Number(t.ev || 0) ? ' / EV' + Number(t.ev || 0).toFixed(2) : '';
       var odds = Number(t.odds || 0) ? ' / ' + Number(t.odds || 0).toFixed(1) + '倍' : '';
-      return t.type + ' ' + (t.nums || []).join('-') + ' ' + yen(t.amount) + '円' + odds + ev;
+      var names = Array.isArray(t.horseNames) && t.horseNames.length ? '［' + t.horseNames.join('－') + '］' : '';
+      return t.type + ' ' + (t.nums || []).join('-') + names + ' ' + yen(t.amount) + '円' + odds + ev;
     }).join('\n');
   }
   function reservationText(r){
@@ -20095,7 +20114,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.237 TripleLiveFrame';
+  var VERSION = 'v5.18.238 RangePurchaseClipboard';
   var RA_KEY = 'tk-sim-reservations-v1';
   var TEXT_KEY = 'tk-sim-reservation-settle-text-v1';
   var GROUP_KEY = 'tk-sim-reservation-settle-groups-v1';
@@ -20341,7 +20360,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.237 TripleLiveFrame';
+  var VERSION = 'v5.18.238 RangePurchaseClipboard';
   var KEY = 'tk-sim-reservations-v1';
   var IMMEDIATE_KEY = 'tk-sweep-immediate-all-v1';
   var prepping = false;
@@ -20935,7 +20954,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 
 <!-- ============================================================
-     v5.18.237 TripleLiveFrame
+     v5.18.238 RangePurchaseClipboard
      ・予約テキスト／リアルタイム精算の確定結果を、期間横断カードの
        既存グラフ領域へ累計収支グラフとして自動表示する。
      ・文章や明細はグラフ領域へ追加せず、グラフだけを表示する。
@@ -20944,7 +20963,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 <script>
 (function(){
   'use strict';
-  var VERSION230 = 'v5.18.237 TripleLiveFrame';
+  var VERSION230 = 'v5.18.238 RangePurchaseClipboard';
 
   function byId(id){ return document.getElementById(id); }
 
@@ -21133,11 +21152,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script>
 /* ============================================================
-   v5.18.237 TripleLiveFrame / 公式地方競馬ライブの遅延iframe読込
+   v5.18.238 RangePurchaseClipboard / 公式地方競馬ライブの遅延iframe読込
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION_LIVE = 'v5.18.237 TripleLiveFrame';
+  var VERSION_LIVE = 'v5.18.238 RangePurchaseClipboard';
   var SIMPLE_BASE = 'https://simple.keiba-lv-st.jp/';
   var NORMAL_BASE = 'https://keiba-lv-st.jp/';
   var TRACK_MAP = {
@@ -21293,11 +21312,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script>
 /* ============================================================
-   v5.18.237 TripleLiveFrame / JRA公式ライブの遅延iframe読込
+   v5.18.238 RangePurchaseClipboard / JRA公式ライブの遅延iframe読込
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION_JRA_LIVE = 'v5.18.237 TripleLiveFrame';
+  var VERSION_JRA_LIVE = 'v5.18.238 RangePurchaseClipboard';
   var URLS = {
     youtube: 'https://www.youtube.com/embed/live_stream?channel=UCj6AKkCWS6FJqf0o5wP45eQ&autoplay=1&playsinline=1&rel=0',
     green: 'https://sp.gch.jp/jra',
@@ -21408,11 +21427,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script>
 /* ============================================================
-   v5.18.237 TripleLiveFrame / 楽天競馬公式ライブ遅延iframe読込
+   v5.18.238 RangePurchaseClipboard / 楽天競馬公式ライブ遅延iframe読込
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION_RAKUTEN_LIVE='v5.18.237 TripleLiveFrame';
+  var VERSION_RAKUTEN_LIVE='v5.18.238 RangePurchaseClipboard';
   var LIVE_URL='https://keiba.rakuten.co.jp/livemovie';
   var currentUrl='';
   var loadSerial=0;
@@ -21492,11 +21511,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script>
 /* ============================================================
-   v5.18.237 TripleLiveFrame / ライブ縦並び・横並び切替
+   v5.18.238 RangePurchaseClipboard / ライブ縦並び・横並び切替
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION_LAYOUT='v5.18.237 TripleLiveFrame';
+  var VERSION_LAYOUT='v5.18.238 RangePurchaseClipboard';
   var STORAGE_KEY='tk-live-layout';
   var currentLayout='horizontal';
 
@@ -21580,6 +21599,153 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   else init();
   [300,1200,3000,7000,11000].forEach(function(ms){setTimeout(function(){applyLayout(currentLayout,false);syncLiveWidth();setVersion();},ms);});
   console.log('['+VERSION_LAYOUT+'] enabled: switchable vertical/horizontal live layout');
+})();
+</script>
+
+
+
+<!-- ============================================================
+     v5.18.238 RangePurchaseClipboard
+     期間横断シミュレーション明細を馬名付き購入テキストへ変換し、
+     クリップボードへ一発コピー＋予約購入補助へrace_id単位で転送する。
+     ============================================================ -->
+<script>
+(function(){
+  'use strict';
+  var RESERVE_KEY = 'tk-sim-reservations-v1';
+  function $(id){ return document.getElementById(id); }
+  function yen(n){ return Number(n || 0).toLocaleString(); }
+  function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]; }); }
+  function numsOf(d){
+    return String((d && (d.買い目 || d.nums)) || '').split(/[-,\s]+/).map(Number).filter(function(n){ return n > 0; });
+  }
+  function namesOf(row, d, nums){
+    var direct = String((d && (d.馬名 || d.horseNames)) || '').trim();
+    if(direct) return direct.split(/[－—–|]/).map(function(x){ return x.trim(); }).filter(Boolean);
+    var map = (row && row.horseNames && typeof row.horseNames === 'object') ? row.horseNames : {};
+    return (nums || []).map(function(n){ return String(map[String(Number(n))] || '').trim(); }).filter(Boolean);
+  }
+  function detailTickets(row){
+    var details = Array.isArray(row && row.ticketDetails) ? row.ticketDetails : [];
+    return details.map(function(d){
+      var nums = numsOf(d);
+      return {
+        type: String(d.券種名 || d.type || '').trim(),
+        nums: nums,
+        amount: Number(d.購入額 || d.amount || 0),
+        horseNames: namesOf(row, d, nums)
+      };
+    }).filter(function(t){ return t.type && t.nums.length && t.amount > 0; });
+  }
+  function getRows(){
+    var rows = Array.isArray(window.__rsLastRows) ? window.__rsLastRows : [];
+    return rows.filter(function(r){
+      return r && !r.header && r.status === 'ok' && Number(r.bet || 0) > 0 && detailTickets(r).length;
+    }).slice().sort(function(a,b){
+      return (String(a.date||'')+'|'+String(a.venueCode||'')+'|'+String(a.no||'').padStart(2,'0'))
+        .localeCompare(String(b.date||'')+'|'+String(b.venueCode||'')+'|'+String(b.no||'').padStart(2,'0'));
+    });
+  }
+  function kindOf(row){
+    if(row && row.kind) return String(row.kind).toUpperCase();
+    var el = $('rsKind'); return String((el && el.value) || 'JRA').toUpperCase();
+  }
+  function hostOf(kind){ return kind === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com'; }
+  function modeInfo(){
+    var key = '';
+    try{ key = (window.settings && settings.mode) || ''; }catch(e){}
+    var label = key;
+    try{ if(key && typeof getModeLabel === 'function') label = getModeLabel(key); }catch(e){}
+    return { key:key, label:label || key || '未設定' };
+  }
+  function ticketLine(t){
+    var names = t.horseNames && t.horseNames.length ? '［'+t.horseNames.join('－')+'］' : '';
+    return t.type+' '+t.nums.join('-')+names+' '+yen(t.amount)+'円';
+  }
+  function buildText(rows){
+    var lines = ['【期間横断シミュレーション・購入用買い目】'];
+    var mode = modeInfo();
+    lines.push('予想モード: '+mode.label);
+    lines.push('対象レース: '+rows.length+'R');
+    lines.push('※馬名は取得できたレースだけ表示。購入確定は投票サイトで本人が確認。');
+    rows.forEach(function(r){
+      var kind = kindOf(r), tickets = detailTickets(r);
+      var title = [r.date, kind, r.venueName || r.venueCode || '', (r.no ? r.no+'R' : ''), r.raceName || ''].filter(Boolean).join(' ');
+      lines.push('', '━━━━━━━━━━━━━━━━━━━━', '【'+title+'】', 'race_id: '+String(r.rid || ''));
+      tickets.forEach(function(t){ lines.push(ticketLine(t)); });
+      lines.push('合計: '+yen(tickets.reduce(function(s,t){ return s+t.amount; },0))+'円');
+      if(r.rid) lines.push('netkeiba: '+hostOf(kind)+'/odds/index.html?race_id='+encodeURIComponent(r.rid)+'&rf=race_submenu');
+    });
+    return lines.join('\n');
+  }
+  function copyText(text){
+    if(navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text).then(function(){ return true; }).catch(fallback);
+    return fallback();
+    function fallback(){
+      return new Promise(function(resolve){
+        try{
+          var ta = document.createElement('textarea'); ta.value = text; ta.style.position='fixed'; ta.style.left='-9999px'; ta.style.top='0';
+          document.body.appendChild(ta); ta.focus(); ta.select(); var ok = document.execCommand('copy'); document.body.removeChild(ta); resolve(!!ok);
+        }catch(e){ resolve(false); }
+      });
+    }
+  }
+  function loadReservations(){ try{ var x=JSON.parse(localStorage.getItem(RESERVE_KEY)||'[]'); return Array.isArray(x)?x:[]; }catch(e){ return []; } }
+  function saveReservations(list){ try{ localStorage.setItem(RESERVE_KEY, JSON.stringify((list||[]).slice(-200))); return true; }catch(e){ return false; } }
+  function transferReservations(rows){
+    var list = loadReservations(), mode = modeInfo(), added = 0;
+    rows.forEach(function(r){
+      var tickets = detailTickets(r), rid = String(r.rid || '');
+      if(!rid || !tickets.length) return;
+      var kind = kindOf(r), host = hostOf(kind), total = tickets.reduce(function(s,t){ return s+t.amount; },0);
+      var rec = {
+        id: 'range-'+rid,
+        date: String(r.date || ''), kind: kind,
+        venue: String(r.venueName || r.venueCode || ''), raceNo: r.no ? String(r.no)+'R' : '', raceName: String(r.raceName || ''),
+        raceId: rid, reserveAt: String(r.reserveAt || ''), postTime: String(r.postTime || ''),
+        tickets: tickets, total: total, mode: mode.key, modeLabel: mode.label,
+        betUrl: host+'/odds/index.html?race_id='+encodeURIComponent(rid)+'&rf=race_submenu',
+        raceUrl: host+'/race/shutuba.html?race_id='+encodeURIComponent(rid)+'&rf=race_submenu',
+        createdAt: new Date().toISOString(), done:false, rangeTransfer:true
+      };
+      list = list.filter(function(x){ return String(x.raceId || '') !== rid; });
+      list.push(rec); added++;
+    });
+    saveReservations(list);
+    try{ if(typeof window.raRenderReservations === 'function') window.raRenderReservations(); }catch(e){}
+    return added;
+  }
+  function setProgress(html, ok){
+    var box = $('rsProgress');
+    if(box) box.innerHTML = '<div class="url-status '+(ok?'ok':'err')+'">'+html+'</div>';
+  }
+  window.rsTransferPurchaseClipboard = async function(ev){
+    var btn = ev && ev.currentTarget;
+    var rows = getRows();
+    if(!rows.length){
+      setProgress('⚠️ 購入用へ転送できる買い目がありません。期間横断シミュレーションを実行し、投資額のある明細を作成してください。', false);
+      return;
+    }
+    var original = btn ? btn.textContent : '';
+    if(btn){ btn.disabled = true; btn.textContent = '⏳ 転送中…'; }
+    try{
+      var text = buildText(rows);
+      var copied = await copyText(text);
+      var added = transferReservations(rows);
+      if(copied){
+        if(btn) btn.textContent = '✅ 転送しました';
+        setProgress('✅ '+rows.length+'Rの馬名付き買い目をクリップボードへコピーし、予約購入補助へ'+added+'R登録しました。シミュレーションタブ下部の予約一覧から各レースを開けます。', true);
+      }else{
+        if(btn) btn.textContent = '⚠️ コピー失敗';
+        setProgress('⚠️ 予約購入補助へ'+added+'R登録しましたが、クリップボードへのコピーに失敗しました。Safariのクリップボード許可を確認してください。', false);
+      }
+    }catch(e){
+      console.error('[rsTransferPurchaseClipboard]', e);
+      setProgress('❌ 一発転送に失敗しました: '+esc(e && e.message || e), false);
+    }finally{
+      setTimeout(function(){ if(btn){ btn.disabled=false; btn.textContent=original; } }, 1800);
+    }
+  };
 })();
 </script>
 

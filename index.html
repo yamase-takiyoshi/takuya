@@ -261,6 +261,7 @@ body{
 .ra-clockbar.testing .ra-clock .ra-sec{color:#fbbf24}
 .ra-clockbar.testing .ra-clock-dot{background:#fbbf24;box-shadow:0 0 6px rgba(251,191,36,.8)}
 .ra-clock-date.testing{color:#fbbf24;font-weight:800}
+.sw-test-badge{font-size:11px;line-height:1.5;color:#fde68a;border:1px dashed rgba(251,191,36,.5);background:rgba(251,191,36,.10);border-radius:8px;padding:6px 9px;margin:2px 0 10px}
 
 </style>
 </head>
@@ -662,6 +663,8 @@ body{
           </select>
         </div>
       </div>
+      <!-- v5.18.222 TestClock: テスト時計に追従中の表示（過去の開催日でスイープ検証） -->
+      <div id="swTestBadge" class="sw-test-badge" style="display:none"></div>
       <div style="margin:6px 0 2px;display:flex;align-items:center;justify-content:space-between;gap:8px">
         <label style="font-size:12px;color:var(--muted)">開催場（複数選択可）</label>
         <button class="btn-sm" type="button" onclick="swToggleAllVenues()">全選択 / 解除</button>
@@ -19393,12 +19396,14 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     writeOffset(d.getTime() - Date.now());
     alerted = {}; // テスト開始時は鳴動履歴をリセット（到来を再検証できる）
     updateClock(); raRenderReservations(); updateNext(load());
+    try{ if(typeof window.swReflectTestClock === 'function') window.swReflectTestClock(true); }catch(e){}
     setStatus('🧪 時計を ' + esc(v.replace('T',' ')) + ' に合わせました。ここから実時間どおり進み、カウントダウン・鳴動をそのまま確認できます。戻すには「⏱ 実時刻に戻す」。', true);
   };
   window.raClearTestClock = function(){
     if(!readOffset()){ setStatus('ℹ️ すでに実時刻（端末時刻）です。', true); return; }
     writeOffset(0); alerted = {};
     updateClock(); raRenderReservations(); updateNext(load());
+    try{ if(typeof window.swReflectTestClock === 'function') window.swReflectTestClock(true); }catch(e){}
     setStatus('⏱ 実時刻（端末時刻）に戻しました。', true);
   };
   // v5.18.220: リアルタイム時計（端末ローカル時刻＝JST）。予約時刻と同じ基準で表示。
@@ -19783,7 +19788,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   }
   function vname(kind, code){ try{ return venueName(kind, code); }catch(e){ return code; } }
   function hasProxy(){ try{ return !!(typeof settings !== 'undefined' && settings && settings.proxyUrl); }catch(e){ return false; } }
-  function todayStr(){ try{ return todayYmd(); }catch(e){ var d=new Date(); return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()); } }
+  // v5.18.222 TestClock: 予約補助のテスト時計を共有（過去の開催日でスイープを検証できる）
+  function nowMs(){ try{ return window.raNowMs ? window.raNowMs() : Date.now(); }catch(e){ return Date.now(); } }
+  function isTesting(){ try{ return !!(window.raClockOffset && window.raClockOffset()); }catch(e){ return false; } }
+  function ymdOf(d){ return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()); }
+  function todayStr(){ if(isTesting()) return ymdOf(new Date(nowMs())); try{ return todayYmd(); }catch(e){ return ymdOf(new Date()); } }
   function load(){ try{ var a = JSON.parse(localStorage.getItem(KEY) || '[]'); return Array.isArray(a) ? a : []; }catch(e){ return []; } }
   function save(a){ try{ localStorage.setItem(KEY, JSON.stringify((a || []).slice(-200))); }catch(e){} }
   function setStatus(html, ok){ var el = $('swStatus'); if(el) el.innerHTML = '<div class="url-status '+(ok?'ok':'err')+'">'+html+'</div>'; }
@@ -19883,6 +19892,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
   // ── スケジューラ：準備時刻に達したスイープ予約の買い目を自動生成 ──
   async function schedulerTick(){
+    try{ window.swReflectTestClock(false); }catch(e){}
     if(prepping) return;
     var now = (window.raNowMs ? window.raNowMs() : Date.now()); // v5.18.222: テスト時計と共有
     var due = load().filter(function(r){
@@ -19936,6 +19946,27 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     var box = $('swVenueBox'); if(!box) return [];
     return [].slice.call(box.querySelectorAll('input[type=checkbox]:checked')).map(function(c){ return c.value; });
   }
+
+  // v5.18.222 TestClock: テスト時計の状態をスイープ側へ反映する。
+  // force=true のとき開催日(swDate)もテスト日（実時刻へ戻したときは実日付）へ合わせる。
+  window.swReflectTestClock = function(force){
+    var testing = isTesting();
+    var badge = $('swTestBadge');
+    if(force){
+      var sd = $('swDate');
+      if(sd) sd.value = testing ? ymdOf(new Date(nowMs())) : (function(){ try{ return todayYmd(); }catch(e){ return ymdOf(new Date()); } })();
+    }
+    if(badge){
+      if(testing){
+        var d = new Date(nowMs());
+        badge.style.display = '';
+        badge.textContent = '🧪 テスト時計に追従中：' + d.getFullYear()+'/'+pad(d.getMonth()+1)+'/'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes())+' 基準で「今より後」を判定します';
+      }else{
+        badge.style.display = 'none';
+        badge.textContent = '';
+      }
+    }
+  };
 
   window.swBuildSweep = async function(){
     var kind = getKind();
@@ -20016,13 +20047,14 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   function init(){
     var sd = $('swDate'); if(sd && !sd.value) sd.value = todayStr();
     renderVenues();
+    try{ window.swReflectTestClock(false); }catch(e){}
     var pk = $('pickKind'); if(pk) pk.addEventListener('change', function(){ renderVenues(); });
     // シミュレーションタブを開いた時に開催場を最新化
     document.addEventListener('click', function(ev){ if(ev.target && ev.target.closest && ev.target.closest('[data-tab="sim"]')) setTimeout(renderVenues, 60); });
     setVer();
   }
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
-  [0, 600, 1800, 4000, 9000].forEach(function(ms){ setTimeout(function(){ setVer(); try{ if(!$('swVenueBox') || !$('swVenueBox').children.length) renderVenues(); }catch(e){} }, ms); });
+  [0, 600, 1800, 4000, 9000].forEach(function(ms){ setTimeout(function(){ setVer(); try{ if(!$('swVenueBox') || !$('swVenueBox').children.length) renderVenues(); }catch(e){} try{ window.swReflectTestClock(false); }catch(e){} }, ms); });
   setInterval(schedulerTick, 5000);
   console.log('[' + VERSION + '] enabled: venue sweep auto-purchase assist');
 })();

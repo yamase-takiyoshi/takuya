@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.248 NoHistoryCap</title>
+<title>The競馬 EV分析 v5.18.249 RaceDateLabels</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -187,8 +187,9 @@ body{
 .sim-ticket-card.miss{border-color:rgba(248,113,113,.20);background:rgba(40,20,30,.34)}
 .sim-ticket-card.hit:after{content:"HIT";position:absolute;right:-22px;top:9px;transform:rotate(28deg);font-size:11px;font-weight:950;color:#03130b;background:#00e676;padding:4px 28px;box-shadow:var(--glow)}
 .sim-ticket-main b{font-size:16px}.sim-ticket-meta{font-size:11px;color:var(--muted);margin-top:4px}.sim-return{font-size:17px;font-weight:950;text-align:right}.sim-return.hit{color:#a7f3d0;text-shadow:0 0 10px rgba(0,255,136,.35)}
-.sim-hist-row{display:grid;grid-template-columns:1fr auto auto auto;gap:6px;align-items:center;padding:6px 8px;border-bottom:1px solid rgba(51,65,85,0.4);font-size:12px}
+.sim-hist-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;gap:6px;align-items:center;padding:6px 8px;border-bottom:1px solid rgba(51,65,85,0.4);font-size:12px}
 .sim-hist-row:last-child{border-bottom:none}
+.sim-hist-date{display:inline-block;margin-right:5px;color:#cbd5e1;font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap}
 .sim-hist-row.win{color:var(--green)}.sim-hist-row.lose{color:var(--red)}.sim-finish-horse{min-width:56px;text-align:center;padding:8px 10px;border-radius:12px;background:rgba(0,255,136,.10);border:1px solid rgba(0,255,136,.22);font-weight:900}.sim-finish-horse span{display:block;font-size:10px;color:#8bd9ae;font-weight:700}
 @media(max-width:560px){.sim-dashboard{grid-template-columns:1fr}.sim-action-grid{grid-template-columns:1fr}.sim-kpi-grid{grid-template-columns:1fr 1fr}.sim-ticket-card{grid-template-columns:1fr}.sim-return{text-align:left}}
 
@@ -578,7 +579,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.248 NoHistoryCap</span>
+    <span class="ver">v5.18.249 RaceDateLabels</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -3213,7 +3214,9 @@ function recordProfit(){
   const ret = Number(document.getElementById('profitReturn')?.value || 0);
   const profit = ret - bet;
   const label = currentRaceName || currentRaceId || new Date().toLocaleString('ja-JP');
-  profitHistory.push({ date: new Date().toISOString(), raceId: currentRaceId, raceName: label, bet, ret, profit });
+  const recordedAt = new Date().toISOString();
+  const raceDate = document.getElementById('pickDate')?.value || formatLocalDate(new Date());
+  profitHistory.push({ date: raceDate, raceDate, recordedAt, raceId: currentRaceId, raceName: label, bet, ret, profit });
   localStorage.setItem('tk-profit-history', JSON.stringify(profitHistory));
   renderProfitChart();
 }
@@ -3548,13 +3551,83 @@ function tkNormalizeByType(src){
   }catch(e){ return null; }
 }
 
+// 収支履歴の日付は「精算した日」ではなく「レース開催日」を使う。
+// 旧履歴はレース名・race_idメタデータ・NAR race_idから可能な範囲で補完する。
+function tkHistoryDateOnly(value){
+  const s = String(value || '').trim();
+  const m = s.match(/(20\d{2})[-\/.](\d{1,2})[-\/.](\d{1,2})/);
+  if(!m) return '';
+  const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+  const dt = new Date(y, mo - 1, d);
+  if(dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return '';
+  return `${y}-${String(mo).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+}
+
+function tkHistoryRaceDate(entry){
+  if(!entry) return '';
+  const direct = tkHistoryDateOnly(entry.raceDate);
+  if(direct) return direct;
+
+  const fromName = tkHistoryDateOnly(entry.raceName);
+  if(fromName) return fromName;
+
+  const rid = String(entry.raceId || entry.race_id || '').replace(/\D/g, '');
+  if(rid){
+    try{
+      const db = window.tkRaceIdPrimaryDB || JSON.parse(localStorage.getItem('tk-raceid-primary-db') || '{}');
+      const fromDb = tkHistoryDateOnly(db && db[rid] && db[rid].date);
+      if(fromDb) return fromDb;
+    }catch(e){}
+
+    // NAR race_id: YYYY + 場コード2桁 + MMDD + RR
+    if(/^\d{12}$/.test(rid) && !/^(0[1-9]|10)$/.test(rid.slice(4,6))){
+      const fromNarId = tkHistoryDateOnly(`${rid.slice(0,4)}-${rid.slice(6,8)}-${rid.slice(8,10)}`);
+      if(fromNarId) return fromNarId;
+    }
+  }
+
+  return tkHistoryDateOnly(entry.date);
+}
+
+function tkCurrentRaceDate(){
+  const fromName = tkHistoryDateOnly(currentRaceName);
+  if(fromName) return fromName;
+  const metaDate = tkHistoryDateOnly(window.tkCurrentRaceMeta && window.tkCurrentRaceMeta.date);
+  if(metaDate) return metaDate;
+  const inputDate = tkHistoryDateOnly(document.getElementById('pickDate')?.value);
+  if(inputDate) return inputDate;
+  return '';
+}
+
+function tkFormatHistoryDate(value){
+  const ymd = tkHistoryDateOnly(value);
+  if(!ymd) return '日付不明';
+  const [y, m, d] = ymd.split('-').map(Number);
+  return `${y}/${m}/${d}`;
+}
+
+function tkHistoryRaceLabel(entry){
+  let label = String((entry && (entry.raceName || entry.raceId || entry.race_id)) || '-');
+  label = label.replace(/^20\d{2}[-\/.]\d{1,2}[-\/.]\d{1,2}\s*/, '');
+  return label || String((entry && (entry.raceId || entry.race_id)) || '-');
+}
+
 function loadSimHistory(){
   try {
     simHistory = JSON.parse(localStorage.getItem('tk-sim-history') || '[]');
     if(!Array.isArray(simHistory)) simHistory = [];
     // v5.18.170: グラフ履歴は「実際に投資したレース」だけ残す。
     // 旧版で入った見送り/投資0円レースはここで自動除外する。
-    simHistory = simHistory.filter(x => Number(x && x.bet || 0) > 0);
+    simHistory = simHistory.filter(x => Number(x && x.bet || 0) > 0).map(x => {
+      const oldDate = String(x && x.date || '');
+      const raceDate = tkHistoryRaceDate(x);
+      if(oldDate.includes('T') && !x.recordedAt) x.recordedAt = oldDate;
+      if(raceDate){
+        x.raceDate = raceDate;
+        x.date = raceDate;
+      }
+      return x;
+    });
     localStorage.setItem('tk-sim-history', JSON.stringify(simHistory));
   } catch(e){ simHistory = []; }
 }
@@ -3590,8 +3663,10 @@ function simRecordProfit(autoRecord, bet, ret, hitCount, total, sourceLabel, byT
 
   const profit  = ret - bet;
   const roi     = bet ? ret / bet * 100 : 0;
+  const recordedAt = new Date().toISOString();
+  const raceDate = tkCurrentRaceDate() || formatLocalDate(new Date());
   const entry   = { raceId, raceName, bet, ret, profit, roi, hitCount, total,
-                    date: new Date().toISOString(), source: sourceLabel || '手入力' };
+                    date: raceDate, raceDate, recordedAt, source: sourceLabel || '手入力' };
   // v5.18.201: 券種別内訳（購入額・払戻額）を分けて記録
   const nb = tkNormalizeByType(byType);
   if(nb) entry.byType = nb;
@@ -3678,14 +3753,15 @@ function renderSimProfitChart(){
   const pad  = Math.max(200, (maxY-minY)*0.15);
   const lo   = minY - pad, hi = maxY + pad;
   const N    = pts.length;
+  const plotTop = 16, plotBottom = h - 38, plotHeight = plotBottom - plotTop;
   const xOf  = i => 36 + (N<=1 ? 0 : i*(w-50)/(N-1));
-  const yOf  = v => 16 + (hi-v)*(h-38)/(hi-lo||1);
+  const yOf  = v => plotTop + (hi-v)*plotHeight/(hi-lo||1);
 
   // グリッド線（横5本）
   ctx.strokeStyle = 'rgba(51,65,85,0.5)';
   ctx.lineWidth = 1;
   for(let i=0;i<=4;i++){
-    const gy = 16 + i*(h-38)/4;
+    const gy = plotTop + i*plotHeight/4;
     ctx.beginPath(); ctx.moveTo(36,gy); ctx.lineTo(w-8,gy); ctx.stroke();
   }
   // ゼロライン
@@ -3699,7 +3775,7 @@ function renderSimProfitChart(){
   const finalProfit = pts[pts.length-1];
   const areaColor1 = finalProfit>=0 ? 'rgba(0,230,118,0.22)' : 'rgba(248,113,113,0.18)';
   const areaColor2 = 'rgba(0,0,0,0)';
-  const grad = ctx.createLinearGradient(0,16,0,h-22);
+  const grad = ctx.createLinearGradient(0,plotTop,0,plotBottom);
   grad.addColorStop(0, areaColor1);
   grad.addColorStop(1, areaColor2);
   ctx.fillStyle = grad;
@@ -3736,18 +3812,40 @@ function renderSimProfitChart(){
   ctx.font = '10px -apple-system,sans-serif';
   ctx.textAlign = 'right';
   ctx.fillText((hi-pad).toLocaleString(), 34, 22);
-  ctx.fillText((lo+pad).toLocaleString(), 34, h-6);
+  ctx.fillText((lo+pad).toLocaleString(), 34, plotBottom-2);
   ctx.fillText('0', 34, zeroY-3);
   ctx.textAlign = 'left';
   ctx.fillStyle = '#475569';
   ctx.fillText('累計収支(円)', 40, 14);
+
+  // 横軸に開催日を表示（先頭・中間・末尾、同一日は重複させない）
+  const sampleIndexes = [...new Set([0, Math.floor((simHistory.length-1)/2), simHistory.length-1])];
+  const seenDates = new Set();
+  const dateLabels = sampleIndexes.map(recordIndex => ({
+    recordIndex,
+    date: tkHistoryRaceDate(simHistory[recordIndex])
+  })).filter(item => {
+    if(!item.date || seenDates.has(item.date)) return false;
+    seenDates.add(item.date);
+    return true;
+  });
+  ctx.fillStyle = '#64748b';
+  ctx.font = '9px -apple-system,sans-serif';
+  dateLabels.forEach((item, i) => {
+    const x = xOf(item.recordIndex + 1);
+    ctx.strokeStyle = 'rgba(100,116,139,0.65)';
+    ctx.beginPath(); ctx.moveTo(x, plotBottom); ctx.lineTo(x, plotBottom + 4); ctx.stroke();
+    ctx.textAlign = dateLabels.length === 1 ? 'center' : (i === 0 ? 'left' : (i === dateLabels.length-1 ? 'right' : 'center'));
+    ctx.fillText(tkFormatHistoryDate(item.date), x, h-7);
+  });
+  ctx.textAlign = 'left';
 
   // 履歴リスト（新しい順）
   if(listEl){
     listEl.innerHTML = [...simHistory].reverse().map((x,i) => {
       const cls = x.profit >= 0 ? 'win' : 'lose';
       const sign = x.profit >= 0 ? '+' : '';
-      const dt = x.date ? new Date(x.date).toLocaleDateString('ja-JP',{month:'numeric',day:'numeric'}) : '';
+      const dt = tkFormatHistoryDate(tkHistoryRaceDate(x));
       // v5.18.201: 券種別の購入額→払戻額を分けて表示
       let byTypeHtml = '';
       if(x.byType && typeof x.byType === 'object'){
@@ -3759,7 +3857,7 @@ function renderSimProfitChart(){
         if(parts.length) byTypeHtml = `<div style="grid-column:1 / -1;display:flex;flex-wrap:wrap;gap:4px 10px;font-size:10px;color:var(--muted);padding:2px 0 0 8px">${parts.join('')}</div>`;
       }
       return `<div class="sim-hist-row ${cls}">
-        <span>${dt} ${escapeHtml(x.raceName||x.raceId||'-')}</span>
+        <span><span class="sim-hist-date">${escapeHtml(dt)}</span>${escapeHtml(tkHistoryRaceLabel(x))}</span>
         <span>${Number(x.bet||0).toLocaleString()}円</span>
         <span>${sign}${Number(x.profit||0).toLocaleString()}円</span>
         <span>${Number(x.roi||0).toFixed(0)}%</span>
@@ -11852,7 +11950,8 @@ if(horses.length === 0){
         raceName: `${r.date} ${r.venueName||r.venueCode||''} ${r.raceName||(r.no+'R')}`,
         bet: r.bet || 0, ret: r.ret || 0, profit: r.profit || 0, roi: r.roi || 0,
         hitCount: r.hit || 0, total: r.count || 0,
-        date: new Date().toISOString(), source: '期間横断シミュレーション'
+        date: r.date || formatLocalDate(new Date()), raceDate: r.date || formatLocalDate(new Date()),
+        recordedAt: new Date().toISOString(), source: '期間横断シミュレーション'
       };
       // v5.18.201: 券種別内訳（購入額・払戻額）も転記する
       const nb = (typeof tkNormalizeByType === 'function') ? tkNormalizeByType(r.byType || r.ticketTypeBreakdown || r.ticketDetails) : null;
@@ -19921,8 +20020,12 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     var ret = Number(($('profitReturn') && $('profitReturn').value) || 0);
     var profit = ret - bet;
     var meta = activeMeta();
+    var recordedAt = new Date().toISOString();
+    var raceDate = (meta && meta.date) || (($('pickDate') && $('pickDate').value) || formatLocalDate(new Date()));
     var entry = {
-      date: new Date().toISOString(),
+      date: raceDate,
+      raceDate: raceDate,
+      recordedAt: recordedAt,
       raceId: meta ? meta.raceId : '',
       race_id: meta ? meta.raceId : '',
       primaryKey: meta ? meta.raceId : '',
@@ -19965,7 +20068,9 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
             simHistory[idx] = Object.assign({}, simHistory[idx], {
               raceId: meta.raceId, race_id: meta.raceId, primaryKey: meta.raceId,
               kind: meta.kind, venueCode: meta.venueCode, venueName: meta.venueName,
-              raceNo: meta.raceNo, raceName: meta.raceName || meta.R
+              raceNo: meta.raceNo, raceName: meta.raceName || meta.R,
+              date: simHistory[idx].raceDate || meta.date || simHistory[idx].date,
+              raceDate: simHistory[idx].raceDate || meta.date || simHistory[idx].date
             });
             if(typeof saveSimHistory === 'function') saveSimHistory();
             if(typeof renderSimProfitChart === 'function') renderSimProfitChart();
@@ -22703,10 +22808,10 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 </script>
 
 <script>
-/* v5.18.248 NoHistoryCap: シミュレーション/収支履歴の保存件数上限を撤廃 */
+/* v5.18.249 RaceDateLabels: 履歴とグラフへレース開催日を表示 */
 (function(){
   'use strict';
-  var V='v5.18.248 NoHistoryCap';
+  var V='v5.18.249 RaceDateLabels';
   function applyVersion(){
     window.APP_VERSION=V;
     var el=document.querySelector('.header .ver, .ver');

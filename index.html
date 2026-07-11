@@ -16187,10 +16187,23 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   function blocked166(text){
     const s = String(text || '');
     if(!s || s.length < 120) return true;
+    // v5.18.245: 正常なnetkeiba本文にもAkamai関連のスクリプト文字列が含まれるため、
+    // 単に "akamai" があるだけで遮断扱いにしない。出馬表・結果・一覧の実データを
+    // 示す構造があれば、HTTP 200の正常本文として最優先で採用する。
+    const hasRaceContent =
+      /(?:Shutuba_Table|RaceTable01|HorseList|Horse_Info|Umaban|RaceList_DataList|RaceList_Item)/i.test(s) ||
+      /db\.netkeiba\.com\/horse\/[0-9]+/i.test(s) ||
+      /race_id=[0-9]{10,14}/i.test(s) ||
+      (s.length >= 3000 && /<(?:html|table|tbody|tr|li|a)\b/i.test(s) && /(?:馬名|騎手|オッズ|出馬表|レース結果)/i.test(s));
+    if(hasRaceContent) return false;
+
+    // 明確な遮断ページだけを拒否する。曖昧な共通JS文字列では拒否しない。
+    if(/<title>\s*(?:Access Denied|Request blocked|Pardon Our Interruption|Just a moment)/i.test(s)) return true;
+    if(/(?:Access Denied|Request blocked|Pardon Our Interruption|captcha|bm-verify|Reference\s*#)/i.test(s)) return true;
     if(typeof window.looksBlockedHtml === 'function'){
-      try{ if(window.looksBlockedHtml(s)) return true; }catch(e){}
+      try{ if(window.looksBlockedHtml(s) && s.length < 3000) return true; }catch(e){}
     }
-    return /Access Denied|Request blocked|Pardon Our Interruption|captcha|akamai|bm-verify|Just a moment|Reference\s*#/i.test(s);
+    return false;
   }
 
   function markBridge166(){

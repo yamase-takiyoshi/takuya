@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.246 SplitViewPiP</title>
+<title>The競馬 EV分析 v5.18.247 RakutenSplitView</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -578,7 +578,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.246 SplitViewPiP</span>
+    <span class="ver">v5.18.247 RakutenSplitView</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1303,24 +1303,24 @@ body{
       </div>
 
       <div class="rakuten-live-note">
-        楽天競馬の公式「地方競馬 ライブ動画」ページを、この画面内のフレームに読み込みます。
-        楽天競馬側では当日開催場を選び、複数場の映像を同時に確認できます。映像・音声の開始には画面内を一度タップしてください。
+        楽天競馬の公式「地方競馬 ライブ動画」ページを開きます。
+        楽天競馬側の制限でフレーム内が黒画面になる場合は、別タブをiPadのSplit Viewで並べて使ってください。
       </div>
 
       <div class="rakuten-live-actions">
-        <button class="btn btn-primary" type="button" onclick="rakutenLiveLoad()">▶️ 楽天競馬を表示</button>
+        <button class="btn btn-primary" type="button" onclick="rakutenLiveOpenExternal()">↗️ 楽天競馬を別タブで開く</button>
+        <button class="btn-sm" type="button" onclick="rakutenLiveLoad()">▶️ 画面内で試す</button>
         <button class="btn-sm" type="button" onclick="rakutenLiveReload()">🔄 再読込</button>
-        <button class="btn-sm" type="button" onclick="rakutenLiveOpenExternal()">↗️ 別タブで開く</button>
         <button class="btn-sm" type="button" onclick="rakutenLiveClose()">⏹ 閉じる</button>
       </div>
 
-      <div id="rakutenLiveStatus" class="rakuten-live-status">「楽天競馬を表示」を押すと読み込みます。</div>
+      <div id="rakutenLiveStatus" class="rakuten-live-status">楽天競馬は別タブ/Split View表示が安定です。画面内表示も試せます。</div>
 
       <div class="rakuten-live-frame-wrap" id="rakutenLiveFrameWrap">
         <div class="rakuten-live-placeholder" id="rakutenLivePlaceholder">
           <div class="tv">🟥</div>
           <b>楽天競馬ライブ</b>
-          <div>地方競馬のライブ動画ページを表示します。</div>
+          <div>安定表示は「別タブで開く」がおすすめです。</div>
         </div>
         <iframe
           id="rakutenLiveFrame"
@@ -1334,7 +1334,7 @@ body{
       </div>
 
       <div class="rakuten-live-fallback">
-        ※楽天競馬側のログイン状態・Cookie設定・セキュリティ設定によって、フレーム内表示が制限される場合があります。その場合は「別タブで開く」を使用してください。公式ページをそのまま表示し、映像URLの抽出・再配信は行いません。
+        ※楽天競馬側のログイン状態・Cookie設定・セキュリティ設定によって、フレーム内表示が制限される場合があります。公式ページをそのまま表示し、映像URLの抽出・再配信は行いません。
       </div>
     </div>
 
@@ -21723,11 +21723,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script>
 /* ============================================================
-   v5.18.244 D1Sync / 楽天競馬公式ライブ遅延iframe読込
+   v5.18.247 RakutenSplitView / 楽天競馬公式ライブ導線
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION_RAKUTEN_LIVE='v5.18.244 D1Sync';
+  var VERSION_RAKUTEN_LIVE='v5.18.247 RakutenSplitView';
   var LIVE_URL='https://keiba.rakuten.co.jp/livemovie';
   var currentUrl='';
   var loadSerial=0;
@@ -21747,24 +21747,54 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     el.className='rakuten-live-status'+(kind?' '+kind:'');
     el.textContent=message;
   }
+  function placeholder(show,mode){
+    var ph=$('rakutenLivePlaceholder');
+    if(!ph) return;
+    if(mode==='fallback'){
+      ph.innerHTML=[
+        '<div class="tv">🟥</div>',
+        '<b>楽天競馬はフレーム内表示が制限される場合があります</b>',
+        '<div>黒画面のままなら、別タブをSplit Viewで並べるのが確実です。</div>',
+        '<button class="btn btn-primary" type="button" onclick="rakutenLiveOpenExternal()" style="width:auto;margin-top:8px">↗️ 楽天競馬を別タブで開く</button>'
+      ].join('');
+    }else if(mode==='ready'){
+      ph.innerHTML=[
+        '<div class="tv">🟥</div>',
+        '<b>楽天競馬ライブ</b>',
+        '<div>安定表示は「別タブで開く」がおすすめです。</div>'
+      ].join('');
+    }
+    ph.style.display=show?'flex':'none';
+  }
+  function fallbackLater(serial){
+    setTimeout(function(){
+      if(serial!==loadSerial) return;
+      var frame=$('rakutenLiveFrame');
+      if(!frame || frame.getAttribute('src')==='about:blank') return;
+      placeholder(true,'fallback');
+      status('楽天競馬側の制限で黒画面になる場合があります。別タブ/Split View表示を使用してください。','warn');
+    },4200);
+  }
   window.rakutenLiveLoad=function(){
     var frame=$('rakutenLiveFrame');
-    var ph=$('rakutenLivePlaceholder');
     if(!frame) return;
     currentUrl=LIVE_URL;
     loadSerial++;
     var serial=loadSerial;
-    if(ph) ph.style.display='none';
-    status('楽天競馬のライブ動画ページを読み込み中…','ok');
+    placeholder(false);
+    status('楽天競馬の画面内表示を試しています。黒画面のままなら別タブ/Split Viewを使用してください。','ok');
     frame.onload=function(){
       if(serial!==loadSerial || frame.src==='about:blank') return;
-      status('楽天競馬ライブを読み込みました。映像が始まらない場合は画面内を一度タップしてください。','ok');
+      status('楽天競馬ページの読み込みを試行しました。映像が始まらない場合は別タブ/Split Viewを使用してください。','warn');
+      fallbackLater(serial);
     };
     frame.onerror=function(){
       if(serial!==loadSerial) return;
-      status('フレーム内で読み込めませんでした。「別タブで開く」を使用してください。','warn');
+      placeholder(true,'fallback');
+      status('フレーム内で読み込めませんでした。別タブ/Split View表示を使用してください。','warn');
     };
     frame.src=LIVE_URL;
+    fallbackLater(serial);
   };
   window.rakutenLiveReload=function(){
     var frame=$('rakutenLiveFrame');
@@ -21775,25 +21805,28 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     }
     loadSerial++;
     var serial=loadSerial;
-    status('楽天競馬ライブを再読み込み中…','ok');
+    placeholder(false);
+    status('楽天競馬の画面内表示を再試行中…','ok');
     frame.onload=function(){
       if(serial!==loadSerial || frame.src==='about:blank') return;
-      status('楽天競馬ライブを再読み込みしました。','ok');
+      status('楽天競馬ページの再読み込みを試行しました。黒画面なら別タブ/Split Viewを使用してください。','warn');
+      fallbackLater(serial);
     };
     frame.src='about:blank';
     setTimeout(function(){frame.src=LIVE_URL},80);
+    fallbackLater(serial);
   };
   window.rakutenLiveOpenExternal=function(){
     var w=window.open(LIVE_URL,'_blank','noopener');
     if(!w) location.href=LIVE_URL;
+    status('楽天競馬を別タブで開きました。iPadではSplit Viewでこの画面と並べられます。','ok');
   };
   window.rakutenLiveClose=function(){
     var frame=$('rakutenLiveFrame');
-    var ph=$('rakutenLivePlaceholder');
     loadSerial++;
     currentUrl='';
     if(frame){frame.onload=null;frame.onerror=null;frame.src='about:blank'}
-    if(ph) ph.style.display='flex';
+    placeholder(true,'ready');
     status('楽天競馬ライブを閉じました。音声・通信も停止します。');
   };
   function init(){setVersion()}
@@ -22672,10 +22705,10 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 </script>
 
 <script>
-/* v5.18.246 SplitViewPiP: 後段の旧バージョン表示を最終的に統一 */
+/* v5.18.247 RakutenSplitView: 後段の旧バージョン表示を最終的に統一 */
 (function(){
   'use strict';
-  var V='v5.18.246 SplitViewPiP';
+  var V='v5.18.247 RakutenSplitView';
   function applyVersion(){
     window.APP_VERSION=V;
     var el=document.querySelector('.header .ver, .ver');

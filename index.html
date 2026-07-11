@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.251 BetStats</title>
+<title>The競馬 EV分析 v5.18.252 BetStatsJSON</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -199,6 +199,7 @@ body{
 .sim-hist-ticket .amount{white-space:nowrap;text-align:right;font-variant-numeric:tabular-nums}
 .sim-bet-stats-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-top:14px;padding-top:12px;border-top:1px solid rgba(51,65,85,.55)}
 .sim-bet-stats-head h3{margin:0;font-size:13px}
+.sim-bet-stats-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .sim-bet-stats-head select{width:auto;min-width:112px;padding:6px 8px;font-size:11px}
 .sim-bet-stats-note{font-size:10px;color:var(--muted);margin:6px 0}
 .sim-bet-stats-scroll{max-height:280px;overflow:auto;border:1px solid rgba(51,65,85,.55);border-radius:6px}
@@ -596,7 +597,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.251 BetStats</span>
+    <span class="ver">v5.18.252 BetStatsJSON</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1139,14 +1140,18 @@ body{
       <div id="simHistoryList" style="margin-top:10px;max-height:200px;overflow-y:auto"></div>
       <div class="sim-bet-stats-head">
         <h3>🎯 買い目別統計</h3>
-        <select id="simBetStatsSort" onchange="renderSimBetStats()" aria-label="買い目別統計の並び順">
-          <option value="count">回数順</option>
-          <option value="profit">収支順</option>
-          <option value="roi">ROI順</option>
-          <option value="hitRate">的中率順</option>
-        </select>
+        <div class="sim-bet-stats-actions">
+          <select id="simBetStatsSort" onchange="renderSimBetStats()" aria-label="買い目別統計の並び順">
+            <option value="count">回数順</option>
+            <option value="profit">収支順</option>
+            <option value="roi">ROI順</option>
+            <option value="hitRate">的中率順</option>
+          </select>
+          <button class="btn-sm" type="button" onclick="exportSimBetStatsJSON()">💾 JSON保存</button>
+        </div>
       </div>
       <div id="simBetStats"></div>
+      <div id="simBetStatsSaveStatus" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
     </div>
   </div>
 
@@ -3774,10 +3779,7 @@ function simClearHistory(){
   renderManualFinishPicker();
 }
 
-function renderSimBetStats(){
-  const box = document.getElementById('simBetStats');
-  if(!box) return;
-
+function collectSimBetStats(){
   const map = new Map();
   let detailRecordCount = 0;
   let detailCount = 0;
@@ -3804,6 +3806,14 @@ function renderSimBetStats(){
     roi: item.bet ? item.ret / item.bet * 100 : 0,
     hitRate: item.count ? item.hit / item.count * 100 : 0
   }));
+  return { rows, detailRecordCount, detailCount };
+}
+
+function renderSimBetStats(){
+  const box = document.getElementById('simBetStats');
+  if(!box) return;
+  const stats = collectSimBetStats();
+  const rows = stats.rows;
   if(!rows.length){
     box.innerHTML = '<div class="empty" style="padding:12px 4px">買い目明細付きで記録・再精算した収支から集計されます。旧履歴の券種集計だけでは買い目を復元できません。</div>';
     return;
@@ -3827,11 +3837,100 @@ function renderSimBetStats(){
     </tr>`;
   }).join('');
 
-  box.innerHTML = `<div class="sim-bet-stats-note">明細付き収支 ${detailRecordCount.toLocaleString()}件 / 買い目 ${detailCount.toLocaleString()}点 / 組合せ ${rows.length.toLocaleString()}種類</div>
+  box.innerHTML = `<div class="sim-bet-stats-note">明細付き収支 ${stats.detailRecordCount.toLocaleString()}件 / 買い目 ${stats.detailCount.toLocaleString()}点 / 組合せ ${rows.length.toLocaleString()}種類</div>
     <div class="sim-bet-stats-scroll"><table class="sim-bet-stats-table">
       <thead><tr><th>買い目</th><th>回数</th><th>的中 / 率</th><th>投資</th><th>払戻</th><th>収支</th><th>ROI</th></tr></thead>
       <tbody>${body}</tbody>
     </table></div>`;
+}
+
+function buildSimBetStatsJSONSnapshot(){
+  const stats = collectSimBetStats();
+  const records = simHistory.map((entry, index) => {
+    const details = tkNormalizeTicketDetails(entry && entry.ticketDetails) || [];
+    return {
+      No: index + 1,
+      日付: tkHistoryRaceDate(entry),
+      区分: entry.kind || '',
+      場: entry.venueName || entry.venueCode || '',
+      R: entry.raceNo || '',
+      レース名: entry.raceName || '',
+      race_id: entry.raceId || entry.race_id || '',
+      投資: Number(entry.bet || 0),
+      払戻: Number(entry.ret || 0),
+      収支: Number(entry.profit ?? (Number(entry.ret||0) - Number(entry.bet||0))),
+      ROI: Number(entry.roi ?? (Number(entry.bet||0) ? Number(entry.ret||0) / Number(entry.bet||0) * 100 : 0)),
+      的中点数: Number(entry.hitCount || 0),
+      買い目点数: details.length,
+      記録元: entry.source || '',
+      券種別集計: entry.byType || null,
+      買い目明細: details
+    };
+  });
+  const sortedStats = stats.rows.slice().sort((a,b) => (b.count-a.count) || (b.profit-a.profit) || a.type.localeCompare(b.type,'ja'));
+  const totalBet = simHistory.reduce((s,x)=>s+Number(x && x.bet || 0),0);
+  const totalRet = simHistory.reduce((s,x)=>s+Number(x && x.ret || 0),0);
+  return {
+    schema: 'keiba-bet-statistics-v1',
+    app: 'The競馬 EV分析',
+    version: window.APP_VERSION || 'v5.18.252 BetStatsJSON',
+    exportedAt: new Date().toISOString(),
+    概要: {
+      収支件数: simHistory.length,
+      明細付き収支件数: stats.detailRecordCount,
+      買い目明細点数: stats.detailCount,
+      買い目組合せ種類: stats.rows.length,
+      総投資: totalBet,
+      総払戻: totalRet,
+      累計収支: totalRet-totalBet,
+      回収率: totalBet ? totalRet/totalBet*100 : 0
+    },
+    収支別買い目データ: records,
+    買い目別統計: sortedStats.map(item => ({
+      統計キー: `${item.type}:${item.combo}`,
+      券種: item.type,
+      買い目: item.combo,
+      回数: item.count,
+      的中回数: item.hit,
+      的中率: item.hitRate,
+      投資: item.bet,
+      払戻: item.ret,
+      収支: item.profit,
+      ROI: item.roi
+    }))
+  };
+}
+
+function simBetStatsSaveStatus(message, ok){
+  const el = document.getElementById('simBetStatsSaveStatus');
+  if(!el) return;
+  el.textContent = message || '';
+  el.style.color = ok === false ? 'var(--red)' : ok === true ? 'var(--green)' : 'var(--muted)';
+}
+
+function exportSimBetStatsJSON(){
+  let snapshot;
+  try{
+    snapshot = buildSimBetStatsJSONSnapshot();
+    if(!snapshot.概要.買い目明細点数){
+      simBetStatsSaveStatus('保存できる買い目明細がありません。買い目付きで精算してから実行してください。', false);
+      return;
+    }
+  }catch(e){
+    simBetStatsSaveStatus('JSON作成に失敗しました: ' + ((e && e.message) || e), false);
+    return;
+  }
+  if(typeof window.askJsonNameAndSave !== 'function'){
+    simBetStatsSaveStatus('名前付き保存機能を初期化できませんでした。ページを再読み込みしてください。', false);
+    return;
+  }
+  const ymd = (typeof formatLocalDate === 'function' ? formatLocalDate() : new Date().toISOString().slice(0,10)).replace(/-/g,'');
+  const defaultName = `keiba_bet_stats_${ymd}.json`;
+  window.askJsonNameAndSave(defaultName, () => JSON.stringify(snapshot, null, 2), result => {
+    if(result && result.cancelled) simBetStatsSaveStatus('保存をキャンセルしました。', null);
+    else if(result && result.ok) simBetStatsSaveStatus(`保存しました: ${result.fileName}`, true);
+    else simBetStatsSaveStatus('JSON保存に失敗しました。', false);
+  });
 }
 
 function renderSimProfitChart(){
@@ -22983,10 +23082,10 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 </script>
 
 <script>
-/* v5.18.251 BetStats: 収支に紐づく買い目を組合せ別に統計集計 */
+/* v5.18.252 BetStatsJSON: 買い目統計を名前付き・保存先選択でJSON出力 */
 (function(){
   'use strict';
-  var V='v5.18.251 BetStats';
+  var V='v5.18.252 BetStatsJSON';
   function applyVersion(){
     window.APP_VERSION=V;
     var el=document.querySelector('.header .ver, .ver');

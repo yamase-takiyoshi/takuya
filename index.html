@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.249 RaceDateLabels</title>
+<title>The競馬 EV分析 v5.18.250 BetDetails</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -190,6 +190,13 @@ body{
 .sim-hist-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;gap:6px;align-items:center;padding:6px 8px;border-bottom:1px solid rgba(51,65,85,0.4);font-size:12px}
 .sim-hist-row:last-child{border-bottom:none}
 .sim-hist-date{display:inline-block;margin-right:5px;color:#cbd5e1;font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap}
+.sim-hist-bets{grid-column:1/-1;padding:2px 0 1px 8px;color:var(--muted)}
+.sim-hist-bets summary{width:max-content;max-width:100%;cursor:pointer;color:#a7f3d0;font-size:10px;font-weight:800;user-select:none}
+.sim-hist-ticket-list{display:grid;gap:3px;margin-top:5px;padding-left:4px}
+.sim-hist-ticket{display:grid;grid-template-columns:auto minmax(70px,1fr) auto;gap:6px;align-items:center;font-size:10px;color:var(--muted)}
+.sim-hist-ticket.hit{color:var(--green)}
+.sim-hist-ticket .combo{min-width:0;overflow-wrap:anywhere;color:var(--text);font-weight:800}
+.sim-hist-ticket .amount{white-space:nowrap;text-align:right;font-variant-numeric:tabular-nums}
 .sim-hist-row.win{color:var(--green)}.sim-hist-row.lose{color:var(--red)}.sim-finish-horse{min-width:56px;text-align:center;padding:8px 10px;border-radius:12px;background:rgba(0,255,136,.10);border:1px solid rgba(0,255,136,.22);font-weight:900}.sim-finish-horse span{display:block;font-size:10px;color:#8bd9ae;font-weight:700}
 @media(max-width:560px){.sim-dashboard{grid-template-columns:1fr}.sim-action-grid{grid-template-columns:1fr}.sim-kpi-grid{grid-template-columns:1fr 1fr}.sim-ticket-card{grid-template-columns:1fr}.sim-return{text-align:left}}
 
@@ -579,7 +586,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.249 RaceDateLabels</span>
+    <span class="ver">v5.18.250 BetDetails</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -3515,7 +3522,7 @@ function simGetTicketsFromEdit(){
 // v5.18.201 TicketTypeAmountRecord:
 //   byType（券種別の購入額・払戻額）を各レコードに保存する。
 //   byType = { '単勝': {bet, ret, hit, count}, '馬連': {...}, ... }
-let simHistory = [];  // [{raceId, raceName, bet, ret, profit, roi, hitCount, total, date, byType}]
+let simHistory = [];  // [{raceId, raceName, bet, ret, profit, roi, hitCount, total, date, byType, ticketDetails}]
 
 // v5.18.201: 券種別内訳を共通形式 { 券種: {bet, ret, hit, count} } に正規化する。
 // 受け付ける形式：
@@ -3548,6 +3555,35 @@ function tkNormalizeByType(src){
       });
     }
     return Object.keys(out).length ? out : null;
+  }catch(e){ return null; }
+}
+
+// 買い目単位の明細を、収支履歴で共通利用する形式へ正規化する。
+function tkNormalizeTicketDetails(src){
+  try{
+    if(!Array.isArray(src)) return null;
+    const out = src.map(d => {
+      if(!d) return null;
+      const type = String(d.券種名 ?? d.type ?? '').trim();
+      const rawNums = d.買い目 ?? d.nums ?? d.combo ?? '';
+      const combo = Array.isArray(rawNums)
+        ? rawNums.map(Number).filter(n => n > 0).join('-')
+        : String(rawNums || '').trim().replace(/[－—–]/g, '-');
+      const rawNames = d.馬名 ?? d.horseNames ?? '';
+      const horseNames = Array.isArray(rawNames) ? rawNames.filter(Boolean).join('－') : String(rawNames || '').trim();
+      const amount = Number(d.購入額 ?? d.amount ?? d.bet ?? 0);
+      const ret = Number(d.払戻額 ?? d.ret ?? d.return ?? 0);
+      const hitRaw = d.的中 ?? d.hit ?? false;
+      const hit = hitRaw === true || Number(hitRaw) > 0;
+      if(!type || !combo || amount <= 0) return null;
+      const row = { 券種名:type, 買い目:combo, 馬名:horseNames, 購入額:amount, 払戻額:ret, 的中:hit ? 1 : 0 };
+      const odds = Number(d.想定オッズ ?? d.odds ?? 0);
+      const ev = Number(d.EV ?? d.ev ?? 0);
+      if(odds > 0) row.想定オッズ = odds;
+      if(ev > 0) row.EV = ev;
+      return row;
+    }).filter(Boolean);
+    return out.length ? out : null;
   }catch(e){ return null; }
 }
 
@@ -3637,8 +3673,8 @@ function saveSimHistory(){
 }
 
 // 精算結果を simHistory に記録（race_id が同じなら上書き）
-// v5.18.201: byType（券種別の購入額・払戻額）を第7引数で受け取り、レコードに保存する。
-function simRecordProfit(autoRecord, bet, ret, hitCount, total, sourceLabel, byType){
+// byType（券種別集計）と ticketDetails（買い目単位明細）を収支ごとに保存する。
+function simRecordProfit(autoRecord, bet, ret, hitCount, total, sourceLabel, byType, ticketDetails){
   bet = Number(bet || 0);
   ret = Number(ret || 0);
   const raceId  = currentRaceId || '';
@@ -3670,9 +3706,12 @@ function simRecordProfit(autoRecord, bet, ret, hitCount, total, sourceLabel, byT
   // v5.18.201: 券種別内訳（購入額・払戻額）を分けて記録
   const nb = tkNormalizeByType(byType);
   if(nb) entry.byType = nb;
+  const nd = tkNormalizeTicketDetails(ticketDetails || byType);
+  if(nd) entry.ticketDetails = nd;
   if(raceId){
     const idx = simHistory.findIndex(x => x.raceId === raceId);
     if(idx >= 0){
+      if(!entry.ticketDetails && simHistory[idx].ticketDetails) entry.ticketDetails = simHistory[idx].ticketDetails;
       simHistory[idx] = entry;
       if(statusEl) statusEl.textContent = '✅ 上書き記録しました';
     } else {
@@ -3846,22 +3885,36 @@ function renderSimProfitChart(){
       const cls = x.profit >= 0 ? 'win' : 'lose';
       const sign = x.profit >= 0 ? '+' : '';
       const dt = tkFormatHistoryDate(tkHistoryRaceDate(x));
-      // v5.18.201: 券種別の購入額→払戻額を分けて表示
-      let byTypeHtml = '';
-      if(x.byType && typeof x.byType === 'object'){
+      const details = tkNormalizeTicketDetails(x.ticketDetails) || [];
+      let betDataHtml = '';
+      if(details.length){
+        const hitTickets = details.filter(d => Number(d.的中 || 0) > 0).length;
+        const rows = details.map(d => {
+          const ty = String(d.券種名 || '不明');
+          const hit = Number(d.的中 || 0) > 0;
+          const names = d.馬名 ? `<span style="display:block;color:var(--muted);font-weight:500">${escapeHtml(d.馬名)}</span>` : '';
+          return `<div class="sim-hist-ticket${hit?' hit':''}">
+            <span class="chip ${CHIP_CLASS[ty]||''}" style="font-size:9px;padding:1px 5px">${escapeHtml(ty)}</span>
+            <span class="combo">${escapeHtml(d.買い目 || '-')}${names}</span>
+            <span class="amount">${Number(d.購入額||0).toLocaleString()}円→${Number(d.払戻額||0).toLocaleString()}円${hit?' 的中':''}</span>
+          </div>`;
+        }).join('');
+        betDataHtml = `<details class="sim-hist-bets"><summary>買い目 ${details.length}点${hitTickets ? ` / 的中${hitTickets}点` : ''}</summary><div class="sim-hist-ticket-list">${rows}</div></details>`;
+      }else if(x.byType && typeof x.byType === 'object'){
+        // 旧履歴は買い目の組合せが未保存なので、券種別集計をそのまま表示する。
         const parts = Object.entries(x.byType).map(([ty, v]) => {
           const b = Number(v && v.bet || 0), r = Number(v && v.ret || 0);
           const col = r >= b ? 'var(--green)' : 'var(--muted)';
           return `<span style="white-space:nowrap"><span class="chip ${CHIP_CLASS[ty]||''}" style="font-size:9px;padding:1px 5px">${escapeHtml(ty)}</span> ${b.toLocaleString()}円→<span style="color:${col}">${r.toLocaleString()}円</span></span>`;
         });
-        if(parts.length) byTypeHtml = `<div style="grid-column:1 / -1;display:flex;flex-wrap:wrap;gap:4px 10px;font-size:10px;color:var(--muted);padding:2px 0 0 8px">${parts.join('')}</div>`;
+        if(parts.length) betDataHtml = `<div style="grid-column:1 / -1;display:flex;flex-wrap:wrap;gap:4px 10px;font-size:10px;color:var(--muted);padding:2px 0 0 8px">${parts.join('')}</div>`;
       }
       return `<div class="sim-hist-row ${cls}">
         <span><span class="sim-hist-date">${escapeHtml(dt)}</span>${escapeHtml(tkHistoryRaceLabel(x))}</span>
         <span>${Number(x.bet||0).toLocaleString()}円</span>
         <span>${sign}${Number(x.profit||0).toLocaleString()}円</span>
         <span>${Number(x.roi||0).toFixed(0)}%</span>
-        ${byTypeHtml}
+        ${betDataHtml}
       </div>`;
     }).join('') || '<div class="empty">記録なし</div>';
   }
@@ -4049,6 +4102,12 @@ function renderSimulation(finish, payouts, sourceLabel){
   let totalReturn = 0;
   let hitCount = 0;
   const typeMap = {};
+  const ticketDetails = [];
+  const horseNameMap = {};
+  (horses || []).forEach(h => {
+    const n = String(Number(h && h.num || 0));
+    if(n !== '0' && h && h.name) horseNameMap[n] = String(h.name);
+  });
   let html = '';
 
   activeTickets.forEach(t => {
@@ -4063,6 +4122,12 @@ function renderSimulation(finish, payouts, sourceLabel){
     typeMap[t.type].ret += ret;
     typeMap[t.type].hit += hit ? 1 : 0;
     typeMap[t.type].count += 1;
+    const nameText = (t.nums || []).map(n => horseNameMap[String(Number(n))] || '').filter(Boolean).join('－');
+    ticketDetails.push({
+      券種名: t.type || '不明', 買い目: (t.nums || []).join('-'), 馬名: nameText,
+      購入額: Number(t.amount || 0), 払戻額: ret, 的中: hit ? 1 : 0,
+      想定オッズ: Number(t.odds || 0), EV: Number(t.ev || 0)
+    });
 
     const roiOne = Number(t.amount||0) ? ret / Number(t.amount||0) * 100 : 0;
     html += `<div class="sim-ticket-card ${hit?'hit':'miss'}">
@@ -4127,11 +4192,11 @@ function renderSimulation(finish, payouts, sourceLabel){
     // ボタンのonclickを最新値に差し替え
     const recBtn = recRow.querySelector('button');
     if(recBtn){
-      recBtn.onclick = () => simRecordProfit(false, totalBet, totalReturn, hitCount, activeTickets.length, sourceLabel, typeMap); // v5.18.201 券種別内訳
+      recBtn.onclick = () => simRecordProfit(false, totalBet, totalReturn, hitCount, activeTickets.length, sourceLabel, typeMap, ticketDetails);
     }
   }
   // 自動で収支記録（race_id がある場合は上書き、なければ毎回）
-  simRecordProfit(true, totalBet, totalReturn, hitCount, activeTickets.length, sourceLabel, typeMap); // v5.18.201 券種別内訳
+  simRecordProfit(true, totalBet, totalReturn, hitCount, activeTickets.length, sourceLabel, typeMap, ticketDetails);
 }
 
 async function runSimulationFromResult(){
@@ -11299,7 +11364,7 @@ if(horses.length === 0){
 
           // 5) 既存のシミュ収支グラフへ記録（race_id単位で上書き）
           if(row.hasFinish){
-            try{ simRecordProfit(true, s.bet, s.ret, s.hit, s.count, currentRaceName, row.byType || row.ticketDetails); }catch(e){} // v5.18.201 券種別内訳
+            try{ simRecordProfit(true, s.bet, s.ret, s.hit, s.count, currentRaceName, row.byType || row.ticketDetails, row.ticketDetails); }catch(e){}
           }
         }catch(e){
           row.status = 'error';
@@ -11956,8 +12021,13 @@ if(horses.length === 0){
       // v5.18.201: 券種別内訳（購入額・払戻額）も転記する
       const nb = (typeof tkNormalizeByType === 'function') ? tkNormalizeByType(r.byType || r.ticketTypeBreakdown || r.ticketDetails) : null;
       if(nb) entry.byType = nb;
+      const nd = (typeof tkNormalizeTicketDetails === 'function') ? tkNormalizeTicketDetails(r.ticketDetails) : null;
+      if(nd) entry.ticketDetails = nd;
       const idx = r.rid ? simHistory.findIndex(x => x.raceId === r.rid) : -1;
-      if(idx >= 0) simHistory[idx] = entry; else simHistory.push(entry);
+      if(idx >= 0){
+        if(!entry.ticketDetails && simHistory[idx].ticketDetails) entry.ticketDetails = simHistory[idx].ticketDetails;
+        simHistory[idx] = entry;
+      }else simHistory.push(entry);
     });
     if(typeof saveSimHistory === 'function') saveSimHistory();
     if(typeof renderSimProfitChart === 'function') renderSimProfitChart();
@@ -12166,10 +12236,10 @@ if(horses.length === 0){
               const s = asw_settle(simTickets, finish, payouts);
               row.bet = s.bet; row.ret = s.ret; row.profit = s.profit; row.roi = s.roi; row.hit = s.hit;
               row.status = 'ok';
-              asw_captureTicketBreakdown(row, simTickets, finish, payouts); // v5.18.188 券種内訳
+              asw_captureTicketBreakdown(row, simTickets, finish, payouts, valid);
 
               if(row.hasFinish && recordToChart){
-                try{ simRecordProfit(true, s.bet, s.ret, s.hit, s.count, `${date} ${vn} ${currentRaceName}`, row.byType || row.ticketDetails); }catch(e){} // v5.18.201 券種別内訳
+                try{ simRecordProfit(true, s.bet, s.ret, s.hit, s.count, `${date} ${vn} ${currentRaceName}`, row.byType || row.ticketDetails, row.ticketDetails); }catch(e){}
               }
             }catch(e){
               row.status = 'error';
@@ -12469,7 +12539,7 @@ if(horses.length === 0){
               try{
                 currentRaceId = r.rid || '';
                 currentRaceName = `${r.date} ${r.venueName || ''} ${r.raceName || (r.no + 'R')}`;
-                simRecordProfit(true, r.bet, r.ret, r.hit, r.count, '期間横断一発モード', r.byType || r.ticketTypeBreakdown || r.ticketDetails); // v5.18.201 券種別内訳
+                simRecordProfit(true, r.bet, r.ret, r.hit, r.count, '期間横断一発モード', r.byType || r.ticketTypeBreakdown || r.ticketDetails, r.ticketDetails);
               }catch(e){}
             }
           });
@@ -13619,6 +13689,11 @@ if(horses.length === 0){
     }
 
     let bet = 0, ret = 0, hit = 0;
+    const horseNameMap = {};
+    rHorses.forEach(h => {
+      const n = String(Number(h && h.num || 0));
+      if(n !== '0' && h && h.name) horseNameMap[n] = String(h.name);
+    });
     const detail = tickets.map(t => {
       const a = Number(t.amount || 0);
       bet += a;
@@ -13627,7 +13702,8 @@ if(horses.length === 0){
       const r = isHit ? Math.floor(a / 100) * Number(pay.amount || 0) : 0;
       if(isHit) hit++;
       ret += r;
-      return { ...t, hit: isHit, pay100: Number(pay.amount || 0), paySource: pay.source || '', ret: r };
+      const horseNames = (t.nums || []).map(n => horseNameMap[String(Number(n))] || '').filter(Boolean).join('－');
+      return { ...t, horseNames, hit: isHit, pay100: Number(pay.amount || 0), paySource: pay.source || '', ret: r };
     });
 
     return {
@@ -13898,7 +13974,7 @@ if(horses.length === 0){
             try{
               currentRaceId = rid;
               currentRaceName = row.raceName;
-              simRecordProfit(true, s.bet, s.ret, s.hit, r.tickets.length, '予想テキスト精算', s.detail); // v5.18.201 券種別内訳
+              simRecordProfit(true, s.bet, s.ret, s.hit, r.tickets.length, '予想テキスト精算', s.detail, s.detail);
             }catch(e){ console.warn('[pts] 収支記録失敗', e); }
           }
         }catch(e){
@@ -22808,10 +22884,10 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 </script>
 
 <script>
-/* v5.18.249 RaceDateLabels: 履歴とグラフへレース開催日を表示 */
+/* v5.18.250 BetDetails: 収支履歴へ買い目単位の明細を保存・表示 */
 (function(){
   'use strict';
-  var V='v5.18.249 RaceDateLabels';
+  var V='v5.18.250 BetDetails';
   function applyVersion(){
     window.APP_VERSION=V;
     var el=document.querySelector('.header .ver, .ver');

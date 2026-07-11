@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.252 BetStatsJSON</title>
+<title>The競馬 EV分析 v5.18.253 ProfitV22Format</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -597,7 +597,7 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.252 BetStatsJSON</span>
+    <span class="ver">v5.18.253 ProfitV22Format</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1946,6 +1946,25 @@ function pgjParseRaceLabel(x){
   if(tm) out.ticket = tm[1];
   return out;
 }
+function pgjTicketDetailRows(src){
+  try{
+    const rows = typeof tkNormalizeTicketDetails === 'function' ? (tkNormalizeTicketDetails(src) || []) : (Array.isArray(src) ? src : []);
+    return rows.map(d => {
+      const row = {
+        券種名: d.券種名 || d.type || '不明',
+        買い目: d.買い目 || (Array.isArray(d.nums) ? d.nums.join('-') : ''),
+        馬名: d.馬名 || d.horseNames || '',
+        点数: 1,
+        購入額: pgjNum(d.購入額 ?? d.amount),
+        払戻額: pgjNum(d.払戻額 ?? d.ret),
+        的中: pgjNum(d.的中 ?? (d.hit ? 1 : 0))
+      };
+      if(pgjNum(d.想定オッズ ?? d.odds) > 0) row.想定オッズ = pgjNum(d.想定オッズ ?? d.odds);
+      if(pgjNum(d.EV ?? d.ev) > 0) row.EV = pgjNum(d.EV ?? d.ev);
+      return row;
+    }).filter(d => d.券種名 && d.買い目 && d.購入額 > 0);
+  }catch(e){ return []; }
+}
 function pgjRecordFromHistory(x, source, i){
   const p = pgjParseRaceLabel(x);
   const bet = pgjNum(x && (x.bet ?? x.stake ?? x.投資));
@@ -1966,10 +1985,12 @@ function pgjRecordFromHistory(x, source, i){
     source: source,
     sourceIndex: i
   };
-  // v5.18.201: byType（券種別の購入額・払戻額）があれば、券種名と内訳を明細に含める。
-  // 内訳キーは解析ツール(Profit Graph Switcher)の明細判定キー(投資/払戻/収支)と
-  // 衝突しない 購入額/払戻額 を使い、二重集計を防ぐ。
-  if(x && x.byType && typeof x.byType === 'object'){
+  // 買い目単位の内訳を優先。購入額/払戻額を使い、v22側の収支明細と二重計上させない。
+  const detailRows = pgjTicketDetailRows(x && x.ticketDetails);
+  if(detailRows.length){
+    rec['券種'] = [...new Set(detailRows.map(d => d.券種名))].join('+');
+    rec['内訳'] = detailRows;
+  }else if(x && x.byType && typeof x.byType === 'object'){
     const keys = Object.keys(x.byType);
     if(keys.length){
       rec['券種'] = keys.join('+');
@@ -2003,7 +2024,7 @@ function pgjRecordsFromRangeRows(){
           sourceIndex: i
         };
         // v5.18.201: 買い目単位の内訳（券種別の購入額・払戻額）があればそのまま含める
-        if(Array.isArray(r.ticketDetails) && r.ticketDetails.length) rec['内訳'] = r.ticketDetails;
+        if(Array.isArray(r.ticketDetails) && r.ticketDetails.length) rec['内訳'] = pgjTicketDetailRows(r.ticketDetails);
         else if(Array.isArray(r.ticketTypeBreakdown) && r.ticketTypeBreakdown.length) rec['内訳'] = r.ticketTypeBreakdown;
         return rec;
       });
@@ -3779,12 +3800,12 @@ function simClearHistory(){
   renderManualFinishPicker();
 }
 
-function collectSimBetStats(){
+function collectSimBetStats(entries = simHistory){
   const map = new Map();
   let detailRecordCount = 0;
   let detailCount = 0;
-  simHistory.forEach(entry => {
-    const details = tkNormalizeTicketDetails(entry && entry.ticketDetails) || [];
+  (entries || []).forEach(entry => {
+    const details = tkNormalizeTicketDetails(entry && (entry.ticketDetails || entry.内訳)) || [];
     if(details.length) detailRecordCount++;
     details.forEach(d => {
       const type = String(d.券種名 || '不明');
@@ -3845,59 +3866,92 @@ function renderSimBetStats(){
 }
 
 function buildSimBetStatsJSONSnapshot(){
-  const stats = collectSimBetStats();
-  const records = simHistory.map((entry, index) => {
+  let records = simHistory.map((entry, index) => {
     const details = tkNormalizeTicketDetails(entry && entry.ticketDetails) || [];
-    return {
-      No: index + 1,
+    const parsed = typeof pgjParseRaceLabel === 'function' ? pgjParseRaceLabel(entry) : {venue:'未分類',race:''};
+    const venue = entry.venueName || entry.venue || entry.venueCode || parsed.venue || '未分類';
+    const raceRaw = entry.raceNo || parsed.race || '';
+    const race = raceRaw ? String(raceRaw).replace(/R?$/,'') + 'R' : '';
+    const types = [...new Set(details.map(d => String(d.券種名 || '')).filter(Boolean))];
+    const cleanDetails = details.map(d => {
+      const row = {
+        券種名: d.券種名 || '不明',
+        買い目: d.買い目 || '',
+        馬名: d.馬名 || '',
+        点数: 1,
+        購入額: Number(d.購入額 || 0),
+        払戻額: Number(d.払戻額 || 0),
+        的中: Number(d.的中 || 0)
+      };
+      if(Number(d.想定オッズ || 0) > 0) row.想定オッズ = Number(d.想定オッズ);
+      if(Number(d.EV || 0) > 0) row.EV = Number(d.EV);
+      return row;
+    });
+    const bet = Number(entry.bet || 0), ret = Number(entry.ret || 0);
+    const rec = {
       日付: tkHistoryRaceDate(entry),
-      区分: entry.kind || '',
-      場: entry.venueName || entry.venueCode || '',
-      R: entry.raceNo || '',
+      場: venue,
+      R: race,
       レース名: entry.raceName || '',
       race_id: entry.raceId || entry.race_id || '',
-      投資: Number(entry.bet || 0),
-      払戻: Number(entry.ret || 0),
-      収支: Number(entry.profit ?? (Number(entry.ret||0) - Number(entry.bet||0))),
-      ROI: Number(entry.roi ?? (Number(entry.bet||0) ? Number(entry.ret||0) / Number(entry.bet||0) * 100 : 0)),
-      的中点数: Number(entry.hitCount || 0),
-      買い目点数: details.length,
-      記録元: entry.source || '',
-      券種別集計: entry.byType || null,
-      買い目明細: details
+      券種: types.length ? types.join('+') : '不明',
+      投資: bet,
+      払戻: ret,
+      収支: Number(entry.profit ?? (ret-bet)),
+      ROI: bet ? Math.round(ret/bet*1000)/10 : 0,
+      source: entry.source || 'シミュレーション収支',
+      sourceIndex: index
+    };
+    if(cleanDetails.length) rec.内訳 = cleanDetails;
+    return rec;
+  });
+  records = records.filter(rec => /^\d{4}-\d{2}-\d{2}$/.test(String(rec.日付 || '')) && rec.場 && !['未分類','不明','unknown'].includes(String(rec.場)));
+
+  const stats = collectSimBetStats(records);
+  const byTicket = {};
+  const byBet = {};
+  stats.rows.forEach(item => {
+    const ticket = byTicket[item.type] || (byTicket[item.type] = {点数:0,的中数:0,投資合計:0,払戻合計:0,収支合計:0,回収率:0});
+    ticket.点数 += item.count;
+    ticket.的中数 += item.hit;
+    ticket.投資合計 += item.bet;
+    ticket.払戻合計 += item.ret;
+    ticket.収支合計 += item.profit;
+    byBet[`${item.type}:${item.combo}`] = {
+      券種:item.type, 買い目:item.combo,
+      回数:item.count, 的中数:item.hit, 的中率:item.hitRate,
+      投資合計:item.bet, 払戻合計:item.ret, 収支合計:item.profit, 回収率:item.roi
     };
   });
-  const sortedStats = stats.rows.slice().sort((a,b) => (b.count-a.count) || (b.profit-a.profit) || a.type.localeCompare(b.type,'ja'));
-  const totalBet = simHistory.reduce((s,x)=>s+Number(x && x.bet || 0),0);
-  const totalRet = simHistory.reduce((s,x)=>s+Number(x && x.ret || 0),0);
+  Object.keys(byTicket).forEach(type => {
+    const g = byTicket[type];
+    g.回収率 = g.投資合計 ? Math.round(g.払戻合計/g.投資合計*1000)/10 : 0;
+  });
+  const totalBet = records.reduce((s,x)=>s+Number(x.投資||0),0);
+  const totalRet = records.reduce((s,x)=>s+Number(x.払戻||0),0);
   return {
-    schema: 'keiba-bet-statistics-v1',
-    app: 'The競馬 EV分析',
-    version: window.APP_VERSION || 'v5.18.252 BetStatsJSON',
+    product: 'The競馬 EV分析',
+    schema: 'keiba-profit-graph-v1',
+    version: window.APP_VERSION || 'v5.18.253 ProfitV22Format',
     exportedAt: new Date().toISOString(),
-    概要: {
-      収支件数: simHistory.length,
-      明細付き収支件数: stats.detailRecordCount,
+    説明: 'keiba_profit_spec_chart_switcher_candle_v22.html 対応JSON（買い目明細・買い目別集計付き）',
+    集計: {
+      件数: records.length,
+      投資合計: totalBet,
+      払戻合計: totalRet,
+      収支合計: totalRet-totalBet,
+      ROI: totalBet ? Math.round(totalRet/totalBet*1000)/10 : 0,
       買い目明細点数: stats.detailCount,
-      買い目組合せ種類: stats.rows.length,
-      総投資: totalBet,
-      総払戻: totalRet,
-      累計収支: totalRet-totalBet,
-      回収率: totalBet ? totalRet/totalBet*100 : 0
+      買い目組合せ種類: stats.rows.length
     },
-    収支別買い目データ: records,
-    買い目別統計: sortedStats.map(item => ({
-      統計キー: `${item.type}:${item.combo}`,
-      券種: item.type,
-      買い目: item.combo,
-      回数: item.count,
-      的中回数: item.hit,
-      的中率: item.hitRate,
-      投資: item.bet,
-      払戻: item.ret,
-      収支: item.profit,
-      ROI: item.roi
-    }))
+    収支明細: records,
+    券種別集計: byTicket,
+    買い目別集計: byBet,
+    仕様: {
+      graphs: ['収支構成比','開催場別収支','券種別収支','累計収支変動'],
+      chartSwitch: ['円グラフ','棒グラフ','折れ線グラフ'],
+      compatibleWith: 'keiba_profit_spec_chart_switcher_candle_v22.html'
+    }
   };
 }
 
@@ -3912,7 +3966,7 @@ function exportSimBetStatsJSON(){
   let snapshot;
   try{
     snapshot = buildSimBetStatsJSONSnapshot();
-    if(!snapshot.概要.買い目明細点数){
+    if(!snapshot.集計.買い目明細点数){
       simBetStatsSaveStatus('保存できる買い目明細がありません。買い目付きで精算してから実行してください。', false);
       return;
     }
@@ -3925,7 +3979,7 @@ function exportSimBetStatsJSON(){
     return;
   }
   const ymd = (typeof formatLocalDate === 'function' ? formatLocalDate() : new Date().toISOString().slice(0,10)).replace(/-/g,'');
-  const defaultName = `keiba_bet_stats_${ymd}.json`;
+  const defaultName = `keiba_profit_v22_${ymd}.json`;
   window.askJsonNameAndSave(defaultName, () => JSON.stringify(snapshot, null, 2), result => {
     if(result && result.cancelled) simBetStatsSaveStatus('保存をキャンセルしました。', null);
     else if(result && result.ok) simBetStatsSaveStatus(`保存しました: ${result.fileName}`, true);
@@ -23082,10 +23136,10 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 </script>
 
 <script>
-/* v5.18.252 BetStatsJSON: 買い目統計を名前付き・保存先選択でJSON出力 */
+/* v5.18.253 ProfitV22Format: 買い目統計JSONを収支グラフv22形式で出力 */
 (function(){
   'use strict';
-  var V='v5.18.252 BetStatsJSON';
+  var V='v5.18.253 ProfitV22Format';
   function applyVersion(){
     window.APP_VERSION=V;
     var el=document.querySelector('.header .ver, .ver');

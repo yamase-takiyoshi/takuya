@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.268 PopWarnRefresh</title>
+<title>The競馬 EV分析 v5.18.272 SimRangeLinkMode</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -196,6 +196,16 @@ body{
 .sim-hist-dateinput.edited{border-color:#f59e0b;color:#fbbf24;background:rgba(245,158,11,.12)}
 .sim-hist-daterestore{background:rgba(245,158,11,.18);border:1px solid rgba(245,158,11,.5);color:#fbbf24;border-radius:6px;font-size:11px;font-weight:900;line-height:1;padding:2px 5px;cursor:pointer}
 .sim-hist-daterestore:active{transform:scale(.92)}
+/* v5.18.270 SimRangeTransfer: 期間フィルタ付き右パネル転送コントローラー */
+.sim-date-bar{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;margin:0 0 10px;padding:8px 10px;background:rgba(0,255,136,.06);border:1px solid rgba(0,255,136,.20);border-radius:8px}
+.sim-date-bar-label{font-size:12px;font-weight:800;color:#d9ffe8}
+.sim-date-bar-scope{background:rgba(30,41,59,.55);border:1px solid rgba(71,85,105,.55);border-radius:6px;color:#cbd5e1;font-size:11px;font-weight:700;padding:3px 6px;color-scheme:dark;cursor:pointer}
+.sim-date-bar-btn{background:rgba(0,255,136,.14);border-color:rgba(0,255,136,.35);color:#d9ffe8;font-weight:850;white-space:nowrap}
+.sim-date-bar-btn:active{transform:translateY(1px)}
+.sim-date-bar-sep{font-size:12px;font-weight:800;color:#94a3b8}
+.sim-date-bar-link{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:#cbd5e1;cursor:pointer;user-select:none}
+.sim-date-bar-link input{accent-color:#00e676;cursor:pointer}
+.sim-date-bar-status{font-size:11px;color:var(--muted);flex:1 1 100%;min-height:14px}
 .sim-hist-bets{grid-column:1/-1;padding:2px 0 1px 8px;color:var(--muted)}
 .sim-hist-bets summary{width:max-content;max-width:100%;cursor:pointer;color:#a7f3d0;font-size:10px;font-weight:800;user-select:none}
 .sim-hist-ticket-list{display:grid;gap:3px;margin-top:5px;padding-left:4px}
@@ -651,7 +661,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
   </div>
   <div style="display:flex;gap:8px;align-items:center">
     <button id="profitSplitBtn" class="btn-sm profit-split-toggle" type="button" onclick="toggleProfitLiveSplit()" aria-pressed="false">📊 横2画面</button>
-    <span class="ver">v5.18.268 PopWarnRefresh</span>
+    <span class="ver">v5.18.272 SimRangeLinkMode</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1244,6 +1254,24 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
           <button class="btn-sm" onclick="simClearHistory()">履歴クリア</button>
         </div>
       </div>
+      <!-- v5.18.271 SimRangeLink: 期間横断の期間を取り込む／連動する（カレンダーで選んだ期間だけを右パネルへ） -->
+      <div class="sim-date-bar">
+        <span class="sim-date-bar-label">📅 期間を右パネルへ転送</span>
+        <input type="date" id="simRangeStart" class="sim-hist-dateinput" aria-label="開始日">
+        <span class="sim-date-bar-sep">〜</span>
+        <input type="date" id="simRangeEnd" class="sim-hist-dateinput" aria-label="終了日">
+        <button class="btn-sm sim-date-bar-btn" type="button" onclick="tkSimRangeTransfer()">➡️ この期間のみ転送</button>
+        <button class="btn-sm" type="button" onclick="tkSimRangeClear()" title="期間フィルタを解除して全期間を右パネルへ転送">↺ 全期間</button>
+        <button class="btn-sm" type="button" onclick="tkSimRangePullFromRs(true)" title="期間横断シミュレーションの開始日／終了日をこの欄へコピー">📆 期間横断から取得</button>
+        <label class="sim-date-bar-link" title="期間横断の開始日／終了日と同期する動作を選びます">🔗 期間横断と連動
+          <select id="simRangeLinkMode" class="sim-date-bar-scope" onchange="tkSimRangeLinkSet(this.value)" aria-label="連動モード">
+            <option value="off">しない</option>
+            <option value="auto">自動転送</option>
+            <option value="sync">日付同期のみ</option>
+          </select>
+        </label>
+        <span id="simRangeStatus" class="sim-date-bar-status"></span>
+      </div>
       <div id="simProfitSummary" class="summary-grid" style="margin-bottom:10px"></div>
       <div class="chart-box"><canvas id="simProfitChart" width="560" height="220"></canvas></div>
       <div id="simHistoryList" style="margin-top:10px;max-height:200px;overflow-y:auto"></div>
@@ -1713,7 +1741,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.267 SimDateEdit';
+window.APP_VERSION = 'v5.18.272 SimRangeLinkMode';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -4304,6 +4332,211 @@ function tkSimBindDateEditor(){
 window.tkSimEditDate = tkSimEditDate;
 window.tkSimRestoreDate = tkSimRestoreDate;
 window.tkSimRestoreAllDates = tkSimRestoreAllDates;
+
+// ── v5.18.270 SimRangeTransfer: カレンダーで選んだ期間だけを右パネル収支グラフへ転送 ──
+// 開始日〜終了日を選び「➡️ この期間のみ転送」で、window.__tkSimTransferRange をセットし
+// 右パネル(v22/別タブ収支グラフ)へ即時再送する。実際の絞り込みは buildLiveSnapshot() が
+// tkApplySimTransferRange() を通して行うため、以後の自動同期でも期間フィルタが維持される。
+// 「↺ 全期間」でフィルタを解除。履歴0件でもバーは常時表示される。
+function tkSimForcePushLive(){
+  // 右パネル（横2画面のiframe）＋別タブ収支グラフ（BroadcastChannel）へ即時再送。
+  try{ if(typeof window.scheduleProfitLiveSync === 'function') window.scheduleProfitLiveSync(); }catch(e){}
+  try{ if(typeof window.refreshProfitLiveGraph === 'function') window.refreshProfitLiveGraph(); }catch(e){}
+}
+window.tkSimForcePushLive = tkSimForcePushLive;
+
+// 右パネルへ送るスナップショットを、選択した期間(日付)だけに絞り込む。
+// buildLiveSnapshot() から呼ばれる。フィルタ未設定/日付なし明細のみ、なら素通し。
+function tkApplySimTransferRange(snap){
+  const r = window.__tkSimTransferRange;
+  if(!r || !r.start || !r.end) return snap;
+  if(!snap || !Array.isArray(snap.収支明細)) return snap;
+  const isYmd = d => /^\d{4}-\d{2}-\d{2}$/.test(String(d || ''));
+  // 別スキーマ(日付を持たない明細)を誤って全消ししないための保険。
+  if(!snap.収支明細.some(x => isYmd(x && x.日付))) return snap;
+
+  const list = snap.収支明細.filter(x => {
+    const d = String(x && x.日付 || '');
+    return isYmd(d) && d >= r.start && d <= r.end;
+  });
+  // 集計・券種別集計を絞り込み後の明細から作り直す（右パネルのKPIを一致させる）。
+  const byTicket = {};
+  const agg = k => byTicket[k] || (byTicket[k] = { '点数':0,'的中数':0,'投資合計':0,'払戻合計':0,'収支合計':0,'回収率':0 });
+  list.forEach(x => {
+    const det = x['内訳'];
+    if(Array.isArray(det) && det.length){
+      det.forEach(d => {
+        const g = agg(String(d['券種名'] || '不明'));
+        const b = Number(d['購入額'] || 0), p = Number(d['払戻額'] || 0);
+        g['点数'] += Number(d['点数'] || 1); g['的中数'] += Number(d['的中'] || 0);
+        g['投資合計'] += b; g['払戻合計'] += p; g['収支合計'] += p - b;
+      });
+    }else{
+      const g = agg(String(x['券種'] || '不明'));
+      g['点数'] += 1; if(Number(x['払戻'] || 0) > 0) g['的中数'] += 1;
+      g['投資合計'] += Number(x['投資'] || 0); g['払戻合計'] += Number(x['払戻'] || 0); g['収支合計'] += Number(x['収支'] || 0);
+    }
+  });
+  Object.keys(byTicket).forEach(k => {
+    const g = byTicket[k];
+    g['回収率'] = g['投資合計'] ? Math.round(g['払戻合計'] / g['投資合計'] * 1000) / 10 : 0;
+  });
+  const totalBet = list.reduce((s,x)=>s+Number(x.投資||0),0);
+  const totalRet = list.reduce((s,x)=>s+Number(x.払戻||0),0);
+  const totalPro = list.reduce((s,x)=>s+Number(x.収支||0),0);
+  const out = Object.assign({}, snap);
+  out.収支明細   = list;
+  out.券種別集計 = byTicket;
+  out.集計       = { 件数:list.length, 投資合計:totalBet, 払戻合計:totalRet, 収支合計:totalPro,
+                     ROI: totalBet ? Math.round(totalRet / totalBet * 1000) / 10 : 0 };
+  out.期間フィルタ = { 開始:r.start, 終了:r.end };
+  return out;
+}
+window.tkApplySimTransferRange = tkApplySimTransferRange;
+
+// simHistory の実在するレース日付から、期間入力の初期値(最小〜最大)を求める。
+function tkSimRangeBounds(){
+  let min = '', max = '';
+  (typeof simHistory !== 'undefined' ? simHistory : []).forEach(rec => {
+    const d = tkHistoryRaceDate(rec);
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(d)) return;
+    if(!min || d < min) min = d;
+    if(!max || d > max) max = d;
+  });
+  return { min, max };
+}
+function tkSimRangeDefault(){
+  const sEl = document.getElementById('simRangeStart');
+  const eEl = document.getElementById('simRangeEnd');
+  if(!sEl || !eEl) return;
+  const { min, max } = tkSimRangeBounds();
+  const today = (typeof formatLocalDate === 'function') ? formatLocalDate(new Date())
+                                                        : new Date().toISOString().slice(0,10);
+  if(!sEl.value) sEl.value = min || today;
+  if(!eEl.value) eEl.value = max || today;
+}
+function tkSimRangeTransfer(){
+  const sEl = document.getElementById('simRangeStart');
+  const eEl = document.getElementById('simRangeEnd');
+  const st  = document.getElementById('simRangeStatus');
+  const setSt = (msg, ok) => {
+    if(!st) return;
+    st.textContent = msg;
+    st.style.color = (ok === false) ? 'var(--red)' : (ok ? 'var(--green)' : 'var(--muted)');
+  };
+  const s = tkHistoryDateOnly(sEl && sEl.value);
+  const e = tkHistoryDateOnly(eEl && eEl.value);
+  if(!s || !e){ setSt('⚠️ 開始日と終了日を入力してください', false); return; }
+  if(s > e){ setSt('⚠️ 開始日は終了日と同じか前にしてください', false); return; }
+
+  window.__tkSimTransferRange = { start: s, end: e };
+
+  // 転送前に「範囲内 何件 / 全 何件」を数える（フィルタ適用前の全明細で判定）。
+  let total = 0, inRange = 0;
+  try{
+    const full = (typeof buildProfitGraphJSONSnapshot === 'function') ? buildProfitGraphJSONSnapshot() : null;
+    const listAll = (full && Array.isArray(full.収支明細)) ? full.収支明細 : [];
+    total = listAll.length;
+    inRange = listAll.filter(x => {
+      const d = String(x && x.日付 || '');
+      return /^\d{4}-\d{2}-\d{2}$/.test(d) && d >= s && d <= e;
+    }).length;
+  }catch(err){}
+
+  tkSimForcePushLive();  // buildLiveSnapshot が tkApplySimTransferRange で絞り込んで送信する
+  if(total && inRange === 0){
+    setSt(`⚠️ ${tkFormatHistoryDate(s)}〜${tkFormatHistoryDate(e)} に該当する明細がありません（全${total}件）`, false);
+  }else{
+    setSt(`✅ ${tkFormatHistoryDate(s)}〜${tkFormatHistoryDate(e)}：${inRange}件 / 全${total}件 を右パネルへ転送`, true);
+  }
+}
+function tkSimRangeClear(){
+  window.__tkSimTransferRange = null;
+  const st = document.getElementById('simRangeStatus');
+  tkSimForcePushLive();
+  if(st){ st.textContent = '↺ 期間フィルタを解除しました（全期間を右パネルへ転送）'; st.style.color = 'var(--muted)'; }
+}
+window.tkSimRangeTransfer = tkSimRangeTransfer;
+window.tkSimRangeClear    = tkSimRangeClear;
+window.tkSimRangeDefault  = tkSimRangeDefault;
+
+// ── v5.18.271 SimRangeLink: 期間横断シミュレーション(rsStart/rsEnd)の期間を取り込む／連動 ──
+// 「📆 期間横断から取得」= 手動で開始日／終了日をコピー。
+// 「🔗 期間横断と連動」= ONで rsStart/rsEnd の変更を自動でこの欄へ反映＋右パネルへ自動転送。
+function tkSimRangePullFromRs(announce){
+  const sEl = document.getElementById('simRangeStart');
+  const eEl = document.getElementById('simRangeEnd');
+  const st  = document.getElementById('simRangeStatus');
+  if(!sEl || !eEl) return false;
+  const rs = document.getElementById('rsStart');
+  const re = document.getElementById('rsEnd');
+  const s = tkHistoryDateOnly(rs && rs.value);
+  const e = tkHistoryDateOnly(re && re.value);
+  if(!s && !e){
+    if(announce && st){ st.textContent = '⚠️ 期間横断シミュレーションの開始日／終了日が未入力です'; st.style.color = 'var(--red)'; }
+    return false;
+  }
+  if(s) sEl.value = s;
+  if(e) eEl.value = e;
+  if(announce && st){
+    st.textContent = `📆 期間横断の期間を取得：${tkFormatHistoryDate(s || e)}〜${tkFormatHistoryDate(e || s)}（「➡️ この期間のみ転送」で反映）`;
+    st.style.color = 'var(--muted)';
+  }
+  return true;
+}
+window.tkSimRangePullFromRs = tkSimRangePullFromRs;
+
+let __tkRsLinkTimer = null;
+function __tkRsLinkOnChange(){
+  // 連動時：期間横断の日付変更を常にこの欄へ反映。'auto'ならさらに右パネルへ自動転送（デバウンス）。
+  if(tkSimRangePullFromRs(false) && window.__tkSimLinkMode === 'auto'){
+    clearTimeout(__tkRsLinkTimer);
+    __tkRsLinkTimer = setTimeout(tkSimRangeTransfer, 400);
+  }
+}
+// mode: 'off'=連動しない / 'auto'=日付同期＋右パネルへ自動転送 / 'sync'=日付同期のみ（転送は手動）
+function tkSimRangeLinkSet(mode){
+  window.__tkSimLinkMode = (mode === 'auto' || mode === 'sync') ? mode : 'off';
+  const on  = window.__tkSimLinkMode !== 'off';
+  const sel = document.getElementById('simRangeLinkMode');
+  if(sel) sel.value = window.__tkSimLinkMode;
+  try{ localStorage.setItem('tk-sim-range-link-mode', window.__tkSimLinkMode); }catch(e){}
+  const st = document.getElementById('simRangeStatus');
+  [document.getElementById('rsStart'), document.getElementById('rsEnd')].forEach(el => {
+    if(!el) return;
+    el.removeEventListener('change', __tkRsLinkOnChange);
+    el.removeEventListener('input',  __tkRsLinkOnChange);
+    if(on){
+      el.addEventListener('change', __tkRsLinkOnChange);
+      el.addEventListener('input',  __tkRsLinkOnChange);
+    }
+  });
+  if(!on){ if(st){ st.textContent = '🔗 連動OFF'; st.style.color = 'var(--muted)'; } return; }
+  const pulled = tkSimRangePullFromRs(false);
+  if(window.__tkSimLinkMode === 'auto'){
+    if(pulled) tkSimRangeTransfer();  // 即転送
+    else if(st){ st.textContent = '🔗 連動（自動転送）：期間横断の開始日／終了日を入力すると自動で反映・転送します'; st.style.color = 'var(--muted)'; }
+  }else{ // sync：日付だけ同期し、転送はボタン押下時のみ
+    const sEl = document.getElementById('simRangeStart'), eEl = document.getElementById('simRangeEnd');
+    if(pulled && st){ st.textContent = `🔗 連動（日付同期のみ）：${tkFormatHistoryDate(sEl && sEl.value)}〜${tkFormatHistoryDate(eEl && eEl.value)}（「➡️ この期間のみ転送」で反映）`; st.style.color = 'var(--muted)'; }
+    else if(st){ st.textContent = '🔗 連動（日付同期のみ）：期間横断の日付をこの欄へ同期します（転送は手動）'; st.style.color = 'var(--muted)'; }
+  }
+}
+window.tkSimRangeLinkSet = tkSimRangeLinkSet;
+
+function tkSimRangeInit(){
+  tkSimRangeDefault();
+  let mode = 'off';
+  try{
+    mode = localStorage.getItem('tk-sim-range-link-mode') || '';
+    if(!mode){ mode = (localStorage.getItem('tk-sim-range-link') === '1') ? 'auto' : 'off'; }  // 旧設定の移行
+  }catch(e){}
+  if(mode === 'auto' || mode === 'sync') tkSimRangeLinkSet(mode);
+  else { const sel = document.getElementById('simRangeLinkMode'); if(sel) sel.value = 'off'; }
+}
+window.tkSimRangeInit = tkSimRangeInit;
+if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', tkSimRangeInit);
+else tkSimRangeInit();
 
 // 精算結果を simHistory に記録（race_id が同じなら上書き）
 // byType（券種別集計）と ticketDetails（買い目単位明細）を収支ごとに保存する。
@@ -16108,7 +16341,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.267 SimDateEdit';
+  window.APP_VERSION = 'v5.18.272 SimRangeLinkMode';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -16537,7 +16770,7 @@ function json(obj, status = 200) {
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.267 SimDateEdit';
+  window.APP_VERSION = 'v5.18.272 SimRangeLinkMode';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -16834,7 +17067,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.267 SimDateEdit';
+  window.APP_VERSION = 'v5.18.272 SimRangeLinkMode';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -17052,7 +17285,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.267 SimDateEdit';
+    window.APP_VERSION = 'v5.18.272 SimRangeLinkMode';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -17352,7 +17585,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.267 SimDateEdit';
+  window.APP_VERSION = 'v5.18.272 SimRangeLinkMode';
   try{
     const ver = document.querySelector('.ver');
     if(ver){
@@ -20451,7 +20684,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
   // ── 表示バージョン更新（このスクリプトが最後に実行されるためここで確定） ──
   try{
-    window.APP_VERSION = 'v5.18.267 SimDateEdit';
+    window.APP_VERSION = 'v5.18.272 SimRangeLinkMode';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     else document.addEventListener('DOMContentLoaded', function(){ try{ window.setAppVersionLabel(); }catch(e){} });
   }catch(e){}
@@ -23935,6 +24168,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     if(!snap||!Array.isArray(snap.収支明細)||!snap.収支明細.length){
       try{ if(typeof buildSimBetStatsJSONSnapshot==='function') snap=buildSimBetStatsJSONSnapshot(); }catch(e){}
     }
+    // v5.18.270 SimRangeTransfer: カレンダーで選んだ期間だけに絞って右パネルへ送る。
+    try{ if(typeof window.tkApplySimTransferRange==='function') snap=window.tkApplySimTransferRange(snap); }catch(e){}
     return snap;
   }
   function writeBridge(){

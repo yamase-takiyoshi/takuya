@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.262 BabaStateBodyScanFix</title>
+<title>The競馬 EV分析 v5.18.263 BabaStateDeepFix</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -621,7 +621,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
   </div>
   <div style="display:flex;gap:8px;align-items:center">
     <button id="profitSplitBtn" class="btn-sm profit-split-toggle" type="button" onclick="toggleProfitLiveSplit()" aria-pressed="false">📊 横2画面</button>
-    <span class="ver">v5.18.262 BabaStateBodyScanFix</span>
+    <span class="ver">v5.18.263 BabaStateDeepFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1628,7 +1628,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.262 BabaStateBodyScanFix';
+window.APP_VERSION = 'v5.18.263 BabaStateDeepFix';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -1955,7 +1955,7 @@ async function exportStateJSON(){
 }
 
 
-// v5.18.262 BabaStateBodyScanFix: 収支明細（親）に 距離/馬場/馬場状態/クラス を、
+// v5.18.263 BabaStateDeepFix: 収支明細（親）に 距離/馬場/馬場状態/クラス を、
 // 買い目内訳に 平均人気/人気帯/想定オッズ/オッズ帯 を付与し、
 // 収支グラフ側の「距離未取得/馬場未取得/状態未取得/人気未取得/オッズ未取得/クラス未取得」を解消する。
 // レース条件はレース名・RaceData 文字列から、人気帯/オッズ帯は買い目に含まれる馬の人気・オッズから算出する。
@@ -1976,21 +1976,27 @@ function pgjNormalizeTrackCond(v){
   return m ? m[0] : '';
 }
 function pgjParseRaceCond(text){
-  const s = pgjToHalf(text);
+  // v5.18.263 BabaStateDeepFix:
+  // NAR/JRAの表記揺れを吸収する。例:「ダート 左 1400m 良」「馬場状態 良」「馬場 良」「芝1200m稍重」。
+  const s = pgjToHalf(text).replace(/\u00a0/g, ' ').replace(/\s+/g, ' ');
+  const compact = s.replace(/\s+/g, '');
   const out = { 距離: 0, 馬場: '', 馬場状態: '' };
-  const dm = s.match(/(芝|ダート|ダ|障害|障)\s*([0-9]{3,4})\s*m/i);
+  const dm = s.match(/(芝|ダート|ダ|障害|障)\s*(?:右|左|外|内|直線|外回り|内回り|・|,|、|\/|－|-|\(|\))*\s*([0-9]{3,4})\s*m/i)
+          || compact.match(/(芝|ダート|ダ|障害|障)(?:右|左|外|内|直線|外回り|内回り)?([0-9]{3,4})m?/i);
   if(dm){
     out.距離 = Number(dm[2]) || 0;
     out.馬場 = pgjNormalizeSurface(dm[1]);
   }else{
-    const dm2 = s.match(/([0-9]{3,4})\s*m/);
+    const dm2 = s.match(/([0-9]{3,4})\s*m/) || compact.match(/([0-9]{3,4})m/);
     if(dm2) out.距離 = Number(dm2[1]) || 0;
     out.馬場 = pgjNormalizeSurface(s);
   }
-  const cm = s.match(/馬場\s*状態\s*[:：]?\s*(稍重|不良|良|重)/)
-          || s.match(/馬場\s*[:：]?\s*(稍重|不良|良|重)/)
+  const cm = s.match(/馬場\s*状態\s*(?:[:：=＝]|\s+)\s*(稍重|不良|良|重)(?![太子馬])/)      // 馬場状態 良
+          || s.match(/馬場\s*(?:[:：=＝]|\s+)\s*(稍重|不良|良|重)(?![太子馬])/)           // 馬場 良
+          || s.match(/(?:芝|ダート|ダ|障害|障)\s*(?:右|左|外|内|直線|外回り|内回り|・|,|、|\/|－|-|\(|\))*\s*[0-9]{3,4}\s*m?\s*(稍重|不良|良|重)(?![太子馬])/) // ダート1400m 良
+          || compact.match(/(?:芝|ダート|ダ|障害|障)(?:右|左|外|内|直線|外回り|内回り)?[0-9]{3,4}m?(稍重|不良|良|重)(?![太子馬])/) // ダ1400良
           || s.match(/(稍重|不良|良|重)\s*馬場/)
-          || s.match(/(?:^|[\s\/｜|・])(稍重|不良|良|重)(?:$|[\s\/｜|・])/)
+          || s.match(/(?:^|[\s\/｜|・,、])(?:馬場)?(稍重|不良|良|重)(?:$|[\s\/｜|・,、])/) 
           || s.match(/(稍重|不良)/);
   if(cm) out.馬場状態 = pgjNormalizeTrackCond(cm[1]);
   return out;
@@ -2008,29 +2014,35 @@ function pgjRaceCondText(doc){
   if(!doc || typeof doc.querySelectorAll !== 'function') return '';
   const parts = [];
   // レース条件が入り得る要素を広めに収集（JRA/NAR・PC/SP・結果/出馬表のDOM差を吸収）。
-  ['.RaceData01', '.RaceData02', '[class*="RaceData"]', '.RaceList_Item02', '.RaceList_Item01',
-   '[class*="TrackState"]', '[class*="Weather"]', '.Icon_TrackState', '.Icon_Weather',
-   '.RaceKentei', '.Result_DataInfo', '.Data_Item', 'dl.RaceData', '[class*="RaceHeader"]'].forEach(sel => {
+  ['.RaceData01', '.RaceData02', '[class*="RaceData"]', '[class*="Race_Data"]', '.RaceList_Item02', '.RaceList_Item01',
+   '[class*="TrackState"]', '[class*="Track_State"]', '[class*="Baba"]', '[class*="Weather"]', '.Icon_TrackState', '.Icon_Weather',
+   '.RaceKentei', '.Result_DataInfo', '.Data_Item', 'dl.RaceData', '[class*="RaceHeader"]', '[class*="RaceInfo"]', '[class*="Course"]'].forEach(sel => {
     try{ doc.querySelectorAll(sel).forEach(el => parts.push(el.textContent || '')); }catch(e){}
   });
   let txt = parts.join(' ');
-  // v5.18.262 BabaStateBodyScanFix: 上記セレクタで馬場状態が拾えない場合の保険。
-  // 本文全体から「馬場:良」等のアンカー付き断片だけを抽出して追記する。
-  // コロン(:／：)必須にすることで「馬場良太（騎手名）」等の誤検出を避ける。
+  // v5.18.263 BabaStateDeepFix: 上記セレクタで馬場状態が拾えない場合の保険。
+  // コロン付きに加え、「馬場状態 良」「馬場 良」「ダート1400m 良」「芝1200m稍重」も拾う。
   try{
-    if(!/馬場\s*(?:状態)?\s*[:：]\s*(?:稍重|不良|良|重)/.test(pgjToHalf(txt)) && doc.body){
+    const hasCond = !!pgjParseRaceCond(txt).馬場状態;
+    if((!hasCond || !/(?:芝|ダート|ダ|障)\s*[^0-9]{0,12}[0-9]{3,4}\s*m/i.test(pgjToHalf(txt))) && doc.body){
       let clone = doc.body;
       try{
         clone = doc.body.cloneNode(true);
-        clone.querySelectorAll('script,style,nav,header,footer,iframe,[class*="Calendar"],[class*="Ad"],[class*="Banner"]').forEach(el => el.remove());
+        clone.querySelectorAll('script,style,nav,header,footer,iframe,[class*="Calendar"],[class*="Ad"],[class*="Banner"],[id*="ad"],[class*="sns"]').forEach(el => el.remove());
       }catch(e){ clone = doc.body; }
-      const body = pgjToHalf(clone.textContent || '');
-      const bm = body.match(/馬場\s*(?:状態)?\s*[:：]\s*(稍重|不良|良|重)/);
-      if(bm){ txt += ' 馬場:' + bm[1]; }
+      const body = pgjToHalf(clone.textContent || '').replace(/\u00a0/g,' ').replace(/\s+/g,' ');
+      if(!hasCond){
+        const bm = body.match(/馬場\s*状態\s*(?:[:：=＝]|\s+)\s*(稍重|不良|良|重)(?![太子馬])/) 
+                || body.match(/馬場\s*(?:[:：=＝]|\s+)\s*(稍重|不良|良|重)(?![太子馬])/) 
+                || body.match(/(?:芝|ダート|ダ|障害|障)\s*(?:右|左|外|内|直線|外回り|内回り|・|,|、|\/|－|-|\(|\))*\s*[0-9]{3,4}\s*m?\s*(稍重|不良|良|重)(?![太子馬])/) 
+                || body.replace(/\s+/g,'').match(/(?:芝|ダート|ダ|障害|障)(?:右|左|外|内|直線|外回り|内回り)?[0-9]{3,4}m?(稍重|不良|良|重)(?![太子馬])/);
+        if(bm){ txt += ' 馬場状態:' + bm[1]; }
+      }
       // 距離・馬場(芝/ダ)も未取得なら本文から補完
-      if(!/(?:芝|ダート|ダ|障)\s*[0-9]{3,4}\s*m/i.test(pgjToHalf(txt))){
-        const dm = body.match(/(芝|ダート|ダ|障害|障)\s*([0-9]{3,4})\s*m/i);
-        if(dm){ txt += ' ' + dm[0]; }
+      if(!/(?:芝|ダート|ダ|障)\s*[^0-9]{0,12}[0-9]{3,4}\s*m/i.test(pgjToHalf(txt))){
+        const dm = body.match(/(芝|ダート|ダ|障害|障)\s*(?:右|左|外|内|直線|外回り|内回り|・|,|、|\/|－|-|\(|\))*\s*([0-9]{3,4})\s*m/i)
+                || body.replace(/\s+/g,'').match(/(芝|ダート|ダ|障害|障)(?:右|左|外|内|直線|外回り|内回り)?([0-9]{3,4})m?/i);
+        if(dm){ txt += ' ' + dm[1] + dm[2] + 'm'; }
       }
     }
   }catch(e){}
@@ -2058,6 +2070,31 @@ function pgjCacheRaceMeta(raceId, doc, raceName){
 function pgjRaceMetaOf(raceId){
   const rid = String(raceId || '').replace(/[^0-9]/g, '');
   return (rid && window.__pgjRaceMeta[rid]) || null;
+}
+
+function pgjApplyRaceMetaToRow(row, raceId, text){
+  // v5.18.263 BabaStateDeepFix: 期間横断/一発モードのrowへrace_idメタを即時コピーする。
+  // JSON出力時の後補完だけに頼ると、キャッシュ失敗・分岐差で「状態未取得」が残るため。
+  try{
+    if(!row) return row;
+    const meta = pgjRaceMetaOf(raceId || row.rid || row.raceId || row.race_id) || {};
+    let dist = pgjNum(row.距離 ?? row.distance ?? meta.距離 ?? 0);
+    let surf = pgjNormalizeSurface(row.馬場 ?? row.surface ?? meta.馬場 ?? '');
+    let cond = pgjNormalizeTrackCond(row.馬場状態 ?? row.trackCond ?? row.trackCondition ?? row.condition ?? meta.馬場状態 ?? '');
+    let cls  = String(row.クラス ?? row.class ?? row.raceClass ?? meta.クラス ?? '').trim();
+    if((!(dist > 0) || !surf || !cond) && text){
+      const c = pgjParseRaceCond(text);
+      if(!(dist > 0)) dist = c.距離;
+      if(!surf) surf = c.馬場;
+      if(!cond) cond = c.馬場状態;
+    }
+    if(!cls && text) cls = pgjInferClass(text);
+    if(dist > 0){ row.距離 = dist; row.distance = dist; }
+    if(surf){ row.馬場 = surf; row.surface = surf; }
+    if(cond){ row.馬場状態 = cond; row.trackCond = cond; row.trackCondition = cond; }
+    if(cls){ row.クラス = cls; row.class = cls; }
+  }catch(e){}
+  return row;
 }
 // 買い目の馬番配列 → 平均人気・代表オッズ（買い目内訳の帯付与に使用）
 function pgjBuyPopOdds(nums, horseList, ticketOdds){
@@ -4009,6 +4046,7 @@ function simRecordProfit(autoRecord, bet, ret, hitCount, total, sourceLabel, byT
   const raceDate = tkCurrentRaceDate() || formatLocalDate(new Date());
   const entry   = { raceId, raceName, bet, ret, profit, roi, hitCount, total,
                     date: raceDate, raceDate, recordedAt, source: sourceLabel || '手入力' };
+  try{ if(typeof pgjApplyRaceMetaToRow === 'function') pgjApplyRaceMetaToRow(entry, raceId, raceName); }catch(e){}
   // v5.18.259: レース条件（距離/馬場/馬場状態/クラス）を記録に埋め込み、収支グラフの帯を「未取得」にしない
   try{
     const meta = (typeof pgjRaceMetaOf === 'function' && pgjRaceMetaOf(raceId)) || null;
@@ -4051,6 +4089,7 @@ function simRecordProfit(autoRecord, bet, ret, hitCount, total, sourceLabel, byT
     const idx = simHistory.findIndex(x => x.raceId === raceId);
     if(idx >= 0){
       if(!entry.ticketDetails && simHistory[idx].ticketDetails) entry.ticketDetails = simHistory[idx].ticketDetails;
+      ['距離','distance','馬場','surface','馬場状態','trackCond','trackCondition','クラス','class'].forEach(k => { if((entry[k] == null || entry[k] === '' || entry[k] === 0) && simHistory[idx] && simHistory[idx][k] != null) entry[k] = simHistory[idx][k]; });
       simHistory[idx] = entry;
       if(statusEl) statusEl.textContent = '✅ 上書き記録しました';
     } else {
@@ -11589,7 +11628,7 @@ if(horses.length === 0){
     if(typeof oddsLookMisKeyedByUmaban === 'function' && oddsLookMisKeyedByUmaban(hs)){
       throw new Error('単勝オッズが馬番=人気=オッズ昇順と一致（誤キーの疑い）のため除外。時間をおいて再取得してください。');
     }
-    return { horses: hs, raceName, isResultPage, resultDoc };
+    return { horses: hs, raceName, isResultPage, resultDoc, raceMeta: (typeof pgjRaceMetaOf === 'function' ? pgjRaceMetaOf(rid) : null) };
   }
 
 
@@ -11616,7 +11655,7 @@ if(horses.length === 0){
         if(typeof oddsLookMisKeyedByUmaban === 'function' && oddsLookMisKeyedByUmaban(hs)){
           throw new Error('mis-keyed odds suspected');
         }
-        return { horses: hs, raceName, isResultPage: true, resultDoc: doc, fast: true };
+        return { horses: hs, raceName, isResultPage: true, resultDoc: doc, fast: true, raceMeta: (typeof pgjRaceMetaOf === 'function' ? pgjRaceMetaOf(rid) : null) };
       }
 
       // NARはページ差が大きいので、result先読みで足りる場合だけ使う。
@@ -11628,7 +11667,7 @@ if(horses.length === 0){
       if(oddsMap && oddsMap.size >= 2){
         hs = mergeOddsPopularityIntoHorses(hs, oddsMap);
         hs = fillNarPopularityFromOdds(hs);
-        return { horses: hs, raceName, isResultPage: true, resultDoc: doc, fast: true };
+        return { horses: hs, raceName, isResultPage: true, resultDoc: doc, fast: true, raceMeta: (typeof pgjRaceMetaOf === 'function' ? pgjRaceMetaOf(rid) : null) };
       }
       throw new Error('NAR result odds not enough');
     }catch(e){
@@ -11644,6 +11683,7 @@ if(horses.length === 0){
       const html = await fetchHtmlViaProxy(url);
       doc = new DOMParser().parseFromString(html, 'text/html');
     }
+    try{ if(typeof pgjCacheRaceMeta === 'function') pgjCacheRaceMeta(rid, doc, parseRaceTitleFromDoc(doc) || currentRaceName || ''); }catch(e){}
     const finish  = parseFinishFromResultDoc(doc);   // 内部で global horses を参照するので先にセット必須
     const payouts = parsePayoutsFromResultDoc(doc);
     return { finish, payouts };
@@ -11885,6 +11925,7 @@ if(horses.length === 0){
           currentRaceId = r.rid;
           currentRaceName = loaded.raceName || r.name || (r.no + 'R');
           row.raceName = currentRaceName;
+          try{ if(typeof pgjApplyRaceMetaToRow === 'function') pgjApplyRaceMetaToRow(row, r.rid, currentRaceName); }catch(e){}
 
           const valid = horses.filter(h => Number(h.num) > 0 && h.name);
           if(valid.length < 2) throw new Error('有効な出走馬が2頭未満');
@@ -11898,6 +11939,7 @@ if(horses.length === 0){
 
           // 3) 結果取得（loadHorsesで掴んだ結果docを使い回す）
           const { finish, payouts } = await asw_getResult(kind, r.rid, loaded.resultDoc);
+          try{ if(typeof pgjApplyRaceMetaToRow === 'function') pgjApplyRaceMetaToRow(row, r.rid, currentRaceName); }catch(e){}
           row.hasFinish = finish && finish.length >= 2;
           row.finishTop = row.hasFinish ? finish.slice(0, 3).map(x => x.horseNo) : [];
 
@@ -12983,6 +13025,7 @@ if(horses.length === 0){
       const html = await fetchHtmlViaProxy(url);
       doc = new DOMParser().parseFromString(html, 'text/html');
     }
+    try{ if(typeof pgjCacheRaceMeta === 'function') pgjCacheRaceMeta(rid, doc, parseRaceTitleFromDoc(doc) || ''); }catch(e){}
     return { finish: rsOneShotParseFinish(doc, localHorses), payouts: parsePayoutsFromResultDoc(doc) };
   }
   function rsOneShotJudge(ticket, finish, localHorseCount){
@@ -13036,7 +13079,13 @@ if(horses.length === 0){
         const ret = isHit ? Math.floor(a / 100) * Number(pay.amount || 0) : 0;
         const nums = Array.isArray(t.nums) ? t.nums.join('-') : '';
         const nameText = (t.nums || []).map(n => horseNameMap[String(Number(n))] || '').filter(Boolean).join('－');
-        details.push({ 券種名: t.type || '', 買い目: nums, 馬名: nameText, 購入額: a, 払戻額: ret, 的中: isHit ? 1 : 0 });
+        const detail = { 券種名: t.type || '', 買い目: nums, 馬名: nameText, 購入額: a, 払戻額: ret, 的中: isHit ? 1 : 0 };
+        try{
+          const po = (typeof pgjBuyPopOdds === 'function') ? pgjBuyPopOdds(t.nums, horseList, t.odds) : { 平均人気: 0, 想定オッズ: 0 };
+          if(po.平均人気 > 0){ detail.平均人気 = po.平均人気; detail.人気帯 = pgjPopBand(po.平均人気); }
+          if(po.想定オッズ > 0){ detail.想定オッズ = po.想定オッズ; detail.オッズ帯 = pgjOddsBand(po.想定オッズ); }
+        }catch(e){}
+        details.push(detail);
         const k = t.type || '不明';
         if(!byType[k]) byType[k] = { 券種名:k, 点数:0, 購入額:0, 払戻額:0, 的中:0 };
         byType[k].点数 += 1; byType[k].購入額 += a; byType[k].払戻額 += ret; if(isHit) byType[k].的中 += 1;
@@ -13097,12 +13146,14 @@ if(horses.length === 0){
       const loaded = String(task.date) < todayForFast ? await asw_loadHorsesFast(kind, task.rid) : await asw_loadHorses(kind, task.rid);
       const localHorses = loaded.horses || [];
       row.raceName = loaded.raceName || task.raceName || (task.no + 'R');
+      try{ if(typeof pgjApplyRaceMetaToRow === 'function') pgjApplyRaceMetaToRow(row, task.rid, row.raceName); }catch(e){}
       const valid = localHorses.filter(h => Number(h.num) > 0 && h.name);
       if(valid.length < 2) throw new Error('有効な出走馬が2頭未満');
       const made = generateCandidates(valid);
       const tickets = buildTickets(made.recs).map(t => ({ ...t, nums:[...t.nums] }));
       row.count = tickets.length;
       const { finish, payouts } = await rsOneShotGetResult(kind, task.rid, loaded.resultDoc, localHorses);
+      try{ if(typeof pgjApplyRaceMetaToRow === 'function') pgjApplyRaceMetaToRow(row, task.rid, row.raceName); }catch(e){}
       row.hasFinish = finish && finish.length >= 2;
       row.finishTop = row.hasFinish ? finish.slice(0, 3).map(x => x.horseNo) : [];
       const s = rsOneShotSettle(tickets, finish, payouts, valid.length);
@@ -13859,6 +13910,7 @@ if(horses.length === 0){
           currentRaceId = r.rid;
           currentRaceName = loaded.raceName || r.name || (r.no + 'R');
           row.raceName = currentRaceName;
+          try{ if(typeof pgjApplyRaceMetaToRow === 'function') pgjApplyRaceMetaToRow(row, r.rid, currentRaceName); }catch(e){}
 
           const valid = horses.filter(h => Number(h.num) > 0 && h.name);
           if(valid.length < 2) throw new Error('有効な出走馬が2頭未満');
@@ -15751,7 +15803,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.262 BabaStateBodyScanFix';
+  window.APP_VERSION = 'v5.18.263 BabaStateDeepFix';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -16180,7 +16232,7 @@ function json(obj, status = 200) {
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.262 BabaStateBodyScanFix';
+  window.APP_VERSION = 'v5.18.263 BabaStateDeepFix';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -16477,7 +16529,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.262 BabaStateBodyScanFix';
+  window.APP_VERSION = 'v5.18.263 BabaStateDeepFix';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -16695,7 +16747,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.262 BabaStateBodyScanFix';
+    window.APP_VERSION = 'v5.18.263 BabaStateDeepFix';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -16995,7 +17047,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.262 BabaStateBodyScanFix';
+  window.APP_VERSION = 'v5.18.263 BabaStateDeepFix';
   try{
     const ver = document.querySelector('.ver');
     if(ver){
@@ -19205,7 +19257,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 
   // ═══════════════════════════════════════════════════════════════
-  // v5.18.262 BabaStateBodyScanFix（券種の採算見込みガード）
+  // v5.18.263 BabaStateDeepFix（券種の採算見込みガード）
   //   「赤字券種を絶対買わない」ではなく、精算履歴から券種ごとの実ROIを蓄積し、
   //   サンプルが十分あり、シュリンク後ROIが下限未満の券種だけを学習系モードで控える。
   //   既存の的中率較正（n/sp/h）とは別に、投資額・払戻額を保持する。
@@ -19877,7 +19929,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   };
 
   // ═══════════════════════════════════════════════════════════════
-  // v5.18.262 BabaStateBodyScanFix（高的中×回収底上げモード）
+  // v5.18.263 BabaStateDeepFix（高的中×回収底上げモード）
   //   既存の学習バケット（n=試行 / sp=推定確率合計 / h=的中数）をそのまま流用。
   //   ・回収フロア：学習補正後EV(=ev×補正) が下限以上（既定110%）
   //   ・的中フロア：学習補正後の的中確率 が下限以上（既定40%）
@@ -20094,7 +20146,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
   // ── 表示バージョン更新（このスクリプトが最後に実行されるためここで確定） ──
   try{
-    window.APP_VERSION = 'v5.18.262 BabaStateBodyScanFix';
+    window.APP_VERSION = 'v5.18.263 BabaStateDeepFix';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     else document.addEventListener('DOMContentLoaded', function(){ try{ window.setAppVersionLabel(); }catch(e){} });
   }catch(e){}
@@ -20474,13 +20526,13 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 </script>
 
 <!-- ============================================================
-     v5.18.262 BabaStateBodyScanFix
+     v5.18.263 BabaStateDeepFix
      race_id を主キーにして、選択・取得・保存・収支履歴を同期
      ============================================================ -->
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.262 BabaStateBodyScanFix';
+  var VERSION = 'v5.18.263 BabaStateDeepFix';
   var STORE_KEY = 'tk-raceid-primary-db';
 
   function $(id){ return document.getElementById(id); }
@@ -23755,7 +23807,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 /* v5.18.256 RangeSyncFix: 横2画面リアルタイム連動 */
 (function(){
   'use strict';
-  var V='v5.18.262 BabaStateBodyScanFix';
+  var V='v5.18.263 BabaStateDeepFix';
   function applyVersion(){
     window.APP_VERSION=V;
     var el=document.querySelector('.header .ver, .ver');

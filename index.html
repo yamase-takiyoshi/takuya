@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.258 PeriodRaceUnitFix</title>
+<title>The競馬 EV分析 v5.18.259 FacetMetaFill</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -621,7 +621,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
   </div>
   <div style="display:flex;gap:8px;align-items:center">
     <button id="profitSplitBtn" class="btn-sm profit-split-toggle" type="button" onclick="toggleProfitLiveSplit()" aria-pressed="false">📊 横2画面</button>
-    <span class="ver">v5.18.258 PeriodRaceUnitFix</span>
+    <span class="ver">v5.18.259 FacetMetaFill</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1628,7 +1628,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.217 ProfitabilityGuard';
+window.APP_VERSION = 'v5.18.259 FacetMetaFill';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -1955,6 +1955,91 @@ async function exportStateJSON(){
 }
 
 
+// v5.18.259 FacetMetaFill: 収支明細（親）に 距離/馬場/馬場状態/クラス を、
+// 買い目内訳に 平均人気/人気帯/想定オッズ/オッズ帯 を付与し、
+// 収支グラフ側の「距離未取得/馬場未取得/状態未取得/人気未取得/オッズ未取得/クラス未取得」を解消する。
+// レース条件はレース名・RaceData 文字列から、人気帯/オッズ帯は買い目に含まれる馬の人気・オッズから算出する。
+window.__pgjRaceMeta = window.__pgjRaceMeta || {};
+function pgjToHalf(s){ return String(s || '').replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)); }
+function pgjParseRaceCond(text){
+  const s = pgjToHalf(text);
+  const out = { 距離: 0, 馬場: '', 馬場状態: '' };
+  const dm = s.match(/(芝|ダート|ダ|障害|障)\s*([0-9]{3,4})\s*m/i);
+  if(dm){
+    out.距離 = Number(dm[2]) || 0;
+    out.馬場 = /^芝/.test(dm[1]) ? '芝' : /^障/.test(dm[1]) ? '障害' : 'ダート';
+  }else{
+    const dm2 = s.match(/([0-9]{3,4})\s*m/);
+    if(dm2) out.距離 = Number(dm2[1]) || 0;
+    if(/芝/.test(s)) out.馬場 = '芝';
+    else if(/障害|障(?![害])/.test(s)) out.馬場 = '障害';
+    else if(/ダート|(?:^|[\s\/])ダ(?:$|[\s\/0-9])/.test(s)) out.馬場 = 'ダート';
+  }
+  const cm = s.match(/馬場\s*[:：]?\s*(稍重|不良|良|重)/) || s.match(/(?:^|[\s\/])(稍重|不良|良|重)(?:$|[\s\/])/);
+  if(cm) out.馬場状態 = cm[1];
+  return out;
+}
+function pgjInferClass(text){
+  const s = String(text || '');
+  const m = s.match(/([1-3１-３]勝クラス|未勝利|新馬|オープン|OP(?![A-Za-z])|[ABCＡＢＣ][1-9１-９]?(?![A-Za-z]))/);
+  if(!m) return '';
+  const c = m[1].replace(/[Ａ-Ｚ１-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
+  return c === 'OP' ? 'オープン' : c;
+}
+function pgjPopBand(v){ const n = Number(v); if(!(n > 0)) return ''; return n <= 3 ? '1〜3番人気' : n <= 6 ? '4〜6番人気' : n <= 9 ? '7〜9番人気' : '10番人気以下'; }
+function pgjOddsBand(v){ const n = Number(v); if(!(n > 0)) return ''; return n < 3 ? '1.0〜2.9倍' : n < 6 ? '3.0〜5.9倍' : n < 10 ? '6.0〜9.9倍' : n < 20 ? '10.0〜19.9倍' : n < 50 ? '20.0〜49.9倍' : '50倍以上'; }
+function pgjRaceCondText(doc){
+  if(!doc || typeof doc.querySelectorAll !== 'function') return '';
+  const parts = [];
+  ['.RaceData01', '.RaceData02', '[class*="RaceData"]', '.RaceList_Item02'].forEach(sel => {
+    try{ doc.querySelectorAll(sel).forEach(el => parts.push(el.textContent || '')); }catch(e){}
+  });
+  return parts.join(' ');
+}
+function pgjCacheRaceMeta(raceId, doc, raceName){
+  try{
+    const rid = String(raceId || '').replace(/[^0-9]/g, '');
+    if(!rid) return null;
+    const condText = pgjRaceCondText(doc);
+    const nameText = String(raceName || '');
+    const cond = pgjParseRaceCond(condText + ' ' + nameText);
+    const cls = pgjInferClass(nameText) || pgjInferClass(condText);
+    const prev = window.__pgjRaceMeta[rid] || {};
+    // 空値では既存値を上書きしない（確定ページ等で拾えた値を保持する）
+    window.__pgjRaceMeta[rid] = {
+      距離: cond.距離 || prev.距離 || 0,
+      馬場: cond.馬場 || prev.馬場 || '',
+      馬場状態: cond.馬場状態 || prev.馬場状態 || '',
+      クラス: cls || prev.クラス || ''
+    };
+    return window.__pgjRaceMeta[rid];
+  }catch(e){ return null; }
+}
+function pgjRaceMetaOf(raceId){
+  const rid = String(raceId || '').replace(/[^0-9]/g, '');
+  return (rid && window.__pgjRaceMeta[rid]) || null;
+}
+// 買い目の馬番配列 → 平均人気・代表オッズ（買い目内訳の帯付与に使用）
+function pgjBuyPopOdds(nums, horseList, ticketOdds){
+  const list = Array.isArray(horseList) ? horseList : [];
+  const map = {};
+  list.forEach(h => { const n = Number((h && (h.num ?? h.horseNo)) || 0); if(n > 0) map[n] = h; });
+  let popSum = 0, popCnt = 0;
+  const arr = Array.isArray(nums) ? nums : String(nums || '').split(/[-－]/);
+  arr.forEach(n => {
+    const h = map[Number(n)];
+    const p = Number((h && h.pop) || 0);
+    if(p > 0){ popSum += p; popCnt++; }
+  });
+  const avgPop = popCnt ? Math.round(popSum / popCnt * 10) / 10 : 0;
+  let odds = Number(ticketOdds || 0);
+  if(!(odds > 0) && arr.length === 1){
+    const h = map[Number(arr[0])];
+    odds = Number((h && h.odds) || 0);
+  }
+  return { 平均人気: avgPop, 想定オッズ: odds > 0 ? Math.round(odds * 10) / 10 : 0 };
+}
+
 // v5.18.176: 収支分析グラフ切替HTML 対応JSON出力
 function pgjNum(v){
   const n = Number(String(v ?? '').replace(/[,+円\s]/g, '').replace(/^▲/, '-'));
@@ -1998,11 +2083,61 @@ function pgjTicketDetailRows(src){
         払戻額: pgjNum(d.払戻額 ?? d.ret),
         的中: pgjNum(d.的中 ?? (d.hit ? 1 : 0))
       };
-      if(pgjNum(d.想定オッズ ?? d.odds) > 0) row.想定オッズ = pgjNum(d.想定オッズ ?? d.odds);
+      const odds = pgjNum(d.想定オッズ ?? d.odds);
+      if(odds > 0) row.想定オッズ = odds;
       if(pgjNum(d.EV ?? d.ev) > 0) row.EV = pgjNum(d.EV ?? d.ev);
+      // v5.18.259: 人気帯・オッズ帯を内訳に付与（収支グラフの帯フィルタで「未取得」を出さない）
+      const pop = pgjNum(d.平均人気 ?? d.popularity);
+      if(pop > 0) row.平均人気 = pop;
+      const pb = String(d.人気帯 || '').trim() || pgjPopBand(pop);
+      if(pb) row.人気帯 = pb;
+      const ob = String(d.オッズ帯 || '').trim() || pgjOddsBand(odds);
+      if(ob) row.オッズ帯 = ob;
       return row;
     }).filter(d => d.券種名 && d.買い目 && d.購入額 > 0);
   }catch(e){ return []; }
+}
+// v5.18.259: 収支明細レコードへ 距離/馬場/馬場状態/クラス と 代表 人気帯/オッズ帯 を付与する。
+// 優先順位: 履歴に記録済みの値 → race_id キャッシュ（取得時に doc から抽出） → レース名からの推定。
+function pgjEnrichRecordMeta(rec, src){
+  try{
+    src = src || {};
+    const meta = pgjRaceMetaOf(rec.race_id) || {};
+    let dist = pgjNum(src.距離 ?? src.distance ?? rec.距離);
+    if(!(dist > 0)) dist = pgjNum(meta.距離);
+    let surf = String(src.馬場 ?? src.surface ?? rec.馬場 ?? '').trim() || String(meta.馬場 || '').trim();
+    let cond = String(src.馬場状態 ?? src.trackCond ?? rec.馬場状態 ?? '').trim() || String(meta.馬場状態 || '').trim();
+    let cls  = String(src.クラス ?? src.class ?? src.raceClass ?? rec.クラス ?? '').trim() || String(meta.クラス || '').trim();
+    if(!(dist > 0) || !surf || !cond){
+      const c = pgjParseRaceCond(String(rec.レース名 || '') + ' ' + String(src.レース名 || ''));
+      if(!(dist > 0)) dist = c.距離;
+      if(!surf) surf = c.馬場;
+      if(!cond) cond = c.馬場状態;
+    }
+    if(!cls) cls = pgjInferClass(String(rec.レース名 || '') + ' ' + String(src.レース名 || ''));
+    if(dist > 0) rec.距離 = dist;
+    if(surf) rec.馬場 = surf;
+    if(cond) rec.馬場状態 = cond;
+    if(cls) rec.クラス = cls;
+    const det = Array.isArray(rec.内訳) ? rec.内訳 : null;
+    if(det && det.length){
+      let popSum = 0, popCnt = 0, oddSum = 0, oddCnt = 0;
+      det.forEach(d => {
+        const pop = pgjNum(d.平均人気 ?? d.popularity);
+        const odd = pgjNum(d.想定オッズ ?? d.odds);
+        if(pop > 0){ popSum += pop; popCnt++; if(!d.人気帯) d.人気帯 = pgjPopBand(pop); }
+        if(odd > 0){ oddSum += odd; oddCnt++; if(!d.オッズ帯) d.オッズ帯 = pgjOddsBand(odd); }
+      });
+      if(popCnt){ rec.平均人気 = Math.round(popSum / popCnt * 10) / 10; rec.人気帯 = rec.人気帯 || pgjPopBand(rec.平均人気); }
+      if(oddCnt){ rec.想定オッズ = Math.round(oddSum / oddCnt * 10) / 10; rec.オッズ帯 = rec.オッズ帯 || pgjOddsBand(rec.想定オッズ); }
+    }else{
+      const pop = pgjNum(src.平均人気 ?? src.popularity);
+      const odd = pgjNum(src.想定オッズ ?? src.odds);
+      if(pop > 0){ rec.平均人気 = pop; rec.人気帯 = pgjPopBand(pop); }
+      if(odd > 0){ rec.想定オッズ = odd; rec.オッズ帯 = pgjOddsBand(odd); }
+    }
+  }catch(e){}
+  return rec;
 }
 function pgjRecordFromHistory(x, source, i){
   const p = pgjParseRaceLabel(x);
@@ -2039,6 +2174,7 @@ function pgjRecordFromHistory(x, source, i){
       });
     }
   }
+  pgjEnrichRecordMeta(rec, x);
   return rec;
 }
 function pgjRecordsFromRangeRows(){
@@ -2070,6 +2206,7 @@ function pgjRecordsFromRangeRows(){
         // v5.18.201: 買い目単位の内訳（券種別の購入額・払戻額）があればそのまま含める
         if(Array.isArray(r.ticketDetails) && r.ticketDetails.length) rec['内訳'] = pgjTicketDetailRows(r.ticketDetails);
         else if(Array.isArray(r.ticketTypeBreakdown) && r.ticketTypeBreakdown.length) rec['内訳'] = r.ticketTypeBreakdown;
+        pgjEnrichRecordMeta(rec, r);
         return rec;
       });
   }catch(e){ return []; }
@@ -3313,7 +3450,15 @@ function recordProfit(){
   const label = currentRaceName || currentRaceId || new Date().toLocaleString('ja-JP');
   const recordedAt = new Date().toISOString();
   const raceDate = document.getElementById('pickDate')?.value || formatLocalDate(new Date());
-  profitHistory.push({ date: raceDate, raceDate, recordedAt, raceId: currentRaceId, raceName: label, bet, ret, profit });
+  const _pm = (typeof pgjRaceMetaOf === 'function' && pgjRaceMetaOf(currentRaceId)) || null;
+  const _pmEntry = { date: raceDate, raceDate, recordedAt, raceId: currentRaceId, raceName: label, bet, ret, profit };
+  try{
+    let dist = _pm ? Number(_pm.距離 || 0) : 0, surf = _pm ? String(_pm.馬場 || '') : '', cond = _pm ? String(_pm.馬場状態 || '') : '', cls = _pm ? String(_pm.クラス || '') : '';
+    if((!dist || !surf || !cond) && typeof pgjParseRaceCond === 'function'){ const c = pgjParseRaceCond(String(label || '')); dist = dist || c.距離; surf = surf || c.馬場; cond = cond || c.馬場状態; }
+    if(!cls && typeof pgjInferClass === 'function') cls = pgjInferClass(String(label || ''));
+    if(dist > 0) _pmEntry.距離 = dist; if(surf) _pmEntry.馬場 = surf; if(cond) _pmEntry.馬場状態 = cond; if(cls) _pmEntry.クラス = cls;
+  }catch(e){}
+  profitHistory.push(_pmEntry);
   localStorage.setItem('tk-profit-history', JSON.stringify(profitHistory));
   renderProfitChart();
 }
@@ -3678,6 +3823,13 @@ function tkNormalizeTicketDetails(src){
       const ev = Number(d.EV ?? d.ev ?? 0);
       if(odds > 0) row.想定オッズ = odds;
       if(ev > 0) row.EV = ev;
+      // v5.18.259: 人気/オッズ帯を保持（収支グラフの人気帯・オッズ帯フィルタ用）
+      const pop = Number(d.平均人気 ?? d.popularity ?? 0);
+      if(pop > 0) row.平均人気 = pop;
+      const pb = String(d.人気帯 ?? '').trim() || (typeof pgjPopBand === 'function' ? pgjPopBand(pop) : '');
+      if(pb) row.人気帯 = pb;
+      const ob = String(d.オッズ帯 ?? '').trim() || (typeof pgjOddsBand === 'function' ? pgjOddsBand(odds) : '');
+      if(ob) row.オッズ帯 = ob;
       return row;
     }).filter(Boolean);
     return out.length ? out : null;
@@ -3810,10 +3962,43 @@ function simRecordProfit(autoRecord, bet, ret, hitCount, total, sourceLabel, byT
   const raceDate = tkCurrentRaceDate() || formatLocalDate(new Date());
   const entry   = { raceId, raceName, bet, ret, profit, roi, hitCount, total,
                     date: raceDate, raceDate, recordedAt, source: sourceLabel || '手入力' };
+  // v5.18.259: レース条件（距離/馬場/馬場状態/クラス）を記録に埋め込み、収支グラフの帯を「未取得」にしない
+  try{
+    const meta = (typeof pgjRaceMetaOf === 'function' && pgjRaceMetaOf(raceId)) || null;
+    let dist = meta ? Number(meta.距離 || 0) : 0;
+    let surf = meta ? String(meta.馬場 || '') : '';
+    let cond = meta ? String(meta.馬場状態 || '') : '';
+    let cls  = meta ? String(meta.クラス || '') : '';
+    if((!dist || !surf || !cond) && typeof pgjParseRaceCond === 'function'){
+      const c = pgjParseRaceCond(String(raceName || ''));
+      dist = dist || c.距離; surf = surf || c.馬場; cond = cond || c.馬場状態;
+    }
+    if(!cls && typeof pgjInferClass === 'function') cls = pgjInferClass(String(raceName || ''));
+    if(dist > 0) entry.距離 = dist;
+    if(surf) entry.馬場 = surf;
+    if(cond) entry.馬場状態 = cond;
+    if(cls) entry.クラス = cls;
+  }catch(e){}
   // v5.18.201: 券種別内訳（購入額・払戻額）を分けて記録
   const nb = tkNormalizeByType(byType);
   if(nb) entry.byType = nb;
-  const nd = tkNormalizeTicketDetails(ticketDetails || byType);
+  // v5.18.259: 手入力/単レース精算の内訳に、現在の出走馬から算出した人気・オッズ帯を補完
+  let tdSrc = ticketDetails || byType;
+  try{
+    if(Array.isArray(tdSrc) && typeof pgjBuyPopOdds === 'function' && Array.isArray(window.horses)){
+      tdSrc = tdSrc.map(d => {
+        const nd2 = Object.assign({}, d);
+        if(!(Number(nd2.平均人気 || 0) > 0) || !(Number(nd2.想定オッズ || 0) > 0)){
+          const nums = nd2.買い目 ?? nd2.nums ?? '';
+          const po = pgjBuyPopOdds(nums, window.horses, nd2.想定オッズ ?? nd2.odds);
+          if(!(Number(nd2.平均人気 || 0) > 0) && po.平均人気 > 0){ nd2.平均人気 = po.平均人気; nd2.人気帯 = pgjPopBand(po.平均人気); }
+          if(!(Number(nd2.想定オッズ || 0) > 0) && po.想定オッズ > 0){ nd2.想定オッズ = po.想定オッズ; nd2.オッズ帯 = pgjOddsBand(po.想定オッズ); }
+        }
+        return nd2;
+      });
+    }
+  }catch(e){}
+  const nd = tkNormalizeTicketDetails(tdSrc);
   if(nd) entry.ticketDetails = nd;
   if(raceId){
     const idx = simHistory.findIndex(x => x.raceId === raceId);
@@ -7535,6 +7720,8 @@ async function fetchRace(){
     if(titleFromDoc) currentRaceName = titleFromDoc;
     const rid = (activeUrl.match(/race_id=(\d{10,14})/) || [])[1];
     if(rid) currentRaceId = rid;
+    // v5.18.259: 単レース取得時にもレース条件をキャッシュ（手入力/単レース精算の収支明細に反映）
+    try{ if(typeof pgjCacheRaceMeta === 'function') pgjCacheRaceMeta(rid || currentRaceId, doc, currentRaceName); }catch(e){}
     const box = document.getElementById('raceTitleBox');
     if(box && currentRaceName){
       box.style.display = 'block';
@@ -11314,6 +11501,8 @@ if(horses.length === 0){
     if(hs.length < 2) throw new Error('出走馬を取得できませんでした');
 
     const raceName = parseRaceTitleFromDoc(doc) || '';
+    // v5.18.259: レース条件（距離/馬場/馬場状態/クラス）をrace_id単位でキャッシュし、収支明細へ引き継ぐ
+    try{ if(typeof pgjCacheRaceMeta === 'function') pgjCacheRaceMeta(rid, doc, raceName); }catch(e){}
 
     // ── オッズ・人気（fetchRace と同じ手順）──
     if(kind === 'JRA'){
@@ -11363,6 +11552,7 @@ if(horses.length === 0){
       let hs = parseHorsesFromDoc(doc, url);
       if(!hs || hs.length < 2) throw new Error('result page horses not enough');
       const raceName = parseRaceTitleFromDoc(doc) || '';
+      try{ if(typeof pgjCacheRaceMeta === 'function') pgjCacheRaceMeta(rid, doc, raceName); }catch(e){}
 
       if(kind === 'JRA'){
         const oddsMap = (typeof parseFinalOddsPopularityFromResultDoc === 'function')
@@ -11478,7 +11668,12 @@ if(horses.length === 0){
         const r = isHit ? Math.floor(a / 100) * Number(pay.amount || 0) : 0;
         const ty = t.type || '不明';
         const nameText = (t.nums || []).map(n => horseNameMap[String(Number(n))] || '').filter(Boolean).join('－');
-        details.push({ 券種名: ty, 買い目: (t.nums || []).join('-'), 馬名: nameText, 購入額: a, 払戻額: r, 的中: isHit ? 1 : 0 });
+        // v5.18.259: 買い目に含まれる馬の人気・オッズから帯を算出（収支グラフの人気帯・オッズ帯フィルタ用）
+        const po = (typeof pgjBuyPopOdds === 'function') ? pgjBuyPopOdds(t.nums, horseList, t.odds) : { 平均人気: 0, 想定オッズ: 0 };
+        const detail = { 券種名: ty, 買い目: (t.nums || []).join('-'), 馬名: nameText, 購入額: a, 払戻額: r, 的中: isHit ? 1 : 0 };
+        if(po.平均人気 > 0){ detail.平均人気 = po.平均人気; detail.人気帯 = pgjPopBand(po.平均人気); }
+        if(po.想定オッズ > 0){ detail.想定オッズ = po.想定オッズ; detail.オッズ帯 = pgjOddsBand(po.想定オッズ); }
+        details.push(detail);
         const m = byType[ty] || (byType[ty] = { count: 0, bet: 0, ret: 0, hit: 0 });
         m.count++; m.bet += a; m.ret += r; if(isHit) m.hit++;
       });
@@ -15502,7 +15697,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.217 ProfitabilityGuard';
+  window.APP_VERSION = 'v5.18.259 FacetMetaFill';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -15931,7 +16126,7 @@ function json(obj, status = 200) {
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.217 ProfitabilityGuard';
+  window.APP_VERSION = 'v5.18.259 FacetMetaFill';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -16228,7 +16423,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.217 ProfitabilityGuard';
+  window.APP_VERSION = 'v5.18.259 FacetMetaFill';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -16446,7 +16641,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.217 ProfitabilityGuard';
+    window.APP_VERSION = 'v5.18.259 FacetMetaFill';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -16746,7 +16941,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.217 ProfitabilityGuard';
+  window.APP_VERSION = 'v5.18.259 FacetMetaFill';
   try{
     const ver = document.querySelector('.ver');
     if(ver){
@@ -18956,7 +19151,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 
   // ═══════════════════════════════════════════════════════════════
-  // v5.18.217 ProfitabilityGuard（券種の採算見込みガード）
+  // v5.18.259 FacetMetaFill（券種の採算見込みガード）
   //   「赤字券種を絶対買わない」ではなく、精算履歴から券種ごとの実ROIを蓄積し、
   //   サンプルが十分あり、シュリンク後ROIが下限未満の券種だけを学習系モードで控える。
   //   既存の的中率較正（n/sp/h）とは別に、投資額・払戻額を保持する。
@@ -19628,7 +19823,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   };
 
   // ═══════════════════════════════════════════════════════════════
-  // v5.18.217 ProfitabilityGuard（高的中×回収底上げモード）
+  // v5.18.259 FacetMetaFill（高的中×回収底上げモード）
   //   既存の学習バケット（n=試行 / sp=推定確率合計 / h=的中数）をそのまま流用。
   //   ・回収フロア：学習補正後EV(=ev×補正) が下限以上（既定110%）
   //   ・的中フロア：学習補正後の的中確率 が下限以上（既定40%）
@@ -19845,7 +20040,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
   // ── 表示バージョン更新（このスクリプトが最後に実行されるためここで確定） ──
   try{
-    window.APP_VERSION = 'v5.18.217 ProfitabilityGuard';
+    window.APP_VERSION = 'v5.18.259 FacetMetaFill';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     else document.addEventListener('DOMContentLoaded', function(){ try{ window.setAppVersionLabel(); }catch(e){} });
   }catch(e){}
@@ -20225,13 +20420,13 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 </script>
 
 <!-- ============================================================
-     v5.18.217 ProfitabilityGuard
+     v5.18.259 FacetMetaFill
      race_id を主キーにして、選択・取得・保存・収支履歴を同期
      ============================================================ -->
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.217 ProfitabilityGuard';
+  var VERSION = 'v5.18.259 FacetMetaFill';
   var STORE_KEY = 'tk-raceid-primary-db';
 
   function $(id){ return document.getElementById(id); }
@@ -23506,7 +23701,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 /* v5.18.256 RangeSyncFix: 横2画面リアルタイム連動 */
 (function(){
   'use strict';
-  var V='v5.18.258 PeriodRaceUnitFix';
+  var V='v5.18.259 FacetMetaFill';
   function applyVersion(){
     window.APP_VERSION=V;
     var el=document.querySelector('.header .ver, .ver');

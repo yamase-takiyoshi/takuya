@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.255 DirectLiveBridge</title>
+<title>The競馬 EV分析 v5.18.256 RangeSyncFix</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -588,7 +588,7 @@ body{
   }
 }
 
-/* v5.18.255 DirectLiveBridge: アプリ＋収支グラフv22 横2画面 */
+/* v5.18.256 RangeSyncFix: アプリ＋収支グラフv22 横2画面 */
 .profit-split-toggle{height:30px;padding:5px 9px;font-size:11px;white-space:nowrap}
 .profit-split-toggle.active{color:#03130b;border-color:rgba(0,230,118,.75);background:linear-gradient(135deg,#00c853,#00e676);box-shadow:var(--glow)}
 #profitLivePane{display:none;background:#07111d}
@@ -621,7 +621,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
   </div>
   <div style="display:flex;gap:8px;align-items:center">
     <button id="profitSplitBtn" class="btn-sm profit-split-toggle" type="button" onclick="toggleProfitLiveSplit()" aria-pressed="false">📊 横2画面</button>
-    <span class="ver">v5.18.255 DirectLiveBridge</span>
+    <span class="ver">v5.18.256 RangeSyncFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2043,8 +2043,13 @@ function pgjRecordFromHistory(x, source, i){
 }
 function pgjRecordsFromRangeRows(){
   try{
-    if(typeof rsLastRows === 'undefined' || !Array.isArray(rsLastRows)) return [];
-    return rsLastRows
+    // v5.18.256 RangeSyncFix: 期間横断シミュレーション結果はレンジ計算クロージャ内の
+    // let rsLastRows に格納されるためトップレベルからは参照できない（typeof undefined）。
+    // グローバルミラー window.__rsLastRows を正として読む。
+    var src = (typeof window !== 'undefined' && Array.isArray(window.__rsLastRows)) ? window.__rsLastRows
+            : ((typeof rsLastRows !== 'undefined' && Array.isArray(rsLastRows)) ? rsLastRows : []);
+    if(!src.length) return [];
+    return src
       .filter(r => r && r.status === 'ok' && Number(r.bet || 0) > 0)
       .map((r,i) => {
         const bet = pgjNum(r.bet), ret = pgjNum(r.ret), profit = (r.profit != null) ? pgjNum(r.profit) : ret - bet;
@@ -23175,7 +23180,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 </script>
 
 <script>
-/* v5.18.255 DirectLiveBridge: PC・タブレット用 横2画面＋リアルタイム収支連動 */
+/* v5.18.256 RangeSyncFix: PC・タブレット用 横2画面＋リアルタイム収支連動 */
 (function(){
   'use strict';
   var SPLIT_STATE_KEY='tk-profit-live-split-v1';
@@ -23212,12 +23217,13 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     btn.textContent=on?'📊 2画面ON':'📊 横2画面';
   }
   function buildLiveSnapshot(){
+    // v5.18.256 RangeSyncFix: 全ソース統合版(profitHistory+simHistory+期間横断rsLastRows)を優先。
+    // sim単体版(simHistoryのみ)を優先すると、simHistoryに残る旧明細で期間横断の開催場が
+    // 上書き・隠蔽され「開催場が同期しない」状態になっていた。統合版は買い目内訳も保持する。
     var snap=null;
-    try{
-      if(typeof buildSimBetStatsJSONSnapshot==='function') snap=buildSimBetStatsJSONSnapshot();
-    }catch(e){}
+    try{ if(typeof buildProfitGraphJSONSnapshot==='function') snap=buildProfitGraphJSONSnapshot(); }catch(e){}
     if(!snap||!Array.isArray(snap.収支明細)||!snap.収支明細.length){
-      try{if(typeof buildProfitGraphJSONSnapshot==='function')snap=buildProfitGraphJSONSnapshot()}catch(e){}
+      try{ if(typeof buildSimBetStatsJSONSnapshot==='function') snap=buildSimBetStatsJSONSnapshot(); }catch(e){}
     }
     return snap;
   }
@@ -23246,7 +23252,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       return true;
     }catch(e){return false}
   }
-  // v5.18.255 DirectLiveBridge: 収支オブジェクトを JSON文字列化せず子ウィンドウへ直接渡す。
+  // v5.18.256 RangeSyncFix: 収支オブジェクトを JSON文字列化せず子ウィンドウへ直接渡す。
   // 同一オリジンの iframe なら __keibaGraphApplyLive(box) をそのまま呼べる（構造化複製すら不要）。
   function deliverToFrame(forceLoad){
     var sent=writeBridge();          // localStorageへseed（互換/フォールバック用。表示経路には使わない）
@@ -23374,16 +23380,31 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     window.addEventListener('resize',function(){clearTimeout(resizeTimer);resizeTimer=setTimeout(enforceDeviceRule,180)});
     window.addEventListener('orientationchange',function(){setTimeout(enforceDeviceRule,250)});
     document.addEventListener('visibilitychange',function(){if(!document.hidden&&splitActive())window.scheduleProfitLiveSync()});
+    // v5.18.256 RangeSyncFix: 期間横断シミュレーション等はライブ用フック(saveSimHistory/
+    // recordProfit/renderSimProfitChart)を通らないため自動更新されない。データ源の変化を
+    // 軽量シグネチャで検知して自動プッシュする（rsLastRows / simHistory / profitHistory）。
+    var lastSig='__init__';
+    function dataSig(){
+      var rr=(typeof window!=='undefined'&&Array.isArray(window.__rsLastRows))?window.__rsLastRows:[];
+      var tail=rr.length?((rr[rr.length-1]&&(rr[rr.length-1].rid||''))+'/'+((rr[rr.length-1]&&rr[rr.length-1].bet)||0)):'';
+      var sh=(typeof simHistory!=='undefined'&&Array.isArray(simHistory))?simHistory.length:0;
+      var ph=(typeof profitHistory!=='undefined'&&Array.isArray(profitHistory))?profitHistory.length:0;
+      return rr.length+'|'+tail+'|'+sh+'|'+ph;
+    }
+    setInterval(function(){
+      var sig=dataSig();
+      if(sig!==lastSig){ lastSig=sig; window.scheduleProfitLiveSync(); }
+    },1200);
   }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
 })();
 </script>
 
 <script>
-/* v5.18.255 DirectLiveBridge: 横2画面リアルタイム連動 */
+/* v5.18.256 RangeSyncFix: 横2画面リアルタイム連動 */
 (function(){
   'use strict';
-  var V='v5.18.255 DirectLiveBridge';
+  var V='v5.18.256 RangeSyncFix';
   function applyVersion(){
     window.APP_VERSION=V;
     var el=document.querySelector('.header .ver, .ver');

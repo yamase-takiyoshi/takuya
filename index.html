@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.266 HistoryCalendarReplay</title>
+<title>The競馬 EV分析 v5.18.267 SimDateEdit</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -190,6 +190,12 @@ body{
 .sim-hist-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;gap:6px;align-items:center;padding:6px 8px;border-bottom:1px solid rgba(51,65,85,0.4);font-size:12px}
 .sim-hist-row:last-child{border-bottom:none}
 .sim-hist-date{display:inline-block;margin-right:5px;color:#cbd5e1;font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap}
+.sim-hist-datewrap{display:inline-flex;align-items:center;gap:2px;margin-right:5px;vertical-align:middle}
+.sim-hist-dateinput{color-scheme:dark;background:rgba(30,41,59,.55);border:1px solid rgba(71,85,105,.55);border-radius:6px;color:#cbd5e1;font-weight:800;font-size:11px;font-variant-numeric:tabular-nums;padding:1px 4px;line-height:1.4;min-width:118px;cursor:pointer;-webkit-appearance:none;appearance:none}
+.sim-hist-dateinput:focus{outline:none;border-color:#38bdf8;box-shadow:0 0 0 2px rgba(56,189,248,.25)}
+.sim-hist-dateinput.edited{border-color:#f59e0b;color:#fbbf24;background:rgba(245,158,11,.12)}
+.sim-hist-daterestore{background:rgba(245,158,11,.18);border:1px solid rgba(245,158,11,.5);color:#fbbf24;border-radius:6px;font-size:11px;font-weight:900;line-height:1;padding:2px 5px;cursor:pointer}
+.sim-hist-daterestore:active{transform:scale(.92)}
 .sim-hist-bets{grid-column:1/-1;padding:2px 0 1px 8px;color:var(--muted)}
 .sim-hist-bets summary{width:max-content;max-width:100%;cursor:pointer;color:#a7f3d0;font-size:10px;font-weight:800;user-select:none}
 .sim-hist-ticket-list{display:grid;gap:3px;margin-top:5px;padding-left:4px}
@@ -614,7 +620,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
 
 
 /* ============================================================
-   v5.18.266 HistoryCalendarReplay / 履歴カレンダーリプレイ
+   v5.18.267 SimDateEdit / シミュレーション日付編集
    ============================================================ */
 .hr-replay-card{border-color:rgba(0,230,118,.34);background:linear-gradient(180deg,rgba(15,39,42,.96),rgba(22,33,52,.96))}
 .hr-replay-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
@@ -645,7 +651,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
   </div>
   <div style="display:flex;gap:8px;align-items:center">
     <button id="profitSplitBtn" class="btn-sm profit-split-toggle" type="button" onclick="toggleProfitLiveSplit()" aria-pressed="false">📊 横2画面</button>
-    <span class="ver">v5.18.266 HistoryCalendarReplay</span>
+    <span class="ver">v5.18.267 SimDateEdit</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1233,7 +1239,10 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
     <div class="card" id="simChartCard">
       <div class="section-header">
         <h2>📉 シミュレーション収支グラフ</h2>
-        <button class="btn-sm" onclick="simClearHistory()">履歴クリア</button>
+        <div style="display:flex;gap:6px">
+          <button class="btn-sm" onclick="(function(){var n=tkSimRestoreAllDates();alert(n?('日付を元に戻しました（'+n+'件）'):'編集された日付はありません');})()" title="編集した日付をすべて元に戻す">↺ 日付を全復元</button>
+          <button class="btn-sm" onclick="simClearHistory()">履歴クリア</button>
+        </div>
       </div>
       <div id="simProfitSummary" class="summary-grid" style="margin-bottom:10px"></div>
       <div class="chart-box"><canvas id="simProfitChart" width="560" height="220"></canvas></div>
@@ -1704,7 +1713,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.266 HistoryCalendarReplay';
+window.APP_VERSION = 'v5.18.267 SimDateEdit';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -4233,6 +4242,65 @@ function saveSimHistory(){
   localStorage.setItem('tk-sim-history', JSON.stringify(simHistory));
 }
 
+// ── v5.18.267 SimDateEdit: シミュレーション履歴の日付を編集→v22へ即時反映／元に戻す ──
+// 日付導出(tkHistoryRaceDate)は raceDate を最優先で見るため、raceDate を書き換えれば
+// リロード後も編集値が保持される。saveSimHistory() は installRealtimeHooks でラップ済みで、
+// 呼ぶだけで v22（リアルタイム収支グラフ）へ自動再送信される。
+function tkSimEditDate(idx, ymd){
+  const rec = simHistory[idx];
+  if(!rec) return;
+  const norm = tkHistoryDateOnly(ymd);
+  if(!norm){ renderSimProfitChart(); return; }   // 不正/空入力は無視して元表示に戻す
+  if(rec._dateOrig === undefined){
+    rec._dateOrig = tkHistoryRaceDate(rec) || rec.raceDate || rec.date || '';
+  }
+  rec.raceDate = norm;
+  rec.date = norm;
+  rec._dateEdited = (norm !== rec._dateOrig);
+  if(!rec._dateEdited) delete rec._dateOrig;      // 元の日付に戻した場合は編集扱いを解除
+  saveSimHistory();          // → v22 へ自動転送
+  renderSimProfitChart();
+}
+function tkSimRestoreDateSilent(rec){
+  const orig = (rec._dateOrig !== undefined) ? rec._dateOrig : '';
+  if(orig){ rec.raceDate = orig; rec.date = orig; }
+  else { delete rec.raceDate; }  // 元が空なら race_id / レース名 から再導出させる
+  delete rec._dateOrig;
+  delete rec._dateEdited;
+}
+function tkSimRestoreDate(idx){
+  const rec = simHistory[idx];
+  if(!rec) return;
+  tkSimRestoreDateSilent(rec);
+  saveSimHistory();          // → v22 へ自動転送（復元）
+  renderSimProfitChart();
+}
+function tkSimRestoreAllDates(){
+  let n = 0;
+  simHistory.forEach(rec => { if(rec && rec._dateEdited){ tkSimRestoreDateSilent(rec); n++; } });
+  if(n){ saveSimHistory(); renderSimProfitChart(); }
+  return n;
+}
+function tkSimBindDateEditor(){
+  const listEl = document.getElementById('simHistoryList');
+  if(!listEl || listEl.__dateEditorBound) return;   // 委譲リスナは1回だけ
+  listEl.__dateEditorBound = true;
+  listEl.addEventListener('change', e => {
+    const inp = e.target.closest('.sim-hist-dateinput');
+    if(!inp) return;
+    tkSimEditDate(Number(inp.dataset.simidx), inp.value);
+  });
+  listEl.addEventListener('click', e => {
+    const btn = e.target.closest('.sim-hist-daterestore');
+    if(!btn) return;
+    e.preventDefault();
+    tkSimRestoreDate(Number(btn.dataset.simidx));
+  });
+}
+window.tkSimEditDate = tkSimEditDate;
+window.tkSimRestoreDate = tkSimRestoreDate;
+window.tkSimRestoreAllDates = tkSimRestoreAllDates;
+
 // 精算結果を simHistory に記録（race_id が同じなら上書き）
 // byType（券種別集計）と ticketDetails（買い目単位明細）を収支ごとに保存する。
 function simRecordProfit(autoRecord, bet, ret, hitCount, total, sourceLabel, byType, ticketDetails){
@@ -4677,9 +4745,12 @@ function renderSimProfitChart(){
   // 履歴リスト（新しい順）
   if(listEl){
     listEl.innerHTML = [...simHistory].reverse().map((x,i) => {
+      const idx = simHistory.length - 1 - i;   // 反転前（simHistory本体）のインデックス
       const cls = x.profit >= 0 ? 'win' : 'lose';
       const sign = x.profit >= 0 ? '+' : '';
-      const dt = tkFormatHistoryDate(tkHistoryRaceDate(x));
+      const ymd = tkHistoryRaceDate(x) || '';
+      const dt = tkFormatHistoryDate(ymd);
+      const dateEdited = !!x._dateEdited;
       const details = tkNormalizeTicketDetails(x.ticketDetails) || [];
       let betDataHtml = '';
       if(details.length){
@@ -4706,13 +4777,14 @@ function renderSimProfitChart(){
         if(parts.length) betDataHtml = `<div style="grid-column:1 / -1;display:flex;flex-wrap:wrap;gap:4px 10px;font-size:10px;color:var(--muted);padding:2px 0 0 8px">${parts.join('')}</div>`;
       }
       return `<div class="sim-hist-row ${cls}">
-        <span><span class="sim-hist-date">${escapeHtml(dt)}</span>${escapeHtml(tkHistoryRaceLabel(x))}</span>
+        <span><span class="sim-hist-datewrap"><input type="date" class="sim-hist-dateinput${dateEdited?' edited':''}" value="${ymd}" data-simidx="${idx}" aria-label="レース日付を編集" title="${dateEdited?'編集済み（元:'+escapeHtml(x._dateOrig||'')+'）':'タップして日付を編集'}">${dateEdited?`<button type="button" class="sim-hist-daterestore" data-simidx="${idx}" title="日付を元に戻す">↺</button>`:''}</span>${escapeHtml(tkHistoryRaceLabel(x))}</span>
         <span>${Number(x.bet||0).toLocaleString()}円</span>
         <span>${sign}${Number(x.profit||0).toLocaleString()}円</span>
         <span>${Number(x.roi||0).toFixed(0)}%</span>
         ${betDataHtml}
       </div>`;
     }).join('') || '<div class="empty">記録なし</div>';
+    tkSimBindDateEditor();
   }
 }
 
@@ -16032,7 +16104,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.266 HistoryCalendarReplay';
+  window.APP_VERSION = 'v5.18.267 SimDateEdit';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -16461,7 +16533,7 @@ function json(obj, status = 200) {
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.266 HistoryCalendarReplay';
+  window.APP_VERSION = 'v5.18.267 SimDateEdit';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -16758,7 +16830,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.266 HistoryCalendarReplay';
+  window.APP_VERSION = 'v5.18.267 SimDateEdit';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -16976,7 +17048,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.266 HistoryCalendarReplay';
+    window.APP_VERSION = 'v5.18.267 SimDateEdit';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -17276,7 +17348,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.266 HistoryCalendarReplay';
+  window.APP_VERSION = 'v5.18.267 SimDateEdit';
   try{
     const ver = document.querySelector('.ver');
     if(ver){
@@ -20375,7 +20447,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
   // ── 表示バージョン更新（このスクリプトが最後に実行されるためここで確定） ──
   try{
-    window.APP_VERSION = 'v5.18.266 HistoryCalendarReplay';
+    window.APP_VERSION = 'v5.18.267 SimDateEdit';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     else document.addEventListener('DOMContentLoaded', function(){ try{ window.setAppVersionLabel(); }catch(e){} });
   }catch(e){}

@@ -13,7 +13,7 @@
 </style>
 </head>
 <body>
-<div class="hero"><div class="hero-inner"><div class="brand"><div class="logo">♞</div><div><h1>競馬アプリ 収支分析グラフ仕様</h1><div class="sub">複数JSON同時読込・分類不能データ除外・開催場別/券種別/収支構成比・円/棒/変動/ローソク足(日足/週足/月足)グラフ切替・最高値/最安値表示・開催場×券種マトリクス・開催場/券種フィルタ・明細編集(追加/削除/一括変更/Undo)・クラス/組/グレード列対応・券種分解(内訳→券種別収支)・買い目別収支グラフ(内訳→券種×買い目)・直リンク受信(The競馬 EV分析→localStorage経由)</div></div></div><div class="ver">v2.2 DirectLink</div></div></div>
+<div class="hero"><div class="hero-inner"><div class="brand"><div class="logo">♞</div><div><h1>競馬アプリ 収支分析グラフ仕様</h1><div class="sub">複数JSON同時読込・分類不能データ除外・開催場別/券種別/収支構成比・円/棒/変動/ローソク足(日足/週足/月足)グラフ切替・最高値/最安値表示・開催場×券種マトリクス・開催場/券種フィルタ・明細編集(追加/削除/一括変更/Undo)・クラス/組/グレード列対応・券種分解(内訳→券種別収支)・買い目別収支グラフ(内訳→券種×買い目)・直リンク受信(The競馬 EV分析→localStorage経由)</div></div></div><div class="ver">v2.3 LiveDirect</div></div></div>
 <div class="app"><div class="grid"><aside class="panel"><h2>JSONファイル読込</h2><label class="drop" id="drop"><input type="file" id="fileInput" accept="application/json,.json" multiple><b>📂 複数JSONを開く</b><span>収支JSON / 予想精算JSON / 統合JSONをまとめて選択</span></label><div class="btns"><button class="btn primary" id="bridgeBtn">🔗 直リンク読込</button><button class="btn" id="sampleBtn">サンプル読込</button><button class="btn" id="exportBtn">集計JSON保存</button><button class="btn warn" id="clearBtn">クリア</button></div><div class="status" id="leftStatus"></div><div class="file-list" id="fileList"></div><div class="card" style="margin-top:12px"><h3>読取対応フィールド</h3><div class="note">日付: date / 日付<br>開催場: venue / place / 場 / 競馬場 / racecourse<br>券種: ticketType / type / 券種 / 賭式<br>クラス: class / クラス / 条件（レース名から自動推定: C1, B2, 未勝利, オープン等）<br>組: kumi / 組（「C1一組」等から自動推定）<br>グレード: grade / グレード / 格付（G1〜G3 / Jpn1〜Jpn3 / 重賞を自動推定）<br>投資: bet / stake / 投資<br>払戻: return / payout / 払戻<br>収支: profit / net / 収支<br>内訳: 内訳[] の 券種名/購入額/払戻額 を券種ごとに集約（券種分解モード時。合計が親明細と不一致の場合は分解せず親を採用）<br>買い目: 内訳[] の 買い目 / 買目 / 組番 / 馬番 / 組合せ（買い目別グラフで使用。欠損時は「買い目不明」）</div></div></aside><main class="panel"><div class="tabs"><button class="tab active" data-tab="charts">📊 グラフ</button><button class="tab" data-tab="records">📋 明細</button><button class="tab" data-tab="spec">🧩 仕様</button><button class="tab" data-tab="raw">{} Raw</button></div><section id="view"></section></main></div></div>
 <script>
 'use strict';
@@ -240,6 +240,60 @@ function loadBridgeData(auto){
   }catch(e){leftStatus('直リンクデータの読込に失敗しました: '+((e&&e.message)||e));return false}
 }
 $('#bridgeBtn').onclick=()=>loadBridgeData(false);
+
+// v2.3 LiveDirect: JSONシリアライズを経由しない直結受信
+// 親iframe/opener（同一オリジン）が __keibaGraphApplyLive(box) を直接呼ぶ経路と、
+// postMessage / BroadcastChannel（structured clone。JSON文字列化なし）の経路を用意する。
+function addDocObj(name,obj,extra={}){
+  const ok=obj!=null&&typeof obj==='object';
+  const error=ok?'':(extra.error||'live: 空データ');
+  const recs=ok?extractRecords(obj,name):[];
+  recs.forEach(r=>{r.id=recSeq++;r.edited=false});
+  records.push(...recs);
+  docs.push({id:Date.now()+Math.random(),name,text:'',obj:ok?obj:null,ok,error,recs,live:true});
+  rebuild();
+}
+function applyLiveData(box){
+  if(!box)return false;
+  const data=box.data||box;
+  const name=box.fileName||'ライブ（The競馬 EV分析）';
+  // 同名の既存ライブ明細を除去して重複集計を防ぐ（毎回上書き）
+  docs=docs.filter(d=>d.name!==name);
+  records=records.filter(r=>r.file!==name);
+  addDocObj(name,data);
+  const when=box.savedAt?new Date(box.savedAt):new Date();
+  const cnt=(data&&Array.isArray(data.収支明細))?data.収支明細.length:'';
+  leftStatus(`🔴 LIVE 受信${cnt!==''?` ${cnt}件`:''}: ${name}${!isNaN(when)?`（${when.toLocaleTimeString('ja-JP')} 更新）`:''}`);
+  return true;
+}
+window.__keibaGraphApplyLive=applyLiveData; // ★ 親（同一オリジン）からオブジェクト直渡し用
+
+(function setupLiveBridge2(){
+  var mode='';try{mode=new URLSearchParams(location.search).get('src')||''}catch(e){}
+  var wantLive=(mode==='bridge2');
+  var liveCh=null;try{liveCh=new BroadcastChannel('keibaProfitGraphLive_v1')}catch(e){}
+  function hello(){
+    // 「現在のデータをください」を親／同一オリジン全タブへ要求（openerはnoopener時null）
+    try{if(window.opener&&!window.opener.closed)window.opener.postMessage({type:'keibaProfitGraphLiveHello'},'*')}catch(e){}
+    try{if(window.parent&&window.parent!==window)window.parent.postMessage({type:'keibaProfitGraphLiveHello'},'*')}catch(e){}
+    if(liveCh){try{liveCh.postMessage({type:'hello'})}catch(e){}}
+  }
+  window.addEventListener('message',function(ev){
+    var d=ev&&ev.data;if(!d||typeof d!=='object')return;
+    if(d.type==='keibaProfitGraphLive'&&d.box){applyLiveData(d.box)}
+    else if(d.type==='keibaProfitGraphBridgeUpdate'){d.payload?applyLiveData(d.payload):loadBridgeData(true)}
+  });
+  if(liveCh){liveCh.onmessage=function(ev){var d=ev&&ev.data;if(d&&d.type==='data'&&d.box)applyLiveData(d.box)}}
+  window.__keibaGraphLiveHello=hello;
+  if(wantLive){
+    hello();
+    document.addEventListener('visibilitychange',function(){if(!document.hidden)hello()});
+    window.addEventListener('focus',hello);
+    // 接続前のちらつき対策：ライブ未受信ならlocalStorageのseedを暫定表示
+    setTimeout(function(){if(!docs.some(function(d){return d.live}))loadBridgeData(true)},450);
+  }
+})();
+
 render();
 try{if(new URLSearchParams(location.search).get('src')==='bridge')loadBridgeData(true)}catch(e){}
 </script>

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.254 LiveSplitBridge</title>
+<title>The競馬 EV分析 v5.18.255 DirectLiveBridge</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -588,7 +588,7 @@ body{
   }
 }
 
-/* v5.18.254 LiveSplitBridge: アプリ＋収支グラフv22 横2画面 */
+/* v5.18.255 DirectLiveBridge: アプリ＋収支グラフv22 横2画面 */
 .profit-split-toggle{height:30px;padding:5px 9px;font-size:11px;white-space:nowrap}
 .profit-split-toggle.active{color:#03130b;border-color:rgba(0,230,118,.75);background:linear-gradient(135deg,#00c853,#00e676);box-shadow:var(--glow)}
 #profitLivePane{display:none;background:#07111d}
@@ -621,7 +621,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
   </div>
   <div style="display:flex;gap:8px;align-items:center">
     <button id="profitSplitBtn" class="btn-sm profit-split-toggle" type="button" onclick="toggleProfitLiveSplit()" aria-pressed="false">📊 横2画面</button>
-    <span class="ver">v5.18.254 LiveSplitBridge</span>
+    <span class="ver">v5.18.255 DirectLiveBridge</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1552,7 +1552,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
         <button class="btn-sm" onclick="exportProfitGraphJSON()">📊 収支分析JSON出力</button>
         <button class="btn-sm" onclick="openProfitGraphDirect()">🔗 グラフを直接開く</button>
         <a class="btn-sm" href="https://takuya-20f.pages.dev/" target="_blank" rel="noopener" style="text-decoration:none">🌐 takuya Pages</a>
-        <a class="btn-sm" href="https://yamase-takiyoshi.github.io/takuya/keiba_profit_spec_chart_switcher_candle_v22.html?src=bridge" target="_blank" rel="noopener" style="text-decoration:none">📈 収支グラフ v22</a>
+        <a class="btn-sm" href="https://yamase-takiyoshi.github.io/takuya/keiba_profit_spec_chart_switcher_candle_v22.html?src=bridge2" target="_blank" rel="noopener" style="text-decoration:none">📈 収支グラフ v22</a>
         <button class="btn-sm" onclick="triggerImportJSON()">📂 JSON読込</button>
         <button class="btn-sm" onclick="clearHorsesConfirm()">🧹 馬データをクリア</button>
         <button class="btn-sm" onclick="resetSettingsToDefault()">♻️ 設定を初期化</button>
@@ -1612,7 +1612,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
     </div>
     <div class="profit-live-actions">
       <button class="btn-sm" type="button" onclick="refreshProfitLiveGraph()" title="グラフを更新">↻ 更新</button>
-      <a class="btn-sm" href="https://yamase-takiyoshi.github.io/takuya/keiba_profit_spec_chart_switcher_candle_v22.html?src=bridge" target="_blank" rel="noopener" style="text-decoration:none" title="別画面で開く">↗</a>
+      <a class="btn-sm" href="https://yamase-takiyoshi.github.io/takuya/keiba_profit_spec_chart_switcher_candle_v22.html?src=bridge2" target="_blank" rel="noopener" style="text-decoration:none" title="別画面で開く">↗</a>
       <button class="btn-sm" type="button" onclick="setProfitLiveSplit(false)" title="横2画面を閉じる">×</button>
     </div>
   </div>
@@ -2210,7 +2210,7 @@ function openProfitGraphDirect(){
     }
     return;
   }
-  const url = PROFIT_GRAPH_URL + (PROFIT_GRAPH_URL.includes('?') ? '&' : '?') + 'src=bridge';
+  const url = PROFIT_GRAPH_URL + (PROFIT_GRAPH_URL.includes('?') ? '&' : '?') + 'src=bridge2';
   const w = window.open(url, 'keibaProfitGraph');
   if(!w){
     dataIoStatus(`🔗 データは送信済みです（${snap.収支明細.length}件）。ポップアップがブロックされたため、グラフHTMLを開いて「🔗 直リンク読込」を押してください。`, false);
@@ -23175,13 +23175,15 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 </script>
 
 <script>
-/* v5.18.254 LiveSplitBridge: PC・タブレット用 横2画面＋リアルタイム収支連動 */
+/* v5.18.255 DirectLiveBridge: PC・タブレット用 横2画面＋リアルタイム収支連動 */
 (function(){
   'use strict';
   var SPLIT_STATE_KEY='tk-profit-live-split-v1';
   var BRIDGE_KEY='keibaProfitGraphBridge_v1';
   var LIVE_FILE_NAME='The競馬_EV分析_リアルタイム.json';
-  var LIVE_URL='https://yamase-takiyoshi.github.io/takuya/keiba_profit_spec_chart_switcher_candle_v22.html?src=bridge&embed=1';
+  var LIVE_URL='https://yamase-takiyoshi.github.io/takuya/keiba_profit_spec_chart_switcher_candle_v22.html?src=bridge2&embed=1';
+  var liveCh=null;try{liveCh=new BroadcastChannel('keibaProfitGraphLive_v1')}catch(e){}
+  var bcastTimer=0;
   var syncTimer=0;
   var resizeTimer=0;
 
@@ -23244,8 +23246,10 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       return true;
     }catch(e){return false}
   }
+  // v5.18.255 DirectLiveBridge: 収支オブジェクトを JSON文字列化せず子ウィンドウへ直接渡す。
+  // 同一オリジンの iframe なら __keibaGraphApplyLive(box) をそのまま呼べる（構造化複製すら不要）。
   function deliverToFrame(forceLoad){
-    var sent=writeBridge();
+    var sent=writeBridge();          // localStorageへseed（互換/フォールバック用。表示経路には使わない）
     var frame=byId('profitLiveFrame');
     if(!frame||!splitActive())return sent;
     var current=frame.getAttribute('src')||'';
@@ -23254,22 +23258,41 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       setStatus(sent?'グラフへ接続中…':'収支データ待機中');
       return sent;
     }
-    var loaded=false;
+    var direct=false,loaded=false;
+    var box=sent?{fileName:LIVE_FILE_NAME,data:sent.payload.data,savedAt:sent.payload.savedAt}:null;
     try{
       applyEmbeddedGraphStyle();
-      if(frame.contentWindow&&typeof frame.contentWindow.loadBridgeData==='function'){
-        frame.contentWindow.loadBridgeData(true);
-        loaded=true;
+      var cw=frame.contentWindow;
+      if(cw&&box&&typeof cw.__keibaGraphApplyLive==='function'){
+        cw.__keibaGraphApplyLive(box);   // ★ JSONを一切通さないダイレクト受け渡し
+        direct=true;loaded=true;
+      }else if(cw&&typeof cw.loadBridgeData==='function'){
+        cw.loadBridgeData(true);loaded=true; // 旧経路フォールバック（localStorage/JSON）
       }
     }catch(e){}
-    try{
-      var targetOrigin=new URL(LIVE_URL,location.href).origin;
-      if(frame.contentWindow)frame.contentWindow.postMessage({type:'keibaProfitGraphBridgeUpdate',key:BRIDGE_KEY,payload:sent&&sent.payload},targetOrigin);
-    }catch(e){}
-    if(sent)setStatus((loaded?'リアルタイム更新':'データ送信')+' '+sent.count.toLocaleString()+'件 / '+new Date().toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit'}));
+    if(!direct){
+      try{
+        var targetOrigin=new URL(LIVE_URL,location.href).origin;
+        if(frame.contentWindow)frame.contentWindow.postMessage(box?{type:'keibaProfitGraphLive',box:box}:{type:'keibaProfitGraphBridgeUpdate',key:BRIDGE_KEY,payload:sent&&sent.payload},targetOrigin);
+      }catch(e){}
+    }
+    if(sent)setStatus((direct?'⚡ ダイレクト更新':(loaded?'リアルタイム更新':'データ送信'))+' '+sent.count.toLocaleString()+'件 / '+new Date().toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit'}));
     return sent;
   }
+  // 別タブで開いた収支グラフ（window.open / 📈リンク）向け：BroadcastChannelでオブジェクトを直接配信
+  function broadcastLive(){
+    if(!liveCh)return;
+    var snap=buildLiveSnapshot();
+    if(!snap||!Array.isArray(snap.収支明細)||!snap.収支明細.length)return;
+    try{liveCh.postMessage({type:'data',box:{fileName:LIVE_FILE_NAME,data:snap,savedAt:new Date().toISOString()}})}catch(e){}
+  }
+  function scheduleBroadcast(){
+    if(!liveCh)return;
+    clearTimeout(bcastTimer);
+    bcastTimer=setTimeout(broadcastLive,500);
+  }
   window.scheduleProfitLiveSync=function(){
+    scheduleBroadcast(); // 別タブで開いた収支グラフ（bridge2）へも配信（split状態に依存しない）
     if(!splitActive()||isPhoneDevice())return;
     clearTimeout(syncTimer);
     syncTimer=setTimeout(function(){deliverToFrame(false)},700);
@@ -23331,6 +23354,12 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   }
   function init(){
     installRealtimeHooks();
+    // 収支グラフ側からの「現在データください」要求に応答（開いた瞬間に最新を表示させる）
+    window.addEventListener('message',function(ev){
+      var d=ev&&ev.data;
+      if(d&&d.type==='keibaProfitGraphLiveHello'){ if(splitActive())deliverToFrame(false); else broadcastLive(); }
+    });
+    if(liveCh)liveCh.onmessage=function(ev){var d=ev&&ev.data;if(d&&d.type==='hello')broadcastLive()};
     var frame=byId('profitLiveFrame');
     if(frame)frame.addEventListener('load',function(){
       if(!splitActive()||frame.getAttribute('src')==='about:blank')return;
@@ -23351,10 +23380,10 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 </script>
 
 <script>
-/* v5.18.254 LiveSplitBridge: 横2画面リアルタイム連動 */
+/* v5.18.255 DirectLiveBridge: 横2画面リアルタイム連動 */
 (function(){
   'use strict';
-  var V='v5.18.254 LiveSplitBridge';
+  var V='v5.18.255 DirectLiveBridge';
   function applyVersion(){
     window.APP_VERSION=V;
     var el=document.querySelector('.header .ver, .ver');

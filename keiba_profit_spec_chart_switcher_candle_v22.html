@@ -259,9 +259,14 @@ function loadBridgeData(auto){
     const box=JSON.parse(raw);
     const name=box.fileName||'直リンク（The競馬 EV分析）';
     try{v22AutoBackupBeforeLive()}catch(e){}   // 上書き前を自動退避
-    // 同名の既存読込を除去して重複集計を防ぐ（再送信時は上書き）
-    docs=docs.filter(d=>d.name!==name);
-    records=records.filter(r=>r.file!==name);
+    if(box.replace){
+      // 置換モード: このライブ明細以外の全ソースを除外（フィルタ選択は保持）
+      docs=[];records=[];
+    }else{
+      // 同名の既存読込を除去して重複集計を防ぐ（再送信時は上書き）
+      docs=docs.filter(d=>d.name!==name);
+      records=records.filter(r=>r.file!==name);
+    }
     addDoc(name,JSON.stringify(box.data||box));
     const when=box.savedAt?new Date(box.savedAt):null;
     leftStatus(`🔗 直リンクデータを読み込みました: ${name}${when&&!isNaN(when)?`（${when.toLocaleString('ja-JP')} 送信）`:''}`);
@@ -284,16 +289,22 @@ function addDocObj(name,obj,extra={}){
 }
 function applyLiveData(box){
   if(!box)return false;
-  try{v22AutoBackupBeforeLive()}catch(e){}   // 転送で上書きされる前の状態を自動退避
+  try{v22AutoBackupBeforeLive()}catch(e){}   // 転送／置換で上書きされる前の状態を自動退避
   const data=box.data||box;
   const name=box.fileName||'ライブ（The競馬 EV分析）';
-  // 同名の既存ライブ明細を除去して重複集計を防ぐ（毎回上書き）
-  docs=docs.filter(d=>d.name!==name);
-  records=records.filter(r=>r.file!==name);
+  if(box.replace){
+    // v2.9 置換モード: このライブ明細"以外"の全ソース（読込JSON・復元スナップショット等）を除外。
+    // ユーザーの多角フィルタ／選択（disabledFacets等）は保持したまま中身だけ差し替える。
+    docs=[];records=[];
+  }else{
+    // 通常: 同名の既存ライブ明細のみ除去して重複集計を防ぐ（他ソースは共存）
+    docs=docs.filter(d=>d.name!==name);
+    records=records.filter(r=>r.file!==name);
+  }
   addDocObj(name,data);
   const when=box.savedAt?new Date(box.savedAt):new Date();
   const cnt=(data&&Array.isArray(data.収支明細))?data.収支明細.length:'';
-  leftStatus(`🔴 LIVE 受信${cnt!==''?` ${cnt}件`:''}: ${name}${!isNaN(when)?`（${when.toLocaleTimeString('ja-JP')} 更新）`:''}`);
+  leftStatus(`${box.replace?'🔁 置換':'🔴 LIVE'} 受信${cnt!==''?` ${cnt}件`:''}: ${name}${!isNaN(when)?`（${when.toLocaleTimeString('ja-JP')} 更新）`:''}`);
   return true;
 }
 window.__keibaGraphApplyLive=applyLiveData; // ★ 親（同一オリジン）からオブジェクト直渡し用

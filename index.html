@@ -1261,6 +1261,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
         <span class="sim-date-bar-sep">〜</span>
         <input type="date" id="simRangeEnd" class="sim-hist-dateinput" aria-label="終了日">
         <button class="btn-sm sim-date-bar-btn" type="button" onclick="tkSimRangeTransfer()">➡️ この期間のみ転送</button>
+        <button class="btn-sm sim-date-bar-btn" type="button" onclick="tkSimRangeReplace()" title="右パネルの既存データ（読込JSON・復元分など）を全消去し、この期間だけに置き換えます">🔁 この期間のみに置換</button>
         <button class="btn-sm" type="button" onclick="tkSimRangeClear()" title="期間フィルタを解除して全期間を右パネルへ転送">↺ 全期間</button>
         <button class="btn-sm" type="button" onclick="tkSimRangePullFromRs(true)" title="期間横断シミュレーションの開始日／終了日をこの欄へコピー">📆 期間横断から取得</button>
         <label class="sim-date-bar-link" title="期間横断の開始日／終了日と同期する動作を選びます">🔗 期間横断と連動
@@ -1741,7 +1742,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.272 SimRangeLinkMode';
+window.APP_VERSION = 'v5.18.273 SimRangeReplace';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -4415,7 +4416,7 @@ function tkSimRangeDefault(){
   if(!sEl.value) sEl.value = min || today;
   if(!eEl.value) eEl.value = max || today;
 }
-function tkSimRangeTransfer(){
+function tkSimRangeTransfer(replaceMode){
   const sEl = document.getElementById('simRangeStart');
   const eEl = document.getElementById('simRangeEnd');
   const st  = document.getElementById('simRangeStatus');
@@ -4430,6 +4431,9 @@ function tkSimRangeTransfer(){
   if(s > e){ setSt('⚠️ 開始日は終了日と同じか前にしてください', false); return; }
 
   window.__tkSimTransferRange = { start: s, end: e };
+  // v5.18.273 SimRangeReplace: 置換モードON時は右パネルの既存データを全消去してから送る。
+  // フラグはライブbox/payloadに載せ、以後の自動同期でも維持される（他ソースの再混入を防ぐ）。
+  window.__tkSimTransferReplace = !!replaceMode;
 
   // 転送前に「範囲内 何件 / 全 何件」を数える（フィルタ適用前の全明細で判定）。
   let total = 0, inRange = 0;
@@ -4444,19 +4448,24 @@ function tkSimRangeTransfer(){
   }catch(err){}
 
   tkSimForcePushLive();  // buildLiveSnapshot が tkApplySimTransferRange で絞り込んで送信する
+  const verb = replaceMode ? '右パネルを置換（既存データを全消去）' : '右パネルへ転送';
   if(total && inRange === 0){
     setSt(`⚠️ ${tkFormatHistoryDate(s)}〜${tkFormatHistoryDate(e)} に該当する明細がありません（全${total}件）`, false);
   }else{
-    setSt(`✅ ${tkFormatHistoryDate(s)}〜${tkFormatHistoryDate(e)}：${inRange}件 / 全${total}件 を右パネルへ転送`, true);
+    setSt(`${replaceMode ? '🔁' : '✅'} ${tkFormatHistoryDate(s)}〜${tkFormatHistoryDate(e)}：${inRange}件 / 全${total}件 で${verb}`, true);
   }
 }
+// v5.18.273 SimRangeReplace: この期間だけで右パネルを置き換える（既存の読込JSON・復元分などを消去）
+function tkSimRangeReplace(){ return tkSimRangeTransfer(true); }
 function tkSimRangeClear(){
   window.__tkSimTransferRange = null;
+  window.__tkSimTransferReplace = false;   // 置換モードも解除
   const st = document.getElementById('simRangeStatus');
   tkSimForcePushLive();
   if(st){ st.textContent = '↺ 期間フィルタを解除しました（全期間を右パネルへ転送）'; st.style.color = 'var(--muted)'; }
 }
 window.tkSimRangeTransfer = tkSimRangeTransfer;
+window.tkSimRangeReplace  = tkSimRangeReplace;
 window.tkSimRangeClear    = tkSimRangeClear;
 window.tkSimRangeDefault  = tkSimRangeDefault;
 
@@ -16341,7 +16350,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.272 SimRangeLinkMode';
+  window.APP_VERSION = 'v5.18.273 SimRangeReplace';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -16770,7 +16779,7 @@ function json(obj, status = 200) {
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.272 SimRangeLinkMode';
+  window.APP_VERSION = 'v5.18.273 SimRangeReplace';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -17067,7 +17076,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.272 SimRangeLinkMode';
+  window.APP_VERSION = 'v5.18.273 SimRangeReplace';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -17285,7 +17294,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.272 SimRangeLinkMode';
+    window.APP_VERSION = 'v5.18.273 SimRangeReplace';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -17585,7 +17594,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.272 SimRangeLinkMode';
+  window.APP_VERSION = 'v5.18.273 SimRangeReplace';
   try{
     const ver = document.querySelector('.ver');
     if(ver){
@@ -20684,7 +20693,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
   // ── 表示バージョン更新（このスクリプトが最後に実行されるためここで確定） ──
   try{
-    window.APP_VERSION = 'v5.18.272 SimRangeLinkMode';
+    window.APP_VERSION = 'v5.18.273 SimRangeReplace';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     else document.addEventListener('DOMContentLoaded', function(){ try{ window.setAppVersionLabel(); }catch(e){} });
   }catch(e){}
@@ -24178,7 +24187,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       setStatus('収支データ待機中');
       return null;
     }
-    var payload={savedAt:new Date().toISOString(),fileName:LIVE_FILE_NAME,data:snap,live:true};
+    var payload={savedAt:new Date().toISOString(),fileName:LIVE_FILE_NAME,data:snap,live:true,replace:!!window.__tkSimTransferReplace};
     try{localStorage.setItem(BRIDGE_KEY,JSON.stringify(payload))}
     catch(e){
       setStatus(e&&(e.name==='QuotaExceededError'||e.code===22)?'データ量が大きく送信できません':'送信エラー: '+((e&&e.message)||e));
@@ -24210,7 +24219,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       return sent;
     }
     var direct=false,loaded=false;
-    var box=sent?{fileName:LIVE_FILE_NAME,data:sent.payload.data,savedAt:sent.payload.savedAt}:null;
+    var box=sent?{fileName:LIVE_FILE_NAME,data:sent.payload.data,savedAt:sent.payload.savedAt,replace:!!window.__tkSimTransferReplace}:null;
     try{
       applyEmbeddedGraphStyle();
       var cw=frame.contentWindow;
@@ -24260,7 +24269,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     if(!liveCh)return;
     var snap=buildLiveSnapshot();
     if(!snap||!Array.isArray(snap.収支明細)||!snap.収支明細.length)return;
-    try{liveCh.postMessage({type:'data',box:{fileName:LIVE_FILE_NAME,data:snap,savedAt:new Date().toISOString()}})}catch(e){}
+    try{liveCh.postMessage({type:'data',box:{fileName:LIVE_FILE_NAME,data:snap,savedAt:new Date().toISOString(),replace:!!window.__tkSimTransferReplace}})}catch(e){}
   }
   function scheduleBroadcast(){
     if(!liveCh)return;

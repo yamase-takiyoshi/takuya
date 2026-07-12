@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.265 BabaStateRaceIdProbe</title>
+<title>The競馬 EV分析 v5.18.266 HistoryCalendarReplay</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -611,6 +611,30 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
   body.profit-split-active #profitLivePane{display:none!important}
 }
 
+
+
+/* ============================================================
+   v5.18.266 HistoryCalendarReplay / 履歴カレンダーリプレイ
+   ============================================================ */
+.hr-replay-card{border-color:rgba(0,230,118,.34);background:linear-gradient(180deg,rgba(15,39,42,.96),rgba(22,33,52,.96))}
+.hr-replay-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
+.hr-replay-badge{display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border-radius:999px;border:1px solid rgba(0,230,118,.34);background:rgba(0,230,118,.11);color:#a7f3d0;font-size:11px;font-weight:900}
+.hr-replay-note{font-size:11px;color:var(--muted);line-height:1.7;margin-bottom:10px;padding:8px 10px;border:1px solid rgba(0,230,118,.18);border-radius:9px;background:rgba(0,230,118,.055)}
+.hr-replay-nav{display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px;margin:8px 0}
+.hr-replay-nav .btn-sm{min-height:36px}
+.hr-replay-info{margin-top:10px;padding:11px;border:1px solid rgba(148,163,184,.22);border-radius:11px;background:rgba(15,23,42,.52);font-size:12px;line-height:1.65}
+.hr-replay-title{font-size:15px;font-weight:950;color:#d9ffe8;margin-bottom:5px}
+.hr-replay-meta{color:var(--muted);font-size:11px;overflow-wrap:anywhere}
+.hr-replay-kpi{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:9px}
+.hr-replay-kpi>div{padding:8px 5px;text-align:center;border-radius:9px;background:rgba(2,8,18,.42);border:1px solid rgba(148,163,184,.14)}
+.hr-replay-kpi b{display:block;font-size:15px}.hr-replay-kpi span{display:block;font-size:9px;color:var(--muted);margin-top:2px}
+.hr-replay-ticket{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:6px;align-items:center;padding:5px 0;border-bottom:1px solid rgba(51,65,85,.4);font-size:10px}
+.hr-replay-ticket:last-child{border-bottom:0}.hr-replay-ticket.hit{color:var(--green)}
+.hr-replay-ticket .combo{font-weight:850;color:var(--text);overflow-wrap:anywhere}.hr-replay-ticket .money{white-space:nowrap;text-align:right}
+.hr-replay-mode{display:none;margin-top:8px;padding:7px 9px;border-radius:8px;background:rgba(251,191,36,.10);border:1px solid rgba(251,191,36,.34);color:#fde68a;font-size:11px;font-weight:800}
+.hr-replay-mode.show{display:block}
+@media(max-width:560px){.hr-replay-nav{grid-template-columns:1fr}.hr-replay-kpi{grid-template-columns:1fr 1fr}.hr-replay-ticket{grid-template-columns:auto 1fr}.hr-replay-ticket .money{grid-column:1/-1;text-align:left;padding-left:4px}}
+
 </style>
 </head>
 <body>
@@ -621,7 +645,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
   </div>
   <div style="display:flex;gap:8px;align-items:center">
     <button id="profitSplitBtn" class="btn-sm profit-split-toggle" type="button" onclick="toggleProfitLiveSplit()" aria-pressed="false">📊 横2画面</button>
-    <span class="ver">v5.18.265 BabaStateRaceIdProbe</span>
+    <span class="ver">v5.18.266 HistoryCalendarReplay</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1154,6 +1178,57 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
       <div id="simTicketList"><div class="empty">推奨買い目作成後にシミュレーションできます。</div></div>
     </div>
 
+
+
+    <!-- v5.18.266 履歴カレンダーリプレイ -->
+    <div class="card hr-replay-card" id="hrReplayCard">
+      <div class="hr-replay-head">
+        <h2 style="margin:0">🔁 履歴カレンダーリプレイ</h2>
+        <span id="hrReplayCount" class="hr-replay-badge">履歴を確認中</span>
+      </div>
+      <div class="hr-replay-note">
+        保存済みの精算履歴を開催日ごとに並べ、前後の開催日・前後のレースへ移動できます。保存済み結果の表示は通信不要です。出走馬スナップショットがない旧履歴は、race_idから出馬表だけを再読込できます。
+      </div>
+      <div class="pick-grid">
+        <div class="field">
+          <label>カレンダー日付</label>
+          <input type="date" id="hrReplayDate" onchange="hrReplayDateChanged()">
+        </div>
+        <div class="field">
+          <label>履歴のある開催日</label>
+          <select id="hrReplayDateList" onchange="hrReplayDateListChanged()"><option value="">履歴なし</option></select>
+        </div>
+      </div>
+      <div class="hr-replay-nav">
+        <button class="btn-sm" type="button" onclick="hrMoveDate(-1)">◀ 前の開催日</button>
+        <button class="btn-sm" type="button" onclick="hrReplayRefresh(true)">↻ 履歴更新</button>
+        <button class="btn-sm" type="button" onclick="hrMoveDate(1)">次の開催日 ▶</button>
+      </div>
+      <div class="pick-grid">
+        <div class="field">
+          <label>開催場</label>
+          <select id="hrReplayVenue" onchange="hrReplayVenueChanged()"><option value="">履歴なし</option></select>
+        </div>
+        <div class="field">
+          <label>レース</label>
+          <select id="hrReplayRace" onchange="hrReplayRaceChanged()"><option value="">履歴なし</option></select>
+        </div>
+      </div>
+      <div class="hr-replay-nav">
+        <button class="btn-sm" type="button" onclick="hrMoveRace(-1)">◀ 前のレース</button>
+        <button class="btn btn-primary" type="button" style="width:auto" onclick="hrReplaySelected()">▶ 履歴をリプレイ</button>
+        <button class="btn-sm" type="button" onclick="hrMoveRace(1)">次のレース ▶</button>
+      </div>
+      <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:8px">
+        <button class="btn-sm" type="button" onclick="hrRestoreSelected(false)">📦 履歴データを復元</button>
+        <button class="btn-sm" type="button" onclick="hrRestoreSelected(true)">🐎 出馬表を再読込</button>
+        <button id="hrAutoBtn" class="btn-sm" type="button" onclick="hrToggleAutoReplay()">⏯ 自動再生</button>
+        <button class="btn-sm" type="button" onclick="hrExitReplay()">■ リプレイ終了</button>
+      </div>
+      <div id="hrReplayMode" class="hr-replay-mode">履歴リプレイ中　購入予約・履歴上書きは行いません</div>
+      <div id="hrReplayInfo" class="hr-replay-info"><div class="empty">保存済み履歴を読み込んでいます。</div></div>
+    </div>
+
     <!-- シミュレーション専用収支グラフ -->
     <div class="card" id="simChartCard">
       <div class="section-header">
@@ -1629,7 +1704,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.265 BabaStateRaceIdProbe';
+window.APP_VERSION = 'v5.18.266 HistoryCalendarReplay';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -1956,7 +2031,7 @@ async function exportStateJSON(){
 }
 
 
-// v5.18.265 BabaStateRaceIdProbe: 収支明細（親）に 距離/馬場/馬場状態/クラス を、
+// v5.18.266 HistoryCalendarReplay: 収支明細（親）に 距離/馬場/馬場状態/クラス を、
 // 買い目内訳に 平均人気/人気帯/想定オッズ/オッズ帯 を付与し、
 // 収支グラフ側の「距離未取得/馬場未取得/不明/人気未取得/オッズ未取得/クラス未取得」を解消する。
 // レース条件はレース名・RaceData 文字列から、人気帯/オッズ帯は買い目に含まれる馬の人気・オッズから算出する。
@@ -1976,7 +2051,7 @@ function pgjNormalizeTrackCond(v){
   const m = s.match(/稍重|不良|良|重/);
   return m ? m[0] : '';
 }
-// v5.18.265 BabaStateRaceIdProbe:
+// v5.18.266 HistoryCalendarReplay:
 // NARは馬場状態を「馬場:稍」「馬場:不」のような1文字略記や、
 // 文字を持たないアイコン(クラスのみ)で表すことがある。限定文脈でのみ略記を許容する。
 function pgjTrackCondFromToken(t){
@@ -2015,7 +2090,7 @@ function pgjTrackCondFromIcons(doc){
   return found;
 }
 function pgjParseRaceCond(text){
-  // v5.18.265 BabaStateRaceIdProbe:
+  // v5.18.266 HistoryCalendarReplay:
   // NAR/JRAの表記揺れを吸収する。例:「ダート 左 1400m 良」「馬場状態 良」「馬場 良」「芝1200m稍重」。
   const s = pgjToHalf(text).replace(/\u00a0/g, ' ').replace(/\s+/g, ' ');
   const compact = s.replace(/\s+/g, '');
@@ -2060,9 +2135,9 @@ function pgjRaceCondText(doc){
     try{ doc.querySelectorAll(sel).forEach(el => parts.push(el.textContent || '')); }catch(e){}
   });
   let txt = parts.join(' ');
-  // v5.18.265 BabaStateRaceIdProbe: 馬場アイコンのクラス名から状態を確定できれば最優先で付与。
+  // v5.18.266 HistoryCalendarReplay: 馬場アイコンのクラス名から状態を確定できれば最優先で付与。
   try{ const ic = pgjTrackCondFromIcons(doc); if(ic) txt = '馬場状態:' + ic + ' ' + txt; }catch(e){}
-  // v5.18.265 BabaStateRaceIdProbe: 上記セレクタで馬場状態が拾えない場合の保険。
+  // v5.18.266 HistoryCalendarReplay: 上記セレクタで馬場状態が拾えない場合の保険。
   // コロン付きに加え、「馬場状態 良」「馬場 良」「ダート1400m 良」「芝1200m稍重」も拾う。
   try{
     const hasCond = !!pgjParseRaceCond(txt).馬場状態;
@@ -2115,7 +2190,7 @@ function pgjRaceMetaOf(raceId){
 }
 
 function pgjApplyRaceMetaToRow(row, raceId, text){
-  // v5.18.265 BabaStateRaceIdProbe: 期間横断/一発モードのrowへrace_idメタを即時コピーする。
+  // v5.18.266 HistoryCalendarReplay: 期間横断/一発モードのrowへrace_idメタを即時コピーする。
   // JSON出力時の後補完だけに頼ると、キャッシュ失敗・分岐差で「不明」が残るため。
   try{
     if(!row) return row;
@@ -2139,7 +2214,7 @@ function pgjApplyRaceMetaToRow(row, raceId, text){
   return row;
 }
 // ============================================================
-// v5.18.265 BabaStateRaceIdProbe:
+// v5.18.266 HistoryCalendarReplay:
 // 馬場状態が「不明」のまま残る明細に対し、race_id を照会して
 // 結果ページ(result.html)から距離/馬場/馬場状態/クラスを確定する。
 // ・JSON読込レコード等、doc を通っていない明細も救済できる。
@@ -4189,6 +4264,17 @@ function simRecordProfit(autoRecord, bet, ret, hitCount, total, sourceLabel, byT
   const raceDate = tkCurrentRaceDate() || formatLocalDate(new Date());
   const entry   = { raceId, raceName, bet, ret, profit, roi, hitCount, total,
                     date: raceDate, raceDate, recordedAt, source: sourceLabel || '手入力' };
+  // v5.18.266: リプレイ用に取得済み出走馬をrace_id履歴へ保存する。
+  // 旧履歴にスナップショットが無くても、race_idから再読込できる。
+  try{
+    if(Array.isArray(horses) && horses.length){
+      entry.horses = horses.map(h => ({
+        frame:Number(h.frame||0), num:Number(h.num||0), name:String(h.name||''),
+        odds:Number(h.odds||0), pop:Number(h.pop||0), score:Number(h.score||0),
+        jockey:String(h.jockey||''), weight:Number(h.weight||0)
+      })).filter(h => h.num > 0 && h.name);
+    }
+  }catch(e){}
   try{ if(typeof pgjApplyRaceMetaToRow === 'function') pgjApplyRaceMetaToRow(entry, raceId, raceName); }catch(e){}
   // v5.18.259: レース条件（距離/馬場/馬場状態/クラス）を記録に埋め込み、収支グラフの帯を「未取得」にしない
   try{
@@ -15946,7 +16032,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.265 BabaStateRaceIdProbe';
+  window.APP_VERSION = 'v5.18.266 HistoryCalendarReplay';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -16375,7 +16461,7 @@ function json(obj, status = 200) {
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.265 BabaStateRaceIdProbe';
+  window.APP_VERSION = 'v5.18.266 HistoryCalendarReplay';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -16672,7 +16758,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.265 BabaStateRaceIdProbe';
+  window.APP_VERSION = 'v5.18.266 HistoryCalendarReplay';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -16890,7 +16976,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.265 BabaStateRaceIdProbe';
+    window.APP_VERSION = 'v5.18.266 HistoryCalendarReplay';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -17190,7 +17276,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.265 BabaStateRaceIdProbe';
+  window.APP_VERSION = 'v5.18.266 HistoryCalendarReplay';
   try{
     const ver = document.querySelector('.ver');
     if(ver){
@@ -19400,7 +19486,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 
   // ═══════════════════════════════════════════════════════════════
-  // v5.18.265 BabaStateRaceIdProbe（券種の採算見込みガード）
+  // v5.18.266 HistoryCalendarReplay（券種の採算見込みガード）
   //   「赤字券種を絶対買わない」ではなく、精算履歴から券種ごとの実ROIを蓄積し、
   //   サンプルが十分あり、シュリンク後ROIが下限未満の券種だけを学習系モードで控える。
   //   既存の的中率較正（n/sp/h）とは別に、投資額・払戻額を保持する。
@@ -20072,7 +20158,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   };
 
   // ═══════════════════════════════════════════════════════════════
-  // v5.18.265 BabaStateRaceIdProbe（高的中×回収底上げモード）
+  // v5.18.266 HistoryCalendarReplay（高的中×回収底上げモード）
   //   既存の学習バケット（n=試行 / sp=推定確率合計 / h=的中数）をそのまま流用。
   //   ・回収フロア：学習補正後EV(=ev×補正) が下限以上（既定110%）
   //   ・的中フロア：学習補正後の的中確率 が下限以上（既定40%）
@@ -20289,7 +20375,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
   // ── 表示バージョン更新（このスクリプトが最後に実行されるためここで確定） ──
   try{
-    window.APP_VERSION = 'v5.18.265 BabaStateRaceIdProbe';
+    window.APP_VERSION = 'v5.18.266 HistoryCalendarReplay';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     else document.addEventListener('DOMContentLoaded', function(){ try{ window.setAppVersionLabel(); }catch(e){} });
   }catch(e){}
@@ -20669,13 +20755,13 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 </script>
 
 <!-- ============================================================
-     v5.18.265 BabaStateRaceIdProbe
+     v5.18.266 HistoryCalendarReplay
      race_id を主キーにして、選択・取得・保存・収支履歴を同期
      ============================================================ -->
 <script>
 (function(){
   'use strict';
-  var VERSION = 'v5.18.265 BabaStateRaceIdProbe';
+  var VERSION = 'v5.18.266 HistoryCalendarReplay';
   var STORE_KEY = 'tk-raceid-primary-db';
 
   function $(id){ return document.getElementById(id); }
@@ -23831,7 +23917,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       }catch(e){}
     }
     if(sent)setStatus((direct?'⚡ ダイレクト更新':(loaded?'リアルタイム更新':'データ送信'))+' '+sent.count.toLocaleString()+'件 / '+new Date().toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit'}));
-    // v5.18.265 BabaStateRaceIdProbe: 送信後、馬場状態が不明のまま race_id を持つ明細があれば
+    // v5.18.266 HistoryCalendarReplay: 送信後、馬場状態が不明のまま race_id を持つ明細があれば
     // 結果ページを race_id で照会して自動補完し、一度だけ再送する。
     // 照会済みID(tkBackfillTried)は再実行しないため無限ループしない。
     try{
@@ -23977,7 +24063,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 /* v5.18.256 RangeSyncFix: 横2画面リアルタイム連動 */
 (function(){
   'use strict';
-  var V='v5.18.265 BabaStateRaceIdProbe';
+  var V='v5.18.266 HistoryCalendarReplay';
   function applyVersion(){
     window.APP_VERSION=V;
     var el=document.querySelector('.header .ver, .ver');
@@ -23987,6 +24073,130 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',applyVersion);
   else applyVersion();
   [300,1200,3000,7000,11500,14000].forEach(function(ms){setTimeout(applyVersion,ms);});
+})();
+</script>
+
+
+
+<script>
+/* v5.18.266 HistoryCalendarReplay */
+(function(){
+  'use strict';
+  var S={records:[],dates:[],autoTimer:null,active:false};
+  function byId(id){return document.getElementById(id)}
+  function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+  function n(v){var x=Number(v||0);return Number.isFinite(x)?x:0}
+  function ridOf(x){return String(x&&(x.raceId||x.race_id||x.rid)||'').replace(/\D/g,'')}
+  function dateOf(x){
+    try{if(typeof tkHistoryRaceDate==='function'){var d=tkHistoryRaceDate(x);if(d)return d}}catch(e){}
+    var s=String(x&&(x.raceDate||x.date||x.raceName)||'');
+    var m=s.match(/(20\d{2})[-\/.](\d{1,2})[-\/.](\d{1,2})/);
+    return m?m[1]+'-'+String(m[2]).padStart(2,'0')+'-'+String(m[3]).padStart(2,'0'):'';
+  }
+  function noOf(x){var r=ridOf(x);return n(x&&(x.no||x.raceNo||x.R))||n(r.slice(-2))}
+  function codeOf(x){var r=ridOf(x),d=String(x&&(x.venueCode||x.placeCode)||'').trim();return d?d.padStart(2,'0'):r.slice(4,6)}
+  function kindOf(x){var k=String(x&&(x.kind||x.区分)||'').toUpperCase();if(k==='JRA'||k==='NAR')return k;var c=n(codeOf(x));return c>=1&&c<=10?'JRA':'NAR'}
+  function venueOf(x){
+    var direct=String(x&&(x.venueName||x.venue||x.場)||'').trim();if(direct)return direct;
+    var k=kindOf(x),c=codeOf(x);try{if(typeof venueName==='function')return venueName(k,c)||c}catch(e){}return c||'開催場不明';
+  }
+  function nameOf(x){
+    var v=String(x&&(x.raceName||x.name||x.レース名)||'').trim();
+    v=v.replace(/^20\d{2}[-\/.]\d{1,2}[-\/.]\d{1,2}\s*/,'').trim();
+    return v||((noOf(x)||'?')+'R');
+  }
+  function mergeMissing(a,b){
+    var o=Object.assign({},b||{},a||{});Object.keys(b||{}).forEach(function(k){if(o[k]==null||o[k]===''||(Array.isArray(o[k])&&!o[k].length))o[k]=b[k]});return o;
+  }
+  function collect(){
+    var src=[];
+    try{if(typeof simHistory!=='undefined'&&Array.isArray(simHistory))src=src.concat(simHistory.map(function(x){return Object.assign({__source:'精算履歴'},x)}))}catch(e){}
+    try{if(Array.isArray(window.__rsLastRows))src=src.concat(window.__rsLastRows.filter(function(x){return x&&!x.header&&ridOf(x)}).map(function(x){return Object.assign({__source:'期間横断履歴'},x)}))}catch(e){}
+    try{if(typeof profitHistory!=='undefined'&&Array.isArray(profitHistory))src=src.concat(profitHistory.map(function(x){return Object.assign({__source:'収支履歴'},x)}))}catch(e){}
+    var map=new Map();
+    src.forEach(function(x){
+      var rid=ridOf(x),d=dateOf(x);if(!rid||!d)return;
+      var key=rid;var old=map.get(key);
+      if(!old)map.set(key,x);else{
+        var prefer=(x.__source==='精算履歴'&&old.__source!=='精算履歴')?mergeMissing(x,old):mergeMissing(old,x);
+        map.set(key,prefer);
+      }
+    });
+    return Array.from(map.values()).sort(function(a,b){
+      var ka=dateOf(a)+'|'+codeOf(a)+'|'+String(noOf(a)).padStart(2,'0');
+      var kb=dateOf(b)+'|'+codeOf(b)+'|'+String(noOf(b)).padStart(2,'0');
+      return ka.localeCompare(kb);
+    });
+  }
+  function selected(){var el=byId('hrReplayRace');if(!el||!el.value)return null;return S.records.find(function(x){return ridOf(x)===el.value})||null}
+  function dateRecords(){var d=byId('hrReplayDate')&&byId('hrReplayDate').value;return S.records.filter(function(x){return dateOf(x)===d})}
+  function setCount(){var el=byId('hrReplayCount');if(el)el.textContent=S.records.length+'R / '+S.dates.length+'日'}
+  function populateDates(keep){
+    var input=byId('hrReplayDate'),list=byId('hrReplayDateList');if(!input||!list)return;
+    var old=keep?input.value:'';
+    var counts={};S.records.forEach(function(x){var d=dateOf(x);counts[d]=(counts[d]||0)+1});S.dates=Object.keys(counts).sort();
+    list.innerHTML=S.dates.length?S.dates.map(function(d){return '<option value="'+esc(d)+'">'+esc(d)+'　'+counts[d]+'R</option>'}).join(''):'<option value="">履歴なし</option>';
+    var use=S.dates.indexOf(old)>=0?old:(S.dates[S.dates.length-1]||'');input.value=use;list.value=use;populateVenues();
+  }
+  function populateVenues(){
+    var rows=dateRecords(),el=byId('hrReplayVenue');if(!el)return;
+    var groups={};rows.forEach(function(x){var key=kindOf(x)+'|'+codeOf(x);if(!groups[key])groups[key]={key:key,name:venueOf(x),count:0};groups[key].count++});
+    var vals=Object.values(groups).sort(function(a,b){return a.key.localeCompare(b.key)});
+    var old=el.value;el.innerHTML=vals.length?vals.map(function(g){return '<option value="'+esc(g.key)+'">'+esc(g.name)+'　'+g.count+'R</option>'}).join(''):'<option value="">この日は履歴なし</option>';
+    if(vals.some(function(g){return g.key===old}))el.value=old;populateRaces();
+  }
+  function populateRaces(){
+    var date=byId('hrReplayDate')&&byId('hrReplayDate').value,venue=byId('hrReplayVenue')&&byId('hrReplayVenue').value,el=byId('hrReplayRace');if(!el)return;
+    var rows=S.records.filter(function(x){return dateOf(x)===date&&(kindOf(x)+'|'+codeOf(x))===venue}).sort(function(a,b){return noOf(a)-noOf(b)});
+    var old=el.value;el.innerHTML=rows.length?rows.map(function(x){var p=n(x.profit!=null?x.profit:n(x.ret)-n(x.bet));return '<option value="'+ridOf(x)+'">'+noOf(x)+'R　'+esc(nameOf(x))+'　'+(p>=0?'+':'')+p.toLocaleString()+'円</option>'}).join(''):'<option value="">該当レースなし</option>';
+    if(rows.some(function(x){return ridOf(x)===old}))el.value=old;render();
+  }
+  function ticketsHtml(x){
+    var ds=[];try{if(typeof tkNormalizeTicketDetails==='function')ds=tkNormalizeTicketDetails(x.ticketDetails)||[]}catch(e){}
+    if(!ds.length&&Array.isArray(x.ticketDetails))ds=x.ticketDetails;
+    if(ds.length)return '<div style="margin-top:9px"><b>買い目</b>'+ds.map(function(d){var hit=n(d.的中||d.hit)>0,ty=d.券種名||d.type||'不明',co=d.買い目||d.combo||d.nums||'-',bet=n(d.購入額||d.amount||d.bet),ret=n(d.払戻額||d.ret);return '<div class="hr-replay-ticket'+(hit?' hit':'')+'"><span>'+esc(ty)+'</span><span class="combo">'+esc(Array.isArray(co)?co.join('-'):co)+'</span><span class="money">'+bet.toLocaleString()+'円→'+ret.toLocaleString()+'円'+(hit?'　的中':'')+'</span></div>'}).join('')+'</div>';
+    if(x.byType&&typeof x.byType==='object')return '<div style="margin-top:9px"><b>券種別</b>'+Object.entries(x.byType).map(function(kv){var v=kv[1]||{};return '<div class="hr-replay-ticket"><span>'+esc(kv[0])+'</span><span class="combo">購入 '+n(v.bet).toLocaleString()+'円</span><span class="money">払戻 '+n(v.ret).toLocaleString()+'円</span></div>'}).join('')+'</div>';
+    return '<div style="margin-top:8px;color:var(--muted)">買い目明細は旧履歴のため未保存です。</div>';
+  }
+  function render(){
+    var x=selected(),box=byId('hrReplayInfo');if(!box)return;
+    if(!x){box.innerHTML='<div class="empty">この日付には再生できるrace_id履歴がありません。</div>';return}
+    var bet=n(x.bet||x.投資),ret=n(x.ret||x.払戻),profit=x.profit!=null?n(x.profit):ret-bet,roi=x.roi!=null?n(x.roi):(bet?ret/bet*100:0);
+    var rows=dateRecords().filter(function(r){return (codeOf(r)+'|'+String(noOf(r)).padStart(2,'0'))<=(codeOf(x)+'|'+String(noOf(x)).padStart(2,'0'))});
+    var dayBet=rows.reduce(function(s,r){return s+n(r.bet||r.投資)},0),dayRet=rows.reduce(function(s,r){return s+n(r.ret||r.払戻)},0);
+    box.innerHTML='<div class="hr-replay-title">'+esc(dateOf(x)+'　'+venueOf(x)+'　'+noOf(x)+'R　'+nameOf(x))+'</div>'+
+      '<div class="hr-replay-meta">race_id '+esc(ridOf(x))+' / '+esc(x.__source||'履歴')+' / '+(Array.isArray(x.horses)&&x.horses.length?'出走馬スナップショットあり':'旧履歴・出走馬はrace_id再読込')+'</div>'+
+      '<div class="hr-replay-kpi"><div><b>'+bet.toLocaleString()+'円</b><span>投資</span></div><div><b>'+ret.toLocaleString()+'円</b><span>払戻</span></div><div><b style="color:'+(profit>=0?'var(--green)':'var(--red)')+'">'+(profit>=0?'+':'')+profit.toLocaleString()+'円</b><span>収支</span></div><div><b>'+roi.toFixed(1)+'%</b><span>ROI</span></div></div>'+
+      '<div style="margin-top:8px;color:var(--muted)">このレースまでの日次累計　'+rows.length+'R　投資 '+dayBet.toLocaleString()+'円　払戻 '+dayRet.toLocaleString()+'円　収支 '+((dayRet-dayBet)>=0?'+':'')+(dayRet-dayBet).toLocaleString()+'円</div>'+ticketsHtml(x);
+  }
+  function setMainContext(x){
+    var rid=ridOf(x),date=dateOf(x),kind=kindOf(x),code=codeOf(x),name=nameOf(x),venue=venueOf(x);
+    var pd=byId('pickDate'),pk=byId('pickKind'),pv=byId('pickVenue'),rs=byId('raceSelect'),ru=byId('raceUrl'),sr=byId('simResultUrl'),tb=byId('raceTitleBox'),st=byId('urlStatus');
+    if(pd)pd.value=date;if(pk)pk.value=kind;
+    if(pv){pv.innerHTML='<option value="'+esc(code)+'">'+esc(venue)+'</option>';pv.value=code}
+    var sUrl=(typeof shutubaUrl==='function')?shutubaUrl(kind,rid):((kind==='NAR'?'https://nar.netkeiba.com':'https://race.netkeiba.com')+'/race/shutuba.html?race_id='+rid);
+    var rUrl=(typeof resultUrl==='function')?resultUrl(kind,rid):((kind==='NAR'?'https://nar.netkeiba.com':'https://race.netkeiba.com')+'/race/result.html?race_id='+rid);
+    if(rs){rs.innerHTML='<option value="'+esc(sUrl)+'" data-race-id="'+esc(rid)+'" data-race-name="'+esc(name)+'">'+esc(date+' '+venue+' '+noOf(x)+'R '+name+' / '+rid)+'</option>';rs.selectedIndex=0}
+    if(ru)ru.value=sUrl;if(sr)sr.value=rUrl;if(tb){tb.style.display='block';tb.textContent='履歴リプレイ中: '+date+' '+venue+' '+noOf(x)+'R '+name+' / '+rid}
+    try{currentRaceId=rid;currentRaceName=name}catch(e){}window.currentRaceId=rid;window.currentRaceName=name;
+    if(st)st.innerHTML='<div class="url-status ok">🔁 履歴からrace_idを復元しました。新しい開催一覧の取得は行っていません。</div>';
+  }
+  window.hrReplayRefresh=function(keep){S.records=collect();setCount();populateDates(!!keep)};
+  window.hrReplayDateChanged=function(){var d=byId('hrReplayDate').value,ls=byId('hrReplayDateList');if(ls)ls.value=S.dates.indexOf(d)>=0?d:'';populateVenues()};
+  window.hrReplayDateListChanged=function(){var d=byId('hrReplayDateList').value;if(byId('hrReplayDate'))byId('hrReplayDate').value=d;populateVenues()};
+  window.hrReplayVenueChanged=populateRaces;window.hrReplayRaceChanged=render;
+  window.hrMoveDate=function(step){var d=byId('hrReplayDate').value,i=S.dates.indexOf(d);if(i<0)i=step>0?-1:S.dates.length;var ni=Math.max(0,Math.min(S.dates.length-1,i+step));if(!S.dates.length||ni===i)return;byId('hrReplayDate').value=S.dates[ni];byId('hrReplayDateList').value=S.dates[ni];populateVenues()};
+  window.hrMoveRace=function(step){var el=byId('hrReplayRace');if(!el||!el.options.length)return;var ni=el.selectedIndex+step;if(ni>=0&&ni<el.options.length){el.selectedIndex=ni;render();return}var di=S.dates.indexOf(byId('hrReplayDate').value),ndi=di+(step>0?1:-1);if(ndi>=0&&ndi<S.dates.length){byId('hrReplayDate').value=S.dates[ndi];byId('hrReplayDateList').value=S.dates[ndi];populateVenues();var re=byId('hrReplayRace');if(re&&re.options.length){re.selectedIndex=step>0?0:re.options.length-1;render()}}};
+  window.hrReplaySelected=function(){var x=selected();if(!x)return;S.active=true;byId('hrReplayMode').classList.add('show');setMainContext(x);render()};
+  window.hrRestoreSelected=async function(fetchNow){var x=selected();if(!x)return;window.hrReplaySelected();var hs=Array.isArray(x.horses)?x.horses:[];
+    if(hs.length&&!fetchNow){try{horses=hs.map(function(h){return Object.assign({},h)});window.horses=horses;if(typeof renderHorseRows==='function')renderHorseRows();var st=byId('urlStatus');if(st)st.innerHTML='<div class="url-status ok">📦 保存済み出走馬 '+hs.length+'頭を通信なしで復元しました。</div>'}catch(e){};var tab=document.querySelector('.tab-btn[data-tab="horses"]');if(tab)tab.click();return}
+    if(!fetchNow){var st0=byId('urlStatus');if(st0)st0.innerHTML='<div class="url-status">旧履歴には出走馬スナップショットがありません。出馬表を再読込してください。</div>';return}
+    var tab2=document.querySelector('.tab-btn[data-tab="horses"]');if(tab2)tab2.click();try{if(typeof fetchRace==='function')await fetchRace()}catch(e){var st1=byId('urlStatus');if(st1)st1.innerHTML='<div class="url-status err">❌ 履歴レース再読込失敗: '+esc(e&&e.message||e)+'</div>'}
+  };
+  window.hrExitReplay=function(){S.active=false;clearInterval(S.autoTimer);S.autoTimer=null;var m=byId('hrReplayMode');if(m)m.classList.remove('show');var b=byId('hrAutoBtn');if(b)b.textContent='⏯ 自動再生'};
+  window.hrToggleAutoReplay=function(){var b=byId('hrAutoBtn');if(S.autoTimer){clearInterval(S.autoTimer);S.autoTimer=null;if(b)b.textContent='⏯ 自動再生';return}window.hrReplaySelected();if(b)b.textContent='⏹ 自動停止';S.autoTimer=setInterval(function(){var before=(byId('hrReplayDate').value+'|'+byId('hrReplayRace').value);window.hrMoveRace(1);window.hrReplaySelected();var after=(byId('hrReplayDate').value+'|'+byId('hrReplayRace').value);if(after===before){window.hrToggleAutoReplay()}},2200)};
+  function init(){window.hrReplayRefresh(false);var prev=window.saveSimHistory;if(typeof prev==='function'&&!prev.__hrReplayWrapped){var w=function(){var r=prev.apply(this,arguments);setTimeout(function(){window.hrReplayRefresh(true)},0);return r};w.__hrReplayWrapped=true;window.saveSimHistory=w;try{saveSimHistory=w}catch(e){}}}
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
 })();
 </script>
 

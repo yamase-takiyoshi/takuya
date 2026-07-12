@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.256 RangeSyncFix</title>
+<title>The競馬 EV分析 v5.18.258 PeriodRaceUnitFix</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -621,7 +621,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
   </div>
   <div style="display:flex;gap:8px;align-items:center">
     <button id="profitSplitBtn" class="btn-sm profit-split-toggle" type="button" onclick="toggleProfitLiveSplit()" aria-pressed="false">📊 横2画面</button>
-    <span class="ver">v5.18.256 RangeSyncFix</span>
+    <span class="ver">v5.18.258 PeriodRaceUnitFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -11915,6 +11915,81 @@ if(horses.length === 0){
     return plan;
   }
 
+  // v5.18.258 PeriodRaceUnitFix
+  // 指定期間を「開催回の逆探索」だけで組み立てると、過去ページ内のナビ日付を
+  // レース日と誤認した際に、複数開催が同じ1日に集約されることがあった。
+  // 期間横断ではユーザーが指定した日付の race_list_sub を正として計画化する。
+  // 開始日〜終了日の土日祝だけを確認し、取得した全race_idを1R単位の処理対象にする。
+  async function buildJraRangePlanByDates(venueCodes, start, end, prog){
+    const wanted = new Set((venueCodes && venueCodes.length) ? venueCodes.map(String) : JRA_VENUES.map(v => String(v[0])));
+    const plan = new Map();
+    plan.reachable = false;
+    const dates = [];
+    let d = start;
+    while(d <= end){
+      if(isJraPossibleRaceDay(d)) dates.push(d);
+      const next = addLocalDaysYmd(d, 1);
+      if(!next || next <= d) break;
+      d = next;
+    }
+
+    for(let i = 0; i < dates.length; i++){
+      if(rsAbort) break;
+      const date = dates[i];
+      if(prog && (i === 0 || (i + 1) % 5 === 0 || i === dates.length - 1)){
+        prog.innerHTML = `<div class="url-status">📅 指定期間のJRA開催日を確認中... ${i + 1}/${dates.length}日候補（${date}）</div>`;
+      }
+      let got;
+      try{ got = await fetchFirstUsefulJraListHtml(date, ''); }
+      catch(e){ got = null; }
+      const raw = got && Array.isArray(got.races) ? got.races : [];
+      if(got && (got.html || raw.length)) plan.reachable = true;
+      if(!raw.length) continue;
+
+      const byVenue = new Map();
+      raw.forEach(r => {
+        const rid = String(r && (r.raceId || r.rid) || '');
+        const vc = String((r && r.venueCode) || extractVenueCodeFromRaceId(rid, 'JRA') || '');
+        const no = Number((r && r.raceNo) || rid.slice(-2));
+        if(!wanted.has(vc) || !rid || !(no >= 1 && no <= 12)) return;
+        if(!byVenue.has(vc)) byVenue.set(vc, []);
+        byVenue.get(vc).push({ raceId:rid, raceNo:no, venueCode:vc, raceName:(r && r.raceName) || `${no}R` });
+      });
+
+      for(const [vc, candidates] of byVenue.entries()){
+        if(rsAbort) break;
+        let exact = [];
+        try{ exact = await finalFilterRacesForSelection(candidates, 'JRA', date, vc); }
+        catch(e){ exact = []; }
+        exact = dedupeRacesByRaceIdAndNo(exact);
+        if(!exact.length) continue;
+        const races = exact.map(r => ({
+          rid:String(r.raceId),
+          no:Number(r.raceNo),
+          name:r.raceName || `${Number(r.raceNo)}R`
+        }));
+        const arr = plan.get(date) || [];
+        arr.push({ venueCode:vc, venueName:venueName('JRA', vc), races });
+        plan.set(date, arr);
+      }
+    }
+    return plan;
+  }
+
+  function rsNormalizeRowsInPlace(rows){
+    if(!Array.isArray(rows)) return rows;
+    const out = [], pos = new Map();
+    rows.forEach(r => {
+      if(!r || r.header){ out.push(r); return; }
+      const key = String(r.rid || '') || `${r.date || ''}|${r.venueCode || ''}|${Number(r.no || 0)}`;
+      if(!key){ out.push(r); return; }
+      if(pos.has(key)) out[pos.get(key)] = r;
+      else { pos.set(key, out.length); out.push(r); }
+    });
+    rows.splice(0, rows.length, ...out);
+    return rows;
+  }
+
   // ── 開催場・日別の集計 ──
   function rsAggregate(rows){
     const map = new Map();
@@ -12348,12 +12423,16 @@ if(horses.length === 0){
     if(resume && !rsResume) return;
     const runStart = resume ? rsResume.effStart : start;
 
-    // 日付列挙（安全上限）v5.18.140: 1年（うるう年366日）+αを許容。以前は70日で打ち切っていた
-    const RS_MAX_DAYS = 400;
+    // v5.18.258: 開始日〜終了日をそのまま列挙。固定日数では打ち切らない。
     const dates = [];
-    let cur = runStart, guard = 0;
-    while(cur <= end && guard < RS_MAX_DAYS){ dates.push(cur); cur = addLocalDaysYmd(cur, 1); guard++; }
-    const truncated = (cur <= end);
+    let cur = runStart;
+    while(cur <= end){
+      dates.push(cur);
+      const next = addLocalDaysYmd(cur, 1);
+      if(!next || next <= cur) break;
+      cur = next;
+    }
+    const truncated = false;
 
     const selVenues = rsSelectedVenueCodes(); // 空なら全場
     const recordToChart = $('rsRecord')?.checked;
@@ -12385,7 +12464,6 @@ if(horses.length === 0){
       $('rsTable').innerHTML = '';
       const cw = $('rsChartWrap'); if(cw) cw.style.display = 'none';
     }
-    if(truncated && prog) prog.innerHTML = `<div class="url-status err">⚠️ 期間が${RS_MAX_DAYS}日を超えるため先頭${RS_MAX_DAYS}日のみ対象にします。</div>`;
 
     const rows = resume ? rsResume.rows : [];
     let rsSkipped = 0; // v5.18.197: リジュームでスキップした精算済みレース数
@@ -12395,7 +12473,13 @@ if(horses.length === 0){
       let rsJraPlan = null;
       if(kind === 'JRA'){
         if(prog) prog.innerHTML = `<div class="url-status">🧭 JRA開催回をrace_idで探索中（回ベース）...${fastMode ? ' ⚡高速モード' : ''}</div>`;
-        try{ rsJraPlan = await buildJraRangePlanByKaisai(selVenues, runStart, end, prog); }
+        try{
+          rsJraPlan = await buildJraRangePlanByDates(selVenues, runStart, end, prog);
+          // 日付一覧が通信遮断で全く取得できない場合だけ旧回ベース探索へ退避する。
+          if(rsJraPlan && rsJraPlan.size === 0 && !rsJraPlan.reachable){
+            rsJraPlan = await buildJraRangePlanByKaisai(selVenues, runStart, end, prog);
+          }
+        }
         catch(e){ rsJraPlan = null; console.warn('[rsJraPlan] failed', e); }
         // v5.18.146: 回ベースplanが空(0件)のときの分岐を「到達できたか」で切り分ける。
         //  ・到達OKで0件 ＝ 選択場はこの期間に開催なし。空planを保持→全日スキップ。
@@ -12566,6 +12650,14 @@ if(horses.length === 0){
         rsRenderChart(rows);
       }
 
+      // v5.18.258: 指定期間内の各race_idを1レースとして集計し、
+      // 完了件数・KPI・表・JSONを同じ重複除去済み配列へ統一する。
+      rsNormalizeRowsInPlace(rows);
+      rsLastRows = rows;
+      try{ window.__rsLastRows = rows.slice(); }catch(e){}
+      rsRenderSummary(rows);
+      rsRenderTable(rows);
+      rsRenderChart(rows);
       const okCount = rows.filter(x => x.status === 'ok').length;
       // v5.18.146: JRAで到達OK・plan空(選択場が期間内に開催なし)＝全日スキップ。0レースの理由を明示する。
       if(kind === 'JRA' && rsJraPlan && rsJraPlan.size === 0 && okCount === 0 && !rsAbort){
@@ -12576,7 +12668,7 @@ if(horses.length === 0){
         // 「開催なし」と誤認させず実際のエラー内容を表示する。
         if(prog) prog.innerHTML = `<div class="url-status err">❌ 完了：0レース（${rsOpenVenuesFailCount}日すべてで開催場一覧の取得に失敗）。原因: ${asw_esc(rsLastOpenVenuesError || '不明')}<br><span style="font-size:11px;opacity:.85">🌉Userscriptブリッジが未接続の可能性があります。バッジに🌉マークが出ているか確認してください。</span></div>`;
       }else if(prog){
-        prog.innerHTML = `<div class="url-status ok">✅ 完了：${okCount}レースをシミュレーションしました${resume ? `（▶️リジューム：精算済み${rsSkipped}Rを再取得せずスキップ）` : ''}${rsAbort ? '（中断）' : ''}${truncated ? `（⚠️期間が${RS_MAX_DAYS}日を超えたため先頭${RS_MAX_DAYS}日のみ）` : ''}。</div>`;
+        prog.innerHTML = `<div class="url-status ok">✅ 完了：指定期間 ${start}〜${end} の ${okCount}レースをシミュレーションしました${resume ? `（▶️リジューム：精算済み${rsSkipped}Rを再取得せずスキップ）` : ''}${rsAbort ? '（中断）' : ''}。</div>`;
       }
     }catch(e){
       console.error('[runRangeVenueSimulation]', e);
@@ -12710,7 +12802,12 @@ if(horses.length === 0){
     let rsJraPlan = null;
     if(kind === 'JRA'){
       if(prog) prog.innerHTML = `<div class="url-status">🚄 一発モード：JRA開催回を先に探索中...</div>`;
-      try{ rsJraPlan = await buildJraRangePlanByKaisai(selVenues, dates[0], dates[dates.length - 1], prog); }
+      try{
+        rsJraPlan = await buildJraRangePlanByDates(selVenues, dates[0], dates[dates.length - 1], prog);
+        if(rsJraPlan && rsJraPlan.size === 0 && !rsJraPlan.reachable){
+          rsJraPlan = await buildJraRangePlanByKaisai(selVenues, dates[0], dates[dates.length - 1], prog);
+        }
+      }
       catch(e){ rsJraPlan = null; }
       if(rsJraPlan && rsJraPlan.size === 0 && !rsJraPlan.reachable) rsJraPlan = null;
     }
@@ -12780,11 +12877,15 @@ if(horses.length === 0){
     const rsResume = resume ? rsPrepareResume(start, end) : null; // v5.18.197
     if(resume && !rsResume) return;
     const runStart = resume ? rsResume.effStart : start;
-    const RS_MAX_DAYS = 400;
     const dates = [];
-    let cur = runStart, guard = 0;
-    while(cur <= end && guard < RS_MAX_DAYS){ dates.push(cur); cur = addLocalDaysYmd(cur, 1); guard++; }
-    const truncated = (cur <= end);
+    let cur = runStart;
+    while(cur <= end){
+      dates.push(cur);
+      const next = addLocalDaysYmd(cur, 1);
+      if(!next || next <= cur) break;
+      cur = next;
+    }
+    const truncated = false;
     const selVenues = rsSelectedVenueCodes();
     const recordToChart = $('rsRecord')?.checked;
     const todayForFast = (typeof todayYmd === 'function') ? todayYmd() : new Date().toISOString().slice(0,10);
@@ -12843,6 +12944,7 @@ if(horses.length === 0){
         // 通信ブロック回避の軽い休憩。通常モードより大幅短縮。
         if(i + chunkSize < tasks.length) await new Promise(r => setTimeout(r, kind === 'JRA' ? 70 : 120));
       }
+      rsNormalizeRowsInPlace(rows);
       rows.sort((a,b)=>(a.date+'|'+(a.venueCode||'')+'|'+String(a.no).padStart(2,'0')).localeCompare(b.date+'|'+(b.venueCode||'')+'|'+String(b.no).padStart(2,'0')));
       rsLastRows = rows; try{ window.__rsLastRows = rows.slice(); }catch(e){}
       rsRenderSummary(rows); rsRenderTable(rows); rsRenderChart(rows);
@@ -12850,8 +12952,8 @@ if(horses.length === 0){
       const newCount = Math.max(0, rows.length - baseLen);
       const sec = Math.max(1, Math.round((Date.now() - started) / 1000));
       if(prog) prog.innerHTML = resume
-        ? `<div class="url-status ok">✅ リジューム完了：新規${newCount}/${tasks.length}レースを${sec}秒で処理（精算済み${rsSkipped}Rはスキップ、累計OK ${okCount}R）${rsAbort ? '（中断）' : ''}${truncated ? `（⚠️先頭${RS_MAX_DAYS}日のみ）` : ''}。</div>`
-        : `<div class="url-status ok">✅ 一発モード完了：${okCount}/${tasks.length}レースを${sec}秒で処理しました${rsAbort ? '（中断）' : ''}${truncated ? `（⚠️先頭${RS_MAX_DAYS}日のみ）` : ''}。</div>`;
+        ? `<div class="url-status ok">✅ リジューム完了：指定期間 ${start}〜${end} の新規${newCount}/${tasks.length}レースを${sec}秒で処理（精算済み${rsSkipped}Rはスキップ、累計OK ${okCount}R）${rsAbort ? '（中断）' : ''}。</div>`
+        : `<div class="url-status ok">✅ 一発モード完了：指定期間 ${start}〜${end} の ${okCount}/${tasks.length}レースを${sec}秒で処理しました${rsAbort ? '（中断）' : ''}。</div>`;
     }catch(e){
       console.error('[runRangeVenueSimulationOneShot]', e);
       if(prog) prog.innerHTML = `<div class="url-status err">❌ 一発モード失敗: ${asw_esc((e && e.message) || e)}</div>`;
@@ -23404,7 +23506,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 /* v5.18.256 RangeSyncFix: 横2画面リアルタイム連動 */
 (function(){
   'use strict';
-  var V='v5.18.256 RangeSyncFix';
+  var V='v5.18.258 PeriodRaceUnitFix';
   function applyVersion(){
     window.APP_VERSION=V;
     var el=document.querySelector('.header .ver, .ver');

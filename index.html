@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.253 ProfitV22Format</title>
+<title>The競馬 EV分析 v5.18.254 LiveSplitBridge</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -588,6 +588,29 @@ body{
   }
 }
 
+/* v5.18.254 LiveSplitBridge: アプリ＋収支グラフv22 横2画面 */
+.profit-split-toggle{height:30px;padding:5px 9px;font-size:11px;white-space:nowrap}
+.profit-split-toggle.active{color:#03130b;border-color:rgba(0,230,118,.75);background:linear-gradient(135deg,#00c853,#00e676);box-shadow:var(--glow)}
+#profitLivePane{display:none;background:#07111d}
+.profit-live-bar{height:44px;flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 9px;border-bottom:1px solid rgba(0,230,118,.28);background:#101e31}
+.profit-live-title{min-width:0;display:flex;flex-direction:column}
+.profit-live-title b{font-size:12px;color:#d9ffe8;white-space:nowrap}
+.profit-live-title span{font-size:9px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.profit-live-actions{display:flex;align-items:center;gap:5px;flex:none}
+.profit-live-actions .btn-sm{padding:5px 7px;font-size:10px}
+#profitLiveFrame{display:block;width:100%;height:100%;border:0;background:#07111d;flex:1;min-height:0}
+body.profit-split-active{overflow:hidden}
+body.profit-split-active .header{position:fixed;left:0;right:0;top:0;z-index:40}
+body.profit-split-active .main{position:fixed;left:0;top:var(--profit-split-top,53px);bottom:0;width:50%;max-width:none;margin:0;padding:10px;overflow:auto;overscroll-behavior:contain}
+body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top:var(--profit-split-top,53px);bottom:0;width:50%;z-index:30;flex-direction:column;border-left:2px solid rgba(0,230,118,.35);box-shadow:-10px 0 28px rgba(0,0,0,.25)}
+@media(max-width:700px){
+  .profit-split-toggle{display:none!important}
+  body.profit-split-active{overflow:auto}
+  body.profit-split-active .header{position:sticky}
+  body.profit-split-active .main{position:static;width:auto;max-width:600px;margin:0 auto;padding:12px;overflow:visible}
+  body.profit-split-active #profitLivePane{display:none!important}
+}
+
 </style>
 </head>
 <body>
@@ -597,7 +620,8 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="ver">v5.18.253 ProfitV22Format</span>
+    <button id="profitSplitBtn" class="btn-sm profit-split-toggle" type="button" onclick="toggleProfitLiveSplit()" aria-pressed="false">📊 横2画面</button>
+    <span class="ver">v5.18.254 LiveSplitBridge</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1579,6 +1603,21 @@ body{
   </div>
 
 </div>
+
+<aside id="profitLivePane" aria-hidden="true">
+  <div class="profit-live-bar">
+    <div class="profit-live-title">
+      <b>📈 収支グラフ v22・リアルタイム連動</b>
+      <span id="profitLiveStatus">待機中</span>
+    </div>
+    <div class="profit-live-actions">
+      <button class="btn-sm" type="button" onclick="refreshProfitLiveGraph()" title="グラフを更新">↻ 更新</button>
+      <a class="btn-sm" href="https://yamase-takiyoshi.github.io/takuya/keiba_profit_spec_chart_switcher_candle_v22.html?src=bridge" target="_blank" rel="noopener" style="text-decoration:none" title="別画面で開く">↗</a>
+      <button class="btn-sm" type="button" onclick="setProfitLiveSplit(false)" title="横2画面を閉じる">×</button>
+    </div>
+  </div>
+  <iframe id="profitLiveFrame" title="収支分析グラフ v22" loading="eager" allow="clipboard-read; clipboard-write"></iframe>
+</aside>
 
 <script>
 // ============================================================
@@ -23136,10 +23175,186 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 </script>
 
 <script>
-/* v5.18.253 ProfitV22Format: 買い目統計JSONを収支グラフv22形式で出力 */
+/* v5.18.254 LiveSplitBridge: PC・タブレット用 横2画面＋リアルタイム収支連動 */
 (function(){
   'use strict';
-  var V='v5.18.253 ProfitV22Format';
+  var SPLIT_STATE_KEY='tk-profit-live-split-v1';
+  var BRIDGE_KEY='keibaProfitGraphBridge_v1';
+  var LIVE_FILE_NAME='The競馬_EV分析_リアルタイム.json';
+  var LIVE_URL='https://yamase-takiyoshi.github.io/takuya/keiba_profit_spec_chart_switcher_candle_v22.html?src=bridge&embed=1';
+  var syncTimer=0;
+  var resizeTimer=0;
+
+  function byId(id){return document.getElementById(id)}
+  function isPhoneDevice(){
+    var ua=String(navigator.userAgent||'');
+    var ipad=/iPad/i.test(ua)||(/Macintosh/i.test(ua)&&Number(navigator.maxTouchPoints||0)>1);
+    if(ipad) return false;
+    if(/iPhone|iPod/i.test(ua)) return true;
+    var shortSide=Math.min(Number(screen.width||9999),Number(screen.height||9999));
+    if(/Android/i.test(ua)&&/Mobile/i.test(ua)) return shortSide<=600;
+    return /Mobile/i.test(ua)&&shortSide<=600;
+  }
+  function splitActive(){return document.body.classList.contains('profit-split-active')}
+  function setStatus(text){var el=byId('profitLiveStatus');if(el)el.textContent=text||''}
+  function updateTop(){
+    var h=document.querySelector('.header');
+    var px=h?Math.ceil(h.getBoundingClientRect().height):53;
+    document.documentElement.style.setProperty('--profit-split-top',px+'px');
+  }
+  function updateButton(on){
+    var btn=byId('profitSplitBtn');
+    if(!btn)return;
+    btn.classList.toggle('active',!!on);
+    btn.setAttribute('aria-pressed',on?'true':'false');
+    btn.textContent=on?'📊 2画面ON':'📊 横2画面';
+  }
+  function buildLiveSnapshot(){
+    var snap=null;
+    try{
+      if(typeof buildSimBetStatsJSONSnapshot==='function') snap=buildSimBetStatsJSONSnapshot();
+    }catch(e){}
+    if(!snap||!Array.isArray(snap.収支明細)||!snap.収支明細.length){
+      try{if(typeof buildProfitGraphJSONSnapshot==='function')snap=buildProfitGraphJSONSnapshot()}catch(e){}
+    }
+    return snap;
+  }
+  function writeBridge(){
+    var snap=buildLiveSnapshot();
+    if(!snap||!Array.isArray(snap.収支明細)){
+      setStatus('収支データ待機中');
+      return null;
+    }
+    var payload={savedAt:new Date().toISOString(),fileName:LIVE_FILE_NAME,data:snap,live:true};
+    try{localStorage.setItem(BRIDGE_KEY,JSON.stringify(payload))}
+    catch(e){
+      setStatus(e&&(e.name==='QuotaExceededError'||e.code===22)?'データ量が大きく送信できません':'送信エラー: '+((e&&e.message)||e));
+      return null;
+    }
+    return {payload:payload,count:snap.収支明細.length};
+  }
+  function applyEmbeddedGraphStyle(){
+    var frame=byId('profitLiveFrame');
+    try{
+      var doc=frame&&frame.contentDocument;
+      if(!doc||!doc.head)return false;
+      var style=doc.getElementById('tkProfitSplitEmbedStyle');
+      if(!style){style=doc.createElement('style');style.id='tkProfitSplitEmbedStyle';doc.head.appendChild(style)}
+      style.textContent='.hero{display:none!important}.app{max-width:none!important;padding:6px!important}.grid{display:block!important}.grid>aside.panel{display:none!important}.grid>main.panel{padding:8px!important;border:0!important;border-radius:0!important;box-shadow:none!important}.chart-wrap{height:340px!important}@media(max-width:920px){.layout{grid-template-columns:1fr!important}.kpis{grid-template-columns:repeat(3,1fr)!important}}';
+      return true;
+    }catch(e){return false}
+  }
+  function deliverToFrame(forceLoad){
+    var sent=writeBridge();
+    var frame=byId('profitLiveFrame');
+    if(!frame||!splitActive())return sent;
+    var current=frame.getAttribute('src')||'';
+    if(forceLoad||!current||current==='about:blank'){
+      frame.src=LIVE_URL;
+      setStatus(sent?'グラフへ接続中…':'収支データ待機中');
+      return sent;
+    }
+    var loaded=false;
+    try{
+      applyEmbeddedGraphStyle();
+      if(frame.contentWindow&&typeof frame.contentWindow.loadBridgeData==='function'){
+        frame.contentWindow.loadBridgeData(true);
+        loaded=true;
+      }
+    }catch(e){}
+    try{
+      var targetOrigin=new URL(LIVE_URL,location.href).origin;
+      if(frame.contentWindow)frame.contentWindow.postMessage({type:'keibaProfitGraphBridgeUpdate',key:BRIDGE_KEY,payload:sent&&sent.payload},targetOrigin);
+    }catch(e){}
+    if(sent)setStatus((loaded?'リアルタイム更新':'データ送信')+' '+sent.count.toLocaleString()+'件 / '+new Date().toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit'}));
+    return sent;
+  }
+  window.scheduleProfitLiveSync=function(){
+    if(!splitActive()||isPhoneDevice())return;
+    clearTimeout(syncTimer);
+    syncTimer=setTimeout(function(){deliverToFrame(false)},700);
+  };
+  window.refreshProfitLiveGraph=function(){
+    if(isPhoneDevice()){window.setProfitLiveSplit(false);return}
+    deliverToFrame(false);
+  };
+  window.setProfitLiveSplit=function(on,opts){
+    opts=opts||{};
+    on=!!on&&!isPhoneDevice();
+    document.body.classList.toggle('profit-split-active',on);
+    var pane=byId('profitLivePane');
+    if(pane)pane.setAttribute('aria-hidden',on?'false':'true');
+    updateButton(on);
+    updateTop();
+    if(opts.persist!==false){try{localStorage.setItem(SPLIT_STATE_KEY,on?'1':'0')}catch(e){}}
+    var frame=byId('profitLiveFrame');
+    if(on){
+      deliverToFrame(true);
+    }else{
+      clearTimeout(syncTimer);
+      setStatus(isPhoneDevice()?'スマートフォンでは自動OFF':'横2画面OFF');
+      if(frame)frame.src='about:blank';
+    }
+    return on;
+  };
+  window.toggleProfitLiveSplit=function(){return window.setProfitLiveSplit(!splitActive())};
+
+  function installRealtimeHooks(){
+    var prevSave=window.saveSimHistory;
+    if(typeof prevSave==='function'&&!prevSave.__profitLiveWrapped){
+      var wrappedSave=function(){var out=prevSave.apply(this,arguments);window.scheduleProfitLiveSync();return out};
+      wrappedSave.__profitLiveWrapped=true;
+      window.saveSimHistory=wrappedSave;
+      try{saveSimHistory=wrappedSave}catch(e){}
+    }
+    var prevRecord=window.recordProfit;
+    if(typeof prevRecord==='function'&&!prevRecord.__profitLiveWrapped){
+      var wrappedRecord=function(){var out=prevRecord.apply(this,arguments);window.scheduleProfitLiveSync();return out};
+      wrappedRecord.__profitLiveWrapped=true;
+      window.recordProfit=wrappedRecord;
+      try{recordProfit=wrappedRecord}catch(e){}
+    }
+    var prevRender=window.renderSimProfitChart;
+    if(typeof prevRender==='function'&&!prevRender.__profitLiveWrapped){
+      var wrappedRender=function(){var out=prevRender.apply(this,arguments);window.scheduleProfitLiveSync();return out};
+      wrappedRender.__profitLiveWrapped=true;
+      window.renderSimProfitChart=wrappedRender;
+      try{renderSimProfitChart=wrappedRender}catch(e){}
+    }
+  }
+  function enforceDeviceRule(){
+    var phone=isPhoneDevice();
+    var btn=byId('profitSplitBtn');
+    if(btn)btn.style.display=phone?'none':'';
+    if(phone&&splitActive())window.setProfitLiveSplit(false);
+    updateTop();
+  }
+  function init(){
+    installRealtimeHooks();
+    var frame=byId('profitLiveFrame');
+    if(frame)frame.addEventListener('load',function(){
+      if(!splitActive()||frame.getAttribute('src')==='about:blank')return;
+      applyEmbeddedGraphStyle();
+      deliverToFrame(false);
+    });
+    enforceDeviceRule();
+    var restore=false;
+    try{restore=localStorage.getItem(SPLIT_STATE_KEY)==='1'}catch(e){}
+    if(restore&&!isPhoneDevice())window.setProfitLiveSplit(true,{persist:false});
+    else updateButton(false);
+    window.addEventListener('resize',function(){clearTimeout(resizeTimer);resizeTimer=setTimeout(enforceDeviceRule,180)});
+    window.addEventListener('orientationchange',function(){setTimeout(enforceDeviceRule,250)});
+    document.addEventListener('visibilitychange',function(){if(!document.hidden&&splitActive())window.scheduleProfitLiveSync()});
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
+})();
+</script>
+
+<script>
+/* v5.18.254 LiveSplitBridge: 横2画面リアルタイム連動 */
+(function(){
+  'use strict';
+  var V='v5.18.254 LiveSplitBridge';
   function applyVersion(){
     window.APP_VERSION=V;
     var el=document.querySelector('.header .ver, .ver');

@@ -925,13 +925,33 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
             <input type="number" id="pgBtPointAmount" min="100" step="100" value="100" inputmode="numeric">
           </div>
         </div>
+        <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;margin:0 0 8px;cursor:pointer;user-select:none">
+          <input type="checkbox" id="pgBtSkipDebut" checked style="width:18px;height:18px;accent-color:#f59e0b;margin-top:1px">
+          <span><b>新馬戦を見送る</b><br><span style="font-size:11px;color:var(--muted)">新馬・メイクデビュー・地方の主なデビュー競走を購入対象から外し、後半レースへ日次予算を残します。</span></span>
+        </label>
+        <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;margin:0 0 8px;cursor:pointer;user-select:none">
+          <input type="checkbox" id="pgBtReserveMain" checked style="width:18px;height:18px;accent-color:#f59e0b;margin-top:1px">
+          <span><b>メインR用の予算を確保する</b><br><span style="font-size:11px;color:var(--muted)">各開催場の指定Rが来るまで前半の利用可能額を減らします。メインも予想条件未達なら見送ります。</span></span>
+        </label>
+        <div class="reserve-grid" style="margin-bottom:8px">
+          <div class="field" style="margin-bottom:0">
+            <label>メインとして扱うR</label>
+            <select id="pgBtMainRaceNo">
+              <option value="9">9R</option><option value="10">10R</option><option value="11" selected>11R</option><option value="12">12R</option>
+            </select>
+          </div>
+          <div class="field" style="margin-bottom:0">
+            <label>1開催場あたりの確保額</label>
+            <input type="number" id="pgBtMainReserve" min="100" step="100" value="300" inputmode="numeric">
+          </div>
+        </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-primary" id="pgBtRunBtn" type="button" style="width:auto;flex:1;min-width:210px;background:#f59e0b;border-color:#fbbf24;color:#111827" onclick="runPurchaseGuardBacktest(event)">期間を取得してバックテスト</button>
           <button class="btn-sm" id="pgBtRecalcBtn" type="button" onclick="recalculatePurchaseGuardBacktest(event)">現在結果で再計算</button>
           <button class="btn-sm" id="pgBtCopyBtn" type="button" onclick="copyPurchaseGuardBacktest(event)" disabled>結果コピー</button>
         </div>
         <div style="font-size:11px;color:var(--muted);line-height:1.6;margin-top:7px">
-          期間横断と同じ予想条件で過去レースを取得し、EV順の最大3点を指定額へ統一します。日次残額が足りないレースは全点見送り、払戻を100円単位で再計算します。「現在結果で再計算」は通信せず、表示済み・JSON読込済みの明細を使います。
+          期間横断と同じ予想条件で過去レースを取得し、EV順の最大3点を指定額へ統一します。前半では後続のメインR数×確保額を差し引き、メイン通過後に未使用分を解放します。日次残額が足りないレースは全点見送り、払戻を100円単位で再計算します。
         </div>
         <div id="pgBtStatus" style="margin-top:8px"></div>
         <div id="pgBtSummary" style="margin-top:8px"></div>
@@ -1085,6 +1105,26 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
           <div class="field" style="margin-bottom:0">
             <label>1点の購入額</label>
             <input type="number" id="swPointAmount" min="100" step="100" value="100" inputmode="numeric">
+          </div>
+        </div>
+        <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;margin:2px 0 7px;cursor:pointer;user-select:none">
+          <input type="checkbox" id="swSkipDebut" checked style="width:18px;height:18px;accent-color:#f59e0b;margin-top:1px">
+          <span><b>新馬戦を見送る</b><br><span style="font-size:11px;color:var(--muted)">新馬・メイクデビュー・地方の主なデビュー競走は予算を使わず見送ります。</span></span>
+        </label>
+        <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;margin:2px 0 7px;cursor:pointer;user-select:none">
+          <input type="checkbox" id="swReserveMain" checked style="width:18px;height:18px;accent-color:#f59e0b;margin-top:1px">
+          <span><b>メインR用の予算を確保する</b><br><span style="font-size:11px;color:var(--muted)">各開催場の指定Rまで確保額を温存します。メインもEV条件未達なら見送ります。</span></span>
+        </label>
+        <div class="reserve-grid" style="margin-bottom:7px">
+          <div class="field" style="margin-bottom:0">
+            <label>メインとして扱うR</label>
+            <select id="swMainRaceNo">
+              <option value="9">9R</option><option value="10">10R</option><option value="11" selected>11R</option><option value="12">12R</option>
+            </select>
+          </div>
+          <div class="field" style="margin-bottom:0">
+            <label>1開催場あたりの確保額</label>
+            <input type="number" id="swMainReserve" min="100" step="100" value="300" inputmode="numeric">
           </div>
         </div>
         <div id="swGuardUsage" style="font-size:11px;line-height:1.6;color:#fde68a">本日の使用額を確認中…</div>
@@ -22141,7 +22181,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.274 PurchaseGuard';
+  var VERSION = 'v5.18.277 MainRaceReserve';
   var KEY = 'tk-sim-reservations-v1';
   var IMMEDIATE_KEY = 'tk-sweep-immediate-all-v1';
   var GUARD_KEY = 'tk-sweep-purchase-guard-v1';
@@ -22222,22 +22262,37 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     try{ raw = JSON.parse(localStorage.getItem(GUARD_KEY) || '{}') || {}; }catch(e){}
     return {
       dailyLimit: Math.max(100, Number(raw.dailyLimit || 2000)),
-      pointAmount: Math.max(100, Number(raw.pointAmount || 100))
+      pointAmount: Math.max(100, Number(raw.pointAmount || 100)),
+      skipDebut: raw.skipDebut !== false,
+      reserveMain: raw.reserveMain !== false,
+      mainRaceNo: [9,10,11,12].indexOf(Number(raw.mainRaceNo)) >= 0 ? Number(raw.mainRaceNo) : 11,
+      mainReserve: Math.max(100, Number(raw.mainReserve || 300))
     };
   }
   function guardConfig(){
     var stored = loadGuard();
     var daily = Number(($('swDailyLimit') && $('swDailyLimit').value) || stored.dailyLimit);
     var point = Number(($('swPointAmount') && $('swPointAmount').value) || stored.pointAmount);
+    var skipDebut = $('swSkipDebut') ? !!$('swSkipDebut').checked : stored.skipDebut;
+    var reserveMain = $('swReserveMain') ? !!$('swReserveMain').checked : stored.reserveMain;
+    var mainRaceNo = Number(($('swMainRaceNo') && $('swMainRaceNo').value) || stored.mainRaceNo);
+    var mainReserve = Number(($('swMainReserve') && $('swMainReserve').value) || stored.mainReserve);
     daily = Math.max(100, Math.floor((isFinite(daily) ? daily : 2000) / 100) * 100);
     point = Math.max(100, Math.floor((isFinite(point) ? point : 100) / 100) * 100);
-    return { dailyLimit:daily, pointAmount:point, maxPoints:MAX_POINTS };
+    if([9,10,11,12].indexOf(mainRaceNo) < 0) mainRaceNo = 11;
+    mainReserve = Math.max(100, Math.floor((isFinite(mainReserve) ? mainReserve : point*MAX_POINTS) / 100) * 100);
+    mainReserve = Math.min(mainReserve, point*MAX_POINTS, daily);
+    return { dailyLimit:daily, pointAmount:point, maxPoints:MAX_POINTS, skipDebut:skipDebut, reserveMain:reserveMain, mainRaceNo:mainRaceNo, mainReserve:mainReserve };
   }
   function persistGuard(){
     var cfg = guardConfig();
     try{ localStorage.setItem(GUARD_KEY, JSON.stringify(cfg)); }catch(e){}
     if($('swDailyLimit')) $('swDailyLimit').value = cfg.dailyLimit;
     if($('swPointAmount')) $('swPointAmount').value = cfg.pointAmount;
+    if($('swSkipDebut')) $('swSkipDebut').checked = cfg.skipDebut;
+    if($('swReserveMain')) $('swReserveMain').checked = cfg.reserveMain;
+    if($('swMainRaceNo')) $('swMainRaceNo').value = cfg.mainRaceNo;
+    if($('swMainReserve')) $('swMainReserve').value = cfg.mainReserve;
     refreshGuardUsage(load());
     return cfg;
   }
@@ -22248,8 +22303,29 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       return sum + Math.max(0, Number(r.total || r.tickets.reduce(function(s,t){ return s + Number(t.amount || 0); }, 0)) || 0);
     }, 0);
   }
+  function isDebutRaceName(name){
+    return /(新馬|メイクデビュー|フレッシュチャレンジ|ファーストステップ|ドリームチャレンジ|スパーキングデビュー|リアトリスデビュー|ハイビスカスデビュー|ライラックデビュー|ローズデビュー)/.test(String(name || ''));
+  }
+  function raceNoOf(rec){
+    var m=String((rec && (rec.raceNo || rec.no)) || '').match(/\d{1,2}/);
+    return m ? Number(m[0]) : Number(String((rec && rec.raceId) || '').slice(-2)) || 0;
+  }
+  function isMainRace(rec,cfg){ return raceNoOf(rec) === Number(cfg.mainRaceNo || 11); }
+  function pendingMainReserve(rec,list,cfg){
+    if(!cfg.reserveMain) return {count:0,amount:0};
+    var seen={},count=0;
+    (list || []).forEach(function(r){
+      if(!r || String(r.date || '')!==String(rec.date || '') || String(r.id || '')===String(rec.id || '') || r.done || r.prepared || !isMainRace(r,cfg)) return;
+      var key=String(r.raceId || r.id || (r.venue+'|'+raceNoOf(r)));
+      if(seen[key]) return; seen[key]=1; count++;
+    });
+    return {count:count,amount:count*cfg.mainReserve};
+  }
   function applyPurchaseGuard(rec, tickets, list){
     var cfg = guardConfig();
+    if(cfg.skipDebut && isDebutRaceName(rec && rec.raceName)){
+      return {tickets:[], total:0, reason:'新馬戦見送り設定', skipType:'debut', used:dailyUsed(rec.date,list,rec.id), cfg:cfg};
+    }
     var ranked = (tickets || []).map(function(t, i){
       return {
         type:String(t.type || ''), nums:Array.isArray(t.nums) ? t.nums.map(Number).filter(Boolean) : [],
@@ -22262,11 +22338,15 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     if(!ranked.length) return {tickets:[], total:0, reason:'予想条件未達（購入0点）', used:dailyUsed(rec.date,list,rec.id), cfg:cfg};
     var total = ranked.length * cfg.pointAmount;
     var used = dailyUsed(rec.date, list, rec.id);
-    var remaining = Math.max(0, cfg.dailyLimit - used);
+    var hold = pendingMainReserve(rec,list,cfg);
+    var remaining = Math.max(0, cfg.dailyLimit - used - hold.amount);
     if(total > remaining){
-      return {tickets:[], total:0, reason:'日次上限まで残り'+yen(remaining)+'円のためレース単位で見送り', used:used, cfg:cfg};
+      var reason = hold.amount > 0 && total <= Math.max(0,cfg.dailyLimit-used)
+        ? '後続メイン'+hold.count+'R用'+yen(hold.amount)+'円を確保するため見送り'
+        : '日次上限まで利用可能'+yen(remaining)+'円のためレース単位で見送り';
+      return {tickets:[], total:0, reason:reason, skipType:hold.amount>0?'mainReserve':'cap', used:used, reserved:hold.amount, cfg:cfg};
     }
-    return {tickets:ranked, total:total, reason:'', used:used, cfg:cfg};
+    return {tickets:ranked, total:total, reason:'', used:used, reserved:hold.amount, cfg:cfg};
   }
   function refreshGuardUsage(list, date){
     var el = $('swGuardUsage'); if(!el) return;
@@ -22274,7 +22354,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     var target = date || (($('swDate') && $('swDate').value) || todayStr());
     var used = dailyUsed(target, Array.isArray(list) ? list : load(), '');
     var remain = Math.max(0, cfg.dailyLimit-used);
-    el.innerHTML = esc(target)+'：使用 <b>'+yen(used)+'円</b> ／ 上限 <b>'+yen(cfg.dailyLimit)+'円</b> ／ 残り <b>'+yen(remain)+'円</b>　<span style="color:var(--muted)">最大3点・1点'+yen(cfg.pointAmount)+'円</span>';
+    el.innerHTML = esc(target)+'：使用 <b>'+yen(used)+'円</b> ／ 上限 <b>'+yen(cfg.dailyLimit)+'円</b> ／ 残り <b>'+yen(remain)+'円</b>　<span style="color:var(--muted)">最大3点・1点'+yen(cfg.pointAmount)+'円'+(cfg.skipDebut?'・新馬見送りON':'')+(cfg.reserveMain?'・'+cfg.mainRaceNo+'R用'+yen(cfg.mainReserve)+'円/場を確保':'')+'</span>';
   }
   window.swRefreshGuardUsage = function(){ refreshGuardUsage(load()); };
 
@@ -22473,7 +22553,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         setStatus('⏳ '+esc(labelOf(rec))+' の買い目を確認中…', true);
         try{
           var res = await prepRace(rec);
-          var guarded = applyPurchaseGuard(rec, res.tickets, load());
+          var guarded = applyPurchaseGuard(Object.assign({},rec,{raceName:res.raceName||rec.raceName}), res.tickets, load());
           var tot = guarded.total;
           if(!guarded.tickets.length || tot<=0){
             removeRec(rec.id);
@@ -22487,7 +22567,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
               if(res.raceName) r.raceName=res.raceName;
               r.verifiedAt=new Date().toISOString();
               r.unverifiedRaceId=false;
-              r.purchaseGuard={dailyLimit:guarded.cfg.dailyLimit,pointAmount:guarded.cfg.pointAmount,maxPoints:MAX_POINTS};
+              r.purchaseGuard={dailyLimit:guarded.cfg.dailyLimit,pointAmount:guarded.cfg.pointAmount,maxPoints:MAX_POINTS,skipDebut:guarded.cfg.skipDebut,reserveMain:guarded.cfg.reserveMain,mainRaceNo:guarded.cfg.mainRaceNo,mainReserve:guarded.cfg.mainReserve};
             });
             reRender(); beep();
             setStatus('✅ '+esc(labelOf(rec))+'：'+esc(res.modeLabel || res.mode || '')+'の予想結果 '+guarded.tickets.length+'点 / '+yen(tot)+'円 を予約しました。🎫を開いて金額確認のうえ購入してください。', true);
@@ -22576,7 +22656,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     var noBet=0, prepFailed=0, rangeCandidates=0, directCandidates=0;
     var directSuccess=0, rangeSuccess=0, normalSuccess=0, failedVenues=0;
     var immediateCandidates=[];
-    var diag=['取得経路: '+transport.label,'基準日時: '+new Date(now).toLocaleString('ja-JP'),'予想モード: '+selectedModeLabel(selectedModeKey()),'購入ガード: 1日'+yen(cfg.dailyLimit)+'円／1点'+yen(cfg.pointAmount)+'円／最大3点／不足時は見送り'];
+    var diag=['取得経路: '+transport.label,'基準日時: '+new Date(now).toLocaleString('ja-JP'),'予想モード: '+selectedModeLabel(selectedModeKey()),'購入ガード: 1日'+yen(cfg.dailyLimit)+'円／1点'+yen(cfg.pointAmount)+'円／最大3点／不足時は見送り'+(cfg.skipDebut?'／新馬戦見送り':'')+(cfg.reserveMain?'／各場'+cfg.mainRaceNo+'R用'+yen(cfg.mainReserve)+'円確保':'')];
     if(staleRemoved) diag.push('旧版の未確認・失敗予約を削除: '+staleRemoved+'R');
     setDiag(diag);
     var purchaseMode = selectedModeKey(), purchaseModeLabel = selectedModeLabel(purchaseMode);
@@ -22609,7 +22689,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         }
         keepPrepared.tickets=keepGuard.tickets;
         keepPrepared.total=keepGuard.total;
-        keepPrepared.purchaseGuard={dailyLimit:keepGuard.cfg.dailyLimit,pointAmount:keepGuard.cfg.pointAmount,maxPoints:MAX_POINTS};
+        keepPrepared.purchaseGuard={dailyLimit:keepGuard.cfg.dailyLimit,pointAmount:keepGuard.cfg.pointAmount,maxPoints:MAX_POINTS,skipDebut:keepGuard.cfg.skipDebut,reserveMain:keepGuard.cfg.reserveMain,mainRaceNo:keepGuard.cfg.mainRaceNo,mainReserve:keepGuard.cfg.mainReserve};
         keepPrepared.unverifiedRaceId=false;
         keepPrepared.prepError='';
         list.push(keepPrepared);
@@ -22683,12 +22763,17 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         await sleep(120);
       }
 
+      immediateCandidates.sort(function(a,b){
+        var pa=postMs(a),pb=postMs(b);
+        if(pa!==pb && isFinite(pa) && isFinite(pb)) return pa-pb;
+        return (raceNoOf(a)-raceNoOf(b)) || String(a.venue||'').localeCompare(String(b.venue||''));
+      });
       for(var pi=0; pi<immediateCandidates.length; pi++){
         var rec=immediateCandidates[pi];
         setStatus('🔎 '+esc(labelOf(rec))+' を確認中…（'+(pi+1)+'/'+immediateCandidates.length+'）', true);
         try{
           var res=await prepRace(rec);
-          var guarded=applyPurchaseGuard(rec,res.tickets,list);
+          var guarded=applyPurchaseGuard(Object.assign({},rec,{raceName:res.raceName||rec.raceName}),res.tickets,list.concat(immediateCandidates.slice(pi)));
           var tot=guarded.total;
           if(!guarded.tickets.length || tot<=0){
             noBet++;
@@ -22703,7 +22788,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
             rec.raceName=res.raceName || rec.raceName;
             rec.unverifiedRaceId=false;
             rec.verifiedAt=new Date().toISOString();
-            rec.purchaseGuard={dailyLimit:guarded.cfg.dailyLimit,pointAmount:guarded.cfg.pointAmount,maxPoints:MAX_POINTS};
+            rec.purchaseGuard={dailyLimit:guarded.cfg.dailyLimit,pointAmount:guarded.cfg.pointAmount,maxPoints:MAX_POINTS,skipDebut:guarded.cfg.skipDebut,reserveMain:guarded.cfg.reserveMain,mainRaceNo:guarded.cfg.mainRaceNo,mainReserve:guarded.cfg.mainReserve};
             list.push(rec);
             preparedSuccess++;
             if(rec.fallbackDirect) directSuccess++;
@@ -22800,7 +22885,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     var guard=loadGuard();
     if($('swDailyLimit')) $('swDailyLimit').value=guard.dailyLimit;
     if($('swPointAmount')) $('swPointAmount').value=guard.pointAmount;
-    ['swDailyLimit','swPointAmount'].forEach(function(id){ var el=$(id); if(el) el.addEventListener('change',persistGuard); });
+    if($('swSkipDebut')) $('swSkipDebut').checked=guard.skipDebut;
+    if($('swReserveMain')) $('swReserveMain').checked=guard.reserveMain;
+    if($('swMainRaceNo')) $('swMainRaceNo').value=guard.mainRaceNo;
+    if($('swMainReserve')) $('swMainReserve').value=guard.mainReserve;
+    ['swDailyLimit','swPointAmount','swSkipDebut','swReserveMain','swMainRaceNo','swMainReserve'].forEach(function(id){ var el=$(id); if(el) el.addEventListener('change',persistGuard); });
     var ia = $('swImmediateAll');
     if(ia){
       ia.checked = localStorage.getItem(IMMEDIATE_KEY) === '1';
@@ -24570,7 +24659,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 /* v5.18.256 RangeSyncFix: 横2画面リアルタイム連動 */
 (function(){
   'use strict';
-  var V='v5.18.275 PurchaseGuardBT';
+  var V='v5.18.277 MainRaceReserve';
   function applyVersion(){
     window.APP_VERSION=V;
     var el=document.querySelector('.header .ver, .ver');
@@ -24708,7 +24797,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 </script>
 
 <script>
-/* v5.18.275 PurchaseGuardBacktest */
+/* v5.18.277 PurchaseGuardBacktest + MainRaceReserve */
 (function(){
   'use strict';
   var GUARD_KEY='tk-sweep-purchase-guard-v1';
@@ -24721,27 +24810,46 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   function cleanMoney(v,def){var x=n(v)||def;return Math.max(100,Math.floor(x/100)*100)}
   function readGuard(){
     var x={};try{x=JSON.parse(localStorage.getItem(GUARD_KEY)||'{}')||{}}catch(e){}
-    return {dailyLimit:cleanMoney(x.dailyLimit,2000),pointAmount:cleanMoney(x.pointAmount,100),maxPoints:MAX_POINTS};
+    return {dailyLimit:cleanMoney(x.dailyLimit,2000),pointAmount:cleanMoney(x.pointAmount,100),maxPoints:MAX_POINTS,skipDebut:x.skipDebut!==false,reserveMain:x.reserveMain!==false,mainRaceNo:[9,10,11,12].indexOf(n(x.mainRaceNo))>=0?n(x.mainRaceNo):11,mainReserve:cleanMoney(x.mainReserve,300)};
   }
   function configFromFields(){
     var old=readGuard();
+    var daily=cleanMoney($('pgBtDailyLimit')&&$('pgBtDailyLimit').value,old.dailyLimit);
+    var point=cleanMoney($('pgBtPointAmount')&&$('pgBtPointAmount').value,old.pointAmount);
+    var mainNo=n($('pgBtMainRaceNo')&&$('pgBtMainRaceNo').value)||old.mainRaceNo;
+    if([9,10,11,12].indexOf(mainNo)<0)mainNo=11;
+    var mainReserve=Math.min(cleanMoney($('pgBtMainReserve')&&$('pgBtMainReserve').value,old.mainReserve),point*MAX_POINTS,daily);
     return {
-      dailyLimit:cleanMoney($('pgBtDailyLimit')&&$('pgBtDailyLimit').value,old.dailyLimit),
-      pointAmount:cleanMoney($('pgBtPointAmount')&&$('pgBtPointAmount').value,old.pointAmount),
-      maxPoints:MAX_POINTS
+      dailyLimit:daily,
+      pointAmount:point,
+      maxPoints:MAX_POINTS,
+      skipDebut:$('pgBtSkipDebut')?!!$('pgBtSkipDebut').checked:old.skipDebut,
+      reserveMain:$('pgBtReserveMain')?!!$('pgBtReserveMain').checked:old.reserveMain,
+      mainRaceNo:mainNo,
+      mainReserve:mainReserve
     };
   }
   function applyConfig(cfg){
     try{localStorage.setItem(GUARD_KEY,JSON.stringify(cfg))}catch(e){}
     [['pgBtDailyLimit',cfg.dailyLimit],['pgBtPointAmount',cfg.pointAmount],['swDailyLimit',cfg.dailyLimit],['swPointAmount',cfg.pointAmount]].forEach(function(x){var el=$(x[0]);if(el)el.value=x[1]});
+    [['pgBtSkipDebut',cfg.skipDebut],['swSkipDebut',cfg.skipDebut]].forEach(function(x){var el=$(x[0]);if(el)el.checked=x[1]});
+    [['pgBtReserveMain',cfg.reserveMain],['swReserveMain',cfg.reserveMain]].forEach(function(x){var el=$(x[0]);if(el)el.checked=x[1]});
+    [['pgBtMainRaceNo',cfg.mainRaceNo],['swMainRaceNo',cfg.mainRaceNo],['pgBtMainReserve',cfg.mainReserve],['swMainReserve',cfg.mainReserve]].forEach(function(x){var el=$(x[0]);if(el)el.value=x[1]});
     try{if(typeof window.swRefreshGuardUsage==='function')window.swRefreshGuardUsage()}catch(e){}
     return cfg;
   }
   function syncFromPurchaseGuard(){
     var old=readGuard(),sd=$('swDailyLimit'),sp=$('swPointAmount');
-    var cfg={dailyLimit:cleanMoney(sd&&sd.value,old.dailyLimit),pointAmount:cleanMoney(sp&&sp.value,old.pointAmount),maxPoints:MAX_POINTS};
+    var ss=$('swSkipDebut'),sm=$('swReserveMain'),mn=n($('swMainRaceNo')&&$('swMainRaceNo').value)||old.mainRaceNo;
+    var daily=cleanMoney(sd&&sd.value,old.dailyLimit),point=cleanMoney(sp&&sp.value,old.pointAmount);
+    var mr=Math.min(cleanMoney($('swMainReserve')&&$('swMainReserve').value,old.mainReserve),point*MAX_POINTS,daily);
+    var cfg={dailyLimit:daily,pointAmount:point,maxPoints:MAX_POINTS,skipDebut:ss?!!ss.checked:old.skipDebut,reserveMain:sm?!!sm.checked:old.reserveMain,mainRaceNo:[9,10,11,12].indexOf(mn)>=0?mn:11,mainReserve:mr};
     if($('pgBtDailyLimit'))$('pgBtDailyLimit').value=cfg.dailyLimit;
     if($('pgBtPointAmount'))$('pgBtPointAmount').value=cfg.pointAmount;
+    if($('pgBtSkipDebut'))$('pgBtSkipDebut').checked=cfg.skipDebut;
+    if($('pgBtReserveMain'))$('pgBtReserveMain').checked=cfg.reserveMain;
+    if($('pgBtMainRaceNo'))$('pgBtMainRaceNo').value=cfg.mainRaceNo;
+    if($('pgBtMainReserve'))$('pgBtMainReserve').value=cfg.mainReserve;
   }
   function setStatus(text,ok){var el=$('pgBtStatus');if(el)el.innerHTML='<div class="url-status '+(ok?'ok':'err')+'">'+text+'</div>'}
   function comboText(v){return Array.isArray(v)?v.join('-'):String(v||'')}
@@ -24761,18 +24869,31 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     }).filter(function(d){return d.type&&d.combo&&d.originalBet>0});
   }
   function raceSort(a,b){
-    var ak=String(a.date||'')+'|'+String(a.venueCode||a.venueName||'')+'|'+String(a.no||0).padStart(2,'0');
-    var bk=String(b.date||'')+'|'+String(b.venueCode||b.venueName||'')+'|'+String(b.no||0).padStart(2,'0');
+    var ak=String(a.date||'')+'|'+String(a.postTime||String(a.no||0).padStart(2,'0'))+'|'+String(a.venueCode||a.venueName||'');
+    var bk=String(b.date||'')+'|'+String(b.postTime||String(b.no||0).padStart(2,'0'))+'|'+String(b.venueCode||b.venueName||'');
     return ak.localeCompare(bk);
   }
-  function makeBase(row){return {date:String(row.date||'日付不明'),venue:String(row.venueName||row.venueCode||''),no:n(row.no),raceName:String(row.raceName||((n(row.no)||'?')+'R')),rid:String(row.rid||row.raceId||''),status:'',reason:'',points:0,bet:0,ret:0,profit:0,tickets:[],hasEv:false}}
+  function makeBase(row){return {date:String(row.date||'日付不明'),venue:String(row.venueName||row.venueCode||''),no:n(row.no),raceName:String(row.raceName||((n(row.no)||'?')+'R')),rid:String(row.rid||row.raceId||''),status:'',reason:'',points:0,bet:0,ret:0,profit:0,tickets:[],hasEv:false,isMain:false}}
+  function isDebutRaceName(name){return /(新馬|メイクデビュー|フレッシュチャレンジ|ファーストステップ|ドリームチャレンジ|スパーキングデビュー|リアトリスデビュー|ハイビスカスデビュー|ライラックデビュー|ローズデビュー)/.test(String(name||''))}
+  function isMainRow(row,cfg){return n(row&&row.no)===n(cfg.mainRaceNo||11)}
+  function pendingMainHold(source,index,rec,cfg){
+    if(!cfg.reserveMain)return {count:0,amount:0};
+    var from=rec.isMain?index+1:index,count=0;
+    for(var i=from;i<source.length;i++){
+      var r=source[i];if(String(r.date||'')!==rec.date)break;
+      if(r.status==='ok'&&r.hasFinish&&isMainRow(r,cfg))count++;
+    }
+    return {count:count,amount:count*cfg.mainReserve};
+  }
   function calculate(rows,cfg){
     var source=(rows||[]).filter(function(r){return r&&!r.header&&r.status==='ok'}).slice().sort(raceSort);
-    var usedByDate={},out=[],stats={source:source.length,settled:0,purchased:0,points:0,signalSkip:0,capSkip:0,missing:0,pending:0,bet:0,ret:0,hitRaces:0,evFallback:0,maxDrawdown:0,cumulative:0,peak:0};
-    source.forEach(function(row){
+    var usedByDate={},out=[],stats={source:source.length,settled:0,purchased:0,points:0,signalSkip:0,debutSkip:0,reserveSkip:0,capSkip:0,missing:0,pending:0,bet:0,ret:0,hitRaces:0,evFallback:0,mainTargets:0,mainPurchased:0,mainBet:0,mainRet:0,maxDrawdown:0,cumulative:0,peak:0};
+    source.forEach(function(row,index){
       var rec=makeBase(row);
       if(!row.hasFinish){rec.status='pending';rec.reason='未確定のため除外';stats.pending++;out.push(rec);return}
       stats.settled++;
+      rec.isMain=isMainRow(row,cfg);if(rec.isMain)stats.mainTargets++;
+      if(cfg.skipDebut&&isDebutRaceName(rec.raceName)){rec.status='debut';rec.reason='新馬戦見送り設定';stats.debutSkip++;out.push(rec);return}
       var details=detailRows(row);
       if(!details.length){
         if(n(row.bet)<=0||n(row.count)<=0){rec.status='signal';rec.reason='予想条件未達で見送り';stats.signalSkip++}
@@ -24781,9 +24902,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       }
       rec.hasEv=details.some(function(d){return d.ev>0});
       details.sort(function(a,b){return rec.hasEv?((b.ev-a.ev)||(b.p-a.p)||(a.order-b.order)):(a.order-b.order)});
-      var picked=details.slice(0,cfg.maxPoints),cost=picked.length*cfg.pointAmount,used=n(usedByDate[rec.date]);
-      if(used+cost>cfg.dailyLimit){
-        rec.status='cap';rec.reason='残り'+money(Math.max(0,cfg.dailyLimit-used))+'円のためレース単位で見送り';stats.capSkip++;out.push(rec);return;
+      var picked=details.slice(0,cfg.maxPoints),cost=picked.length*cfg.pointAmount,used=n(usedByDate[rec.date]),hold=pendingMainHold(source,index,rec,cfg),available=Math.max(0,cfg.dailyLimit-used-hold.amount);
+      if(cost>available){
+        if(hold.amount>0&&cost<=Math.max(0,cfg.dailyLimit-used)){rec.status='reserve';rec.reason='後続メイン'+hold.count+'R用'+money(hold.amount)+'円を確保';stats.reserveSkip++}
+        else{rec.status='cap';rec.reason='利用可能'+money(available)+'円のためレース単位で見送り';stats.capSkip++}
+        out.push(rec);return;
       }
       usedByDate[rec.date]=used+cost;
       rec.status='buy';rec.reason='購入';rec.points=picked.length;rec.bet=cost;
@@ -24793,10 +24916,12 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       });
       rec.ret=rec.tickets.reduce(function(s,t){return s+t.ret},0);rec.profit=rec.ret-rec.bet;
       stats.purchased++;stats.points+=rec.points;stats.bet+=rec.bet;stats.ret+=rec.ret;if(rec.ret>0)stats.hitRaces++;if(!rec.hasEv)stats.evFallback++;
+      if(rec.isMain){stats.mainPurchased++;stats.mainBet+=rec.bet;stats.mainRet+=rec.ret}
       stats.cumulative+=rec.profit;stats.peak=Math.max(stats.peak,stats.cumulative);stats.maxDrawdown=Math.max(stats.maxDrawdown,stats.peak-stats.cumulative);
       out.push(rec);
     });
     stats.profit=stats.ret-stats.bet;stats.roi=stats.bet?stats.ret/stats.bet*100:0;stats.hitRate=stats.purchased?stats.hitRaces/stats.purchased*100:0;
+    stats.mainProfit=stats.mainRet-stats.mainBet;stats.mainRoi=stats.mainBet?stats.mainRet/stats.mainBet*100:0;
     stats.days=new Set(out.filter(function(r){return r.date&&r.date!=='日付不明'}).map(function(r){return r.date})).size;
     stats.maxDailyUsed=Object.keys(usedByDate).reduce(function(m,d){return Math.max(m,n(usedByDate[d]))},0);
     return {config:cfg,stats:stats,rows:out,usedByDate:usedByDate,createdAt:new Date().toISOString()};
@@ -24809,6 +24934,9 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       '<div class="sim-kpi"><div class="v">'+s.purchased+'</div><div class="l">購入R</div></div>'+ 
       '<div class="sim-kpi"><div class="v">'+s.points+'</div><div class="l">購入点数</div></div>'+ 
       '<div class="sim-kpi"><div class="v">'+s.capSkip+'</div><div class="l">上限見送り</div></div>'+ 
+      '<div class="sim-kpi"><div class="v">'+s.debutSkip+'</div><div class="l">新馬見送り</div></div>'+ 
+      '<div class="sim-kpi"><div class="v">'+s.reserveSkip+'</div><div class="l">メイン温存見送り</div></div>'+ 
+      '<div class="sim-kpi"><div class="v">'+s.mainPurchased+'</div><div class="l">メイン購入R</div></div>'+ 
       '<div class="sim-kpi"><div class="v">'+s.signalSkip+'</div><div class="l">予想見送り</div></div>'+ 
       '<div class="sim-kpi"><div class="v">'+money(s.bet)+'</div><div class="l">投資円</div></div>'+ 
       '<div class="sim-kpi"><div class="v">'+money(s.ret)+'</div><div class="l">払戻円</div></div>'+ 
@@ -24818,8 +24946,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       '<div class="sim-kpi"><div class="v">'+money(s.maxDrawdown)+'</div><div class="l">最大DD円</div></div></div>';
   }
   function statusLabel(r){
-    if(r.status==='buy')return r.ret>0?'的中購入':'購入';
-    if(r.status==='cap')return '上限見送り';if(r.status==='signal')return '予想見送り';if(r.status==='pending')return '未確定';return '明細なし';
+    if(r.status==='buy')return r.isMain?(r.ret>0?'メイン的中':'メイン購入'):(r.ret>0?'的中購入':'購入');
+    if(r.status==='reserve')return 'メイン予算温存';if(r.status==='cap')return '上限見送り';if(r.status==='debut')return '新馬見送り';if(r.status==='signal')return '予想見送り';if(r.status==='pending')return '未確定';return '明細なし';
   }
   function renderTable(result){
     var box=$('pgBtTable');if(!box)return;var groups={};
@@ -24836,7 +24964,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     });box.innerHTML=html;
   }
   function resultText(result){
-    var c=result.config,s=result.stats,lines=['購入ガード・バックテスト','1日上限\t'+c.dailyLimit+'円','1点\t'+c.pointAmount+'円','最大点数\t'+c.maxPoints,'日数\t'+s.days,'確定R\t'+s.settled,'購入R\t'+s.purchased,'購入点数\t'+s.points,'上限見送り\t'+s.capSkip,'予想見送り\t'+s.signalSkip,'投資\t'+s.bet+'円','払戻\t'+s.ret+'円','収支\t'+s.profit+'円','回収率\t'+s.roi.toFixed(1)+'%','購入R的中率\t'+s.hitRate.toFixed(1)+'%','最大DD\t'+s.maxDrawdown+'円','','日付\t場\tR\tレース\t判定\t点\t投資\t払戻\t収支\t理由・買い目'];
+    var c=result.config,s=result.stats,lines=['購入ガード・バックテスト','1日上限\t'+c.dailyLimit+'円','1点\t'+c.pointAmount+'円','最大点数\t'+c.maxPoints,'新馬戦見送り\t'+(c.skipDebut?'ON':'OFF'),'メイン予算確保\t'+(c.reserveMain?(c.mainRaceNo+'R・各場'+c.mainReserve+'円'):'OFF'),'日数\t'+s.days,'確定R\t'+s.settled,'購入R\t'+s.purchased,'購入点数\t'+s.points,'メイン購入R\t'+s.mainPurchased,'メイン収支\t'+s.mainProfit+'円','メイン温存見送り\t'+s.reserveSkip,'新馬見送り\t'+s.debutSkip,'上限見送り\t'+s.capSkip,'予想見送り\t'+s.signalSkip,'投資\t'+s.bet+'円','払戻\t'+s.ret+'円','収支\t'+s.profit+'円','回収率\t'+s.roi.toFixed(1)+'%','購入R的中率\t'+s.hitRate.toFixed(1)+'%','最大DD\t'+s.maxDrawdown+'円','','日付\t場\tR\tレース\t判定\t点\t投資\t払戻\t収支\t理由・買い目'];
     result.rows.forEach(function(r){lines.push([r.date,r.venue,r.no+'R',r.raceName,statusLabel(r),r.points,r.bet,r.ret,r.profit,r.tickets.map(function(t){return t.type+' '+t.combo}).join(' / ')||r.reason].join('\t'))});return lines.join('\n');
   }
   function currentRows(){return Array.isArray(window.__rsLastRows)?window.__rsLastRows.slice():[]}
@@ -24847,7 +24975,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     var cp=$('pgBtCopyBtn');if(cp)cp.disabled=false;
     var extra=result.stats.missing?' / 明細不足 '+result.stats.missing+'Rを除外':'';
     var fallback=result.stats.evFallback?' / EV未保存 '+result.stats.evFallback+'購入Rは元の買い目順を使用':'';
-    setStatus('バックテスト完了：'+result.stats.purchased+'R・'+result.stats.points+'点を購入、上限見送り '+result.stats.capSkip+'R。日次最大使用額 '+money(result.stats.maxDailyUsed)+'円。'+extra+fallback,true);
+    setStatus('バックテスト完了：'+result.stats.purchased+'R・'+result.stats.points+'点を購入、メイン購入 '+result.stats.mainPurchased+'R、メイン予算温存で前半見送り '+result.stats.reserveSkip+'R、新馬見送り '+result.stats.debutSkip+'R。日次最大使用額 '+money(result.stats.maxDailyUsed)+'円。'+extra+fallback,true);
     return result;
   };
   window.runPurchaseGuardBacktest=async function(ev){
@@ -24879,8 +25007,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   };
   function init(){
     syncFromPurchaseGuard();
-    ['pgBtDailyLimit','pgBtPointAmount'].forEach(function(id){var el=$(id);if(el)el.addEventListener('change',function(){applyConfig(configFromFields())})});
-    ['swDailyLimit','swPointAmount'].forEach(function(id){var el=$(id);if(el)el.addEventListener('change',function(){setTimeout(syncFromPurchaseGuard,0)})});
+    ['pgBtDailyLimit','pgBtPointAmount','pgBtSkipDebut','pgBtReserveMain','pgBtMainRaceNo','pgBtMainReserve'].forEach(function(id){var el=$(id);if(el)el.addEventListener('change',function(){applyConfig(configFromFields())})});
+    ['swDailyLimit','swPointAmount','swSkipDebut','swReserveMain','swMainRaceNo','swMainReserve'].forEach(function(id){var el=$(id);if(el)el.addEventListener('change',function(){setTimeout(syncFromPurchaseGuard,0)})});
     document.addEventListener('click',function(ev){if(ev.target&&ev.target.closest&&ev.target.closest('[data-tab="sim"]'))setTimeout(syncFromPurchaseGuard,30)});
     setStatus('期間を指定して取得するか、表示済みの期間横断結果を再計算できます。',true);
   }

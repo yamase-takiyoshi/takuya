@@ -910,6 +910,33 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
         <button class="btn-sm" id="rsBabaBackfillBtn" onclick="rsRunBabaBackfill(event)" type="button" style="background:rgba(96,165,250,.14);border-color:rgba(96,165,250,.42);color:#bfdbfe;font-weight:900">🩹 レース情報を補完</button>
         <input type="file" id="rsJsonImportFile" accept=".json,application/json,text/json" style="display:none">
       </div>
+      <div id="pgBacktestPanel" style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(251,191,36,.32)">
+        <div class="section-header" style="margin-bottom:8px">
+          <h2 style="margin-bottom:0;color:#fde68a">購入ガード・バックテスト</h2>
+          <span style="font-size:10px;color:var(--muted)">レース数上限なし / 最大3点 / 日次予算を日付ごとに再現</span>
+        </div>
+        <div class="reserve-grid" style="margin-bottom:8px">
+          <div class="field" style="margin-bottom:0">
+            <label>1日の購入上限</label>
+            <input type="number" id="pgBtDailyLimit" min="100" step="100" value="2000" inputmode="numeric">
+          </div>
+          <div class="field" style="margin-bottom:0">
+            <label>1点の購入額</label>
+            <input type="number" id="pgBtPointAmount" min="100" step="100" value="100" inputmode="numeric">
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-primary" id="pgBtRunBtn" type="button" style="width:auto;flex:1;min-width:210px;background:#f59e0b;border-color:#fbbf24;color:#111827" onclick="runPurchaseGuardBacktest(event)">期間を取得してバックテスト</button>
+          <button class="btn-sm" id="pgBtRecalcBtn" type="button" onclick="recalculatePurchaseGuardBacktest(event)">現在結果で再計算</button>
+          <button class="btn-sm" id="pgBtCopyBtn" type="button" onclick="copyPurchaseGuardBacktest(event)" disabled>結果コピー</button>
+        </div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;margin-top:7px">
+          期間横断と同じ予想条件で過去レースを取得し、EV順の最大3点を指定額へ統一します。日次残額が足りないレースは全点見送り、払戻を100円単位で再計算します。「現在結果で再計算」は通信せず、表示済み・JSON読込済みの明細を使います。
+        </div>
+        <div id="pgBtStatus" style="margin-top:8px"></div>
+        <div id="pgBtSummary" style="margin-top:8px"></div>
+        <div id="pgBtTable" style="margin-top:8px"></div>
+      </div>
       <div id="rsProgress" style="margin-top:10px"></div>
       <div id="rsSummary" style="margin-top:10px"></div>
       <div id="rsChartWrap" style="margin-top:12px;display:none">
@@ -1045,6 +1072,23 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
       <div id="swModeStatus" style="margin:0 0 10px;padding:9px 11px;border:1px solid rgba(0,255,136,.28);background:rgba(0,255,136,.08);border-radius:10px;font-size:12px;line-height:1.6;color:#d9ffe8">
         🎯 購入に使う予想モードを確認中…
       </div>
+      <div id="swGuardPanel" style="margin:0 0 10px;padding:10px;border:1px solid rgba(251,191,36,.38);background:rgba(251,191,36,.07);border-radius:8px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+          <b style="font-size:13px;color:#fde68a">購入ガード</b>
+          <span style="font-size:11px;color:var(--muted)">レース数上限なし・1R最大3点・不足時は見送り</span>
+        </div>
+        <div class="reserve-grid" style="margin-bottom:6px">
+          <div class="field" style="margin-bottom:0">
+            <label>1日の購入上限</label>
+            <input type="number" id="swDailyLimit" min="100" step="100" value="2000" inputmode="numeric">
+          </div>
+          <div class="field" style="margin-bottom:0">
+            <label>1点の購入額</label>
+            <input type="number" id="swPointAmount" min="100" step="100" value="100" inputmode="numeric">
+          </div>
+        </div>
+        <div id="swGuardUsage" style="font-size:11px;line-height:1.6;color:#fde68a">本日の使用額を確認中…</div>
+      </div>
       <div class="reserve-grid">
         <div class="field" style="margin-bottom:0">
           <label>開催日</label>
@@ -1071,14 +1115,15 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
       </div>
       <div id="swVenueBox" class="sw-venue-box" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-primary" type="button" style="width:auto;flex:1;min-width:220px" onclick="swBuildSweep()">🏟️ スイープ予約を作成（全R）</button>
+        <button class="btn btn-primary" id="swOneClickBtn" type="button" style="width:auto;flex:1;min-width:220px;background:#f59e0b;border-color:#fbbf24;color:#111827" onclick="swOneClickDaily()">⚡ ワンクリック当日一括</button>
+        <button class="btn-sm" id="swBuildBtn" type="button" onclick="swBuildSweep()">🏟️ 設定内容で作成</button>
         <button class="btn-sm" type="button" onclick="swPrepDueNow()">⚡ 今すぐ準備分を生成</button>
         <button class="btn-sm" type="button" onclick="swClearSweep()">🗑 スイープ予約だけ削除</button>
       </div>
       <div id="swStatus" style="margin-top:8px"></div>
       <div id="swDiag" style="display:none;margin-top:8px;padding:8px 10px;border:1px solid rgba(148,163,184,.22);border-radius:8px;background:rgba(15,23,42,.35);font-size:11px;color:var(--muted);line-height:1.65;white-space:pre-wrap"></div>
       <div class="sweep-note" style="font-size:11px;color:var(--muted);line-height:1.65;margin-top:6px">
-        作成した予約は下の「⏰ 予約購入補助」リストに発走時刻順で並びます。設定タブで選んだ予想モードを予約作成時に固定します。「未来レースも即時生成」がONなら全Rを登録直後に、OFFなら未来レースを準備時刻・過去レースを登録直後に生成します。
+        ワンクリック当日一括は、当日・未来レース即時生成を選び、開催場が未選択なら全開催場を対象にします。買い目は期待値順で最大3点、各点を指定額に統一し、日次上限を超えるレースは丸ごと見送ります。作成した予約は下の「⏰ 予約購入補助」へ並びます。
       </div>
     </div>
 
@@ -12340,6 +12385,8 @@ if(horses.length === 0){
         // v5.18.259: 買い目に含まれる馬の人気・オッズから帯を算出（収支グラフの人気帯・オッズ帯フィルタ用）
         const po = (typeof pgjBuyPopOdds === 'function') ? pgjBuyPopOdds(t.nums, horseList, t.odds) : { 平均人気: 0, 想定オッズ: 0 };
         const detail = { 券種名: ty, 買い目: (t.nums || []).join('-'), 馬名: nameText, 購入額: a, 払戻額: r, 的中: isHit ? 1 : 0 };
+        if(Number(t.ev || 0) > 0) detail.期待値 = Number(t.ev);
+        if(Number(t.p || 0) > 0) detail.予測確率 = Number(t.p);
         if(po.平均人気 > 0){ detail.平均人気 = po.平均人気; detail.人気帯 = pgjPopBand(po.平均人気); }
         if(po.想定オッズ > 0){ detail.想定オッズ = po.想定オッズ; detail.オッズ帯 = pgjOddsBand(po.想定オッズ); }
         details.push(detail);
@@ -13655,6 +13702,8 @@ if(horses.length === 0){
         const nums = Array.isArray(t.nums) ? t.nums.join('-') : '';
         const nameText = (t.nums || []).map(n => horseNameMap[String(Number(n))] || '').filter(Boolean).join('－');
         const detail = { 券種名: t.type || '', 買い目: nums, 馬名: nameText, 購入額: a, 払戻額: ret, 的中: isHit ? 1 : 0 };
+        if(Number(t.ev || 0) > 0) detail.期待値 = Number(t.ev);
+        if(Number(t.p || 0) > 0) detail.予測確率 = Number(t.p);
         try{
           const po = (typeof pgjBuyPopOdds === 'function') ? pgjBuyPopOdds(t.nums, horseList, t.odds) : { 平均人気: 0, 想定オッズ: 0 };
           if(po.平均人気 > 0){ detail.平均人気 = po.平均人気; detail.人気帯 = pgjPopBand(po.平均人気); }
@@ -22092,9 +22141,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.244 D1Sync';
+  var VERSION = 'v5.18.274 PurchaseGuard';
   var KEY = 'tk-sim-reservations-v1';
   var IMMEDIATE_KEY = 'tk-sweep-immediate-all-v1';
+  var GUARD_KEY = 'tk-sweep-purchase-guard-v1';
+  var MAX_POINTS = 3;
   var prepping = false;
 
   function $(id){ return document.getElementById(id); }
@@ -22150,7 +22201,10 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   function ymdOf(d){ return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()); }
   function todayStr(){ if(isTesting()) return ymdOf(new Date(nowMs())); try{ return todayYmd(); }catch(e){ return ymdOf(new Date()); } }
   function load(){ try{ var a = JSON.parse(localStorage.getItem(KEY) || '[]'); return Array.isArray(a) ? a : []; }catch(e){ return []; } }
-  function save(a){ try{ localStorage.setItem(KEY, JSON.stringify((a || []).slice(-200))); }catch(e){} }
+  function save(a){
+    try{ localStorage.setItem(KEY, JSON.stringify((a || []).slice(-200))); }catch(e){}
+    try{ refreshGuardUsage(a || []); }catch(e){}
+  }
   function setStatus(html, ok){ var el = $('swStatus'); if(el) el.innerHTML = '<div class="url-status '+(ok?'ok':'err')+'">'+html+'</div>'; }
   function reRender(){ try{ if(typeof window.raRenderReservations === 'function') window.raRenderReservations(); }catch(e){} }
   function immediateAllOn(){ var el = $('swImmediateAll'); return !!(el && el.checked); }
@@ -22162,6 +22216,67 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     if(count) save(list);
     return count;
   }
+
+  function loadGuard(){
+    var raw = {};
+    try{ raw = JSON.parse(localStorage.getItem(GUARD_KEY) || '{}') || {}; }catch(e){}
+    return {
+      dailyLimit: Math.max(100, Number(raw.dailyLimit || 2000)),
+      pointAmount: Math.max(100, Number(raw.pointAmount || 100))
+    };
+  }
+  function guardConfig(){
+    var stored = loadGuard();
+    var daily = Number(($('swDailyLimit') && $('swDailyLimit').value) || stored.dailyLimit);
+    var point = Number(($('swPointAmount') && $('swPointAmount').value) || stored.pointAmount);
+    daily = Math.max(100, Math.floor((isFinite(daily) ? daily : 2000) / 100) * 100);
+    point = Math.max(100, Math.floor((isFinite(point) ? point : 100) / 100) * 100);
+    return { dailyLimit:daily, pointAmount:point, maxPoints:MAX_POINTS };
+  }
+  function persistGuard(){
+    var cfg = guardConfig();
+    try{ localStorage.setItem(GUARD_KEY, JSON.stringify(cfg)); }catch(e){}
+    if($('swDailyLimit')) $('swDailyLimit').value = cfg.dailyLimit;
+    if($('swPointAmount')) $('swPointAmount').value = cfg.pointAmount;
+    refreshGuardUsage(load());
+    return cfg;
+  }
+  function dailyUsed(date, list, exceptId){
+    return (list || []).reduce(function(sum, r){
+      if(!r || String(r.date || '') !== String(date || '') || String(r.id || '') === String(exceptId || '')) return sum;
+      if(!Array.isArray(r.tickets) || !r.tickets.length) return sum;
+      return sum + Math.max(0, Number(r.total || r.tickets.reduce(function(s,t){ return s + Number(t.amount || 0); }, 0)) || 0);
+    }, 0);
+  }
+  function applyPurchaseGuard(rec, tickets, list){
+    var cfg = guardConfig();
+    var ranked = (tickets || []).map(function(t, i){
+      return {
+        type:String(t.type || ''), nums:Array.isArray(t.nums) ? t.nums.map(Number).filter(Boolean) : [],
+        amount:cfg.pointAmount, odds:Number(t.odds || 0), ev:Number(t.ev || 0), p:Number(t.p || 0),
+        horseNames:Array.isArray(t.horseNames) ? t.horseNames.slice() : [], _order:i
+      };
+    }).filter(function(t){ return t.type && t.nums.length; }).sort(function(a,b){
+      return (b.ev-a.ev) || (b.p-a.p) || (a._order-b._order);
+    }).slice(0, cfg.maxPoints).map(function(t){ delete t._order; return t; });
+    if(!ranked.length) return {tickets:[], total:0, reason:'予想条件未達（購入0点）', used:dailyUsed(rec.date,list,rec.id), cfg:cfg};
+    var total = ranked.length * cfg.pointAmount;
+    var used = dailyUsed(rec.date, list, rec.id);
+    var remaining = Math.max(0, cfg.dailyLimit - used);
+    if(total > remaining){
+      return {tickets:[], total:0, reason:'日次上限まで残り'+yen(remaining)+'円のためレース単位で見送り', used:used, cfg:cfg};
+    }
+    return {tickets:ranked, total:total, reason:'', used:used, cfg:cfg};
+  }
+  function refreshGuardUsage(list, date){
+    var el = $('swGuardUsage'); if(!el) return;
+    var cfg = guardConfig();
+    var target = date || (($('swDate') && $('swDate').value) || todayStr());
+    var used = dailyUsed(target, Array.isArray(list) ? list : load(), '');
+    var remain = Math.max(0, cfg.dailyLimit-used);
+    el.innerHTML = esc(target)+'：使用 <b>'+yen(used)+'円</b> ／ 上限 <b>'+yen(cfg.dailyLimit)+'円</b> ／ 残り <b>'+yen(remain)+'円</b>　<span style="color:var(--muted)">最大3点・1点'+yen(cfg.pointAmount)+'円</span>';
+  }
+  window.swRefreshGuardUsage = function(){ refreshGuardUsage(load()); };
 
   function fmtLocalInput(d){ return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes()); }
   function toDateTime(dateStr, hhmm){
@@ -22358,22 +22473,24 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         setStatus('⏳ '+esc(labelOf(rec))+' の買い目を確認中…', true);
         try{
           var res = await prepRace(rec);
-          var tot = res.tickets.reduce(function(sum,t){ return sum + t.amount; }, 0);
-          if(!res.tickets.length || tot<=0){
+          var guarded = applyPurchaseGuard(rec, res.tickets, load());
+          var tot = guarded.total;
+          if(!guarded.tickets.length || tot<=0){
             removeRec(rec.id);
-            appendDiagLine(labelOf(rec)+'：見送り（購入0点）→予約なし');
+            appendDiagLine(labelOf(rec)+'：'+guarded.reason+'→予約なし');
             reRender();
-            setStatus('🚫 '+esc(labelOf(rec))+'：'+esc(res.modeLabel || res.mode || '')+'の予想結果は見送りのため、予約しません。', true);
+            setStatus('🚫 '+esc(labelOf(rec))+'：'+esc(guarded.reason)+'。予約しません。', true);
           }else{
             updateRec(rec.id, function(r){
-              r.tickets=res.tickets; r.total=tot; r.prepared=true; r.prepError='';
+              r.tickets=guarded.tickets; r.total=tot; r.prepared=true; r.prepError='';
               r.mode=res.mode || r.mode; r.modeLabel=res.modeLabel || r.modeLabel;
               if(res.raceName) r.raceName=res.raceName;
               r.verifiedAt=new Date().toISOString();
               r.unverifiedRaceId=false;
+              r.purchaseGuard={dailyLimit:guarded.cfg.dailyLimit,pointAmount:guarded.cfg.pointAmount,maxPoints:MAX_POINTS};
             });
             reRender(); beep();
-            setStatus('✅ '+esc(labelOf(rec))+'：'+esc(res.modeLabel || res.mode || '')+'の予想結果 '+res.tickets.length+'点 / '+yen(tot)+'円 を予約しました。🎫を開いて金額確認のうえ購入してください。', true);
+            setStatus('✅ '+esc(labelOf(rec))+'：'+esc(res.modeLabel || res.mode || '')+'の予想結果 '+guarded.tickets.length+'点 / '+yen(tot)+'円 を予約しました。🎫を開いて金額確認のうえ購入してください。', true);
           }
         }catch(e){
           var msg=(e&&e.message)||String(e);
@@ -22443,7 +22560,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     if(!transport.usable){
       setStatus('⚠️ Worker／Bridgeを検出できません。NARはrace_id直接候補を確認しますが、馬データを取得できない候補は予約しません。', false);
     }
-    var btn = null; try{ btn = document.querySelector('#sweepCard .btn-primary'); }catch(e){}
+    var cfg = persistGuard();
+    var btn = $('swBuildBtn');
     if(btn){ btn.disabled = true; btn.textContent = '⏳ 候補確認中…'; }
     var now = (window.raNowMs ? window.raNowMs() : Date.now());
     var list = load();
@@ -22458,7 +22576,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     var noBet=0, prepFailed=0, rangeCandidates=0, directCandidates=0;
     var directSuccess=0, rangeSuccess=0, normalSuccess=0, failedVenues=0;
     var immediateCandidates=[];
-    var diag=['取得経路: '+transport.label,'基準日時: '+new Date(now).toLocaleString('ja-JP'),'予想モード: '+selectedModeLabel(selectedModeKey())];
+    var diag=['取得経路: '+transport.label,'基準日時: '+new Date(now).toLocaleString('ja-JP'),'予想モード: '+selectedModeLabel(selectedModeKey()),'購入ガード: 1日'+yen(cfg.dailyLimit)+'円／1点'+yen(cfg.pointAmount)+'円／最大3点／不足時は見送り'];
     if(staleRemoved) diag.push('旧版の未確認・失敗予約を削除: '+staleRemoved+'R');
     setDiag(diag);
     var purchaseMode = selectedModeKey(), purchaseModeLabel = selectedModeLabel(purchaseMode);
@@ -22483,6 +22601,15 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       list=list.filter(function(x){ if(x.id===id){ keepPrepared=x; return false; } return true; });
       var keepValid=!!(keepPrepared && keepPrepared.prepared && Array.isArray(keepPrepared.tickets) && keepPrepared.tickets.length && Number(keepPrepared.total||0)>0 && String(keepPrepared.mode || '')===String(purchaseMode));
       if(keepValid){
+        var keepGuard=applyPurchaseGuard(keepPrepared,keepPrepared.tickets,list);
+        if(!keepGuard.tickets.length){
+          noBet++;
+          diag.push(labelOf(keepPrepared)+'：'+keepGuard.reason+'→既存予約も見送り');
+          return true;
+        }
+        keepPrepared.tickets=keepGuard.tickets;
+        keepPrepared.total=keepGuard.total;
+        keepPrepared.purchaseGuard={dailyLimit:keepGuard.cfg.dailyLimit,pointAmount:keepGuard.cfg.pointAmount,maxPoints:MAX_POINTS};
         keepPrepared.unverifiedRaceId=false;
         keepPrepared.prepError='';
         list.push(keepPrepared);
@@ -22561,12 +22688,13 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         setStatus('🔎 '+esc(labelOf(rec))+' を確認中…（'+(pi+1)+'/'+immediateCandidates.length+'）', true);
         try{
           var res=await prepRace(rec);
-          var tot=res.tickets.reduce(function(sum,t){ return sum+t.amount; },0);
-          if(!res.tickets.length || tot<=0){
+          var guarded=applyPurchaseGuard(rec,res.tickets,list);
+          var tot=guarded.total;
+          if(!guarded.tickets.length || tot<=0){
             noBet++;
-            diag.push(labelOf(rec)+'：見送り（購入0点）→予約なし');
+            diag.push(labelOf(rec)+'：'+guarded.reason+'→予約なし');
           }else{
-            rec.tickets=res.tickets;
+            rec.tickets=guarded.tickets;
             rec.total=tot;
             rec.prepared=true;
             rec.prepError='';
@@ -22575,6 +22703,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
             rec.raceName=res.raceName || rec.raceName;
             rec.unverifiedRaceId=false;
             rec.verifiedAt=new Date().toISOString();
+            rec.purchaseGuard={dailyLimit:guarded.cfg.dailyLimit,pointAmount:guarded.cfg.pointAmount,maxPoints:MAX_POINTS};
             list.push(rec);
             preparedSuccess++;
             if(rec.fallbackDirect) directSuccess++;
@@ -22619,9 +22748,33 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       );
       setDiag(diag);
       setStatus(msg,finalCount>0);
+      refreshGuardUsage(list,date);
     } finally {
       restoreRaceUi(uiSnap);
-      if(btn){ btn.disabled=false; btn.textContent='🏟️ スイープ予約を作成（全R）'; }
+      if(btn){ btn.disabled=false; btn.textContent='🏟️ 設定内容で作成'; }
+    }
+  };
+
+  window.swOneClickDaily = async function(){
+    var btn=$('swOneClickBtn'), original=btn ? btn.textContent : '';
+    try{
+      if(btn){ btn.disabled=true; btn.textContent='⏳ 当日分を一括作成中…'; }
+      var sd=$('swDate'); if(sd) sd.value=todayStr();
+      var ia=$('swImmediateAll');
+      if(ia){ ia.checked=true; try{ localStorage.setItem(IMMEDIATE_KEY,'1'); }catch(e){} }
+      applyImmediateToQueue(true);
+      if(!selectedVenues().length){
+        var box=$('swVenueBox');
+        if(box) [].slice.call(box.querySelectorAll('input[type=checkbox]')).forEach(function(c){ c.checked=true; var chip=c.closest('.sw-chip'); if(chip) chip.classList.add('on'); });
+      }
+      if(!selectedVenues().length) throw new Error('対象開催場を選択できません');
+      persistGuard();
+      setStatus('⚡ 当日・選択開催場・未来を含む全レースを、購入ガード付きで一括判定します。',true);
+      await window.swBuildSweep();
+    }catch(e){
+      setStatus('❌ ワンクリック一括作成に失敗しました：'+esc((e&&e.message)||e),false);
+    }finally{
+      if(btn){ btn.disabled=false; btn.textContent=original || '⚡ ワンクリック当日一括'; }
     }
   };
 
@@ -22644,6 +22797,10 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   function setVer(){ try{ window.APP_VERSION = VERSION; var ver=document.querySelector('.ver'); if(ver) ver.textContent=VERSION; document.title='The競馬 EV分析 '+VERSION; }catch(e){} }
   function init(){
     var sd = $('swDate'); if(sd && !sd.value) sd.value = todayStr();
+    var guard=loadGuard();
+    if($('swDailyLimit')) $('swDailyLimit').value=guard.dailyLimit;
+    if($('swPointAmount')) $('swPointAmount').value=guard.pointAmount;
+    ['swDailyLimit','swPointAmount'].forEach(function(id){ var el=$(id); if(el) el.addEventListener('change',persistGuard); });
     var ia = $('swImmediateAll');
     if(ia){
       ia.checked = localStorage.getItem(IMMEDIATE_KEY) === '1';
@@ -22671,6 +22828,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     if(cleanList.length!==cleanBefore){ save(cleanList); reRender(); setDiag(['旧版の未確認・失敗予約を自動削除: '+(cleanBefore-cleanList.length)+'R']); }
     renderVenues();
     refreshModeStatus();
+    refreshGuardUsage(cleanList);
     try{ window.swReflectTestClock(false); }catch(e){}
     var pk = $('pickKind'); if(pk) pk.addEventListener('change', function(){ renderVenues(); });
     // シミュレーションタブを開いた時に開催場を最新化
@@ -22680,6 +22838,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
   [0, 600, 1800, 4000, 9000].forEach(function(ms){ setTimeout(function(){ setVer(); try{ if(!$('swVenueBox') || !$('swVenueBox').children.length) renderVenues(); refreshModeStatus(); }catch(e){} try{ window.swReflectTestClock(false); }catch(e){} }, ms); });
   setInterval(schedulerTick, 5000);
+  setInterval(function(){ try{ refreshGuardUsage(load()); }catch(e){} }, 5000);
   console.log('[' + VERSION + '] enabled: venue sweep auto-purchase assist + direct NAR race_id fallback');
 })();
 </script>
@@ -24411,7 +24570,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 /* v5.18.256 RangeSyncFix: 横2画面リアルタイム連動 */
 (function(){
   'use strict';
-  var V='v5.18.266 HistoryCalendarReplay';
+  var V='v5.18.275 PurchaseGuardBT';
   function applyVersion(){
     window.APP_VERSION=V;
     var el=document.querySelector('.header .ver, .ver');
@@ -24544,6 +24703,187 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   window.hrExitReplay=function(){S.active=false;clearInterval(S.autoTimer);S.autoTimer=null;var m=byId('hrReplayMode');if(m)m.classList.remove('show');var b=byId('hrAutoBtn');if(b)b.textContent='⏯ 自動再生'};
   window.hrToggleAutoReplay=function(){var b=byId('hrAutoBtn');if(S.autoTimer){clearInterval(S.autoTimer);S.autoTimer=null;if(b)b.textContent='⏯ 自動再生';return}window.hrReplaySelected();if(b)b.textContent='⏹ 自動停止';S.autoTimer=setInterval(function(){var before=(byId('hrReplayDate').value+'|'+byId('hrReplayRace').value);window.hrMoveRace(1);window.hrReplaySelected();var after=(byId('hrReplayDate').value+'|'+byId('hrReplayRace').value);if(after===before){window.hrToggleAutoReplay()}},2200)};
   function init(){window.hrReplayRefresh(false);var prev=window.saveSimHistory;if(typeof prev==='function'&&!prev.__hrReplayWrapped){var w=function(){var r=prev.apply(this,arguments);setTimeout(function(){window.hrReplayRefresh(true)},0);return r};w.__hrReplayWrapped=true;window.saveSimHistory=w;try{saveSimHistory=w}catch(e){}}}
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
+})();
+</script>
+
+<script>
+/* v5.18.275 PurchaseGuardBacktest */
+(function(){
+  'use strict';
+  var GUARD_KEY='tk-sweep-purchase-guard-v1';
+  var MAX_POINTS=3;
+  var state={result:null,running:false};
+  function $(id){return document.getElementById(id)}
+  function n(v){var x=Number(v||0);return Number.isFinite(x)?x:0}
+  function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+  function money(v){return Math.round(n(v)).toLocaleString()}
+  function cleanMoney(v,def){var x=n(v)||def;return Math.max(100,Math.floor(x/100)*100)}
+  function readGuard(){
+    var x={};try{x=JSON.parse(localStorage.getItem(GUARD_KEY)||'{}')||{}}catch(e){}
+    return {dailyLimit:cleanMoney(x.dailyLimit,2000),pointAmount:cleanMoney(x.pointAmount,100),maxPoints:MAX_POINTS};
+  }
+  function configFromFields(){
+    var old=readGuard();
+    return {
+      dailyLimit:cleanMoney($('pgBtDailyLimit')&&$('pgBtDailyLimit').value,old.dailyLimit),
+      pointAmount:cleanMoney($('pgBtPointAmount')&&$('pgBtPointAmount').value,old.pointAmount),
+      maxPoints:MAX_POINTS
+    };
+  }
+  function applyConfig(cfg){
+    try{localStorage.setItem(GUARD_KEY,JSON.stringify(cfg))}catch(e){}
+    [['pgBtDailyLimit',cfg.dailyLimit],['pgBtPointAmount',cfg.pointAmount],['swDailyLimit',cfg.dailyLimit],['swPointAmount',cfg.pointAmount]].forEach(function(x){var el=$(x[0]);if(el)el.value=x[1]});
+    try{if(typeof window.swRefreshGuardUsage==='function')window.swRefreshGuardUsage()}catch(e){}
+    return cfg;
+  }
+  function syncFromPurchaseGuard(){
+    var old=readGuard(),sd=$('swDailyLimit'),sp=$('swPointAmount');
+    var cfg={dailyLimit:cleanMoney(sd&&sd.value,old.dailyLimit),pointAmount:cleanMoney(sp&&sp.value,old.pointAmount),maxPoints:MAX_POINTS};
+    if($('pgBtDailyLimit'))$('pgBtDailyLimit').value=cfg.dailyLimit;
+    if($('pgBtPointAmount'))$('pgBtPointAmount').value=cfg.pointAmount;
+  }
+  function setStatus(text,ok){var el=$('pgBtStatus');if(el)el.innerHTML='<div class="url-status '+(ok?'ok':'err')+'">'+text+'</div>'}
+  function comboText(v){return Array.isArray(v)?v.join('-'):String(v||'')}
+  function detailRows(row){
+    var src=Array.isArray(row&&row.ticketDetails)?row.ticketDetails:(Array.isArray(row&&row['内訳'])?row['内訳']:[]);
+    return src.map(function(d,i){
+      var originalBet=n(d&&((d['購入額']!=null)?d['購入額']:(d.amount!=null?d.amount:d.bet)));
+      var originalRet=n(d&&((d['払戻額']!=null)?d['払戻額']:(d.ret!=null?d.ret:d['払戻'])));
+      var units=Math.max(1,Math.floor(originalBet/100));
+      return {
+        type:String(d&&(d['券種名']||d.type||d.ticketType)||'').trim(),
+        combo:comboText(d&&(d['買い目']||d.combo||d.nums)), horse:String(d&&(d['馬名']||d.horseNames)||''),
+        originalBet:originalBet,originalRet:originalRet,unitReturn:originalRet/units,
+        ev:n(d&&(d['期待値']!=null?d['期待値']:(d.ev!=null?d.ev:d.EV))),
+        p:n(d&&(d['予測確率']!=null?d['予測確率']:d.p)),order:i
+      };
+    }).filter(function(d){return d.type&&d.combo&&d.originalBet>0});
+  }
+  function raceSort(a,b){
+    var ak=String(a.date||'')+'|'+String(a.venueCode||a.venueName||'')+'|'+String(a.no||0).padStart(2,'0');
+    var bk=String(b.date||'')+'|'+String(b.venueCode||b.venueName||'')+'|'+String(b.no||0).padStart(2,'0');
+    return ak.localeCompare(bk);
+  }
+  function makeBase(row){return {date:String(row.date||'日付不明'),venue:String(row.venueName||row.venueCode||''),no:n(row.no),raceName:String(row.raceName||((n(row.no)||'?')+'R')),rid:String(row.rid||row.raceId||''),status:'',reason:'',points:0,bet:0,ret:0,profit:0,tickets:[],hasEv:false}}
+  function calculate(rows,cfg){
+    var source=(rows||[]).filter(function(r){return r&&!r.header&&r.status==='ok'}).slice().sort(raceSort);
+    var usedByDate={},out=[],stats={source:source.length,settled:0,purchased:0,points:0,signalSkip:0,capSkip:0,missing:0,pending:0,bet:0,ret:0,hitRaces:0,evFallback:0,maxDrawdown:0,cumulative:0,peak:0};
+    source.forEach(function(row){
+      var rec=makeBase(row);
+      if(!row.hasFinish){rec.status='pending';rec.reason='未確定のため除外';stats.pending++;out.push(rec);return}
+      stats.settled++;
+      var details=detailRows(row);
+      if(!details.length){
+        if(n(row.bet)<=0||n(row.count)<=0){rec.status='signal';rec.reason='予想条件未達で見送り';stats.signalSkip++}
+        else{rec.status='missing';rec.reason='買い目明細がないため再計算不可';stats.missing++}
+        out.push(rec);return;
+      }
+      rec.hasEv=details.some(function(d){return d.ev>0});
+      details.sort(function(a,b){return rec.hasEv?((b.ev-a.ev)||(b.p-a.p)||(a.order-b.order)):(a.order-b.order)});
+      var picked=details.slice(0,cfg.maxPoints),cost=picked.length*cfg.pointAmount,used=n(usedByDate[rec.date]);
+      if(used+cost>cfg.dailyLimit){
+        rec.status='cap';rec.reason='残り'+money(Math.max(0,cfg.dailyLimit-used))+'円のためレース単位で見送り';stats.capSkip++;out.push(rec);return;
+      }
+      usedByDate[rec.date]=used+cost;
+      rec.status='buy';rec.reason='購入';rec.points=picked.length;rec.bet=cost;
+      rec.tickets=picked.map(function(d){
+        var units=Math.floor(cfg.pointAmount/100),r=Math.round(d.unitReturn*units);
+        return {type:d.type,combo:d.combo,horse:d.horse,ev:d.ev,amount:cfg.pointAmount,ret:r,hit:r>0};
+      });
+      rec.ret=rec.tickets.reduce(function(s,t){return s+t.ret},0);rec.profit=rec.ret-rec.bet;
+      stats.purchased++;stats.points+=rec.points;stats.bet+=rec.bet;stats.ret+=rec.ret;if(rec.ret>0)stats.hitRaces++;if(!rec.hasEv)stats.evFallback++;
+      stats.cumulative+=rec.profit;stats.peak=Math.max(stats.peak,stats.cumulative);stats.maxDrawdown=Math.max(stats.maxDrawdown,stats.peak-stats.cumulative);
+      out.push(rec);
+    });
+    stats.profit=stats.ret-stats.bet;stats.roi=stats.bet?stats.ret/stats.bet*100:0;stats.hitRate=stats.purchased?stats.hitRaces/stats.purchased*100:0;
+    stats.days=new Set(out.filter(function(r){return r.date&&r.date!=='日付不明'}).map(function(r){return r.date})).size;
+    stats.maxDailyUsed=Object.keys(usedByDate).reduce(function(m,d){return Math.max(m,n(usedByDate[d]))},0);
+    return {config:cfg,stats:stats,rows:out,usedByDate:usedByDate,createdAt:new Date().toISOString()};
+  }
+  function renderSummary(result){
+    var s=result.stats,box=$('pgBtSummary');if(!box)return;
+    box.innerHTML='<div class="sim-kpi-grid" style="margin-top:0">'+
+      '<div class="sim-kpi"><div class="v">'+s.days+'</div><div class="l">日数</div></div>'+ 
+      '<div class="sim-kpi"><div class="v">'+s.settled+'</div><div class="l">確定R</div></div>'+ 
+      '<div class="sim-kpi"><div class="v">'+s.purchased+'</div><div class="l">購入R</div></div>'+ 
+      '<div class="sim-kpi"><div class="v">'+s.points+'</div><div class="l">購入点数</div></div>'+ 
+      '<div class="sim-kpi"><div class="v">'+s.capSkip+'</div><div class="l">上限見送り</div></div>'+ 
+      '<div class="sim-kpi"><div class="v">'+s.signalSkip+'</div><div class="l">予想見送り</div></div>'+ 
+      '<div class="sim-kpi"><div class="v">'+money(s.bet)+'</div><div class="l">投資円</div></div>'+ 
+      '<div class="sim-kpi"><div class="v">'+money(s.ret)+'</div><div class="l">払戻円</div></div>'+ 
+      '<div class="sim-kpi"><div class="v" style="color:'+(s.profit>=0?'var(--green)':'var(--red)')+'">'+(s.profit>=0?'+':'')+money(s.profit)+'</div><div class="l">収支円</div></div>'+ 
+      '<div class="sim-kpi"><div class="v" style="color:'+(s.roi>=100?'var(--green)':'var(--yellow)')+'">'+s.roi.toFixed(1)+'%</div><div class="l">回収率</div></div>'+ 
+      '<div class="sim-kpi"><div class="v">'+s.hitRate.toFixed(1)+'%</div><div class="l">購入R的中率</div></div>'+ 
+      '<div class="sim-kpi"><div class="v">'+money(s.maxDrawdown)+'</div><div class="l">最大DD円</div></div></div>';
+  }
+  function statusLabel(r){
+    if(r.status==='buy')return r.ret>0?'的中購入':'購入';
+    if(r.status==='cap')return '上限見送り';if(r.status==='signal')return '予想見送り';if(r.status==='pending')return '未確定';return '明細なし';
+  }
+  function renderTable(result){
+    var box=$('pgBtTable');if(!box)return;var groups={};
+    result.rows.forEach(function(r){(groups[r.date]||(groups[r.date]=[])).push(r)});
+    var html='';Object.keys(groups).sort().forEach(function(date,di){
+      var rows=groups[date],buy=rows.filter(function(r){return r.status==='buy'}),bet=buy.reduce(function(s,r){return s+r.bet},0),ret=buy.reduce(function(s,r){return s+r.ret},0),profit=ret-bet,skips=rows.length-buy.length;
+      html+='<details '+(di===0?'open':'')+' style="border-top:1px solid rgba(148,163,184,.2);padding:7px 0"><summary style="cursor:pointer;font-size:12px;font-weight:800">'+esc(date)+'　購入 '+buy.length+'R / 見送り・除外 '+skips+'R　投資 '+money(bet)+'円　払戻 '+money(ret)+'円　<span style="color:'+(profit>=0?'var(--green)':'var(--red)')+'">収支 '+(profit>=0?'+':'')+money(profit)+'円</span></summary>';
+      html+='<div style="overflow-x:auto;margin-top:6px"><table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="color:var(--muted);text-align:left"><th style="padding:4px">場・R</th><th style="padding:4px">レース</th><th style="padding:4px">判定</th><th style="padding:4px">買い目</th><th style="padding:4px;text-align:right">投資</th><th style="padding:4px;text-align:right">払戻</th><th style="padding:4px;text-align:right">収支</th></tr></thead><tbody>';
+      rows.forEach(function(r){
+        var tk=r.tickets.map(function(t){return t.type+' '+t.combo+(t.ev>0?' EV'+t.ev.toFixed(2):'')}).join(' / '),pc=r.profit>=0?'var(--green)':'var(--red)',lc=r.status==='buy'?(r.ret>0?'var(--green)':'var(--text)'):(r.status==='cap'?'#fde68a':'var(--muted)');
+        html+='<tr style="border-top:1px solid rgba(148,163,184,.13)"><td style="padding:4px;white-space:nowrap">'+esc(r.venue)+' '+r.no+'R</td><td style="padding:4px">'+esc(r.raceName)+'</td><td style="padding:4px;color:'+lc+';white-space:nowrap">'+esc(statusLabel(r))+'</td><td style="padding:4px;min-width:180px">'+esc(tk||r.reason)+'</td><td style="padding:4px;text-align:right">'+(r.status==='buy'?money(r.bet):'-')+'</td><td style="padding:4px;text-align:right">'+(r.status==='buy'?money(r.ret):'-')+'</td><td style="padding:4px;text-align:right;color:'+pc+'">'+(r.status==='buy'?((r.profit>=0?'+':'')+money(r.profit)):'-')+'</td></tr>';
+      });
+      html+='</tbody></table></div></details>';
+    });box.innerHTML=html;
+  }
+  function resultText(result){
+    var c=result.config,s=result.stats,lines=['購入ガード・バックテスト','1日上限\t'+c.dailyLimit+'円','1点\t'+c.pointAmount+'円','最大点数\t'+c.maxPoints,'日数\t'+s.days,'確定R\t'+s.settled,'購入R\t'+s.purchased,'購入点数\t'+s.points,'上限見送り\t'+s.capSkip,'予想見送り\t'+s.signalSkip,'投資\t'+s.bet+'円','払戻\t'+s.ret+'円','収支\t'+s.profit+'円','回収率\t'+s.roi.toFixed(1)+'%','購入R的中率\t'+s.hitRate.toFixed(1)+'%','最大DD\t'+s.maxDrawdown+'円','','日付\t場\tR\tレース\t判定\t点\t投資\t払戻\t収支\t理由・買い目'];
+    result.rows.forEach(function(r){lines.push([r.date,r.venue,r.no+'R',r.raceName,statusLabel(r),r.points,r.bet,r.ret,r.profit,r.tickets.map(function(t){return t.type+' '+t.combo}).join(' / ')||r.reason].join('\t'))});return lines.join('\n');
+  }
+  function currentRows(){return Array.isArray(window.__rsLastRows)?window.__rsLastRows.slice():[]}
+  window.recalculatePurchaseGuardBacktest=function(){
+    var rows=currentRows(),cfg=applyConfig(configFromFields());
+    if(!rows.length){setStatus('期間横断結果がありません。期間を指定して「期間を取得してバックテスト」を実行してください。',false);return null}
+    var result=calculate(rows,cfg);state.result=result;window.__pgBacktestResult=result;renderSummary(result);renderTable(result);
+    var cp=$('pgBtCopyBtn');if(cp)cp.disabled=false;
+    var extra=result.stats.missing?' / 明細不足 '+result.stats.missing+'Rを除外':'';
+    var fallback=result.stats.evFallback?' / EV未保存 '+result.stats.evFallback+'購入Rは元の買い目順を使用':'';
+    setStatus('バックテスト完了：'+result.stats.purchased+'R・'+result.stats.points+'点を購入、上限見送り '+result.stats.capSkip+'R。日次最大使用額 '+money(result.stats.maxDailyUsed)+'円。'+extra+fallback,true);
+    return result;
+  };
+  window.runPurchaseGuardBacktest=async function(ev){
+    if(state.running)return;var btn=(ev&&ev.currentTarget)||$('pgBtRunBtn'),old=btn&&btn.textContent,cfg=applyConfig(configFromFields());
+    var start=$('rsStart')&&$('rsStart').value,end=$('rsEnd')&&$('rsEnd').value;
+    if(!start||!end){alert('開始日と終了日を選択してください。');return}
+    if(start>end){alert('開始日は終了日以前にしてください。');return}
+    if(typeof window.runRangeVenueSimulation!=='function'){setStatus('期間横断シミュレーションを利用できません。',false);return}
+    try{if(typeof settings!=='undefined'&&settings&&!settings.proxyUrl){alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。');return}}catch(e){}
+    state.running=true;if(btn){btn.disabled=true;btn.textContent='バックテスト用データ取得中...'}
+    var snap=null,record=$('rsRecord'),recordOn=record&&record.checked;
+    try{
+      try{if(typeof settings!=='undefined'&&settings){snap={unit:settings.unit,budget:settings.budget,maxTickets:settings.maxTickets};settings.unit=cfg.pointAmount;settings.budget=cfg.pointAmount*MAX_POINTS;settings.maxTickets=MAX_POINTS}}catch(e){}
+      if(record)record.checked=false;
+      try{window.__rsLastRows=[]}catch(e){}
+      setStatus('過去レースを取得・精算中です。完了後に日次上限と最大3点を適用します。',true);
+      await window.runRangeVenueSimulation();
+      window.recalculatePurchaseGuardBacktest();
+    }catch(e){console.error('[PurchaseGuardBacktest]',e);setStatus('バックテストに失敗しました：'+esc(e&&e.message||e),false)}
+    finally{
+      try{if(snap&&typeof settings!=='undefined'&&settings){settings.unit=snap.unit;settings.budget=snap.budget;settings.maxTickets=snap.maxTickets}}catch(e){}
+      if(record)record.checked=!!recordOn;state.running=false;if(btn){btn.disabled=false;btn.textContent=old||'期間を取得してバックテスト'}
+    }
+  };
+  window.copyPurchaseGuardBacktest=async function(ev){
+    if(!state.result){setStatus('コピーするバックテスト結果がありません。',false);return}
+    var text=resultText(state.result),ok=false;try{await navigator.clipboard.writeText(text);ok=true}catch(e){try{var ta=document.createElement('textarea');ta.value=text;ta.style.position='fixed';ta.style.left='-9999px';document.body.appendChild(ta);ta.focus();ta.select();ok=document.execCommand('copy');document.body.removeChild(ta)}catch(e2){}}
+    var b=(ev&&ev.currentTarget)||$('pgBtCopyBtn'),old=b&&b.textContent;if(b){b.textContent=ok?'コピー完了':'コピー失敗';setTimeout(function(){b.textContent=old||'結果コピー'},1600)}
+  };
+  function init(){
+    syncFromPurchaseGuard();
+    ['pgBtDailyLimit','pgBtPointAmount'].forEach(function(id){var el=$(id);if(el)el.addEventListener('change',function(){applyConfig(configFromFields())})});
+    ['swDailyLimit','swPointAmount'].forEach(function(id){var el=$(id);if(el)el.addEventListener('change',function(){setTimeout(syncFromPurchaseGuard,0)})});
+    document.addEventListener('click',function(ev){if(ev.target&&ev.target.closest&&ev.target.closest('[data-tab="sim"]'))setTimeout(syncFromPurchaseGuard,30)});
+    setStatus('期間を指定して取得するか、表示済みの期間横断結果を再計算できます。',true);
+  }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
 })();
 </script>

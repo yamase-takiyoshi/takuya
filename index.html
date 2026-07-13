@@ -13655,6 +13655,12 @@ if(horses.length === 0){
     const start = $('rsStart')?.value || '';
     const end = $('rsEnd')?.value || '';
     const resume = !!(opts && opts.resume === true); // v5.18.203 DirectGraphLink
+    const purchaseGuardRun = !!(opts && opts.purchaseGuard === true);
+    if(!purchaseGuardRun){
+      window.__pgBacktestLiveActive = false;
+      window.__pgBacktestResult = null;
+      window.__pgBacktestCapError = '';
+    }
 
     if(!settings.proxyUrl){ alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。'); return; }
     if(!start || !end){ alert('開始日と終了日を選択してください。'); return; }
@@ -14147,6 +14153,11 @@ if(horses.length === 0){
     const start = $('rsStart')?.value || '';
     const end = $('rsEnd')?.value || '';
     const resume = !!(opts && opts.resume === true); // v5.18.203 DirectGraphLink
+    if(!(opts && opts.purchaseGuard === true)){
+      window.__pgBacktestLiveActive = false;
+      window.__pgBacktestResult = null;
+      window.__pgBacktestCapError = '';
+    }
     if(!settings.proxyUrl){ alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。'); return; }
     if(!start || !end){ alert('開始日と終了日を選択してください。'); return; }
     if(start > end){ alert('開始日は終了日より前（または同日）にしてください。'); return; }
@@ -14473,6 +14484,10 @@ if(horses.length === 0){
             alert('このJSONに復元できる明細がありません（収支明細・未確定明細・エラー明細がすべて空です）。');
             return;
           }
+          // 読込成功後は、以前の購入ガード専用表示を解除して未配分の期間横断結果へ戻す。
+          window.__pgBacktestLiveActive = false;
+          window.__pgBacktestResult = null;
+          window.__pgBacktestCapError = '';
           rsApplyImportedConditions(obj.conditions);
           rsLastRows = rows;
           try{ window.__rsLastRows = rows.slice(); }catch(e){}
@@ -25130,6 +25145,19 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     btn.textContent=on?'📊 2画面ON':'📊 横2画面';
   }
   function buildLiveSnapshot(){
+    // v5.18.283 DailyCapGraphFix:
+    // 購入ガード実行中は、日次配分前の候補（__rsLastRows）を右グラフへ流さない。
+    // 完了後は購入ガードで実際に採用した買い目だけの専用スナップショットを送る。
+    if(window.__pgBacktestRunning)return null;
+    if(window.__pgBacktestLiveActive){
+      if(!window.__pgBacktestResult||typeof window.tkBuildPurchaseGuardGraphSnapshot!=='function')return null;
+      try{
+        var guarded=window.tkBuildPurchaseGuardGraphSnapshot(window.__pgBacktestResult);
+        if(guarded&&typeof window.tkApplySimTransferRange==='function')guarded=window.tkApplySimTransferRange(guarded);
+        return guarded;
+      }
+      catch(e){window.__pgBacktestCapError=(e&&e.message)||String(e);return null}
+    }
     // v5.18.256 RangeSyncFix: 全ソース統合版(profitHistory+simHistory+期間横断rsLastRows)を優先。
     // sim単体版(simHistoryのみ)を優先すると、simHistoryに残る旧明細で期間横断の開催場が
     // 上書き・隠蔽され「開催場が同期しない」状態になっていた。統合版は買い目内訳も保持する。
@@ -25145,10 +25173,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   function writeBridge(){
     var snap=buildLiveSnapshot();
     if(!snap||!Array.isArray(snap.収支明細)){
-      setStatus('収支データ待機中');
+      setStatus(window.__pgBacktestRunning?'購入ガード計算中（グラフ更新保留）':(window.__pgBacktestCapError?'日次上限検証エラー：'+window.__pgBacktestCapError:'収支データ待機中'));
       return null;
     }
-    var payload={savedAt:new Date().toISOString(),fileName:LIVE_FILE_NAME,data:snap,live:true,replace:!!window.__tkSimTransferReplace};
+    var replace=!!window.__tkSimTransferReplace||!!snap.購入ガード;
+    var payload={savedAt:new Date().toISOString(),fileName:LIVE_FILE_NAME,data:snap,live:true,replace:replace};
     try{localStorage.setItem(BRIDGE_KEY,JSON.stringify(payload))}
     catch(e){
       setStatus(e&&(e.name==='QuotaExceededError'||e.code===22)?'データ量が大きく送信できません':'送信エラー: '+((e&&e.message)||e));
@@ -25180,7 +25209,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       return sent;
     }
     var direct=false,loaded=false;
-    var box=sent?{fileName:LIVE_FILE_NAME,data:sent.payload.data,savedAt:sent.payload.savedAt,replace:!!window.__tkSimTransferReplace}:null;
+    var box=sent?{fileName:LIVE_FILE_NAME,data:sent.payload.data,savedAt:sent.payload.savedAt,replace:!!sent.payload.replace}:null;
     try{
       applyEmbeddedGraphStyle();
       var cw=frame.contentWindow;
@@ -25229,8 +25258,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   function broadcastLive(){
     if(!liveCh)return;
     var snap=buildLiveSnapshot();
-    if(!snap||!Array.isArray(snap.収支明細)||!snap.収支明細.length)return;
-    try{liveCh.postMessage({type:'data',box:{fileName:LIVE_FILE_NAME,data:snap,savedAt:new Date().toISOString(),replace:!!window.__tkSimTransferReplace}})}catch(e){}
+    if(!snap||!Array.isArray(snap.収支明細)||(!snap.収支明細.length&&!snap.購入ガード))return;
+    try{liveCh.postMessage({type:'data',box:{fileName:LIVE_FILE_NAME,data:snap,savedAt:new Date().toISOString(),replace:!!window.__tkSimTransferReplace||!!snap.購入ガード}})}catch(e){}
   }
   function scheduleBroadcast(){
     if(!liveCh)return;
@@ -25749,6 +25778,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
   function money(v){return Math.round(n(v)).toLocaleString()}
   function cleanMoney(v,def){var x=n(v)||def;return Math.max(100,Math.floor(x/100)*100)}
+  function dayOnly(v){var s=String(v||''),m=s.match(/(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);return m?m[1]+'-'+String(m[2]).padStart(2,'0')+'-'+String(m[3]).padStart(2,'0'):s}
   function priorityLabel(cfg){return cfg&&cfg.ticketPriority==='normal'?'ノーマル（設定モード順）':'EV上位優先'}
   function metricLabel(cfg){return cfg&&cfg.dailyRankMetric==='adjusted_ev'?'補正EV順':(cfg&&cfg.dailyRankMetric==='learned_profit'?'過去学習後の期待利益順':'EV順')}
   function allocationLabel(cfg){return cfg&&cfg.allocationMode==='daily_rank'?'全日ランキング・最終Rまで比較（'+metricLabel(cfg)+'）':priorityLabel(cfg)}
@@ -25849,7 +25879,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     var bk=String(b.date||'')+'|'+String(b.postTime||String(b.no||0).padStart(2,'0'))+'|'+String(b.venueCode||b.venueName||'');
     return ak.localeCompare(bk);
   }
-  function makeBase(row){return {date:String(row.date||'日付不明'),venue:String(row.venueName||row.venueCode||''),no:n(row.no),raceName:String(row.raceName||((n(row.no)||'?')+'R')),rid:String(row.rid||row.raceId||''),status:'',reason:'',points:0,bet:0,ret:0,profit:0,tickets:[],hasEv:false,isMain:false}}
+  function makeBase(row){return {date:dayOnly(row.date)||'日付不明',venue:String(row.venueName||row.venueCode||''),no:n(row.no),raceName:String(row.raceName||((n(row.no)||'?')+'R')),rid:String(row.rid||row.raceId||''),status:'',reason:'',points:0,bet:0,ret:0,profit:0,tickets:[],hasEv:false,isMain:false}}
   function isDebutRaceName(name){return /(新馬|メイクデビュー|フレッシュチャレンジ|ファーストステップ|ドリームチャレンジ|スパーキングデビュー|リアトリスデビュー|ハイビスカスデビュー|ライラックデビュー|ローズデビュー)/.test(String(name||''))}
   function isMainRow(row,cfg){return n(row&&row.no)===n(cfg.mainRaceNo||11)}
   function pendingMainHold(source,index,rec,cfg){
@@ -26005,16 +26035,35 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     result.rows.forEach(function(r){lines.push([r.date,r.venue,r.no+'R',r.raceName,statusLabel(r),r.points,r.bet,r.ret,r.profit,r.tickets.map(function(t){return t.type+' '+t.combo}).join(' / ')||r.reason].join('\t'))});return lines.join('\n');
   }
   function currentRows(){return Array.isArray(window.__rsLastRows)?window.__rsLastRows.slice():[]}
+  function validateDailyCap(result){
+    var daily={},seen={},duplicate=[];
+    (result&&Array.isArray(result.rows)?result.rows:[]).forEach(function(r){
+      if(!r||r.status!=='buy')return;
+      var d=dayOnly(r.date)||'日付不明',rid=String(r.rid||''),key=rid||[d,r.venue,r.no].join('|');
+      if(seen[key])duplicate.push(key);else seen[key]=1;
+      daily[d]=n(daily[d])+n(r.bet);
+    });
+    var limit=n(result&&result.config&&result.config.dailyLimit),violations=Object.keys(daily).filter(function(d){return daily[d]>limit}).map(function(d){return {date:d,used:daily[d]}}),max=Object.keys(daily).reduce(function(m,d){return Math.max(m,n(daily[d]))},0);
+    return {ok:!violations.length&&!duplicate.length,limit:limit,maxDailyUsed:max,daily:daily,violations:violations,duplicateRaceIds:duplicate};
+  }
   window.recalculatePurchaseGuardBacktest=function(){
     var rows=currentRows(),cfg=applyConfig(configFromFields());
     if(!rows.length){setStatus('期間横断結果がありません。期間を指定して「期間を取得してバックテスト」を実行してください。',false);return null}
-    var result=calculate(rows,cfg);state.result=result;window.__pgBacktestResult=result;renderSummary(result);renderTable(result);
+    var result=calculate(rows,cfg),validation=validateDailyCap(result);result.capValidation=validation;state.result=result;window.__pgBacktestResult=result;window.__pgBacktestLiveActive=true;window.__pgBacktestRunning=false;renderSummary(result);renderTable(result);
     var cp=$('pgBtCopyBtn');if(cp)cp.disabled=false;
+    if(!validation.ok){
+      var bad=validation.violations.map(function(x){return x.date+' '+money(x.used)+'円'}).join('、'),dup=validation.duplicateRaceIds.length?' / race_id重複 '+validation.duplicateRaceIds.length+'件':'';
+      window.__pgBacktestCapError=(bad?'上限超過 '+bad:'')+dup;
+      setStatus('日次上限の安全検査で停止しました：'+esc(window.__pgBacktestCapError)+'。未配分の候補データは右グラフへ送りません。',false);
+      return result;
+    }
+    window.__pgBacktestCapError='';
     var extra=result.stats.missing?' / 明細不足 '+result.stats.missing+'Rを除外':'';
     var fallback=result.stats.evFallback?' / EV未保存 '+result.stats.evFallback+'購入Rは元の買い目順を使用':'';
     var metricFallback=result.stats.metricFallback?' / 過去データに選択指標がない'+result.stats.metricFallback+'点は利用可能なEVへフォールバック':'';
     var rankInfo=result.config.allocationMode==='daily_rank'?'、全'+result.stats.candidates+'候補から全日順位見送り '+result.stats.rankSkip+'R':'';
-    setStatus('バックテスト完了（'+allocationLabel(result.config)+' / NAR地方移動補正: '+narBacktestLabel(result.config)+'）：'+result.stats.purchased+'R・'+result.stats.points+'点を購入'+rankInfo+'、メイン購入 '+result.stats.mainPurchased+'R、新馬見送り '+result.stats.debutSkip+'R。日次最大使用額 '+money(result.stats.maxDailyUsed)+'円。'+extra+fallback+metricFallback,true);
+    setStatus('バックテスト完了（'+allocationLabel(result.config)+' / NAR地方移動補正: '+narBacktestLabel(result.config)+'）：'+result.stats.purchased+'R・'+result.stats.points+'点を購入'+rankInfo+'、メイン購入 '+result.stats.mainPurchased+'R、新馬見送り '+result.stats.debutSkip+'R。日別上限検証 OK（最大 '+money(validation.maxDailyUsed)+'円 / 上限 '+money(validation.limit)+'円）。右グラフは購入済み買い目だけで置換しました。'+extra+fallback+metricFallback,true);
+    setTimeout(function(){try{if(typeof window.scheduleProfitLiveSync==='function')window.scheduleProfitLiveSync()}catch(e){}try{if(typeof window.refreshProfitLiveGraph==='function')window.refreshProfitLiveGraph()}catch(e){}},20);
     return result;
   };
   window.runPurchaseGuardBacktest=async function(ev){
@@ -26024,7 +26073,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     if(start>end){alert('開始日は終了日以前にしてください。');return}
     if(typeof window.runRangeVenueSimulation!=='function'){setStatus('期間横断シミュレーションを利用できません。',false);return}
     try{if(typeof settings!=='undefined'&&settings&&!settings.proxyUrl){alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。');return}}catch(e){}
-    state.running=true;if(btn){btn.disabled=true;btn.textContent='バックテスト用データ取得中...'}
+    state.running=true;window.__pgBacktestRunning=true;window.__pgBacktestCapError='';if(btn){btn.disabled=true;btn.textContent='バックテスト用データ取得中...'}
     var snap=null,narSnap=null,narFrozen=false,record=$('rsRecord'),recordOn=record&&record.checked;
     try{
       try{if(typeof settings!=='undefined'&&settings){snap={unit:settings.unit,budget:settings.budget,maxTickets:settings.maxTickets};settings.unit=cfg.pointAmount;settings.budget=cfg.pointAmount*MAX_POINTS;settings.maxTickets=MAX_POINTS}}catch(e){}
@@ -26039,11 +26088,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       if(record)record.checked=false;
       try{window.__rsLastRows=[]}catch(e){}
       setStatus((cfg.allocationMode==='daily_rank'?'過去レースの全候補を取得・精算中です。完了後に日付ごとに'+metricLabel(cfg)+'で上位'+money(cfg.dailyLimit)+'円分を選びます。':'過去レースを取得・精算中です。完了後に日次上限と最大3点を適用します。')+' NAR地方移動補正は「'+narBacktestLabel(cfg)+'」で学習更新を凍結します。',true);
-      await window.runRangeVenueSimulation();
+      await window.runRangeVenueSimulation({purchaseGuard:true});
       window.recalculatePurchaseGuardBacktest();
-    }catch(e){console.error('[PurchaseGuardBacktest]',e);setStatus('バックテストに失敗しました：'+esc(e&&e.message||e),false)}
+    }catch(e){window.__pgBacktestRunning=false;console.error('[PurchaseGuardBacktest]',e);setStatus('バックテストに失敗しました：'+esc(e&&e.message||e),false)}
     finally{
-      window.__pgDailyRankCapture=false;
+      window.__pgDailyRankCapture=false;window.__pgBacktestRunning=false;
       try{if(narFrozen){window.__narTransitionLearningFrozen=false;if(narSnap&&typeof window.tkNarTransitionImportData==='function')window.tkNarTransitionImportData(narSnap)}}catch(e){window.__narTransitionLearningFrozen=false}
       try{if(snap&&typeof settings!=='undefined'&&settings){settings.unit=snap.unit;settings.budget=snap.budget;settings.maxTickets=snap.maxTickets}}catch(e){}
       if(record)record.checked=!!recordOn;state.running=false;if(btn){btn.disabled=false;btn.textContent=old||'期間を取得してバックテスト'}
@@ -26066,10 +26115,101 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 </script>
 
 <script>
-/* v5.18.282 NarTransitionFinalIntegration: 最終通信・買い目・表示経路を固定 */
+/* v5.18.283 DailyCapGraphFix: 購入ガード確定結果だけを収支グラフへ渡す */
 (function(){
   'use strict';
-  var VERSION='v5.18.282 NarTransitionEV';
+  function n(v){var x=Number(v==null?0:v);return Number.isFinite(x)?x:0}
+  function text(v){return Array.isArray(v)?v.join('－'):String(v==null?'':v).trim()}
+  function day(v){var s=String(v||''),m=s.match(/(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);return m?m[1]+'-'+String(m[2]).padStart(2,'0')+'-'+String(m[3]).padStart(2,'0'):''}
+  function typeKey(v){return String(v||'').replace(/\s+/g,'').toUpperCase()}
+  function comboText(v){return (Array.isArray(v)?v.join('-'):String(v||'')).replace(/[－—–]/g,'-').replace(/\s+/g,'')}
+  function val(o,keys){for(var i=0;i<keys.length;i++){if(o&&o[keys[i]]!=null&&o[keys[i]]!=='')return o[keys[i]]}return ''}
+  function rawDetails(raw){
+    if(!raw)return [];
+    var src=Array.isArray(raw.ticketDetails)?raw.ticketDetails:(Array.isArray(raw.内訳)?raw.内訳:[]);
+    return src.slice();
+  }
+  function rawIndexes(){
+    var byRid=new Map(),byKey=new Map(),rows=Array.isArray(window.__rsLastRows)?window.__rsLastRows:[];
+    rows.forEach(function(r){
+      if(!r||r.header)return;
+      var rid=String(r.rid||r.raceId||r.race_id||'');if(rid&&!byRid.has(rid))byRid.set(rid,r);
+      var d=day(r.date),venue=String(r.venueName||r.venueCode||''),no=n(r.no||r.raceNo);
+      var key=[d,venue,no].join('|');if(d&&venue&&no&&!byKey.has(key))byKey.set(key,r);
+    });
+    return {byRid:byRid,byKey:byKey};
+  }
+  function rawFor(rec,idx){
+    var rid=String(rec.rid||rec.raceId||rec.race_id||''),r=rid&&idx.byRid.get(rid);if(r)return r;
+    return idx.byKey.get([day(rec.date),String(rec.venue||rec.venueName||''),n(rec.no||rec.raceNo)].join('|'))||null;
+  }
+  function selectedDetails(rec,raw,cfg){
+    var src=rawDetails(raw),used={};
+    return (Array.isArray(rec.tickets)?rec.tickets:[]).map(function(t){
+      var tk=typeKey(t.type||t.券種名),ck=comboText(t.combo||t.買い目||t.nums),rd=null,ri=-1;
+      for(var i=0;i<src.length;i++){
+        if(used[i])continue;
+        if(typeKey(val(src[i],['券種名','type','ticketType']))===tk&&comboText(val(src[i],['買い目','combo','nums']))===ck){rd=src[i];ri=i;break}
+      }
+      if(ri>=0)used[ri]=1;
+      rd=rd||{};
+      var amount=n(t.amount||t.stake)||n(cfg.pointAmount),ret=n(t.ret),horse=text(t.horse||val(rd,['馬名','horseNames']));
+      var d={券種名:String(t.type||val(rd,['券種名','type','ticketType'])||'不明'),買い目:ck,馬名:horse,点数:1,購入額:amount,払戻額:ret,的中:ret>0?1:0};
+      var odds=n(val(rd,['想定オッズ','odds'])),pop=n(val(rd,['平均人気','popularity'])),ev=n(t.ev||val(rd,['素EV','EV','期待値','evRaw','ev'])),rawEv=n(t.evRaw||val(rd,['素EV','evRaw'])),adj=n(t.adjustedEv||val(rd,['補正EV','adjustedEv'])),learn=n(t.learnedEv||val(rd,['学習後EV','learnedEv']));
+      if(odds>0)d.想定オッズ=odds;if(pop>0)d.平均人気=pop;if(ev>0)d.EV=ev;if(rawEv>0)d.素EV=rawEv;if(adj>0)d.補正EV=adj;if(learn>0)d.学習後EV=learn;
+      var pb=String(val(rd,['人気帯','popularityBand'])||''),ob=String(val(rd,['オッズ帯','oddsBand'])||'');if(pb)d.人気帯=pb;if(ob)d.オッズ帯=ob;
+      var nf=n(t.narTransitionFactor||val(rd,['地方移動補正目安','narTransitionFactor']));if(nf>0&&nf!==1)d.地方移動補正目安=nf;
+      var nr=text(t.narTransitionReasons||val(rd,['地方移動補正理由','narTransitionReasons']));if(nr)d.地方移動補正理由=nr;
+      if(t.rank)d.全日順位=n(t.rank);if(t.score!=null)d.全日順位スコア=n(t.score);
+      return d;
+    });
+  }
+  function aggregate(list){
+    var out={};
+    function bucket(k){return out[k]||(out[k]={点数:0,的中数:0,投資合計:0,払戻合計:0,収支合計:0,回収率:0})}
+    list.forEach(function(r){
+      var det=Array.isArray(r.内訳)?r.内訳:[];
+      det.forEach(function(d){var g=bucket(String(d.券種名||'不明')),b=n(d.購入額),p=n(d.払戻額);g.点数+=n(d.点数)||1;g.的中数+=n(d.的中);g.投資合計+=b;g.払戻合計+=p;g.収支合計+=p-b});
+    });
+    Object.keys(out).forEach(function(k){var g=out[k];g.回収率=g.投資合計?Math.round(g.払戻合計/g.投資合計*1000)/10:0});
+    return out;
+  }
+  function build(result){
+    result=result||{};var cfg=result.config||{},limit=n(cfg.dailyLimit),idx=rawIndexes(),seen={},daily={},errors=[],list=[];
+    (Array.isArray(result.rows)?result.rows:[]).forEach(function(r,i){
+      if(!r||r.status!=='buy')return;
+      var d=day(r.date),rid=String(r.rid||''),venue=String(r.venue||r.venueName||''),no=n(r.no||r.raceNo),key=rid||[d,venue,no].join('|');
+      if(!d)errors.push('日付不明の購入行');if(!venue)errors.push((rid||key)+' の開催場不明');if(seen[key])errors.push((rid||key)+' の重複');else seen[key]=1;
+      var raw=rawFor(r,idx),det=selectedDetails(r,raw,cfg),bet=det.reduce(function(s,x){return s+n(x.購入額)},0),ret=det.reduce(function(s,x){return s+n(x.払戻額)},0);
+      if(!det.length&&n(r.bet)>0)errors.push((rid||key)+' の購入明細なし');
+      if(bet!==n(r.bet))errors.push((rid||key)+' の投資額不一致');
+      daily[d]=n(daily[d])+bet;
+      var types=[];det.forEach(function(x){if(types.indexOf(x.券種名)<0)types.push(x.券種名)});
+      var rec={日付:d,場:venue,R:no?no+'R':'',レース名:String(r.raceName||''),race_id:rid,券種:types.join('+')||'購入ガード',投資:bet,払戻:ret,収支:ret-bet,ROI:bet?Math.round(ret/bet*1000)/10:0,source:'購入ガード・バックテスト',sourceIndex:i,内訳:det,日次上限:limit};
+      try{if(typeof pgjEnrichRecordMeta==='function')pgjEnrichRecordMeta(rec,raw||r)}catch(e){}
+      list.push(rec);
+    });
+    Object.keys(daily).forEach(function(d){if(daily[d]>limit)errors.push(d+' '+daily[d]+'円（上限'+limit+'円）')});
+    var totalBet=list.reduce(function(s,r){return s+n(r.投資)},0),totalRet=list.reduce(function(s,r){return s+n(r.払戻)},0),expected=n(result.stats&&result.stats.bet),max=Object.keys(daily).reduce(function(m,d){return Math.max(m,n(daily[d]))},0);
+    if(totalBet!==expected)errors.push('投資合計 '+totalBet+'円（計算結果 '+expected+'円）');
+    if(result.capValidation&&result.capValidation.ok===false)errors.push('購入ガード本体の上限検証エラー');
+    if(errors.length){window.__pgBacktestCapError=errors.slice(0,5).join(' / ');return null}
+    window.__pgBacktestCapError='';
+    var byTicket=aggregate(list),profit=totalRet-totalBet;
+    return {product:'The競馬 EV分析',schema:'keiba-profit-graph-v1',version:window.APP_VERSION||'',exportedAt:new Date().toISOString(),説明:'購入ガード適用後の購入買い目だけを収支グラフへ連動',集計:{件数:list.length,投資合計:totalBet,払戻合計:totalRet,収支合計:profit,ROI:totalBet?Math.round(totalRet/totalBet*1000)/10:0},収支明細:list,券種別集計:byTicket,購入ガード:{適用済み:true,購入配分:cfg.allocationMode||'',ランキング基準:cfg.dailyRankMetric||'',一日上限:limit,一日最大使用額:max,日別上限検証:'OK',日別投資:daily},仕様:{graphs:['収支構成比','開催場別収支','券種別収支','累計収支変動'],chartSwitch:['円グラフ','棒グラフ','折れ線グラフ'],compatibleWith:'keiba_profit_spec_chart_switcher_candle_v22.html'}};
+  }
+  window.tkBuildPurchaseGuardGraphSnapshot=build;
+  window.tkDeactivatePurchaseGuardLive=function(){window.__pgBacktestLiveActive=false;window.__pgBacktestResult=null;window.__pgBacktestCapError='';window.__pgBacktestRunning=false};
+  if(typeof window.__pgBacktestLiveActive!=='boolean')window.__pgBacktestLiveActive=false;
+  if(typeof window.__pgBacktestRunning!=='boolean')window.__pgBacktestRunning=false;
+})();
+</script>
+
+<script>
+/* v5.18.283 DailyCapGraphFix: 最終通信・買い目・表示経路を固定 */
+(function(){
+  'use strict';
+  var VERSION='v5.18.283 DailyCapGraphFix';
   function ridFromUrl(url){
     var s=String(url||'');
     if(!/^https:\/\/nar(?:\.sp)?\.netkeiba\.com\//i.test(s))return '';

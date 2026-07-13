@@ -888,7 +888,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
       </label>
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:4px;cursor:pointer;user-select:none">
         <input type="checkbox" id="rsPastAdj" style="width:18px;height:18px;accent-color:var(--green)">
-        <span>🐴 馬柱補正を使って予想する（NAR実験：転入・組替わり・場替わりで勝率を補正。レース毎に馬柱を1回追加取得）</span>
+        <span>🐴 地方移動EV補正を使う（JRA転入クラス・昇降級・適応戦数・転出元→転入先の場レベルを補正）</span>
       </label>
       <div id="rsPastAdjStat" style="display:none;font-size:11px;color:var(--muted);margin:0 0 10px 26px"></div>
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:10px;cursor:pointer;user-select:none">
@@ -951,6 +951,14 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
         </div>
         <div id="pgBtDailyRankNote" style="display:none;margin:-1px 0 8px;padding:7px 9px;border-radius:8px;background:rgba(96,165,250,.09);color:#bfdbfe;font-size:11px;line-height:1.55">
           1Rから最終Rまでの候補を先に集め、1R最大3点を守って日次上限まで採用します。EV＝素EV、補正EV＝確率学習による補正後、過去学習後の期待利益＝1点額×（補正EV×過去ROI補正−1）です。学習サンプル不足時は補正なしで計算します。
+        </div>
+        <div class="field" style="margin-bottom:8px">
+          <label>NAR地方移動補正のバックテスト学習</label>
+          <select id="pgBtNarLearningMode">
+            <option value="prior_only" selected>固定補正のみ（推奨・未来情報なし）</option>
+            <option value="current_frozen">現在の学習値を固定適用（運用再現用）</option>
+          </select>
+          <div style="font-size:11px;color:var(--muted);line-height:1.55;margin-top:4px">どちらも期間中の結果で学習値を更新しません。バックテスト後は通常運用の学習データを自動復元します。</div>
         </div>
         <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;margin:0 0 8px;cursor:pointer;user-select:none">
           <input type="checkbox" id="pgBtSkipDebut" checked style="width:18px;height:18px;accent-color:#f59e0b;margin-top:1px">
@@ -1015,7 +1023,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
       </label>
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:4px;cursor:pointer;user-select:none">
         <input type="checkbox" id="predSimPastAdj" style="width:18px;height:18px;accent-color:var(--green)">
-        <span>🐴 馬柱補正を使って予想する（NAR実験：転入・組替わり・場替わりで勝率を補正。レース毎に馬柱を1回追加取得）</span>
+        <span>🐴 地方移動EV補正を使う（JRA転入クラス・昇降級・適応戦数・転出元→転入先の場レベルを補正）</span>
       </label>
       <div id="predSimPastAdjStat" style="display:none;font-size:11px;color:var(--muted);margin:0 0 10px 26px"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -1771,6 +1779,29 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
       </div>
     </div>
 
+    <div class="card" id="narTransitionSettingsCard">
+      <h2>🐴 地方競馬・移動EV補正</h2>
+      <div class="settings-row">
+        <label>移動・昇降級を補正</label>
+        <input type="checkbox" id="setNarTransitionAdj" checked onchange="saveSettings()">
+      </div>
+      <div class="settings-row">
+        <label>結果から補正を学習</label>
+        <input type="checkbox" id="setNarTransitionLearn" checked onchange="saveSettings()">
+      </div>
+      <div class="proxy-note" style="margin-top:6px;font-size:11px;line-height:1.65">
+        NARだけに適用します。JRAの未勝利・1勝・2勝・3勝・OPを区別し、転出元→転入先の場レベル、転入後何戦目か、同じ競走体系内の昇格・降格を確率へ反映してから再正規化します。結果学習は市場確率に対する過不足だけを記録し、サンプル不足時は1.00へ縮小します。
+      </div>
+      <div id="narTransitionSettingsStat" style="margin-top:8px;padding:8px 10px;border:1px solid rgba(52,211,153,.25);border-radius:8px;background:rgba(16,185,129,.06);font-size:11px;line-height:1.6;color:#d1fae5">
+        移動EV補正の学習状況を確認中…
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+        <button class="btn-sm" type="button" onclick="tkNarTransitionExport()">📤 補正学習JSON出力</button>
+        <button class="btn-sm" type="button" onclick="tkNarTransitionImport()">📥 補正学習JSON読込</button>
+        <button class="btn-sm" type="button" style="border-color:rgba(248,113,113,.4);color:#fca5a5" onclick="tkNarTransitionReset()">🗑 補正学習リセット</button>
+      </div>
+    </div>
+
     <div class="card">
       <h2>⚙️ 基本設定</h2>
       <div class="settings-row">
@@ -2034,6 +2065,8 @@ let settings = {
   dailyPointAmount: 100,
   allocationMode: 'per_race',
   dailyRankMetric: 'ev',
+  narTransitionAdj: true,
+  narTransitionLearn: true,
   minEVByType: {...DEFAULT_MIN_EV},
   proxyUrl: 'https://takuya.nitta-katsuhiko.workers.dev/'
 };
@@ -2169,6 +2202,14 @@ function updateDailyBudgetSettingsUI(){
     ? '<b>全日ランキング（'+rankLabel+'）</b>：1Rから最終Rまでの候補を全部出してから順位付けし、日次上限まで採用します。レース数は無制限、1R最大3点、新馬戦見送り設定も引き継ぎます。後半に高い候補があれば、前半で予算を使い切りません。実行はシミュレーション画面の「ワンクリック当日一括」を使います。'
     : '<b>レース順</b>：発走順に購入判定する従来方式です。上限に達した後のレースは見送るため、後半の高EV候補を比較したい場合は「全日EV上位」を選んでください。';
 }
+function updateNarTransitionSettingsUI(){
+  settings.narTransitionAdj = settings.narTransitionAdj !== false;
+  settings.narTransitionLearn = settings.narTransitionLearn !== false;
+  const adj = document.getElementById('setNarTransitionAdj'); if(adj) adj.checked = settings.narTransitionAdj;
+  const learn = document.getElementById('setNarTransitionLearn'); if(learn){ learn.checked = settings.narTransitionLearn; learn.disabled = !settings.narTransitionAdj; }
+  ['rsPastAdj','predSimPastAdj'].forEach(id=>{ const el=document.getElementById(id); if(el) el.checked=settings.narTransitionAdj; });
+  try{ if(typeof window.tkNarTransitionRenderStatus === 'function') window.tkNarTransitionRenderStatus(); }catch(e){}
+}
 function syncDailyBudgetGuardStorage(){
   normalizeDailyBudgetSettings();
   const partial = {dailyLimit:settings.dailyLimit,pointAmount:settings.dailyPointAmount,allocationMode:settings.allocationMode,dailyRankMetric:settings.dailyRankMetric};
@@ -2231,6 +2272,8 @@ function saveSettings(){
   settings.allocationMode = document.getElementById('setDailyAllocationMode')?.value === 'daily_rank' ? 'daily_rank' : 'per_race';
   const dailyMetric = document.getElementById('setDailyRankMetric')?.value;
   settings.dailyRankMetric = ['ev','adjusted_ev','learned_profit'].includes(dailyMetric) ? dailyMetric : 'ev';
+  settings.narTransitionAdj = document.getElementById('setNarTransitionAdj')?.checked !== false;
+  settings.narTransitionLearn = document.getElementById('setNarTransitionLearn')?.checked !== false;
   normalizeDailyBudgetSettings();
   TICKET_TYPES.forEach(t => {
     const el = document.getElementById('ev-' + t);
@@ -2239,6 +2282,7 @@ function saveSettings(){
   document.getElementById('narBadge').style.display = settings.nar ? '' : 'none';
   localStorage.setItem('tk-html-settings', JSON.stringify(settings));
   updateDailyBudgetSettingsUI();
+  updateNarTransitionSettingsUI();
   syncDailyBudgetGuardStorage();
 }
 function saveProxy(){
@@ -2267,7 +2311,9 @@ function buildStateSnapshot(){
     horses: horses,
     currentRaceName: currentRaceName,
     currentRaceId: currentRaceId,
-    profitHistory: profitHistory
+    profitHistory: profitHistory,
+    narTransitionLearning: (typeof window !== 'undefined' && typeof window.tkNarTransitionExportData === 'function')
+      ? window.tkNarTransitionExportData() : null
   };
 }
 
@@ -3026,6 +3072,11 @@ function handleImportJSON(input){
 
 function applyStateSnapshot(data){
   if(!data || typeof data !== 'object'){ dataIoStatus('読込に失敗しました（中身が不正です）', false); return; }
+  if(Number(data.schema) === 2 && data.buckets && typeof window.tkNarTransitionImportData === 'function'){
+    const ok = window.tkNarTransitionImportData(data);
+    dataIoStatus(ok ? '🐎 地方移動EV補正の学習データを読み込みました' : '補正学習データを読み込めませんでした', !!ok);
+    return;
+  }
   // 設定（既存デフォルトを保ちつつ上書き）
   if(data.settings && typeof data.settings === 'object'){
     Object.assign(settings, data.settings);
@@ -3046,6 +3097,9 @@ function applyStateSnapshot(data){
   if(typeof data.currentRaceName === 'string') currentRaceName = data.currentRaceName;
   if(data.currentRaceId != null) currentRaceId = String(data.currentRaceId);
   if(Array.isArray(data.profitHistory)) profitHistory = data.profitHistory;
+  if(data.narTransitionLearning && typeof window.tkNarTransitionImportData === 'function'){
+    try{ window.tkNarTransitionImportData(data.narTransitionLearning); }catch(e){}
+  }
 
   // 永続化＆UI反映
   normalizeDailyBudgetSettings();
@@ -3072,6 +3126,7 @@ function refreshSettingsUI(){
   const setNGM = document.getElementById('setNagoyaMode'); if(setNGM) setNGM.checked = settings.nagoyaMode === true;
   const setDTA = document.getElementById('setDisabledTypeAction'); if(setDTA) setDTA.value = (settings.disabledTypeAction === 'exclude') ? 'exclude' : 'skip'; // v5.18.194
   updateDailyBudgetSettingsUI();
+  updateNarTransitionSettingsUI();
   const pUrl = document.getElementById('proxyUrl'); if(pUrl) pUrl.value = settings.proxyUrl || '';
   const nb = document.getElementById('narBadge'); if(nb) nb.style.display = settings.nar ? '' : 'none';
   TICKET_TYPES.forEach(t => {
@@ -3111,6 +3166,8 @@ function resetSettingsToDefault(){
     dailyPointAmount: 100,
     allocationMode: 'per_race',
     dailyRankMetric: 'ev',
+    narTransitionAdj: true,
+    narTransitionLearn: true,
     minEVByType: {...DEFAULT_MIN_EV},
     proxyUrl: keepProxy || 'https://takuya.nitta-katsuhiko.workers.dev/'
   };
@@ -3164,6 +3221,7 @@ function initUI(){
   document.getElementById('setNagoyaMode').checked = settings.nagoyaMode === true;
   document.getElementById('setDisabledTypeAction').value = (settings.disabledTypeAction === 'exclude') ? 'exclude' : 'skip'; // v5.18.194
   updateDailyBudgetSettingsUI();
+  updateNarTransitionSettingsUI();
   syncDailyBudgetGuardStorage();
   document.getElementById('proxyUrl').value = settings.proxyUrl || '';
   document.getElementById('narBadge').style.display = settings.nar ? '' : 'none';
@@ -4037,6 +4095,17 @@ function renderResult(valid, rated){
     <div class="summary-item"><div class="val">${hasOdds}頭</div><div class="lbl">オッズ有</div></div>
     <div class="summary-item"><div class="val">${isNAR()?'NAR':'JRA'}</div><div class="lbl">区分</div></div>
   `;
+  try{
+    const narSummary = (typeof window.tkNarTransitionRaceSummary === 'function') ? window.tkNarTransitionRaceSummary(String(currentRaceId || '')) : null;
+    const narRows = narSummary && Array.isArray(narSummary.details)
+      ? narSummary.details.filter(x => Math.abs(Number(x.mult || 1) - 1) > 0.001 || (x.tags || []).some(t => t !== '移動なし')) : [];
+    if(narRows.length){
+      sg.insertAdjacentHTML('beforeend', `<div class="summary-item" style="grid-column:1/-1;text-align:left">
+        <details><summary style="cursor:pointer;font-weight:800;color:#6ee7b7">地方移動EV補正・馬別理由（${narRows.length}頭）</summary>
+        <div style="margin-top:6px;font-size:11px;line-height:1.65">${narRows.map(x => `${Number(x.num)||'?'} ${escapeHtml(x.name||'')} <b>×${Number(x.mult||1).toFixed(3)}</b>　${escapeHtml((x.tags||[]).join(' / '))}`).join('<br>')}</div></details>
+      </div>`);
+    }
+  }catch(e){}
 
   // 推奨買い目
   const tl = document.getElementById('ticketList');
@@ -4060,12 +4129,16 @@ function renderResult(valid, rated){
     lastTickets.forEach(t => {
       const evColor = t.ev >= 1.2 ? 'var(--green)' : t.ev >= 1.0 ? 'var(--yellow)' : 'var(--red)';
       const tg = isTrigami(t, totalBet) && settings.antigami ? '⚠️ ' : '';
+      const narReasons = Array.isArray(t.narTransitionReasons) ? t.narTransitionReasons.filter(Boolean) : [];
+      const narLine = narReasons.length
+        ? `<div style="font-size:10px;color:#6ee7b7;margin-top:3px">地方移動補正目安 ×${Number(t.narTransitionFactor||1).toFixed(3)}　${escapeHtml(narReasons.join(' / '))}</div>` : '';
       html += `<div class="ticket-row">
         <span class="chip ${CHIP_CLASS[t.type]||''}">${t.type}</span>
         <div class="info">
           <b>${t.nums.join('-')}</b>
           <span style="color:var(--muted);font-size:11px;margin-left:6px">推定${t.odds.toFixed(1)}倍</span>
           ${tg}
+          ${narLine}
         </div>
         <div>
           <div style="font-size:10px;color:var(--muted);text-align:right">EV <span style="color:${evColor}">${t.ev.toFixed(2)}</span></div>
@@ -12553,6 +12626,10 @@ if(horses.length === 0){
   function asw_settle(tickets, finish, payouts){
     let bet = 0, ret = 0, hit = 0;
     const hasFinish = finish && finish.length >= 2;
+    // 買い目ゼロの見送りレースでも、予測済みなら馬単位の移動補正を1回だけ学習する。
+    if(hasFinish && typeof window.tkNarTransitionSettle === 'function'){
+      try{ window.tkNarTransitionSettle(String(currentRaceId || ''), finish); }catch(e){}
+    }
     tickets.forEach(t => {
       const a = Number(t.amount || 0);
       bet += a;
@@ -12632,6 +12709,12 @@ if(horses.length === 0){
         if(Number.isFinite(Number(t.learnedExpectedProfit))) detail.学習期待利益 = Number(t.learnedExpectedProfit);
         if(Number(t.learnedRoiAdj || 0) > 0) detail.学習ROI補正 = Number(t.learnedRoiAdj);
         if(Number(t.p || 0) > 0) detail.予測確率 = Number(t.p);
+        const narInfo = (typeof window.tkNarTransitionTicketInfo === 'function')
+          ? window.tkNarTransitionTicketInfo(String(row.rid || currentRaceId || ''), t) : null;
+        const narFactor = Number(t.narTransitionFactor || (narInfo && narInfo.factor) || 0);
+        const narReasons = Array.isArray(t.narTransitionReasons) ? t.narTransitionReasons : ((narInfo && narInfo.reasons) || []);
+        if(narFactor > 0 && (Math.abs(narFactor - 1) > 0.001 || narReasons.length)) detail.地方移動補正目安 = narFactor;
+        if(narReasons.length) detail.地方移動補正理由 = narReasons.join(' / ');
         if(po.平均人気 > 0){ detail.平均人気 = po.平均人気; detail.人気帯 = pgjPopBand(po.平均人気); }
         if(po.想定オッズ > 0){ detail.想定オッズ = po.想定オッズ; detail.オッズ帯 = pgjOddsBand(po.想定オッズ); }
         details.push(detail);
@@ -12640,6 +12723,7 @@ if(horses.length === 0){
       });
       row.ticketDetails = details;
       row.byType = byType;
+      if(typeof window.tkNarTransitionRaceSummary === 'function') row.narTransitionAdjustment = window.tkNarTransitionRaceSummary(String(row.rid || currentRaceId || ''));
       const keys = Object.keys(byType);
       row.ticketType = keys.length === 1 ? keys[0] : (keys.length ? keys.join('+') : '');
     }catch(e){}
@@ -13954,6 +14038,10 @@ if(horses.length === 0){
         if(Number.isFinite(Number(t.learnedExpectedProfit))) detail.学習期待利益 = Number(t.learnedExpectedProfit);
         if(Number(t.learnedRoiAdj || 0) > 0) detail.学習ROI補正 = Number(t.learnedRoiAdj);
         if(Number(t.p || 0) > 0) detail.予測確率 = Number(t.p);
+        const narFactor = Number(t.narTransitionFactor || 0);
+        const narReasons = Array.isArray(t.narTransitionReasons) ? t.narTransitionReasons : [];
+        if(narFactor > 0 && (Math.abs(narFactor - 1) > 0.001 || narReasons.length)) detail.地方移動補正目安 = narFactor;
+        if(narReasons.length) detail.地方移動補正理由 = narReasons.join(' / ');
         try{
           const po = (typeof pgjBuyPopOdds === 'function') ? pgjBuyPopOdds(t.nums, horseList, t.odds) : { 平均人気: 0, 想定オッズ: 0 };
           if(po.平均人気 > 0){ detail.平均人気 = po.平均人気; detail.人気帯 = pgjPopBand(po.平均人気); }
@@ -14021,18 +14109,32 @@ if(horses.length === 0){
       const localHorses = loaded.horses || [];
       row.raceName = loaded.raceName || task.raceName || (task.no + 'R');
       try{ if(typeof pgjApplyRaceMetaToRow === 'function') pgjApplyRaceMetaToRow(row, task.rid, row.raceName); }catch(e){}
-      const valid = localHorses.filter(h => Number(h.num) > 0 && h.name);
+      let valid = localHorses.filter(h => Number(h.num) > 0 && h.name);
       if(valid.length < 2) throw new Error('有効な出走馬が2頭未満');
+      // 一発モードは複数レースを並行するため、globalではなく馬ごとにrace_idを固定する。
+      if(kind === 'NAR' && typeof window.tkNarPrepareHorses === 'function'){
+        valid = await window.tkNarPrepareHorses(task.rid, valid);
+      }
       const made = generateCandidates(valid);
-      const tickets = buildTickets(made.recs).map(t => ({ ...t, nums:[...t.nums] }));
+      const tickets = buildTickets(made.recs).map(t => {
+        const info = (kind === 'NAR' && typeof window.tkNarTransitionTicketInfo === 'function')
+          ? window.tkNarTransitionTicketInfo(task.rid, t) : null;
+        return { ...t, nums:[...t.nums],
+          narTransitionFactor: Number(info && info.factor || t.narTransitionFactor || 1),
+          narTransitionReasons: (info && info.reasons) ? info.reasons.slice() : (Array.isArray(t.narTransitionReasons) ? t.narTransitionReasons.slice() : []) };
+      });
       row.count = tickets.length;
       const { finish, payouts } = await rsOneShotGetResult(kind, task.rid, loaded.resultDoc, localHorses);
       try{ if(typeof pgjApplyRaceMetaToRow === 'function') pgjApplyRaceMetaToRow(row, task.rid, row.raceName); }catch(e){}
       row.hasFinish = finish && finish.length >= 2;
       row.finishTop = row.hasFinish ? finish.slice(0, 3).map(x => x.horseNo) : [];
+      if(row.hasFinish && typeof window.tkNarTransitionSettle === 'function'){
+        try{ window.tkNarTransitionSettle(task.rid, finish); }catch(e){}
+      }
       const s = rsOneShotSettle(tickets, finish, payouts, valid.length);
       row.bet = s.bet; row.ret = s.ret; row.profit = s.profit; row.roi = s.roi; row.hit = s.hit; row.status = 'ok';
       rsOneShotBreakdown(row, tickets, finish, payouts, valid.length, valid);
+      if(typeof window.tkNarTransitionRaceSummary === 'function') row.narTransitionAdjustment = window.tkNarTransitionRaceSummary(task.rid);
     }catch(e){
       row.status = 'error';
       row.error = (e && e.message) || String(e);
@@ -14942,6 +15044,9 @@ if(horses.length === 0){
       const finish = bundle.finish || [];
       const hasFinish = finish.length >= 2;
       const payouts = hasFinish ? (bundle.payouts || {}) : {};
+      if(hasFinish && typeof window.tkNarTransitionSettle === 'function'){
+        try{ window.tkNarTransitionSettle(row.rid, finish); }catch(e){}
+      }
       let bet = 0, ret = 0, hit = 0;
       const detail = (row.tickets || []).map(t => {
         const a = Number(t.amount || 0); bet += a;
@@ -15254,6 +15359,9 @@ if(horses.length === 0){
     const finish = bundle.finish || [];
     const hasFinish = finish.length >= 2;
     const payouts = hasFinish ? (bundle.payouts || {}) : {};
+    if(hasFinish && typeof window.tkNarTransitionSettle === 'function'){
+      try{ window.tkNarTransitionSettle(rid, finish); }catch(e){}
+    }
 
     // result.htmlもdb版も取得できず、着順も馬一覧もない場合だけ本当の解析失敗とする。
     if(!doc && rHorses.length < 2 && !hasFinish){
@@ -18143,19 +18251,31 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   function parseClass171(rawText){
     const t = toHalf171(rawText).replace(/\s+/g, '');
     if(!t) return null;
-    const grade = (t.match(/Jpn[I1２ⅠⅡⅢ23]{0,3}|JpnＩ|Ｇ?[GＧ][I1２ⅠⅡⅢ23]{1,3}|重賞/) || [])[0] || '';
+    const grade = (t.match(/(?:Jpn|[GＧ])(?:I{1,3}|[123]|Ⅰ|Ⅱ|Ⅲ)|重賞/i) || [])[0] || '';
+    let jm = null;
+    if(grade) jm = { cls:'JRAG', level:6, raw:grade };
+    else if(/(?:3勝クラス|1600万下)/.test(t)) jm = { cls:'JRA3', level:4, raw:'JRA3勝クラス' };
+    else if(/(?:2勝クラス|1000万下)/.test(t)) jm = { cls:'JRA2', level:3, raw:'JRA2勝クラス' };
+    else if(/(?:1勝クラス|500万下)/.test(t)) jm = { cls:'JRA1', level:2, raw:'JRA1勝クラス' };
+    else if(/未勝利/.test(t)) jm = { cls:'JRA0', level:1, raw:'JRA未勝利' };
+    else if(/新馬/.test(t)) jm = { cls:'JRANEW', level:0, raw:'JRA新馬' };
+    else if(/(?:リステッド|Listed|\bL\b|オープン|OPEN|\bOP\b)/i.test(t)) jm = { cls:'JRAOP', level:5, raw:'JRAオープン' };
+    if(jm) return { cls:jm.cls, group:0, raw:jm.raw, grade, system:jm.cls==='JRAG'?'GRADE':'JRA', jraLevel:jm.level };
     let m =
       t.match(/(?:^|[^A-Za-z0-9])([ABCD])([0-9]{0,2})(?:級)?[-‐－ーｰ・]?([0-9]{1,2}|[一二三四五六七八九十]{1,3})?組/) ||
       t.match(/(?:^|[^A-Za-z0-9])([ABCD])([0-9]{1,2})[-‐－ーｰ]([0-9]{1,2})/) ||
       t.match(/(?:^|[^A-Za-z0-9])([ABCD])([0-9]{0,2})([一二三四五六七八九十]{1,3})/) ||
-      t.match(/(?:^|[^A-Za-z0-9])([ABCD])([0-9]{1,2})/);
+      t.match(/(?:^|[^A-Za-z0-9])([ABCD])([0-9]{1,2})/) ||
+      t.match(/(?:^|[^A-Za-z0-9])([ABCD])(?:級|クラス|$)/);
     if(!m && !grade) return null;
-    if(!m) return { cls:'', group:0, raw:grade, grade };
+    if(!m) return { cls:'', group:0, raw:grade, grade, system:'GRADE', jraLevel:0 };
     return {
       cls: m[1] + (m[2] || ''),
       group: kanNum171(m[3] || ''),
       raw: m[0].replace(/^[^A-Za-z0-9]/, ''),
-      grade
+      grade,
+      system:'NAR',
+      jraLevel:0
     };
   }
 
@@ -18548,6 +18668,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   function api(){ return window.__narPast171 || null; }
   // v5.18.173: 期間横断シミュ(rsPastAdj)と対象レース一括予想(predSimPastAdj)のどちらかがONなら補正を使う
   function pastAdjOn(){
+    if(window.__narTransitionEngineActive) return false;
     const a = document.getElementById('rsPastAdj');
     const b = document.getElementById('predSimPastAdj');
     return !!((a && a.checked) || (b && b.checked));
@@ -18727,6 +18848,266 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   });
 
   console.log('[v5.18.172] NAR past-performance adjustment integrated into simulation (all NAR venues)');
+})();
+</script>
+
+<script>
+/* v5.18.282 NarTransitionEV: JRAクラス・場間・適応減衰・結果学習を統合 */
+(function(){
+  'use strict';
+  window.__narTransitionEngineActive = true;
+  const VERSION = 'v5.18.282 NarTransitionEV';
+  const LS_KEY = 'tk-nar-transition-learning-v2';
+  const MAX_SEEN = 3000, MAX_PENDING = 240;
+  const VENUE_LEVEL = {
+    '札幌':1.25,'函館':1.25,'福島':1.25,'新潟':1.25,'東京':1.25,'中山':1.25,'中京':1.25,'京都':1.25,'阪神':1.25,'小倉':1.25,
+    '門別':1.06,'盛岡':1.00,'水沢':0.99,'浦和':1.10,'船橋':1.13,'大井':1.15,'川崎':1.11,
+    '金沢':0.98,'笠松':0.99,'名古屋':1.01,'園田':1.07,'姫路':1.04,'高知':1.02,'佐賀':0.99,'帯広':1.00
+  };
+  const JRA_CLASS_FACTOR = {0:0.98,1:1.00,2:1.09,3:1.14,4:1.18,5:1.22,6:1.26};
+  const DEST_CLASS_FACTOR = {A:0.94,B:0.99,C:1.06,D:1.10};
+  const RETENTION = {1:1.00,2:0.70,3:0.40,4:0.20};
+  const ADAPT = {1:0.98,2:1.03,3:1.015,4:1.00};
+  const MIN_N = {VS:18,V:30,C:50,J:30,M:40,T:70};
+  const CLIP_MIN = 0.72, CLIP_MAX = 1.42;
+  const LEARN_MIN = 0.80, LEARN_MAX = 1.25, LEARN_PRIOR_WINS = 5;
+  const cache = new Map(), ready = new Map();
+  const runStat = {ok:0,none:0,fail:0,last:''};
+  let saveTimer = null, lastResult = null;
+
+  function n(v){ const x=Number(v); return Number.isFinite(x)?x:0; }
+  function clip(v,lo,hi){ return Math.max(lo,Math.min(hi,v)); }
+  function esc(v){ return String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  function readSettings(){
+    try{ if(typeof settings!=='undefined'&&settings) return settings; }catch(e){}
+    try{ return JSON.parse(localStorage.getItem('tk-html-settings')||'{}')||{}; }catch(e){ return {}; }
+  }
+  function enabled(){ return readSettings().narTransitionAdj!==false; }
+  function learningEnabled(){ const s=readSettings(); return enabled()&&s.narTransitionLearn!==false; }
+  function learningFrozen(){ return !!window.__narTransitionLearningFrozen; }
+  function blankStore(){ return {buckets:{},seen:[],pending:{},savedAt:''}; }
+  function loadStore(){
+    let x=blankStore();
+    try{x=JSON.parse(localStorage.getItem(LS_KEY)||'{}')||x}catch(e){}
+    if(!x.buckets||typeof x.buckets!=='object')x.buckets={};
+    if(!Array.isArray(x.seen))x.seen=[];
+    if(!x.pending||typeof x.pending!=='object')x.pending={};
+    return x;
+  }
+  let learn=loadStore(),seenSet=null;
+  function seenHas(k){ if(!seenSet)seenSet=new Set(learn.seen||[]);return seenSet.has(k); }
+  function seenAdd(k){ if(!seenSet)seenHas('');if(seenSet.has(k))return;seenSet.add(k);learn.seen.push(k);if(learn.seen.length>MAX_SEEN){learn.seen=learn.seen.slice(-MAX_SEEN);seenSet=new Set(learn.seen)} }
+  function trimPending(){
+    const keys=Object.keys(learn.pending||{}).sort((a,b)=>n(learn.pending[a]&&learn.pending[a].t)-n(learn.pending[b]&&learn.pending[b].t));
+    while(keys.length>MAX_PENDING){delete learn.pending[keys.shift()]}
+  }
+  function saveNow(){
+    try{trimPending();learn.savedAt=new Date().toISOString();localStorage.setItem(LS_KEY,JSON.stringify(learn))}catch(e){}
+  }
+  function scheduleSave(){clearTimeout(saveTimer);saveTimer=setTimeout(saveNow,180)}
+  function api(){return window.__narPast171||null}
+  function currentRid(h){
+    if(h&&h.__narRaceId)return String(h.__narRaceId);
+    try{if(typeof currentRaceId!=='undefined'&&currentRaceId)return String(currentRaceId)}catch(e){}
+    return String(window.currentRaceId||'');
+  }
+  function venueFactor(from,to){
+    if(!from||!to||from===to)return 1;
+    if(from==='帯広'||to==='帯広')return 1;
+    const a=n(VENUE_LEVEL[from])||1,b=n(VENUE_LEVEL[to])||1;
+    return clip(1+0.38*(a/b-1),0.90,1.12);
+  }
+  function narClassLetter(cls){const m=String(cls&&cls.cls||'').match(/^([ABCD])/);return m?m[1]:''}
+  function narClassRank(cls){
+    const m=String(cls&&cls.cls||'').match(/^([ABCD])([0-9]{0,2})$/);if(!m)return null;
+    const base={A:400,B:300,C:200,D:100}[m[1]],sub=n(m[2]);return base-sub;
+  }
+  function jraLevel(cls,text){
+    if(cls&&Number.isFinite(Number(cls.jraLevel)))return Number(cls.jraLevel);
+    const t=String(text||'');
+    if(/(?:G[ⅠⅡⅢI123]|Jpn|重賞)/i.test(t))return 6;
+    if(/(?:オープン|OPEN|\bOP\b|リステッド)/i.test(t))return 5;
+    if(/(?:3勝クラス|1600万下)/.test(t))return 4;
+    if(/(?:2勝クラス|1000万下)/.test(t))return 3;
+    if(/(?:1勝クラス|500万下)/.test(t))return 2;
+    if(/未勝利/.test(t))return 1;
+    if(/新馬/.test(t))return 0;
+    return 1;
+  }
+  function jraLevelLabel(level){return ['新馬','未勝利','1勝','2勝','3勝','OP/L','重賞'][clip(Math.round(n(level)),0,6)]}
+  function classMove(lastCls,curCls){
+    if(!lastCls||!curCls||lastCls.system==='JRA'||curCls.system==='JRA')return null;
+    const a=narClassRank(lastCls),b=narClassRank(curCls);
+    if(a!=null&&b!=null&&Math.abs(a-b)>0.001)return {kind:b>a?'up':'down',from:lastCls.raw||lastCls.cls,to:curCls.raw||curCls.cls};
+    if(String(lastCls.cls||'')===String(curCls.cls||'')&&n(lastCls.group)>0&&n(curCls.group)>0&&n(lastCls.group)!==n(curCls.group))return {kind:n(curCls.group)<n(lastCls.group)?'up_group':'down_group',from:lastCls.raw||'',to:curCls.raw||''};
+    return null;
+  }
+  function transitionState(valid,curCircuit){
+    let streak=0;for(const p of valid){if(p.circuit&&p.circuit===curCircuit)streak++;else break}
+    if(streak<valid.length&&valid[streak]&&valid[streak].circuit&&valid[streak].circuit!==curCircuit)return {start:streak+1,source:valid[streak],streak};
+    return {start:0,source:null,streak};
+  }
+  function keyType(k){return String(k||'').split('|')[0]||'T'}
+  function learnedInfo(keys){
+    if(!learningEnabled())return {mult:1,key:'',n:0,level:'学習OFF'};
+    for(const key of keys||[]){
+      const b=learn.buckets[key],typ=keyType(key),min=MIN_N[typ]||70;
+      if(!b||n(b.n)<min||n(b.sp)<1.5)continue;
+      const raw=(n(b.h)+LEARN_PRIOR_WINS)/(n(b.sp)+LEARN_PRIOR_WINS);
+      return {mult:clip(raw,LEARN_MIN,LEARN_MAX),key,n:n(b.n),sp:n(b.sp),h:n(b.h),level:typ};
+    }
+    return {mult:1,key:'',n:0,level:'サンプル不足'};
+  }
+  function profileFor(pasts,curVenue,curCircuit,curCls){
+    const valid=(pasts||[]).filter(p=>p&&!p.empty),tags=[],keys=[],parts=[];
+    if(!valid.length)return {mult:1,priorMult:1,learnedMult:1,tags:['馬柱なし'],keys:[],start:0,sourceVenue:'',sourceCircuit:'',learn:{mult:1,n:0,level:'馬柱なし'}};
+    const last=valid[0],tr=transitionState(valid,curCircuit);
+    let prior=1,sourceVenue='',sourceCircuit='',start=tr.start;
+    if(tr.source&&start<=4){
+      const src=tr.source;sourceVenue=src.venue||'';sourceCircuit=src.circuit||'';
+      const retain=RETENTION[start]||0,adapt=ADAPT[start]||1;
+      let edge=venueFactor(sourceVenue,curVenue),sourceLabel=sourceVenue||sourceCircuit||'転出元不明';
+      if(sourceCircuit==='JRA'){
+        const jl=jraLevel(src.cls,src.raceName),jf=JRA_CLASS_FACTOR[jl]||1,dc=narClassLetter(curCls),df=DEST_CLASS_FACTOR[dc]||1;
+        edge*=jf*df;sourceLabel='JRA'+jraLevelLabel(jl);keys.push('J|'+jl+'>'+String(dc||'不明'));
+        tags.push(sourceLabel+'→'+curVenue+(dc?dc+'級':''));parts.push({name:'JRAクラス',value:jf},{name:'転入先クラス',value:df});
+      }else tags.push((sourceVenue||sourceCircuit)+'→'+curVenue);
+      const move=1+(edge-1)*retain;prior*=move*adapt;
+      parts.push({name:'場間 '+(sourceVenue||sourceCircuit)+'→'+curVenue,value:venueFactor(sourceVenue,curVenue)},{name:'移動効果残存',value:move},{name:'適応'+start+'戦目',value:adapt});
+      tags.push('転入後'+start+'戦目');
+      const routeLabel=sourceVenue||sourceCircuit||'転出元不明';
+      keys.unshift('VS|'+routeLabel+'>'+curVenue+'|'+start,'VS|'+sourceLabel+'>'+curVenue+'|'+start,'V|'+routeLabel+'>'+curVenue,'V|'+sourceLabel+'>'+curVenue,'C|'+sourceCircuit+'>'+curCircuit);
+      keys.push('T|transfer|'+Math.min(start,4));
+    }else if(last.venue&&last.venue!==curVenue&&last.circuit===curCircuit){
+      sourceVenue=last.venue;sourceCircuit=last.circuit;
+      const vf=venueFactor(last.venue,curVenue);prior*=vf;parts.push({name:'同地区場替',value:vf});tags.push('場替'+last.venue+'→'+curVenue);
+      keys.push('VS|'+last.venue+'>'+curVenue+'|1','V|'+last.venue+'>'+curVenue,'C|'+curCircuit+'>'+curCircuit,'T|same_circuit_move');
+    }
+    if(last.circuit&&last.circuit===curCircuit){
+      const mv=classMove(last.cls,curCls);
+      if(mv){
+        let f=1,label='';
+        if(mv.kind==='up'){f=0.90;label='昇格'}else if(mv.kind==='down'){f=1.08;label='降格'}else if(mv.kind==='up_group'){f=0.95;label='昇組'}else{f=1.05;label='降組'}
+        prior*=f;parts.push({name:label,value:f});tags.push(label+(mv.from&&mv.to?mv.from+'→'+mv.to:''));keys.unshift('M|'+mv.kind+'|'+curVenue);keys.push('T|'+mv.kind);
+      }
+    }
+    const unique=[...new Set(keys.filter(Boolean))],li=learnedInfo(unique);let mult=prior*li.mult;
+    mult=clip(mult,CLIP_MIN,CLIP_MAX);
+    if(li.mult!==1){parts.push({name:'実績学習',value:li.mult});tags.push('学習×'+li.mult.toFixed(3)+' n='+li.n)}
+    return {mult,priorMult:prior,learnedMult:li.mult,tags:tags.length?tags:['移動なし'],keys:unique,start,sourceVenue,sourceCircuit,learn:li,parts};
+  }
+  async function buildAdjustment(rid){
+    const A=api();if(!A)throw new Error('馬柱パーサ未ロード');
+    const code=String(rid).slice(4,6),curVenue=A.NAR_CODES171[code];if(!curVenue)return {skip:'JRA',mult:new Map(),profiles:new Map(),details:[]};
+    const curCircuit=A.CIRCUIT171[curVenue]||'',tried=[];
+    const urls=['https://nar.netkeiba.com/race/shutuba_past.html?race_id='+rid+'&rf=shutuba_submenu','https://nar.sp.netkeiba.com/race/shutuba_past.html?race_id='+rid];
+    let got={html:'',path:''};for(const u of urls){got=await A.fetch171(u,tried);if(got.html)break}if(!got.html)throw new Error('馬柱取得失敗: '+tried.join(' / '));
+    const doc=new DOMParser().parseFromString(got.html,'text/html');
+    const raceNameEl=doc.querySelector('.RaceName,[class*="RaceName"],h1'),raceName=((raceNameEl&&raceNameEl.textContent)||doc.title||'').trim();
+    const curCls=A.parseClass171(raceName),mult=new Map(),profiles=new Map(),details=[];
+    const rows=[...doc.querySelectorAll('tr')].filter(tr=>tr.querySelector('a[href*="/horse/"]'));
+    rows.forEach(tr=>{
+      const num=A.findUmaban171(tr);if(!num||profiles.has(num))return;
+      const link=tr.querySelector('a[href*="/horse/"]'),name=((link&&link.textContent)||'').replace(/\s+/g,'').slice(0,18);
+      let cells=[...tr.querySelectorAll('td')].filter(td=>/past/i.test(td.className||''));if(!cells.length)cells=[...tr.querySelectorAll('td')].filter(td=>td.querySelector('a[href*="/race/"]'));
+      const pasts=cells.slice(0,5).map(A.parsePastCell171),p=profileFor(pasts,curVenue,curCircuit,curCls);
+      mult.set(num,p.mult);profiles.set(num,p);details.push({num,name,mult:p.mult,priorMult:p.priorMult,learnedMult:p.learnedMult,tags:p.tags,parts:p.parts,start:p.start,sourceVenue:p.sourceVenue,sourceCircuit:p.sourceCircuit,learn:p.learn});
+    });
+    if(!mult.size)throw new Error('馬柱行を解析できません');
+    return {rid,venue:curVenue,circuit:curCircuit,raceName,curCls,mult,profiles,details,tried,path:got.path};
+  }
+  function renderStatus(){
+    const active=enabled(),bucketEntries=Object.entries(learn.buckets||{}),bucketCount=bucketEntries.length,activeBuckets=bucketEntries.filter(([k,b])=>n(b&&b.n)>=(MIN_N[keyType(k)]||70)&&n(b&&b.sp)>=1.5).length,settled=(learn.seen||[]).length,pending=Object.keys(learn.pending||{}).length;
+    const latest=lastResult&&lastResult.details?lastResult.details.filter(x=>Math.abs(n(x.mult)-1)>0.001).slice(0,8):[];
+    let html='<b>'+(active?'✅ 地方移動EV補正 ON':'⏸ 地方移動EV補正 OFF')+'</b>　適用'+runStat.ok+'R / 対象なし'+runStat.none+'R / 失敗'+runStat.fail+'R<br><span style="opacity:.85">学習バケット '+bucketCount+'（採用可 '+activeBuckets+'） / 精算済み '+settled+'R / 学習待ち '+pending+'R'+(learningEnabled()?' / 縮小学習ON':' / 学習OFF')+(learningFrozen()?' / バックテスト中は更新凍結':'')+'</span>';
+    if(lastResult)html+='<br><span style="opacity:.9">直近 '+esc(lastResult.venue||'')+' '+esc(lastResult.raceName||'')+'</span>';
+    if(latest.length)html+='<details style="margin-top:5px"><summary>直近の馬別補正理由</summary>'+latest.map(x=>'<div>'+x.num+' '+esc(x.name||'')+' <b>×'+n(x.mult).toFixed(3)+'</b>　'+esc((x.tags||[]).join(' / '))+'</div>').join('')+'</details>';
+    const box=document.getElementById('narTransitionSettingsStat');if(box)box.innerHTML=html;
+    [['rsPastAdjStat','rsPastAdj'],['predSimPastAdjStat','predSimPastAdj']].forEach(([sid,cid])=>{const el=document.getElementById(sid),cb=document.getElementById(cid);if(el){el.style.display=(active||(cb&&cb.checked))?'block':'none';el.innerHTML=html}});
+  }
+  function ensure(rid){
+    rid=String(rid||'');if(!enabled()||!/^[0-9]{12}$/.test(rid))return Promise.resolve({skip:'disabled',mult:new Map(),profiles:new Map(),details:[]});
+    if(cache.has(rid))return cache.get(rid);
+    const p=buildAdjustment(rid).then(res=>{
+      ready.set(rid,res);lastResult=res;const changed=[...res.mult.values()].filter(v=>Math.abs(v-1)>0.001).length;if(changed)runStat.ok++;else runStat.none++;
+      if(ready.size>240){for(const old of ready.keys()){if(old===rid)continue;ready.delete(old);cache.delete(old);if(ready.size<=240)break}}
+      runStat.last=(res.venue||'')+' '+changed+'頭';window.__narPastAdjLast={rid,...res,mult:Object.fromEntries(res.mult||[])};renderStatus();return res;
+    }).catch(err=>{const res={rid,err:(err&&err.message)||String(err),mult:new Map(),profiles:new Map(),details:[]};ready.set(rid,res);runStat.fail++;runStat.last='失敗 '+res.err;renderStatus();console.warn('[NarTransitionEV]',rid,res.err);return res});
+    cache.set(rid,p);return p;
+  }
+  function predictionRecord(rid,h,raw,profile){
+    if(!learningEnabled()||learningFrozen()||!profile||!(raw>0))return;
+    const rec=learn.pending[rid]||(learn.pending[rid]={t:Date.now(),horses:{},venue:(ready.get(rid)||{}).venue||''});
+    rec.t=Date.now();rec.horses[String(Number(h&&h.num||0))]={raw,adjRaw:raw*profile.mult,mult:profile.mult,keys:profile.keys||[],tags:profile.tags||[]};scheduleSave();
+  }
+  function settle(rid,finish){
+    rid=String(rid||'');if(!learningEnabled()||learningFrozen()||!rid||seenHas(rid))return false;
+    const rec=learn.pending[rid],hs=rec&&rec.horses;if(!hs)return false;
+    const winner=(finish||[]).find(x=>n(x&&x.rank)===1)||(finish||[])[0],winNo=String(n(winner&&winner.horseNo));if(!winNo||!hs[winNo])return false;
+    const entries=Object.entries(hs),sumRaw=entries.reduce((s,x)=>s+n(x[1].raw),0)||1,sumAdj=entries.reduce((s,x)=>s+n(x[1].adjRaw),0)||1;
+    entries.forEach(([num,x])=>{
+      const y=num===winNo?1:0,p0=n(x.raw)/sumRaw,p1=n(x.adjRaw)/sumAdj;
+      [...new Set(x.keys||[])].forEach(key=>{const b=learn.buckets[key]||(learn.buckets[key]={n:0,sp:0,h:0,brierBase:0,brierAdj:0});b.n++;b.sp+=p1;b.h+=y;b.brierBase+=(y-p0)*(y-p0);b.brierAdj+=(y-p1)*(y-p1)});
+    });
+    seenAdd(rid);delete learn.pending[rid];saveNow();cache.delete(rid);renderStatus();return true;
+  }
+  async function prepareHorses(rid,horses){
+    await ensure(rid);return (horses||[]).map(h=>Object.assign({},h,{__narRaceId:String(rid)}));
+  }
+  function ticketInfo(rid,ticket){
+    const e=ready.get(String(rid||''));if(!e||!e.profiles)return {factor:1,reasons:[]};
+    const ps=(ticket&&ticket.nums||[]).map(x=>e.profiles.get(Number(x))).filter(Boolean);if(!ps.length)return {factor:1,reasons:[]};
+    const factor=Math.pow(ps.reduce((s,p)=>s*Math.max(0.01,n(p.mult)||1),1),1/ps.length),reasons=[...new Set(ps.flatMap(p=>p.tags||[]))];
+    return {factor,reasons,learned:ps.some(p=>p.learnedMult!==1),race:e.raceName||''};
+  }
+  function raceSummary(rid){const e=ready.get(String(rid||''));if(!e)return null;return {rid:e.rid,venue:e.venue,raceName:e.raceName,details:e.details||[]}}
+
+  const prevFetch=window.fetchHtmlViaProxy;
+  if(typeof prevFetch==='function')window.fetchHtmlViaProxy=async function(url){const html=await prevFetch.apply(this,arguments);try{if(enabled()){const m=String(url||'').match(/nar(?:\.sp)?\.netkeiba\.com\/race\/(?:shutuba|result|race_result)\.html\?race_id=(\d{12})/);if(m)await ensure(m[1])}}catch(e){}return html};
+  const prevProb=window.evProbRaw||(typeof evProbRaw==='function'?evProbRaw:null);
+  if(typeof prevProb==='function'){
+    const wrapped=function(h,all){const p=prevProb.apply(this,arguments);try{if(!enabled())return p;const rid=currentRid(h),e=ready.get(rid),prof=e&&e.profiles&&e.profiles.get(Number(h&&h.num));if(!prof)return p;predictionRecord(rid,h,p,prof);return p*prof.mult}catch(err){return p}};
+    window.evProbRaw=wrapped;try{evProbRaw=wrapped}catch(e){}
+  }
+  const prevJudge=window.judgeTicketHit;
+  if(typeof prevJudge==='function')window.judgeTicketHit=function(ticket,finish){try{settle(currentRid(),finish)}catch(e){}return prevJudge.apply(this,arguments)};
+
+  window.tkNarEnsureAdjustment=ensure;
+  window.tkNarPrepareHorses=prepareHorses;
+  window.tkNarTransitionSettle=settle;
+  window.tkNarTransitionTicketInfo=ticketInfo;
+  window.tkNarTransitionRaceSummary=raceSummary;
+  window.tkNarTransitionProfileFor=profileFor;
+  window.tkNarTransitionVenueFactor=venueFactor;
+  window.tkNarTransitionLearnedInfo=learnedInfo;
+  window.tkNarTransitionRenderStatus=renderStatus;
+  window.tkNarTransitionExportData=()=>JSON.parse(JSON.stringify({schema:2,buckets:learn.buckets,seen:learn.seen,pending:learn.pending,savedAt:learn.savedAt,version:VERSION}));
+  window.tkNarTransitionImportData=function(data,options){if(!data||typeof data!=='object')return false;learn={buckets:data.buckets||{},seen:Array.isArray(data.seen)?data.seen:[],pending:data.pending||{},savedAt:data.savedAt||''};seenSet=null;cache.clear();ready.clear();lastResult=null;if(!(options&&options.transient))saveNow();renderStatus();return true};
+  window.tkNarTransitionClearCache=function(){cache.clear();ready.clear();lastResult=null;renderStatus()};
+  window.tkNarTransitionExport=async function(){
+    const text=JSON.stringify(window.tkNarTransitionExportData(),null,2),blob=new Blob([text],{type:'application/json'}),name='nar_transition_learning_'+new Date().toISOString().slice(0,10)+'.json';
+    try{if(window.showSaveFilePicker){const h=await showSaveFilePicker({suggestedName:name,types:[{description:'JSON',accept:{'application/json':['.json']}}]}),w=await h.createWritable();await w.write(blob);await w.close();return}}catch(e){if(e&&e.name==='AbortError')return}
+    try{if(navigator.share&&typeof File==='function'){const f=new File([blob],name,{type:'application/json'});if(!navigator.canShare||navigator.canShare({files:[f]})){await navigator.share({files:[f],title:'地方移動EV補正学習'});return}}}catch(e){if(e&&e.name==='AbortError')return}
+    const a=document.createElement('a'),url=URL.createObjectURL(blob);a.href=url;a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{try{a.remove()}catch(e){}URL.revokeObjectURL(url)},1200);
+  };
+  window.tkNarTransitionImport=function(){
+    const input=document.createElement('input');input.type='file';input.accept='.json,application/json';input.style.display='none';document.body.appendChild(input);
+    input.onchange=function(){const file=input.files&&input.files[0];if(!file){input.remove();return}const reader=new FileReader();reader.onload=function(){try{const data=JSON.parse(String(reader.result||''));if(!data||Number(data.schema)!==2||!data.buckets)throw new Error('補正学習JSONではありません');window.tkNarTransitionImportData(data);alert('地方移動EV補正の学習データを読み込みました。')}catch(e){alert('読込失敗: '+(e&&e.message||e))}finally{input.remove()}};reader.onerror=function(){alert('ファイルを読み込めませんでした。');input.remove()};reader.readAsText(file,'utf-8')};input.click();
+  };
+  window.tkNarTransitionReset=function(){if(!confirm('地方移動EV補正の結果学習をリセットしますか？ 固定の転入・昇降級・場間補正は残ります。'))return;learn=blankStore();seenSet=null;saveNow();cache.clear();ready.clear();lastResult=null;renderStatus()};
+
+  document.addEventListener('change',ev=>{
+    const id=ev.target&&ev.target.id;if(!['rsPastAdj','predSimPastAdj','setNarTransitionAdj','setNarTransitionLearn'].includes(id))return;
+    if(id==='rsPastAdj'||id==='predSimPastAdj'){
+      const on=!!ev.target.checked;try{if(typeof settings!=='undefined'&&settings){settings.narTransitionAdj=on;localStorage.setItem('tk-html-settings',JSON.stringify(settings))}}catch(e){}
+      const s=document.getElementById('setNarTransitionAdj');if(s)s.checked=on;['rsPastAdj','predSimPastAdj'].forEach(x=>{const el=document.getElementById(x);if(el)el.checked=on});
+      const l=document.getElementById('setNarTransitionLearn');if(l)l.disabled=!on;
+    }
+    cache.clear();ready.clear();renderStatus();
+  });
+  setTimeout(()=>{try{if(typeof updateNarTransitionSettingsUI==='function')updateNarTransitionSettingsUI()}catch(e){}renderStatus()},300);
+  [0,500,1800,5000,9000].forEach(ms=>setTimeout(()=>{try{window.APP_VERSION=VERSION;const v=document.querySelector('.ver');if(v)v.textContent=VERSION;document.title='The競馬 EV分析 '+VERSION}catch(e){}},ms));
+  console.log('[v5.18.282] NAR transition EV engine ready');
 })();
 </script>
 
@@ -22191,6 +22572,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     var tail = [];
     if(odds > 0) tail.push('想定' + odds.toFixed(1) + '倍');
     if(ev > 0) tail.push('EV' + ev.toFixed(2));
+    var narReasons = Array.isArray(t && t.narTransitionReasons) ? t.narTransitionReasons.filter(Boolean) : [];
+    if(narReasons.length) tail.push('地方移動補正×' + Number(t.narTransitionFactor || 1).toFixed(3) + ' ' + narReasons.join('・'));
     return '  ' + type + ' ' + nums.join('-') + ' ' + yen(amount) + '円' + (tail.length ? ' (' + tail.join(' / ') + ')' : '');
   }
   function groupKey(r){
@@ -22561,7 +22944,12 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       return {
         type:String(t.type || ''), nums:Array.isArray(t.nums) ? t.nums.map(Number).filter(Boolean) : [],
         amount:cfg.pointAmount, odds:Number(t.odds || 0), ev:Number(t.ev || 0), p:Number(t.p || 0),
-        horseNames:Array.isArray(t.horseNames) ? t.horseNames.slice() : [], _order:i
+        horseNames:Array.isArray(t.horseNames) ? t.horseNames.slice() : [],
+        evRaw:Number(t.evRaw || 0), adjustedEv:Number(t.adjustedEv || 0), learnedEv:Number(t.learnedEv || 0),
+        learnedExpectedProfit:Number(t.learnedExpectedProfit || 0), dailyRank:Number(t.dailyRank || 0),
+        narTransitionFactor:Number(t.narTransitionFactor || 1),
+        narTransitionReasons:Array.isArray(t.narTransitionReasons) ? t.narTransitionReasons.slice() : [],
+        _order:i
       };
     }).filter(function(t){ return t.type && t.nums.length; });
     if(cfg.ticketPriority === 'ev'){
@@ -22729,7 +23117,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         try{if(typeof window.tkDailyRankReducePool==='function')pool=window.tkDailyRankReducePool(pool,{kind:rec.kind,venue:rec.venue,raceName:nm,raceId:rec.raceId},MAX_POINTS)}catch(e){}
       }
       function normalized(t,defaultAmount){
-        return {type:String(t.type||''),nums:Array.isArray(t.nums)?t.nums.map(Number).filter(Boolean):[],amount:Number(t.amount||defaultAmount||0),odds:Number(t.odds||0),ev:Number(t.ev||0),p:Number(t.p||0),horseNames:Array.isArray(t.horseNames)?t.horseNames.slice():[],evRaw:Number(t.evRaw||0),learnAdj:Number(t.learnAdj||0),adjustedEv:Number(t.adjustedEv||0),learnedRoiAdj:Number(t.learnedRoiAdj||0),learnedEv:Number(t.learnedEv||0),learnedExpectedProfit:Number(t.learnedExpectedProfit||0),learnLevel:Number(t.learnLevel||0),learnN:Number(t.learnN||0),profitLearnN:Number(t.profitLearnN||0),profitLearnLevel:String(t.profitLearnLevel||'')};
+        var ni=(typeof window.tkNarTransitionTicketInfo==='function')?window.tkNarTransitionTicketInfo(rec.raceId,t):null;
+        return {type:String(t.type||''),nums:Array.isArray(t.nums)?t.nums.map(Number).filter(Boolean):[],amount:Number(t.amount||defaultAmount||0),odds:Number(t.odds||0),ev:Number(t.ev||0),p:Number(t.p||0),horseNames:Array.isArray(t.horseNames)?t.horseNames.slice():[],evRaw:Number(t.evRaw||0),learnAdj:Number(t.learnAdj||0),adjustedEv:Number(t.adjustedEv||0),learnedRoiAdj:Number(t.learnedRoiAdj||0),learnedEv:Number(t.learnedEv||0),learnedExpectedProfit:Number(t.learnedExpectedProfit||0),learnLevel:Number(t.learnLevel||0),learnN:Number(t.learnN||0),profitLearnN:Number(t.profitLearnN||0),profitLearnLevel:String(t.profitLearnLevel||''),narTransitionFactor:Number(t.narTransitionFactor||(ni&&ni.factor)||1),narTransitionReasons:Array.isArray(t.narTransitionReasons)?t.narTransitionReasons.slice():((ni&&ni.reasons)?ni.reasons.slice():[])};
       }
       var norm=tickets.map(function(t){return normalized(t,0)}).filter(function(t){return t.type&&t.nums.length&&t.amount>0});
       var poolNorm=pool.map(function(t){return normalized(t,cfgNow.pointAmount)}).filter(function(t){return t.type&&t.nums.length});
@@ -24279,7 +24668,13 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         type: String(d.券種名 || d.type || '').trim(),
         nums: nums,
         amount: Number(d.購入額 || d.amount || 0),
-        horseNames: namesOf(row, d, nums)
+        horseNames: namesOf(row, d, nums),
+        ev: Number(d.期待値 || d.EV || d.ev || 0),
+        evRaw: Number(d.素EV || d.evRaw || 0),
+        adjustedEv: Number(d.補正EV || d.adjustedEv || 0),
+        learnedExpectedProfit: Number(d.学習期待利益 || d.learnedExpectedProfit || 0),
+        narTransitionFactor: Number(d.地方移動補正目安 || d.narTransitionFactor || 1),
+        narTransitionReasons: String(d.地方移動補正理由 || '').split(' / ').filter(Boolean)
       };
     }).filter(function(t){ return t.type && t.nums.length && t.amount > 0; });
   }
@@ -24306,7 +24701,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   }
   function ticketLine(t){
     var names = t.horseNames && t.horseNames.length ? '［'+t.horseNames.join('－')+'］' : '';
-    return t.type+' '+t.nums.join('-')+names+' '+yen(t.amount)+'円';
+    var nar = Array.isArray(t.narTransitionReasons) && t.narTransitionReasons.length ? ' / 地方移動補正 '+t.narTransitionReasons.join('・') : '';
+    return t.type+' '+t.nums.join('-')+names+' '+yen(t.amount)+'円'+nar;
   }
   function buildText(rows){
     var lines = ['【期間横断シミュレーション・購入用買い目】'];
@@ -25072,7 +25468,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   function ticketsOf(r){
     return (Array.isArray(r&&r.tickets)?r.tickets:[]).map(function(t){
       var names=Array.isArray(t&&t.horseNames)?t.horseNames.map(String).filter(Boolean):[];
-      return {type:String(t&&(t.type||t.ticketType||t['券種名'])||'').trim(),nums:numsOf(t),amount:Math.max(0,n(t&&(t.amount||t.bet||t['購入額']))),odds:n(t&&t.odds),ev:n(t&&(t.evRaw||t.ev)),adjustedEv:n(t&&t.adjustedEv),learnedExpectedProfit:n(t&&t.learnedExpectedProfit),dailyRank:n(t&&t.dailyRank),horseNames:names};
+      var reasons=Array.isArray(t&&t.narTransitionReasons)?t.narTransitionReasons.map(String).filter(Boolean):[];
+      return {type:String(t&&(t.type||t.ticketType||t['券種名'])||'').trim(),nums:numsOf(t),amount:Math.max(0,n(t&&(t.amount||t.bet||t['購入額']))),odds:n(t&&t.odds),ev:n(t&&(t.evRaw||t.ev)),adjustedEv:n(t&&t.adjustedEv),learnedExpectedProfit:n(t&&t.learnedExpectedProfit),dailyRank:n(t&&t.dailyRank),horseNames:names,narTransitionFactor:n(t&&t.narTransitionFactor)||1,narTransitionReasons:reasons};
     }).filter(function(t){return t.type&&t.nums.length&&t.amount>0});
   }
   function raceNo(r){var m=String(r&&(r.raceNo||r.no)||'').match(/\d{1,2}/);return m?n(m[0]):n(String(r&&r.raceId||'').slice(-2))}
@@ -25087,6 +25484,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     if(n(t.dailyRank)>0)tail.push('日次#'+n(t.dailyRank));
     if(n(t.adjustedEv)>0)tail.push('補正EV'+n(t.adjustedEv).toFixed(2));
     if(n(t.learnedExpectedProfit)!==0)tail.push('学習期待利益'+(n(t.learnedExpectedProfit)>=0?'+':'')+yen(t.learnedExpectedProfit)+'円');
+    if(t.narTransitionReasons.length)tail.push('地方移動補正×'+n(t.narTransitionFactor).toFixed(3)+' '+t.narTransitionReasons.join('・'));
     return '  '+t.type+' '+t.nums.join('-')+names+' '+yen(t.amount)+'円'+(tail.length?' ('+tail.join(' / ')+')':'');
   }
   function buildText(b){
@@ -25354,10 +25752,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   function priorityLabel(cfg){return cfg&&cfg.ticketPriority==='normal'?'ノーマル（設定モード順）':'EV上位優先'}
   function metricLabel(cfg){return cfg&&cfg.dailyRankMetric==='adjusted_ev'?'補正EV順':(cfg&&cfg.dailyRankMetric==='learned_profit'?'過去学習後の期待利益順':'EV順')}
   function allocationLabel(cfg){return cfg&&cfg.allocationMode==='daily_rank'?'全日ランキング・最終Rまで比較（'+metricLabel(cfg)+'）':priorityLabel(cfg)}
+  function narBacktestLabel(cfg){return cfg&&cfg.narTransitionBacktestMode==='current_frozen'?'現在の学習値を固定適用':'固定補正のみ（未来情報なし）'}
   function toggleAllocationUi(cfg){var on=cfg&&cfg.allocationMode==='daily_rank',w=$('pgBtDailyRankMetricWrap'),sw=$('swDailyRankMetricWrap'),note=$('swDailyRankNote'),btNote=$('pgBtDailyRankNote');if(w)w.style.display=on?'':'none';if(sw)sw.style.display=on?'':'none';if(note)note.style.display=on?'':'none';if(btNote)btNote.style.display=on?'':'none';['pgBtReserveMain','pgBtMainRaceNo','pgBtMainReserve','pgBtTicketPriority','swReserveMain','swMainRaceNo','swMainReserve','swTicketPriority'].forEach(function(id){var el=$(id);if(el)el.disabled=on})}
   function readGuard(){
     var x={};try{x=JSON.parse(localStorage.getItem(GUARD_KEY)||'{}')||{}}catch(e){}
-    return {dailyLimit:cleanMoney(x.dailyLimit,2000),pointAmount:cleanMoney(x.pointAmount,100),maxPoints:MAX_POINTS,skipDebut:x.skipDebut!==false,reserveMain:x.reserveMain!==false,mainRaceNo:[9,10,11,12].indexOf(n(x.mainRaceNo))>=0?n(x.mainRaceNo):11,mainReserve:cleanMoney(x.mainReserve,300),ticketPriority:x.ticketPriority==='normal'?'normal':'ev',allocationMode:x.allocationMode==='daily_rank'?'daily_rank':'per_race',dailyRankMetric:['ev','adjusted_ev','learned_profit'].indexOf(x.dailyRankMetric)>=0?x.dailyRankMetric:'ev'};
+    return {dailyLimit:cleanMoney(x.dailyLimit,2000),pointAmount:cleanMoney(x.pointAmount,100),maxPoints:MAX_POINTS,skipDebut:x.skipDebut!==false,reserveMain:x.reserveMain!==false,mainRaceNo:[9,10,11,12].indexOf(n(x.mainRaceNo))>=0?n(x.mainRaceNo):11,mainReserve:cleanMoney(x.mainReserve,300),ticketPriority:x.ticketPriority==='normal'?'normal':'ev',allocationMode:x.allocationMode==='daily_rank'?'daily_rank':'per_race',dailyRankMetric:['ev','adjusted_ev','learned_profit'].indexOf(x.dailyRankMetric)>=0?x.dailyRankMetric:'ev',narTransitionBacktestMode:x.narTransitionBacktestMode==='current_frozen'?'current_frozen':'prior_only'};
   }
   function configFromFields(){
     var old=readGuard();
@@ -25376,7 +25775,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       mainReserve:mainReserve,
       ticketPriority:(($('pgBtTicketPriority')&&$('pgBtTicketPriority').value)||old.ticketPriority)==='normal'?'normal':'ev',
       allocationMode:(($('pgBtAllocationMode')&&$('pgBtAllocationMode').value)||old.allocationMode)==='daily_rank'?'daily_rank':'per_race',
-      dailyRankMetric:['ev','adjusted_ev','learned_profit'].indexOf(($('pgBtDailyRankMetric')&&$('pgBtDailyRankMetric').value)||old.dailyRankMetric)>=0?(($('pgBtDailyRankMetric')&&$('pgBtDailyRankMetric').value)||old.dailyRankMetric):'ev'
+      dailyRankMetric:['ev','adjusted_ev','learned_profit'].indexOf(($('pgBtDailyRankMetric')&&$('pgBtDailyRankMetric').value)||old.dailyRankMetric)>=0?(($('pgBtDailyRankMetric')&&$('pgBtDailyRankMetric').value)||old.dailyRankMetric):'ev',
+      narTransitionBacktestMode:(($('pgBtNarLearningMode')&&$('pgBtNarLearningMode').value)||old.narTransitionBacktestMode)==='current_frozen'?'current_frozen':'prior_only'
     };
   }
   function applyConfig(cfg){
@@ -25387,6 +25787,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     [['pgBtMainRaceNo',cfg.mainRaceNo],['swMainRaceNo',cfg.mainRaceNo],['pgBtMainReserve',cfg.mainReserve],['swMainReserve',cfg.mainReserve]].forEach(function(x){var el=$(x[0]);if(el)el.value=x[1]});
     [['pgBtTicketPriority',cfg.ticketPriority],['swTicketPriority',cfg.ticketPriority]].forEach(function(x){var el=$(x[0]);if(el)el.value=x[1]});
     [['pgBtAllocationMode',cfg.allocationMode],['swAllocationMode',cfg.allocationMode],['pgBtDailyRankMetric',cfg.dailyRankMetric],['swDailyRankMetric',cfg.dailyRankMetric]].forEach(function(x){var el=$(x[0]);if(el)el.value=x[1]});
+    var nb=$('pgBtNarLearningMode');if(nb)nb.value=cfg.narTransitionBacktestMode==='current_frozen'?'current_frozen':'prior_only';
     toggleAllocationUi(cfg);
     try{if(typeof window.swRefreshGuardUsage==='function')window.swRefreshGuardUsage()}catch(e){}
     try{if(typeof window.tkSyncDailyBudgetSettingsFromGuard==='function')window.tkSyncDailyBudgetSettingsFromGuard(cfg)}catch(e){}
@@ -25408,6 +25809,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     if($('pgBtTicketPriority'))$('pgBtTicketPriority').value=cfg.ticketPriority;
     if($('pgBtAllocationMode'))$('pgBtAllocationMode').value=cfg.allocationMode;
     if($('pgBtDailyRankMetric'))$('pgBtDailyRankMetric').value=cfg.dailyRankMetric;
+    if($('pgBtNarLearningMode'))$('pgBtNarLearningMode').value=old.narTransitionBacktestMode==='current_frozen'?'current_frozen':'prior_only';
     toggleAllocationUi(cfg);
   }
   window.tkApplyDailyBudgetGuard=function(partial){
@@ -25599,7 +26001,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     });box.innerHTML=html;
   }
   function resultText(result){
-    var c=result.config,s=result.stats,lines=['購入ガード・バックテスト','購入配分\t'+allocationLabel(c),'1日上限\t'+c.dailyLimit+'円','1点\t'+c.pointAmount+'円','1R最大点数\t'+c.maxPoints,'新馬戦見送り\t'+(c.skipDebut?'ON':'OFF'),'メイン予算確保\t'+(c.allocationMode==='daily_rank'?'全日ランキングでは不使用':(c.reserveMain?(c.mainRaceNo+'R・各場'+c.mainReserve+'円'):'OFF')),'日数\t'+s.days,'確定R\t'+s.settled,'全日比較候補\t'+(s.candidates||0),'購入R\t'+s.purchased,'購入点数\t'+s.points,'全日順位見送り\t'+(s.rankSkip||0),'メイン購入R\t'+s.mainPurchased,'メイン収支\t'+s.mainProfit+'円','メイン温存見送り\t'+s.reserveSkip,'新馬見送り\t'+s.debutSkip,'上限見送り\t'+s.capSkip,'予想見送り\t'+s.signalSkip,'投資\t'+s.bet+'円','払戻\t'+s.ret+'円','収支\t'+s.profit+'円','回収率\t'+s.roi.toFixed(1)+'%','購入R的中率\t'+s.hitRate.toFixed(1)+'%','最大DD\t'+s.maxDrawdown+'円','','日付\t場\tR\tレース\t判定\t点\t投資\t払戻\t収支\t理由・買い目'];
+    var c=result.config,s=result.stats,lines=['購入ガード・バックテスト','購入配分\t'+allocationLabel(c),'NAR地方移補正学習\t'+narBacktestLabel(c),'1日上限\t'+c.dailyLimit+'円','1点\t'+c.pointAmount+'円','1R最大点数\t'+c.maxPoints,'新馬戦見送り\t'+(c.skipDebut?'ON':'OFF'),'メイン予算確保\t'+(c.allocationMode==='daily_rank'?'全日ランキングでは不使用':(c.reserveMain?(c.mainRaceNo+'R・各場'+c.mainReserve+'円'):'OFF')),'日数\t'+s.days,'確定R\t'+s.settled,'全日比較候補\t'+(s.candidates||0),'購入R\t'+s.purchased,'購入点数\t'+s.points,'全日順位見送り\t'+(s.rankSkip||0),'メイン購入R\t'+s.mainPurchased,'メイン収支\t'+s.mainProfit+'円','メイン温存見送り\t'+s.reserveSkip,'新馬見送り\t'+s.debutSkip,'上限見送り\t'+s.capSkip,'予想見送り\t'+s.signalSkip,'投資\t'+s.bet+'円','払戻\t'+s.ret+'円','収支\t'+s.profit+'円','回収率\t'+s.roi.toFixed(1)+'%','購入R的中率\t'+s.hitRate.toFixed(1)+'%','最大DD\t'+s.maxDrawdown+'円','','日付\t場\tR\tレース\t判定\t点\t投資\t払戻\t収支\t理由・買い目'];
     result.rows.forEach(function(r){lines.push([r.date,r.venue,r.no+'R',r.raceName,statusLabel(r),r.points,r.bet,r.ret,r.profit,r.tickets.map(function(t){return t.type+' '+t.combo}).join(' / ')||r.reason].join('\t'))});return lines.join('\n');
   }
   function currentRows(){return Array.isArray(window.__rsLastRows)?window.__rsLastRows.slice():[]}
@@ -25612,7 +26014,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     var fallback=result.stats.evFallback?' / EV未保存 '+result.stats.evFallback+'購入Rは元の買い目順を使用':'';
     var metricFallback=result.stats.metricFallback?' / 過去データに選択指標がない'+result.stats.metricFallback+'点は利用可能なEVへフォールバック':'';
     var rankInfo=result.config.allocationMode==='daily_rank'?'、全'+result.stats.candidates+'候補から全日順位見送り '+result.stats.rankSkip+'R':'';
-    setStatus('バックテスト完了（'+allocationLabel(result.config)+'）：'+result.stats.purchased+'R・'+result.stats.points+'点を購入'+rankInfo+'、メイン購入 '+result.stats.mainPurchased+'R、新馬見送り '+result.stats.debutSkip+'R。日次最大使用額 '+money(result.stats.maxDailyUsed)+'円。'+extra+fallback+metricFallback,true);
+    setStatus('バックテスト完了（'+allocationLabel(result.config)+' / NAR地方移動補正: '+narBacktestLabel(result.config)+'）：'+result.stats.purchased+'R・'+result.stats.points+'点を購入'+rankInfo+'、メイン購入 '+result.stats.mainPurchased+'R、新馬見送り '+result.stats.debutSkip+'R。日次最大使用額 '+money(result.stats.maxDailyUsed)+'円。'+extra+fallback+metricFallback,true);
     return result;
   };
   window.runPurchaseGuardBacktest=async function(ev){
@@ -25623,18 +26025,26 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     if(typeof window.runRangeVenueSimulation!=='function'){setStatus('期間横断シミュレーションを利用できません。',false);return}
     try{if(typeof settings!=='undefined'&&settings&&!settings.proxyUrl){alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。');return}}catch(e){}
     state.running=true;if(btn){btn.disabled=true;btn.textContent='バックテスト用データ取得中...'}
-    var snap=null,record=$('rsRecord'),recordOn=record&&record.checked;
+    var snap=null,narSnap=null,narFrozen=false,record=$('rsRecord'),recordOn=record&&record.checked;
     try{
       try{if(typeof settings!=='undefined'&&settings){snap={unit:settings.unit,budget:settings.budget,maxTickets:settings.maxTickets};settings.unit=cfg.pointAmount;settings.budget=cfg.pointAmount*MAX_POINTS;settings.maxTickets=MAX_POINTS}}catch(e){}
+      try{
+        if(String(($('rsKind')&&$('rsKind').value)||'').toUpperCase()==='NAR'&&typeof window.tkNarTransitionExportData==='function'&&typeof window.tkNarTransitionImportData==='function'){
+          narSnap=window.tkNarTransitionExportData();window.__narTransitionLearningFrozen=true;narFrozen=true;
+          if(cfg.narTransitionBacktestMode==='prior_only')window.tkNarTransitionImportData({schema:2,buckets:{},seen:[],pending:{},savedAt:''},{transient:true});
+          else if(typeof window.tkNarTransitionClearCache==='function')window.tkNarTransitionClearCache();
+        }
+      }catch(e){}
       window.__pgDailyRankCapture=cfg.allocationMode==='daily_rank';
       if(record)record.checked=false;
       try{window.__rsLastRows=[]}catch(e){}
-      setStatus(cfg.allocationMode==='daily_rank'?'過去レースの全候補を取得・精算中です。完了後に日付ごとに'+metricLabel(cfg)+'で上位'+money(cfg.dailyLimit)+'円分を選びます。':'過去レースを取得・精算中です。完了後に日次上限と最大3点を適用します。',true);
+      setStatus((cfg.allocationMode==='daily_rank'?'過去レースの全候補を取得・精算中です。完了後に日付ごとに'+metricLabel(cfg)+'で上位'+money(cfg.dailyLimit)+'円分を選びます。':'過去レースを取得・精算中です。完了後に日次上限と最大3点を適用します。')+' NAR地方移動補正は「'+narBacktestLabel(cfg)+'」で学習更新を凍結します。',true);
       await window.runRangeVenueSimulation();
       window.recalculatePurchaseGuardBacktest();
     }catch(e){console.error('[PurchaseGuardBacktest]',e);setStatus('バックテストに失敗しました：'+esc(e&&e.message||e),false)}
     finally{
       window.__pgDailyRankCapture=false;
+      try{if(narFrozen){window.__narTransitionLearningFrozen=false;if(narSnap&&typeof window.tkNarTransitionImportData==='function')window.tkNarTransitionImportData(narSnap)}}catch(e){window.__narTransitionLearningFrozen=false}
       try{if(snap&&typeof settings!=='undefined'&&settings){settings.unit=snap.unit;settings.budget=snap.budget;settings.maxTickets=snap.maxTickets}}catch(e){}
       if(record)record.checked=!!recordOn;state.running=false;if(btn){btn.disabled=false;btn.textContent=old||'期間を取得してバックテスト'}
     }
@@ -25646,12 +26056,81 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   };
   function init(){
     syncFromPurchaseGuard();
-    ['pgBtDailyLimit','pgBtPointAmount','pgBtTicketPriority','pgBtAllocationMode','pgBtDailyRankMetric','pgBtSkipDebut','pgBtReserveMain','pgBtMainRaceNo','pgBtMainReserve'].forEach(function(id){var el=$(id);if(el)el.addEventListener('change',function(){applyConfig(configFromFields())})});
+    ['pgBtDailyLimit','pgBtPointAmount','pgBtTicketPriority','pgBtAllocationMode','pgBtDailyRankMetric','pgBtNarLearningMode','pgBtSkipDebut','pgBtReserveMain','pgBtMainRaceNo','pgBtMainReserve'].forEach(function(id){var el=$(id);if(el)el.addEventListener('change',function(){applyConfig(configFromFields())})});
     ['swDailyLimit','swPointAmount','swTicketPriority','swAllocationMode','swDailyRankMetric','swSkipDebut','swReserveMain','swMainRaceNo','swMainReserve'].forEach(function(id){var el=$(id);if(el)el.addEventListener('change',function(){setTimeout(syncFromPurchaseGuard,0)})});
     document.addEventListener('click',function(ev){if(ev.target&&ev.target.closest&&ev.target.closest('[data-tab="sim"]'))setTimeout(syncFromPurchaseGuard,30)});
     setStatus('期間を指定して取得するか、表示済みの期間横断結果を再計算できます。',true);
   }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
+})();
+</script>
+
+<script>
+/* v5.18.282 NarTransitionFinalIntegration: 最終通信・買い目・表示経路を固定 */
+(function(){
+  'use strict';
+  var VERSION='v5.18.282 NarTransitionEV';
+  function ridFromUrl(url){
+    var s=String(url||'');
+    if(!/^https:\/\/nar(?:\.sp)?\.netkeiba\.com\//i.test(s))return '';
+    if(!/\/race\/(?:shutuba|result|race_result)\.html/i.test(s))return '';
+    var m=s.match(/[?&]race_id=(\d{12})/);return m?m[1]:'';
+  }
+  function currentRid(){
+    try{if(typeof currentRaceId!=='undefined'&&currentRaceId)return String(currentRaceId)}catch(e){}
+    return String(window.currentRaceId||'');
+  }
+  function installFetch(){
+    var old=window.fetchHtmlViaProxy;
+    if(typeof old!=='function'||old.__narTransitionFinalHook)return;
+    var wrapped=async function(url){
+      var html=await old.apply(this,arguments),rid=ridFromUrl(url);
+      if(rid&&typeof window.tkNarEnsureAdjustment==='function'){
+        try{await window.tkNarEnsureAdjustment(rid)}catch(e){}
+      }
+      return html;
+    };
+    wrapped.__narTransitionFinalHook=true;wrapped.__narTransitionOld=old;
+    window.fetchHtmlViaProxy=wrapped;try{fetchHtmlViaProxy=wrapped}catch(e){}
+  }
+  function installTickets(){
+    var old=window.buildTickets||(typeof buildTickets==='function'?buildTickets:null);
+    if(typeof old!=='function'||old.__narTransitionFinalHook)return;
+    var wrapped=function(recs){
+      var out=old.apply(this,arguments)||[],rid=currentRid();
+      if(!rid||typeof window.tkNarTransitionTicketInfo!=='function')return out;
+      return out.map(function(t){
+        var info=window.tkNarTransitionTicketInfo(rid,t),c=Object.assign({},t);
+        c.narTransitionFactor=Number(info&&info.factor||1);
+        c.narTransitionReasons=(info&&Array.isArray(info.reasons))?info.reasons.slice():[];
+        c.narTransitionLearned=!!(info&&info.learned);
+        return c;
+      });
+    };
+    wrapped.__narTransitionFinalHook=true;wrapped.__narTransitionOld=old;
+    window.buildTickets=wrapped;try{buildTickets=wrapped}catch(e){}
+  }
+  function setVersion(){
+    try{window.APP_VERSION=VERSION;var el=document.querySelector('.header .ver, .ver');if(el)el.textContent=VERSION;document.title='The競馬 EV分析 '+VERSION}catch(e){}
+  }
+  var versionObserver=null;
+  function lockVersionLabel(){
+    if(versionObserver||typeof MutationObserver!=='function')return;
+    versionObserver=new MutationObserver(function(){
+      var el=document.querySelector('.header .ver, .ver'),title='The競馬 EV分析 '+VERSION;
+      if(window.APP_VERSION!==VERSION||(el&&el.textContent!==VERSION)||document.title!==title)setVersion();
+    });
+    var el=document.querySelector('.header .ver, .ver'),te=document.querySelector('title');
+    if(el)versionObserver.observe(el,{childList:true,subtree:true,characterData:true});
+    if(te)versionObserver.observe(te,{childList:true,subtree:true,characterData:true});
+  }
+  function init(){
+    installFetch();installTickets();setVersion();lockVersionLabel();
+    try{if(typeof updateNarTransitionSettingsUI==='function')updateNarTransitionSettingsUI()}catch(e){}
+  }
+  window.tkNarTransitionInstallFinalHooks=function(){installFetch();installTickets();setVersion()};
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
+  [250,500,850,1250,1700,2500,3050,5100,6550,7050,11100,11600,14100,16000].forEach(function(ms){setTimeout(function(){installFetch();installTickets();setVersion()},ms)});
 })();
 </script>
 

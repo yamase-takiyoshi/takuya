@@ -907,7 +907,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
         <button class="btn-sm" id="rsJsonExportBtn" onclick="exportRangeVenueSimulationJSON()" type="button">📊 期間横断JSON出力</button>
         <button class="btn-sm" id="rsJsonImportBtn" onclick="importRangeVenueSimulationJSON()" type="button">📥 期間横断JSON読込</button>
         <button class="btn-sm" id="rsPurchaseCopyBtn" onclick="rsTransferPurchaseClipboard(event)" type="button" style="background:rgba(251,191,36,.14);border-color:rgba(251,191,36,.42);color:#fde68a;font-weight:900">🎫 明細を購入用へ一発転送</button>
-        <button class="btn-sm" id="rsBabaBackfillBtn" onclick="rsRunBabaBackfill(event)" type="button" style="background:rgba(96,165,250,.14);border-color:rgba(96,165,250,.42);color:#bfdbfe;font-weight:900">🩹 馬場状態を補完</button>
+        <button class="btn-sm" id="rsBabaBackfillBtn" onclick="rsRunBabaBackfill(event)" type="button" style="background:rgba(96,165,250,.14);border-color:rgba(96,165,250,.42);color:#bfdbfe;font-weight:900">🩹 レース情報を補完</button>
         <input type="file" id="rsJsonImportFile" accept=".json,application/json,text/json" style="display:none">
       </div>
       <div id="rsProgress" style="margin-top:10px"></div>
@@ -2253,10 +2253,10 @@ function pgjApplyRaceMetaToRow(row, raceId, text){
 }
 // ============================================================
 // v5.18.266 HistoryCalendarReplay:
-// 馬場状態が「不明」のまま残る明細に対し、race_id を照会して
+// 距離0・馬場/馬場状態/クラス未取得の明細に対し、race_id を照会して
 // 結果ページ(result.html)から距離/馬場/馬場状態/クラスを確定する。
 // ・JSON読込レコード等、doc を通っていない明細も救済できる。
-// ・キャッシュ済み(馬場状態あり)は再取得しない。プロキシ負荷を抑える。
+// ・キャッシュ済み(主要メタあり)は再取得しない。プロキシ負荷を抑える。
 // ============================================================
 function pgjKindFromRaceId(rid){
   const id = String(rid || '').replace(/[^0-9]/g, '');
@@ -2271,12 +2271,40 @@ function pgjResultUrlForRaceId(rid){
   if(!id || !kind) return '';
   return `${pgjResultHost(kind)}/race/result.html?race_id=${id}&rf=race_submenu`;
 }
-// 1件分：キャッシュに馬場状態が無ければ結果ページを照会してキャッシュする。
+function pgjHasUsefulRaceMeta(meta){
+  if(!meta) return false;
+  return pgjNum(meta.距離) > 0 ||
+         !!pgjNormalizeSurface(meta.馬場 || '') ||
+         !!pgjNormalizeTrackCond(meta.馬場状態 || '') ||
+         !!String(meta.クラス || '').trim();
+}
+function pgjRaceMetaCompleteEnough(meta){
+  if(!meta) return false;
+  return pgjNum(meta.距離) > 0 &&
+         !!pgjNormalizeSurface(meta.馬場 || '') &&
+         !!pgjNormalizeTrackCond(meta.馬場状態 || '');
+}
+function pgjRecordNeedsRaceMetaBackfill(r){
+  if(!r) return false;
+  const dist = pgjNum(r.距離 ?? r.distance ?? r.距離m ?? r.courseDistance ?? r.raceDistance ?? 0);
+  const surf = pgjNormalizeSurface(r.馬場 ?? r.surface ?? r.trackType ?? r.courseType ?? r.コース種別 ?? '');
+  const cond = pgjNormalizeTrackCond(r.馬場状態 ?? r.trackCond ?? r.trackCondition ?? r.condition ?? r.馬場コンディション ?? '');
+  const cls = String(r.クラス ?? r.class ?? r.raceClass ?? '').trim();
+  return !(dist > 0) || !surf || !cond || !cls;
+}
+function pgjApplyRaceMetaToRecord(rec){
+  if(!rec) return false;
+  const before = JSON.stringify([rec.距離, rec.馬場, rec.馬場状態, rec.クラス]);
+  pgjEnrichRecordMeta(rec, rec);
+  const after = JSON.stringify([rec.距離, rec.馬場, rec.馬場状態, rec.クラス]);
+  return before !== after;
+}
+// 1件分：キャッシュに主要メタが無ければ結果ページを照会してキャッシュする。
 async function pgjEnsureRaceMetaByRaceId(rid){
   const id = String(rid || '').replace(/[^0-9]/g, '');
   if(!id) return null;
   const cached = pgjRaceMetaOf(id);
-  if(cached && cached.馬場状態) return cached;                 // 既に確定済み
+  if(pgjRaceMetaCompleteEnough(cached)) return cached;          // 既に主要メタ取得済み
   if(typeof fetchHtmlViaProxy !== 'function') return cached || null;
   const url = pgjResultUrlForRaceId(id);
   if(!url) return cached || null;
@@ -2290,7 +2318,7 @@ async function pgjEnsureRaceMetaByRaceId(rid){
   }catch(e){}
   return pgjRaceMetaOf(id) || cached || null;
 }
-// 明細配列から「馬場状態が空 かつ race_id あり」を集めて順に照会する。
+// 明細配列から「距離0/馬場/馬場状態/クラスが不足 かつ race_id あり」を集めて順に照会する。
 // 逐次＋微小待機でプロキシ/ブリッジへの瞬間負荷を避ける。返り値は確定できた件数。
 async function pgjBackfillTrackCondByRaceId(records, opts){
   opts = opts || {};
@@ -2301,23 +2329,23 @@ async function pgjBackfillTrackCondByRaceId(records, opts){
   const seen = new Set();
   list.forEach(r => {
     if(!r) return;
-    const cond = pgjNormalizeTrackCond(r.馬場状態 ?? r.trackCond ?? r.trackCondition ?? r.condition ?? '');
-    if(cond) return;                                            // 既に馬場状態あり
+    if(!pgjRecordNeedsRaceMetaBackfill(r)) return;              // 既に主要メタあり
     const id = String(r.race_id || r.rid || r.raceId || '').replace(/[^0-9]/g, '');
     if(!id || id.length < 10) return;                           // race_id 無し/短すぎ
     const m = pgjRaceMetaOf(id);
-    if(m && m.馬場状態) return;                                 // キャッシュ済み→照会不要
+    if(pgjRaceMetaCompleteEnough(m)) return;                    // キャッシュ済み→照会不要
     if(seen.has(id)) return;
     seen.add(id); need.push(id);
   });
-  let filled = 0;
+  let filled = 0, applied = 0;
   const targets = need.slice(0, cap);
   for(const id of targets){
     const m = await pgjEnsureRaceMetaByRaceId(id);
-    if(m && m.馬場状態) filled++;
+    if(pgjHasUsefulRaceMeta(m)) filled++;
     if(delayMs > 0) await new Promise(res => setTimeout(res, delayMs));
   }
-  return { filled, requested: targets.length, skipped: need.length - targets.length };
+  list.forEach(r => { if(pgjApplyRaceMetaToRecord(r)) applied++; });
+  return { filled, applied, requested: targets.length, skipped: need.length - targets.length };
 }
 // UIから叩けるエントリ：現スナップショットの不明分を照会→補完→収支グラフへ再送。
 window.pgjBackfillTrackCond = async function(opts){
@@ -2331,7 +2359,7 @@ window.pgjBackfillTrackCond = async function(opts){
   try{ if(typeof window.scheduleProfitLiveSync === 'function') window.scheduleProfitLiveSync(); }catch(e){}
   return res;
 };
-// ツールバー「🩹 馬場状態を補完」ボタン
+// ツールバー「🩹 レース情報を補完」ボタン
 async function rsRunBabaBackfill(ev){
   const btn = (ev && ev.currentTarget) || document.getElementById('rsBabaBackfillBtn');
   const label = btn ? btn.textContent : '';
@@ -2340,14 +2368,14 @@ async function rsRunBabaBackfill(ev){
     const res = await window.pgjBackfillTrackCond({ max: 200 });
     const msg = res
       ? (res.requested === 0 ? '補完対象なし（すべて取得済み）'
-         : `馬場状態を ${res.filled}/${res.requested} 件補完しました${res.skipped ? `（残り${res.skipped}件は上限で見送り）` : ''}`)
+         : `レース情報を ${res.filled}/${res.requested} 件照会・${res.applied || 0}件反映しました${res.skipped ? `（残り${res.skipped}件は上限で見送り）` : ''}`)
       : '補完を実行しました';
     if(typeof dataIoStatus === 'function') dataIoStatus('🩹 ' + msg, true);
     else if(btn){ btn.textContent = '✅ ' + (res ? res.filled : 0) + '件補完'; }
   }catch(e){
     if(typeof dataIoStatus === 'function') dataIoStatus('🩹 補完に失敗: ' + ((e && e.message) || e), false);
   }finally{
-    if(btn){ btn.disabled = false; setTimeout(() => { btn.textContent = label || '🩹 馬場状態を補完'; }, 1600); }
+    if(btn){ btn.disabled = false; setTimeout(() => { btn.textContent = label || '🩹 レース情報を補完'; }, 1600); }
   }
 }
 window.rsRunBabaBackfill = rsRunBabaBackfill;
@@ -24237,7 +24265,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       }catch(e){}
     }
     if(sent)setStatus((direct?'⚡ ダイレクト更新':(loaded?'リアルタイム更新':'データ送信'))+' '+sent.count.toLocaleString()+'件 / '+new Date().toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit'}));
-    // v5.18.266 HistoryCalendarReplay: 送信後、馬場状態が不明のまま race_id を持つ明細があれば
+    // v5.18.270: 送信後、距離0・馬場/馬場状態/クラス未取得のまま race_id を持つ明細があれば
     // 結果ページを race_id で照会して自動補完し、一度だけ再送する。
     // 照会済みID(tkBackfillTried)は再実行しないため無限ループしない。
     try{
@@ -24246,17 +24274,17 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         if(Array.isArray(det)){
           var missing=[];
           det.forEach(function(r){
-            var c=r&&(r.馬場状態||r.trackCond||r.trackCondition||r.condition);
             var id=r&&String(r.race_id||r.rid||r.raceId||'').replace(/[^0-9]/g,'');
-            if(!c&&id&&id.length>=10&&!tkBackfillTried[id]) missing.push(id);
+            var need=(typeof pgjRecordNeedsRaceMetaBackfill==='function') ? pgjRecordNeedsRaceMetaBackfill(r) : !(r&&(r.馬場状態||r.trackCond||r.trackCondition||r.condition));
+            if(need&&id&&id.length>=10&&!tkBackfillTried[id]) missing.push(id);
           });
           if(missing.length){
             missing.forEach(function(id){tkBackfillTried[id]=1});
             tkBackfillBusy=true;
-            setStatus('🩹 馬場状態を race_id で照会中… '+missing.length+'件');
+            setStatus('🩹 レース情報を race_id で照会中… '+missing.length+'件');
             Promise.resolve(window.pgjBackfillTrackCond({max:150})).then(function(res){
               tkBackfillBusy=false;
-              if(res&&res.filled>0) setStatus('🩹 馬場状態を補完 '+res.filled+'件・再送しました');
+              if(res&&res.filled>0) setStatus('🩹 レース情報を補完 '+res.filled+'件・再送しました');
             }).catch(function(){tkBackfillBusy=false});
           }
         }

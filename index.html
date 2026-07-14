@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.292 JraRelativeValueGate</title>
+<title>The競馬 EV分析 v5.18.293 AllAgreeMode</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -662,7 +662,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
   </div>
   <div style="display:flex;gap:8px;align-items:center">
     <button id="profitSplitBtn" class="btn-sm profit-split-toggle" type="button" onclick="toggleProfitLiveSplit()" aria-pressed="false">📊 横2画面</button>
-    <span class="ver">v5.18.292 JraRelativeValueGate</span>
+    <span class="ver">v5.18.293 AllAgreeMode</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2066,6 +2066,7 @@ const CHIP_CLASS = {
 
 let settings = {
   mode: 'roi100',
+  allAgreeModes: ['roi100','roi120','ev_roi'],
   nar: false,
   budget: 500,
   unit: 100,
@@ -3197,6 +3198,7 @@ function resetSettingsToDefault(){
   const keepProxy = settings.proxyUrl;
   settings = {
     mode: 'roi100',
+    allAgreeModes: ['roi100','roi120','ev_roi'],
     nar: false,
     budget: 500,
     unit: 100,
@@ -5668,11 +5670,17 @@ function renderSimulation(finish, payouts, sourceLabel){
     typeMap[t.type].hit += hit ? 1 : 0;
     typeMap[t.type].count += 1;
     const nameText = (t.nums || []).map(n => horseNameMap[String(Number(n))] || '').filter(Boolean).join('－');
-    ticketDetails.push({
+    const simDetail = {
       券種名: t.type || '不明', 買い目: (t.nums || []).join('-'), 馬名: nameText,
       購入額: Number(t.amount || 0), 払戻額: ret, 的中: hit ? 1 : 0,
       想定オッズ: Number(t.odds || 0), EV: Number(t.ev || 0)
-    });
+    };
+    if(t.allAgree === true || t.userForcedPriority === true){
+      simDetail.全て同意 = 1;
+      simDetail.ユーザー強制優先 = 1;
+      simDetail.同意モード = Array.isArray(t.allAgreeModes) ? t.allAgreeModes.join(',') : '';
+    }
+    ticketDetails.push(simDetail);
 
     const roiOne = Number(t.amount||0) ? ret / Number(t.amount||0) * 100 : 0;
     html += `<div class="sim-ticket-card ${hit?'hit':'miss'}">
@@ -12754,6 +12762,11 @@ if(horses.length === 0){
         if(Number.isFinite(Number(t.learnedExpectedProfit))) detail.学習期待利益 = Number(t.learnedExpectedProfit);
         if(Number(t.learnedRoiAdj || 0) > 0) detail.学習ROI補正 = Number(t.learnedRoiAdj);
         if(Number(t.p || 0) > 0) detail.予測確率 = Number(t.p);
+        if(t.allAgree === true || t.userForcedPriority === true){
+          detail.全て同意 = 1;
+          detail.ユーザー強制優先 = 1;
+          detail.同意モード = Array.isArray(t.allAgreeModes) ? t.allAgreeModes.join(',') : '';
+        }
         const narInfo = (typeof window.tkNarTransitionTicketInfo === 'function')
           ? window.tkNarTransitionTicketInfo(String(row.rid || currentRaceId || ''), t) : null;
         const narFactor = Number(t.narTransitionFactor || (narInfo && narInfo.factor) || 0);
@@ -14174,6 +14187,11 @@ if(horses.length === 0){
         if(Number.isFinite(Number(t.learnedExpectedProfit))) detail.学習期待利益 = Number(t.learnedExpectedProfit);
         if(Number(t.learnedRoiAdj || 0) > 0) detail.学習ROI補正 = Number(t.learnedRoiAdj);
         if(Number(t.p || 0) > 0) detail.予測確率 = Number(t.p);
+        if(t.allAgree === true || t.userForcedPriority === true){
+          detail.全て同意 = 1;
+          detail.ユーザー強制優先 = 1;
+          detail.同意モード = Array.isArray(t.allAgreeModes) ? t.allAgreeModes.join(',') : '';
+        }
         const narFactor = Number(t.narTransitionFactor || 0);
         const narReasons = Array.isArray(t.narTransitionReasons) ? t.narTransitionReasons : [];
         if(narFactor > 0 && (Math.abs(narFactor - 1) > 0.001 || narReasons.length)) detail.地方移動補正目安 = narFactor;
@@ -22930,7 +22948,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.292 JraRelativeValueGate';
+  var VERSION = 'v5.18.293 AllAgreeMode';
   var KEY = 'tk-sim-reservations-v1';
   var IMMEDIATE_KEY = 'tk-sweep-immediate-all-v1';
   var GUARD_KEY = 'tk-sweep-purchase-guard-v1';
@@ -23284,7 +23302,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       }
       function normalized(t,defaultAmount){
         var ni=(typeof window.tkNarTransitionTicketInfo==='function')?window.tkNarTransitionTicketInfo(rec.raceId,t):null;
-        return {type:String(t.type||''),nums:Array.isArray(t.nums)?t.nums.map(Number).filter(Boolean):[],amount:Number(t.amount||defaultAmount||0),odds:Number(t.odds||0),ev:Number(t.ev||0),p:Number(t.p||0),horseNames:Array.isArray(t.horseNames)?t.horseNames.slice():[],evRaw:Number(t.evRaw||0),learnAdj:Number(t.learnAdj||0),adjustedEv:Number(t.adjustedEv||0),learnedRoiAdj:Number(t.learnedRoiAdj||0),learnedEv:Number(t.learnedEv||0),learnedExpectedProfit:Number(t.learnedExpectedProfit||0),learnLevel:Number(t.learnLevel||0),learnN:Number(t.learnN||0),profitLearnN:Number(t.profitLearnN||0),profitLearnLevel:String(t.profitLearnLevel||''),narTransitionFactor:Number(t.narTransitionFactor||(ni&&ni.factor)||1),narTransitionReasons:Array.isArray(t.narTransitionReasons)?t.narTransitionReasons.slice():((ni&&ni.reasons)?ni.reasons.slice():[])};
+        return {type:String(t.type||''),nums:Array.isArray(t.nums)?t.nums.map(Number).filter(Boolean):[],amount:Number(t.amount||defaultAmount||0),odds:Number(t.odds||0),ev:Number(t.ev||0),p:Number(t.p||0),horseNames:Array.isArray(t.horseNames)?t.horseNames.slice():[],evRaw:Number(t.evRaw||0),learnAdj:Number(t.learnAdj||0),adjustedEv:Number(t.adjustedEv||0),learnedRoiAdj:Number(t.learnedRoiAdj||0),learnedEv:Number(t.learnedEv||0),learnedExpectedProfit:Number(t.learnedExpectedProfit||0),learnLevel:Number(t.learnLevel||0),learnN:Number(t.learnN||0),profitLearnN:Number(t.profitLearnN||0),profitLearnLevel:String(t.profitLearnLevel||''),narTransitionFactor:Number(t.narTransitionFactor||(ni&&ni.factor)||1),narTransitionReasons:Array.isArray(t.narTransitionReasons)?t.narTransitionReasons.slice():((ni&&ni.reasons)?ni.reasons.slice():[]),allAgree:t.allAgree===true,userForcedPriority:t.userForcedPriority===true,allAgreeCount:Number(t.allAgreeCount||0),allAgreeModes:Array.isArray(t.allAgreeModes)?t.allAgreeModes.slice():[]};
       }
       var norm=tickets.map(function(t){return normalized(t,0)}).filter(function(t){return t.type&&t.nums.length&&t.amount>0});
       var poolNorm=pool.map(function(t){return normalized(t,cfgNow.pointAmount)}).filter(function(t){return t.type&&t.nums.length});
@@ -25550,7 +25568,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 </script>
 
 <script>
-/* v5.18.292 JraRelativeValueGate: 3点すべての旨み判定＋JRA日内相対旨み判定 */
+/* v5.18.293 AllAgreeMode: 3点すべての旨み判定＋JRA日内相対旨み判定 */
 (function(){
   'use strict';
   function n(v){var x=Number(v);return Number.isFinite(x)?x:0}
@@ -25562,7 +25580,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   }
   function applyJraRelativeGate(packages){
     var groups={},cutoffs={},excluded=0;
-    (packages||[]).forEach(function(pkg){if(pkg.kind!=='JRA')return;var date=pkg.date||'当日';(groups[date]||(groups[date]=[])).push(pkg)});
+    (packages||[]).forEach(function(pkg){if(pkg.kind!=='JRA'||pkg.userForcedPriority)return;var date=pkg.date||'当日';(groups[date]||(groups[date]=[])).push(pkg)});
     Object.keys(groups).forEach(function(date){
       var group=groups[date];if(group.length<4)return;
       var center=median(group.map(function(pkg){return pkg.expectedRoi})),mad=median(group.map(function(pkg){return Math.abs(pkg.expectedRoi-center)})),gap=Math.max(10,mad*.5),cutoff=center+gap;
@@ -25610,7 +25628,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   }
   function ticketKey(t){return String(t.type||'')+'|'+(Array.isArray(t.nums)?t.nums.join('-'):String(t.nums||''))}
   function sortMetric(list,metric,point){
-    return list.slice().sort(function(a,b){return metricValue(b,metric,point)-metricValue(a,metric,point)||n(b.adjustedEv)-n(a.adjustedEv)||n(b.evRaw)-n(a.evRaw)||n(b.p)-n(a.p)||n(a._dailyOrder)-n(b._dailyOrder)})
+    return list.slice().sort(function(a,b){return Number(!!b.userForcedPriority)-Number(!!a.userForcedPriority)||metricValue(b,metric,point)-metricValue(a,metric,point)||n(b.adjustedEv)-n(a.adjustedEv)||n(b.evRaw)-n(a.evRaw)||n(b.p)-n(a.p)||n(a._dailyOrder)-n(b._dailyOrder)})
   }
   function reducePool(tickets,ctx,maxPoints){
     var decorated=decorateTickets(tickets,ctx).map(function(t,i){t._dailyOrder=i;return t}),keep={},out=[],perRace=Math.min(3,Math.max(1,n(maxPoints)||3));
@@ -25627,19 +25645,20 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       var rec=entry&&entry.rec||{},id=String(rec.id||rec.raceId||ei),ctx={kind:rec.kind,venue:rec.venue,raceName:rec.raceName,raceId:rec.raceId};
       var valid=decorateTickets(entry&&entry.tickets||[],ctx).map(function(t,ti){t._dailyOrder=ei*10000+ti;t.dailyRankScore=metricValue(t,metric,point);return t}).filter(function(t){return t.type&&Array.isArray(t.nums)&&t.nums.length});
       var hasEv=valid.some(function(t){return n(t.evRaw)>0||n(t.ev)>0});
-      var ranked=(priority==='ev'&&hasEv)?sortMetric(valid,'ev',point):valid.slice().sort(function(a,b){return n(a._dailyOrder)-n(b._dailyOrder)});
+      var ranked=(priority==='ev'&&hasEv)?sortMetric(valid,'ev',point):valid.slice().sort(function(a,b){return Number(!!b.userForcedPriority)-Number(!!a.userForcedPriority)||n(a._dailyOrder)-n(b._dailyOrder)});
       if(ranked.length<packagePoints){incompleteRaces++;return}
       ranked=ranked.slice(0,packagePoints);
+      var userForcedPriority=ranked.every(function(t){return !!t.userForcedPriority});
       var score=ranked.reduce(function(s,t){return s+n(t.dailyRankScore)},0);
       var weakestScore=ranked.reduce(function(m,t){return Math.min(m,n(t.dailyRankScore))},Infinity);
       completeRaces++;
-      if(score+1e-9<minScore||weakestScore+1e-9<minTicketScore){qualityExcludedRaces++;return}
+      if(!userForcedPriority&&(score+1e-9<minScore||weakestScore+1e-9<minTicketScore)){qualityExcludedRaces++;return}
       var expectedRoi=metric==='learned_profit'?100*(1+score/packageCost):100*score/packagePoints;
       var weakestExpectedRoi=metric==='learned_profit'?100*(1+weakestScore/point):100*weakestScore;
-      packages.push({id:id,entry:entry,tickets:ranked,score:score,expectedRoi:expectedRoi,weakestExpectedRoi:weakestExpectedRoi,topScore:n(ranked[0]&&ranked[0].dailyRankScore),order:ei,kind:recordKind(rec),date:String(rec.date||'当日')});
+      packages.push({id:id,entry:entry,tickets:ranked,score:score,expectedRoi:expectedRoi,weakestExpectedRoi:weakestExpectedRoi,topScore:n(ranked[0]&&ranked[0].dailyRankScore),order:ei,kind:recordKind(rec),date:String(rec.date||'当日'),userForcedPriority:userForcedPriority});
     });
     var absoluteQualifiedRaces=packages.length,relativeGate=applyJraRelativeGate(packages),jraRelativeExcludedRaces=relativeGate.excluded,jraRelativeCutoffs=relativeGate.cutoffs;packages=relativeGate.packages;
-    packages.sort(function(a,b){return b.score-a.score||b.topScore-a.topScore||a.order-b.order});
+    packages.sort(function(a,b){return Number(!!b.userForcedPriority)-Number(!!a.userForcedPriority)||b.score-a.score||b.topScore-a.topScore||a.order-b.order});
     var capacityRaces=Math.max(0,Math.floor((limit-used)/packageCost)),byId={},selected=[],selectedRaces=0,cutoff=0;
     for(var i=0;i<packages.length&&selectedRaces<capacityRaces;i++){
       var pkg=packages[i],packageRank=selectedRaces+1;
@@ -25675,7 +25694,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 /* v5.18.287 BatchSubmitAssist: 3点セット当日一括購入票＋公式投票サイト引き渡し */
 (function(){
   'use strict';
-  var VERSION='v5.18.292 JraRelativeValueGate';
+  var VERSION='v5.18.293 AllAgreeMode';
   var RES_KEY='tk-sim-reservations-v1';
   var GUARD_KEY='tk-sweep-purchase-guard-v1';
   var PREF_KEY='tk-daily-batch-provider-v1';
@@ -25850,7 +25869,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 /* v5.18.256 RangeSyncFix: 横2画面リアルタイム連動 */
 (function(){
   'use strict';
-  var V='v5.18.292 JraRelativeValueGate';
+  var V='v5.18.293 AllAgreeMode';
   function applyVersion(){
     window.APP_VERSION=V;
     var el=document.querySelector('.header .ver, .ver');
@@ -26105,7 +26124,10 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         combo:comboText(d&&(d['買い目']||d.combo||d.nums)), horse:String(d&&(d['馬名']||d.horseNames)||''),
         originalBet:originalBet,originalRet:originalRet,unitReturn:originalRet/units,
         ev:ev,evRaw:rawEv,adjustedEv:adjustedEv,learnedEv:learnedEv,learnedExpectedProfit:learnedProfit,hasRaw:hasRaw,hasAdjusted:hasAdjusted,hasLearned:hasLearned,
-        p:n(d&&(d['予測確率']!=null?d['予測確率']:d.p)),order:i
+        p:n(d&&(d['予測確率']!=null?d['予測確率']:d.p)),
+        allAgree:!!(d&&(d['全て同意']===1||d['全て同意']===true||d.allAgree===true)),
+        userForcedPriority:!!(d&&(d['ユーザー強制優先']===1||d['ユーザー強制優先']===true||d.userForcedPriority===true)),
+        allAgreeModes:String(d&&(d['同意モード']||d.allAgreeModes)||''),order:i
       };
     }).filter(function(d){return d.type&&d.combo&&d.originalBet>0});
   }
@@ -26163,26 +26185,27 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       }
       if(details.length<packagePoints){rec.status='incomplete';rec.reason='3点セットが揃わないため見送り（候補'+details.length+'点）';stats.incompleteSkip++;out.push(rec);return}
       var hasPriorityEv=details.some(function(d){return n(d.evRaw)>0||n(d.ev)>0});
-      if(cfg.ticketPriority==='ev'&&hasPriorityEv)details.sort(function(a,b){return n(b.evRaw||b.ev)-n(a.evRaw||a.ev)||n(b.p)-n(a.p)||a.order-b.order});
-      else details.sort(function(a,b){return a.order-b.order});
+      if(cfg.ticketPriority==='ev'&&hasPriorityEv)details.sort(function(a,b){return Number(!!b.userForcedPriority)-Number(!!a.userForcedPriority)||n(b.evRaw||b.ev)-n(a.evRaw||a.ev)||n(b.p)-n(a.p)||a.order-b.order});
+      else details.sort(function(a,b){return Number(!!b.userForcedPriority)-Number(!!a.userForcedPriority)||a.order-b.order});
       if(cfg.ticketPriority==='ev'&&!hasPriorityEv)stats.evFallback++;
       var packageDetails=details.slice(0,packagePoints),items=packageDetails.map(function(d){return {detail:d,score:dailyMetricValue(d,cfg)}}),packageScore=items.reduce(function(s,x){return s+n(x.score)},0);
+      var userForcedPriority=packageDetails.every(function(d){return !!d.userForcedPriority});
       var expectedRoi=packageExpectedRoi(packageScore,cfg,packagePoints,packageCost),minimumScore=packageMinimumScore(cfg,packagePoints,packageCost),minimumTicketScore=ticketMinimumScore(cfg,cfg.pointAmount),weakestScore=items.reduce(function(m,x){return Math.min(m,n(x.score))},Infinity),weakestExpectedRoi=ticketExpectedRoi(weakestScore,cfg,cfg.pointAmount);
       stats.candidates++;stats.candidatePoints+=packagePoints;stats.candidateBet+=packageCost;
-      if(packageScore+1e-9<minimumScore||weakestScore+1e-9<minimumTicketScore){rec.status='quality';rec.reason='旨みライン未達（3点内最低 '+weakestExpectedRoi.toFixed(1)+'% < '+cleanRoi(cfg.dailyRankMinRoi,120)+'%）';rec.expectedRoi=expectedRoi;rec.weakestExpectedRoi=weakestExpectedRoi;stats.qualitySkip++;out.push(rec);return}
+      if(!userForcedPriority&&(packageScore+1e-9<minimumScore||weakestScore+1e-9<minimumTicketScore)){rec.status='quality';rec.reason='旨みライン未達（3点内最低 '+weakestExpectedRoi.toFixed(1)+'% < '+cleanRoi(cfg.dailyRankMinRoi,120)+'%）';rec.expectedRoi=expectedRoi;rec.weakestExpectedRoi=weakestExpectedRoi;stats.qualitySkip++;out.push(rec);return}
       stats.absoluteQualified++;rec.hasEv=hasPriorityEv;rec.status='candidate';out.push(rec);
       var bucket=byDate[rec.date]||(byDate[rec.date]=[]);
-      bucket.push({rec:rec,items:items,score:packageScore,expectedRoi:expectedRoi,weakestExpectedRoi:weakestExpectedRoi,topScore:n(items[0]&&items[0].score),order:index});
+      bucket.push({rec:rec,items:items,score:packageScore,expectedRoi:expectedRoi,weakestExpectedRoi:weakestExpectedRoi,topScore:n(items[0]&&items[0].score),order:index,userForcedPriority:userForcedPriority});
     });
     Object.keys(byDate).forEach(function(date){
-      var packages=byDate[date],jraPackages=packages.filter(function(pkg){return pkg.rec.kind==='JRA'});
+      var packages=byDate[date],jraPackages=packages.filter(function(pkg){return pkg.rec.kind==='JRA'&&!pkg.userForcedPriority});
       if(jraPackages.length>=4){
         var center=median(jraPackages.map(function(pkg){return pkg.expectedRoi})),mad=median(jraPackages.map(function(pkg){return Math.abs(pkg.expectedRoi-center)})),gap=Math.max(10,mad*.5),relativeCutoff=center+gap;
         stats.jraRelativeCutoffs[date]={candidateRaces:jraPackages.length,median:center,mad:mad,gap:gap,cutoff:relativeCutoff};
         jraPackages.forEach(function(pkg){pkg.jraRelativeCutoff=relativeCutoff;if(pkg.expectedRoi+1e-9<relativeCutoff){pkg.rec.status='relative';pkg.rec.expectedRoi=pkg.expectedRoi;pkg.rec.jraRelativeCutoff=relativeCutoff;pkg.rec.reason='JRA日内相対旨み未達（期待回収率 '+pkg.expectedRoi.toFixed(1)+'% < 日内基準 '+relativeCutoff.toFixed(1)+'%）';stats.relativeSkip++}});
         packages=packages.filter(function(pkg){return pkg.rec.status==='candidate'});
       }
-      packages.sort(function(a,b){return b.score-a.score||b.topScore-a.topScore||a.order-b.order});
+      packages.sort(function(a,b){return Number(!!b.userForcedPriority)-Number(!!a.userForcedPriority)||b.score-a.score||b.topScore-a.topScore||a.order-b.order});
       var capacityRaces=Math.floor(cfg.dailyLimit/packageCost),picked=packages.slice(0,capacityRaces);
       for(var i=0;i<picked.length;i++){
         var x=picked[i];x.rank=i+1;selectedByRace[x.rec._dailyKey]=x;
@@ -26193,11 +26216,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       if(rec.status!=='candidate'){delete rec._dailyKey;return}
       var picked=selectedByRace[rec._dailyKey];
       if(!picked){rec.status='rank';rec.reason='日次'+metricLabel(cfg)+'の3点セット予算圏外';stats.rankSkip++;delete rec._dailyKey;return}
-      rec.status='buy';rec.reason='日次'+metricLabel(cfg)+'で3点セット採用';rec.points=packagePoints;rec.bet=packageCost;
+      rec.status='buy';rec.reason=picked.userForcedPriority?'全て同意・ユーザー強制優先':'日次'+metricLabel(cfg)+'で3点セット採用';rec.points=packagePoints;rec.bet=packageCost;
       rec.tickets=picked.items.map(function(x,pointIndex){
         var d=x.detail,units=Math.floor(cfg.pointAmount/100),r=Math.round(d.unitReturn*units),fallback=cfg.dailyRankMetric==='adjusted_ev'?!d.hasAdjusted:(cfg.dailyRankMetric==='learned_profit'?!d.hasLearned:!(d.hasRaw||d.ev>0));
         if(fallback)stats.metricFallback++;
-        return {type:d.type,combo:d.combo,horse:d.horse,ev:d.evRaw||d.ev,evRaw:d.evRaw,adjustedEv:d.adjustedEv,learnedEv:d.learnedEv,learnedExpectedProfit:cfg.pointAmount*(d.learnedEv-1),score:x.score,packageScore:picked.score,expectedRoi:picked.expectedRoi,weakestExpectedRoi:picked.weakestExpectedRoi,minimumRoi:cleanRoi(cfg.dailyRankMinRoi,120),jraRelativeCutoff:n(picked.jraRelativeCutoff),packageRank:picked.rank,rank:(picked.rank-1)*packagePoints+pointIndex+1,amount:cfg.pointAmount,ret:r,hit:r>0};
+        return {type:d.type,combo:d.combo,horse:d.horse,ev:d.evRaw||d.ev,evRaw:d.evRaw,adjustedEv:d.adjustedEv,learnedEv:d.learnedEv,learnedExpectedProfit:cfg.pointAmount*(d.learnedEv-1),score:x.score,packageScore:picked.score,expectedRoi:picked.expectedRoi,weakestExpectedRoi:picked.weakestExpectedRoi,minimumRoi:cleanRoi(cfg.dailyRankMinRoi,120),jraRelativeCutoff:n(picked.jraRelativeCutoff),packageRank:picked.rank,rank:(picked.rank-1)*packagePoints+pointIndex+1,amount:cfg.pointAmount,ret:r,hit:r>0,allAgree:d.allAgree,userForcedPriority:d.userForcedPriority,allAgreeModes:d.allAgreeModes};
       });
       rec.ret=rec.tickets.reduce(function(s,t){return s+t.ret},0);rec.profit=rec.ret-rec.bet;
       stats.purchased++;stats.points+=rec.points;stats.bet+=rec.bet;stats.ret+=rec.ret;if(rec.ret>0)stats.hitRaces++;
@@ -26230,7 +26253,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       }
       if(details.length<packagePoints){rec.status='incomplete';rec.reason='3点セットが揃わないため見送り（候補'+details.length+'点）';stats.incompleteSkip++;out.push(rec);return}
       rec.hasEv=details.some(function(d){return d.ev>0});
-      details.sort(function(a,b){return cfg.ticketPriority==='ev'&&rec.hasEv?((b.ev-a.ev)||(b.p-a.p)||(a.order-b.order)):(a.order-b.order)});
+      details.sort(function(a,b){return Number(!!b.userForcedPriority)-Number(!!a.userForcedPriority)||(cfg.ticketPriority==='ev'&&rec.hasEv?((b.ev-a.ev)||(b.p-a.p)||(a.order-b.order)):(a.order-b.order))});
       var picked=details.slice(0,packagePoints),cost=packageCost,used=n(usedByDate[rec.date]),hold=pendingMainHold(source,index,rec,cfg),available=Math.max(0,cfg.dailyLimit-used-hold.amount);
       stats.candidates++;stats.candidatePoints+=packagePoints;stats.candidateBet+=packageCost;
       if(cost>available){
@@ -26239,10 +26262,10 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         out.push(rec);return;
       }
       usedByDate[rec.date]=used+cost;
-      rec.status='buy';rec.reason='3点セット購入';rec.points=packagePoints;rec.bet=cost;
+      rec.status='buy';rec.reason=picked.every(function(d){return !!d.userForcedPriority})?'全て同意・ユーザー強制優先':'3点セット購入';rec.points=packagePoints;rec.bet=cost;
       rec.tickets=picked.map(function(d){
         var units=Math.floor(cfg.pointAmount/100),r=Math.round(d.unitReturn*units);
-        return {type:d.type,combo:d.combo,horse:d.horse,ev:d.ev,amount:cfg.pointAmount,ret:r,hit:r>0};
+        return {type:d.type,combo:d.combo,horse:d.horse,ev:d.ev,amount:cfg.pointAmount,ret:r,hit:r>0,allAgree:d.allAgree,userForcedPriority:d.userForcedPriority,allAgreeModes:d.allAgreeModes};
       });
       rec.ret=rec.tickets.reduce(function(s,t){return s+t.ret},0);rec.profit=rec.ret-rec.bet;
       stats.purchased++;stats.points+=rec.points;stats.bet+=rec.bet;stats.ret+=rec.ret;if(rec.ret>0)stats.hitRaces++;if(cfg.ticketPriority==='ev'&&!rec.hasEv)stats.evFallback++;
@@ -26646,10 +26669,10 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 </script>
 
 <script>
-/* v5.18.292 JraRelativeValueGate: 最終通信・買い目・比較表示経路を固定 */
+/* v5.18.293 AllAgreeMode: 最終通信・買い目・比較表示経路を固定 */
 (function(){
   'use strict';
-  var VERSION='v5.18.292 JraRelativeValueGate';
+  var VERSION='v5.18.293 AllAgreeMode';
   function ridFromUrl(url){
     var s=String(url||'');
     if(!/^https:\/\/nar(?:\.sp)?\.netkeiba\.com\//i.test(s))return '';
@@ -26711,6 +26734,188 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   window.tkNarTransitionInstallFinalHooks=function(){installFetch();installTickets();setVersion()};
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
   [250,500,850,1250,1700,2500,3050,5100,6550,7050,11100,11600,14100,16000].forEach(function(ms){setTimeout(function(){installFetch();installTickets();setVersion()},ms)});
+})();
+</script>
+
+<script>
+/* v5.18.293 AllAgreeMode: ユーザー指定の複数予想モードが同じ買い目に全て同意した時だけ強制優先 */
+(function(){
+  'use strict';
+  var MODE_KEY='all_agree';
+  var MODE_LABEL='🤝 全て同意（ユーザー強制優先）';
+  var VERSION='v5.18.293 AllAgreeMode';
+  var DEFAULT_MODES=['roi100','roi120','ev_roi'];
+
+  function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+  function availableModes(){
+    var seen={},out=[];
+    try{
+      (MODE_OPTIONS||[]).forEach(function(o){
+        var k=String(o&&o[0]||''),label=String(o&&o[1]||k);
+        if(!k||k===MODE_KEY||seen[k])return;
+        seen[k]=1;out.push({key:k,label:label});
+      });
+    }catch(e){}
+    return out;
+  }
+  function normalizeModes(value,allowShort){
+    var avail=availableModes(),ok={};avail.forEach(function(x){ok[x.key]=1});
+    var seen={},out=[];
+    (Array.isArray(value)?value:[]).forEach(function(k){k=String(k||'');if(ok[k]&&!seen[k]){seen[k]=1;out.push(k)}});
+    if(!allowShort&&out.length<2){
+      out=[];DEFAULT_MODES.forEach(function(k){if(ok[k]&&!seen[k]){seen[k]=1;out.push(k)}});
+      for(var i=0;i<avail.length&&out.length<2;i++)if(!seen[avail[i].key]){seen[avail[i].key]=1;out.push(avail[i].key)}
+    }
+    return out;
+  }
+  function selectedModes(){
+    try{
+      settings.allAgreeModes=normalizeModes(settings.allAgreeModes,false);
+      return settings.allAgreeModes.slice();
+    }catch(e){return normalizeModes(DEFAULT_MODES,false)}
+  }
+  function saveModes(list){
+    try{
+      settings.allAgreeModes=normalizeModes(list,false);
+      localStorage.setItem('tk-html-settings',JSON.stringify(settings));
+      if(typeof window.swRefreshModeStatus==='function')window.swRefreshModeStatus();
+    }catch(e){}
+  }
+  function modeLabel(key){
+    try{return typeof getModeLabel==='function'?getModeLabel(key):key}catch(e){return key}
+  }
+  function ticketKey(t){
+    var type=String(t&&t.type||''),nums=Array.isArray(t&&t.nums)?t.nums.map(Number):[];
+    if(type!=='馬単'&&type!=='3連単')nums=nums.slice().sort(function(a,b){return a-b});
+    return type+'|'+nums.join('-');
+  }
+  function installCore(){
+    var old=window.selectByModeCore||(typeof selectByModeCore==='function'?selectByModeCore:null);
+    if(typeof old!=='function'||old.__allAgreeMode)return;
+    var wrapped=function(recs,mode,max){
+      if(mode!==MODE_KEY)return old.apply(this,arguments);
+      var modes=selectedModes(),limit=Math.max(1,Number(max)||1),lists=[];
+      for(var i=0;i<modes.length;i++){
+        var picked=old.call(this,recs,modes[i],limit)||[];
+        lists.push(picked);
+      }
+      if(modes.length<2||!lists.length||lists.some(function(x){return !x.length})){
+        window.__allAgreeLast={modes:modes,total:0,common:0};
+        return [];
+      }
+      var maps=lists.map(function(list){var m={};list.forEach(function(t,rank){var k=ticketKey(t);if(k&&!m[k])m[k]={ticket:t,rank:rank}});return m});
+      var common=[];
+      Object.keys(maps[0]).forEach(function(k){
+        var votes=maps.map(function(m){return m[k]}).filter(Boolean);
+        if(votes.length!==modes.length)return;
+        var c=Object.assign({},votes[0].ticket),evs=[],raws=[],ps=[],rankSum=0;
+        votes.forEach(function(v){
+          rankSum+=Number(v.rank)||0;
+          var ev=Number(v.ticket&&v.ticket.ev),raw=Number(v.ticket&&v.ticket.evRaw),p=Number(v.ticket&&v.ticket.p);
+          if(ev>0)evs.push(ev);if(raw>0)raws.push(raw);if(p>0)ps.push(p);
+        });
+        if(evs.length)c.ev=Math.min.apply(Math,evs);
+        if(raws.length)c.evRaw=Math.min.apply(Math,raws);
+        if(ps.length)c.p=Math.min.apply(Math,ps);
+        c.expectedReturn=Number(c.ev||0)*Number(c.unit||100);
+        c.allAgree=true;c.userForcedPriority=true;c.allAgreeCount=modes.length;c.allAgreeModes=modes.slice();c.allAgreeRankScore=rankSum;
+        common.push(c);
+      });
+      common.sort(function(a,b){return Number(a.allAgreeRankScore)-Number(b.allAgreeRankScore)||Number(b.ev||0)-Number(a.ev||0)||Number(b.p||0)-Number(a.p||0)});
+      window.__allAgreeLast={modes:modes,total:(recs||[]).length,common:common.length};
+      return common.slice(0,limit);
+    };
+    wrapped.__allAgreeMode=true;wrapped.__allAgreeOld=old;
+    window.selectByModeCore=wrapped;
+    try{selectByModeCore=wrapped}catch(e){}
+  }
+  function registerMode(){
+    try{
+      if(!MODE_OPTIONS.some(function(o){return o[0]===MODE_KEY}))MODE_OPTIONS.push([MODE_KEY,MODE_LABEL]);
+      if(!MODE_EV[MODE_KEY])MODE_EV[MODE_KEY]={'単勝':0.80,'複勝':0.80,'枠連':0.80,'ワイド':0.80,'馬連':0.80,'馬単':0.80,'3連複':0.80,'3連単':0.80};
+    }catch(e){}
+  }
+  function selectAllAgreeMode(button){
+    try{
+      settings.mode=MODE_KEY;
+      document.querySelectorAll('#modeGrid .mode-btn').forEach(function(x){x.classList.remove('active')});
+      if(button)button.classList.add('active');
+      localStorage.setItem('tk-html-settings',JSON.stringify(settings));
+      renderSettings();
+      if(typeof window.swRefreshModeStatus==='function')window.swRefreshModeStatus();
+    }catch(e){}
+  }
+  function addModeButton(){
+    var grid=document.getElementById('modeGrid');if(!grid)return false;
+    var found=null;grid.querySelectorAll('.mode-btn').forEach(function(b){if(b.textContent===MODE_LABEL)found=b});
+    if(!found){
+      found=document.createElement('button');found.type='button';found.textContent=MODE_LABEL;found.className='mode-btn';
+      found.onclick=function(){selectAllAgreeMode(found)};grid.appendChild(found);
+    }
+    found.classList.toggle('active',typeof settings!=='undefined'&&settings.mode===MODE_KEY);
+    return true;
+  }
+  function renderSettings(message){
+    var grid=document.getElementById('modeGrid');if(!grid)return false;
+    var card=document.getElementById('allAgreeSettings');
+    if(!card){
+      card=document.createElement('div');card.id='allAgreeSettings';
+      card.style.cssText='margin-top:12px;padding:11px;border:1px solid rgba(52,211,153,.35);border-radius:10px;background:rgba(16,185,129,.07)';
+      grid.parentNode.appendChild(card);
+    }
+    var selected=selectedModes(),active=typeof settings!=='undefined'&&settings.mode===MODE_KEY;
+    var html='<div style="font-size:13px;font-weight:900;color:#d1fae5;margin-bottom:5px">🤝 全て同意モードの対象</div>'+
+      '<div style="font-size:11px;line-height:1.65;color:var(--muted);margin-bottom:8px">チェックした予想モードが<b>券種・買い目とも完全一致</b>した候補だけを採用します。一致した買い目はユーザー指定として、EV順・旨みライン・JRA日内相対順位より強制優先します。1日上限は超えず、3点揃わないレースを別候補で穴埋めしません。</div>'+
+      '<div id="allAgreeChecks" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:6px">';
+    availableModes().forEach(function(o){var on=selected.indexOf(o.key)>=0;html+='<label style="display:flex;align-items:center;gap:7px;padding:7px 8px;border:1px solid '+(on?'rgba(52,211,153,.42)':'rgba(148,163,184,.20)')+';border-radius:8px;background:'+(on?'rgba(16,185,129,.10)':'rgba(15,23,42,.25)')+';font-size:11px;cursor:pointer"><input type="checkbox" data-all-agree-mode="'+esc(o.key)+'" '+(on?'checked':'')+' style="width:18px;height:18px;accent-color:#10b981"><span>'+esc(o.label)+'</span></label>'});
+    html+='</div><div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:8px"><button type="button" class="btn-sm" id="allAgreeSelectAll">すべて選択</button><button type="button" class="btn-sm" id="allAgreeRecommended">推奨3モードに戻す</button></div>'+
+      '<div id="allAgreeStatus" style="font-size:11px;line-height:1.55;margin-top:8px;color:'+(message?'#fecaca':(active?'#a7f3d0':'var(--muted)'))+'">'+esc(message||(active?'全て同意モードが有効です。':'対象を保存済みです。「🤝 全て同意」を選ぶと有効になります。'))+'<br>選択中：'+selected.map(modeLabel).map(esc).join(' / ')+'</div>';
+    card.innerHTML=html;
+    card.querySelectorAll('input[data-all-agree-mode]').forEach(function(input){input.onchange=function(){
+      var list=[].slice.call(card.querySelectorAll('input[data-all-agree-mode]:checked')).map(function(x){return x.getAttribute('data-all-agree-mode')});
+      if(list.length<2){input.checked=true;renderSettings('全て同意には2つ以上の予想モードが必要です。');return}
+      saveModes(list);renderSettings();
+    }});
+    var all=card.querySelector('#allAgreeSelectAll');if(all)all.onclick=function(){saveModes(availableModes().map(function(x){return x.key}));renderSettings()};
+    var rec=card.querySelector('#allAgreeRecommended');if(rec)rec.onclick=function(){saveModes(DEFAULT_MODES);renderSettings()};
+    return true;
+  }
+  function installRefreshHook(){
+    var old=window.refreshSettingsUI||(typeof refreshSettingsUI==='function'?refreshSettingsUI:null);
+    if(typeof old!=='function'||old.__allAgreeMode)return;
+    var wrapped=function(){var out=old.apply(this,arguments);try{addModeButton();renderSettings()}catch(e){}return out};
+    wrapped.__allAgreeMode=true;window.refreshSettingsUI=wrapped;try{refreshSettingsUI=wrapped}catch(e){}
+  }
+  function injectFeedback(){
+    try{
+      var old=document.getElementById('allAgreeFeedback');if(old)old.remove();
+      if(settings.mode!==MODE_KEY)return;
+      var host=document.getElementById('ticketList');if(!host)return;
+      var f=window.__allAgreeLast||{modes:selectedModes(),common:0},box=document.createElement('div');box.id='allAgreeFeedback';
+      box.style.cssText='margin-top:10px;padding:9px 11px;border:1px solid rgba(52,211,153,.38);border-radius:10px;background:rgba(16,185,129,.08);font-size:11px;line-height:1.6;color:#d1fae5';
+      box.textContent='🤝 全て同意：'+f.modes.map(modeLabel).join(' / ')+' ｜ 共通買い目 '+Number(f.common||0)+'点'+(Number(f.common||0)<3?'（3点未満のため購入ガードでは見送り）':'（ユーザー強制優先）');
+      host.appendChild(box);
+    }catch(e){}
+  }
+  function installRenderHook(){
+    var old=window.renderResult||(typeof renderResult==='function'?renderResult:null);
+    if(typeof old!=='function'||old.__allAgreeMode)return;
+    var wrapped=function(){var out=old.apply(this,arguments);injectFeedback();return out};
+    wrapped.__allAgreeMode=true;window.renderResult=wrapped;try{renderResult=wrapped}catch(e){}
+  }
+  function setVersion(){
+    try{window.APP_VERSION=VERSION;var el=document.querySelector('.header .ver, .ver');if(el)el.textContent=VERSION;document.title='The競馬 EV分析 '+VERSION}catch(e){}
+  }
+  function init(){
+    registerMode();
+    try{settings.allAgreeModes=normalizeModes(settings.allAgreeModes,false)}catch(e){}
+    installCore();installRefreshHook();installRenderHook();addModeButton();renderSettings();setVersion();
+    var grid=document.getElementById('modeGrid');if(grid&&!grid.__allAgreeClickHook){grid.__allAgreeClickHook=true;grid.addEventListener('click',function(){setTimeout(function(){try{addModeButton();renderSettings()}catch(e){}},0)})}
+  }
+  window.tkAllAgreeModeInit=init;
+  window.tkAllAgreeSelectedModes=selectedModes;
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
+  [300,1000,2500,6000,12000].forEach(function(ms){setTimeout(function(){installCore();addModeButton();setVersion()},ms)});
 })();
 </script>
 

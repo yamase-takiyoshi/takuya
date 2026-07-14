@@ -2867,7 +2867,7 @@ function pgjRecordsFromRangeRows(){
     // グローバルミラー window.__rsLastRows を正として読む。
     var src = (typeof window !== 'undefined' && Array.isArray(window.__rsLastRows)) ? window.__rsLastRows
             : ((typeof rsLastRows !== 'undefined' && Array.isArray(rsLastRows)) ? rsLastRows : []);
-    // v5.18.285 CandidateLedgerSeparation:
+    // v5.18.286 HitStateSeparation:
     // __rsLastRows は全日ランキング用の「候補プール」。購入ガード中／適用後の
     // 収支・JSONには、上限適用済みの購入台帳だけを渡す。
     if(typeof window !== 'undefined' && typeof window.tkPurchaseLedgerRows === 'function'){
@@ -2936,7 +2936,7 @@ function buildProfitGraphJSONSnapshot(){
       };
     }
   }catch(e){
-    console.error('[CandidateLedgerSeparation]', e);
+    console.error('[HitStateSeparation]', e);
     return {product:'The競馬 EV分析',schema:'keiba-profit-graph-v1',version:(typeof window!=='undefined'&&window.APP_VERSION)||'',exportedAt:new Date().toISOString(),説明:'購入台帳の作成に失敗',集計:{件数:0,投資合計:0,払戻合計:0,収支合計:0,ROI:0},収支明細:[],券種別集計:{}};
   }
   let list = [];
@@ -13286,9 +13286,12 @@ if(horses.length === 0){
       if(!r.date || !r.venueCode) return;
       const key = r.date + '|' + r.venueCode;
       if(!map.has(key)) map.set(key, { date: r.date, venueCode: r.venueCode, venueName: r.venueName,
-        races: 0, settled: 0, hitRaces: 0, bet: 0, ret: 0, settledBet: 0, errors: 0 });
+        races: 0, settled: 0, hitRaces: 0, candidateHitRaces: 0, allocationPending: 0, guarded: false, bet: 0, ret: 0, settledBet: 0, errors: 0 });
       const g = map.get(key);
       if(r.status === 'ok'){
+        if(r.guardStatus){ g.guarded = true; }
+        if(r.candidateHasFinish && Number(r.candidateHit || 0) > 0){ g.candidateHitRaces++; }
+        if(r.guardStatus === 'allocating'){ g.allocationPending++; }
         g.races++;
         g.bet += r.bet || 0;
         if(r.hasFinish){ g.settled++; g.settledBet += r.bet || 0; g.ret += r.ret || 0; if(r.hit > 0) g.hitRaces++; }
@@ -13306,34 +13309,39 @@ if(horses.length === 0){
     const agg = rsAggregate(rows || []);
     if(!agg.length) return '';
     const lines = [];
+    const guarded = agg.some(g => g.guarded);
     lines.push('📊 開催場・日別集計');
-    lines.push(['日付','場','R','確定','的中','投資','払戻','収支','ROI'].join('\t'));
+    lines.push((guarded?['日付','場','R','確定','候補的中','購入的中','投資','払戻','収支','ROI']:['日付','場','R','確定','的中','投資','払戻','収支','ROI']).join('\t'));
     let gBet = 0, gRet = 0, gSettledBet = 0;
     agg.forEach(g => {
       const profit = g.ret - g.settledBet;
       const roi = g.settledBet ? g.ret / g.settledBet * 100 : 0;
       gBet += g.bet; gRet += g.ret; gSettledBet += g.settledBet;
-      lines.push([
+      const values = [
         g.date,
         g.venueName || g.venueCode,
         g.races,
         g.settled,
+      ];
+      if(guarded) values.push(g.candidateHitRaces);
+      values.push(
         g.hitRaces,
         rsFmtNum(g.bet),
         rsFmtNum(g.ret),
         (profit >= 0 ? '+' : '') + rsFmtNum(profit),
         g.settledBet ? roi.toFixed(0) + '%' : '-'
-      ].join('\t'));
+      );
+      lines.push(values.join('\t'));
     });
     const gProfit = gRet - gSettledBet;
     const gRoi = gSettledBet ? gRet / gSettledBet * 100 : 0;
-    lines.push([
-      '全期間トータル', '', '', '', '',
+    const totalHead = guarded ? ['全期間トータル','','','','',''] : ['全期間トータル','','','',''];
+    lines.push(totalHead.concat([
       rsFmtNum(gBet),
       rsFmtNum(gRet),
       (gProfit >= 0 ? '+' : '') + rsFmtNum(gProfit),
       gSettledBet ? gRoi.toFixed(0) + '%' : '-'
-    ].join('\t'));
+    ]).join('\t'));
     return lines.join('\n');
   }
 
@@ -13343,11 +13351,14 @@ if(horses.length === 0){
   // 優先順位: 買い目単位の明細 → 券種別集計 → byType（古いデータの後方互換）。
   function rsTicketParts(r){
     try{
-      if(Array.isArray(r.ticketDetails) && r.ticketDetails.length){
-        return r.ticketDetails.map(d => ({
-          text: `${d.券種名 || '?'} ${d.買い目 || ''}${d.馬名 ? `［${d.馬名}］` : ''} ${(Number(d.購入額) || 0).toLocaleString()}円`
+      const candidateOnly = !(Array.isArray(r.ticketDetails) && r.ticketDetails.length) && Array.isArray(r.candidateTicketDetails) && r.candidateTicketDetails.length;
+      const detailSource = candidateOnly ? r.candidateTicketDetails : r.ticketDetails;
+      if(Array.isArray(detailSource) && detailSource.length){
+        return detailSource.map(d => ({
+          text: `${candidateOnly?'候補 ':''}${d.券種名 || '?'} ${d.買い目 || ''}${d.馬名 ? `［${d.馬名}］` : ''} ${(Number(d.購入額) || 0).toLocaleString()}円`
               + (d.的中 ? `→${(Number(d.払戻額) || 0).toLocaleString()}円` : ''),
-          hit: !!d.的中
+          hit: !!d.的中,
+          candidate: candidateOnly
         }));
       }
       if(Array.isArray(r.ticketTypeBreakdown) && r.ticketTypeBreakdown.length){
@@ -13396,8 +13407,9 @@ if(horses.length === 0){
         ].join('\t'));
         return;
       }
-      const fin = r.hasFinish ? (r.finishTop || []).join('-') : '未確定';
-      const name = (r.raceName || (r.no + 'R')) + (r.count === 0 ? '（見送り）' : '');
+      const fin = (r.hasFinish || r.candidateHasFinish) ? (r.finishTop || []).join('-') : '未確定';
+      const stateNote = r.guardStatus === 'allocating' ? '（配分確定待ち）' : (Number(r.candidateHit||0)>0 && Number(r.hit||0)===0 ? '（候補的中・非購入）' : (r.count === 0 ? '（見送り）' : ''));
+      const name = (r.raceName || (r.no + 'R')) + stateNote;
       lines.push([
         r.date,
         r.venueName || '',
@@ -13451,10 +13463,9 @@ if(horses.length === 0){
     if(!box) return;
     const guardResult = rows.__pgGuardResult || null;
     const guardCandidateBet = Number(guardResult&&guardResult.stats&&guardResult.stats.candidateBet)||0;
-    const guardActualBet = Number(guardResult&&guardResult.stats&&guardResult.stats.bet)||0;
-    const guardBanner = guardResult ? `<div class="url-status ok" style="margin-bottom:8px">🛡️ 購入ガード${guardResult.preview?'暫定':'確定'}表示：候補総額 ${guardCandidateBet.toLocaleString()}円 → 実投資 ${guardActualBet.toLocaleString()}円（1日上限 ${(Number(guardResult.config&&guardResult.config.dailyLimit)||0).toLocaleString()}円適用済み）</div>` : '';
     const ok = rows.filter(r => r && r.status === 'ok');
     const settled = ok.filter(r => r.hasFinish);
+    const purchasedSettled = settled.filter(r => Number(r.bet || 0) > 0);
     const days = new Set(ok.map(r => r.date)).size;
     const venues = new Set(ok.map(r => r.date + '|' + r.venueCode)).size;
     const settledBet = settled.reduce((s, r) => s + (r.bet || 0), 0);
@@ -13462,15 +13473,20 @@ if(horses.length === 0){
     const profit = ret - settledBet;
     const roi = settledBet ? ret / settledBet * 100 : 0;
     const hitRaces = settled.filter(r => r.hit > 0).length;
-    const hitRate  = settled.length ? (hitRaces / settled.length * 100) : 0;
+    const hitDenominator = guardResult ? purchasedSettled.length : settled.length;
+    const hitRate  = hitDenominator ? (hitRaces / hitDenominator * 100) : 0;
+    const candidateHitRaces = Number(guardResult&&guardResult.candidateHitRaces)||0;
+    const provisionalDate = String(guardResult&&guardResult.provisionalDate||'');
+    const guardBanner = guardResult ? `<div class="url-status ok" style="margin-bottom:8px">🛡️ 購入ガード${guardResult.preview?'暫定':'確定'}表示：公式結果の候補的中 <b>${candidateHitRaces}R</b>を保持 / 確定投資 ${settledBet.toLocaleString()}円（候補総額 ${guardCandidateBet.toLocaleString()}円・1日上限 ${(Number(guardResult.config&&guardResult.config.dailyLimit)||0).toLocaleString()}円）${provisionalDate?`<br><span style="color:#fde68a">⏳ ${provisionalDate} は候補収集中のため、購入・払戻・ROIへの計上を保留しています。</span>`:''}</div>` : '';
     box.innerHTML = guardBanner + `
       <div class="sim-kpi-grid" style="margin-top:0">
         <div class="sim-kpi"><div class="v">${days}</div><div class="l">日数</div></div>
         <div class="sim-kpi"><div class="v">${venues}</div><div class="l">延べ開催場</div></div>
         <div class="sim-kpi"><div class="v">${ok.length}</div><div class="l">処理R</div></div>
         <div class="sim-kpi"><div class="v">${settled.length}</div><div class="l">確定R</div></div>
-        <div class="sim-kpi"><div class="v">${hitRaces}</div><div class="l">的中R</div></div>
-        <div class="sim-kpi"><div class="v">${hitRate.toFixed(1)}%</div><div class="l">的中率</div></div>
+        ${guardResult?`<div class="sim-kpi"><div class="v" style="color:var(--green)">${candidateHitRaces}</div><div class="l">候補的中R（保持）</div></div>`:''}
+        <div class="sim-kpi"><div class="v">${hitRaces}</div><div class="l">${guardResult?'購入的中R':'的中R'}</div></div>
+        <div class="sim-kpi"><div class="v">${hitRate.toFixed(1)}%</div><div class="l">${guardResult?'購入的中率':'的中率'}</div></div>
         <div class="sim-kpi"><div class="v">${settledBet.toLocaleString()}</div><div class="l">投資円(確定)</div></div>
         <div class="sim-kpi"><div class="v">${ret.toLocaleString()}</div><div class="l">払戻円</div></div>
         <div class="sim-kpi"><div class="v" style="color:${profit>=0?'var(--green)':'var(--red)'}">${profit>=0?'+':''}${profit.toLocaleString()}</div><div class="l">収支円</div></div>
@@ -13483,6 +13499,7 @@ if(horses.length === 0){
     const box = $('rsTable');
     if(!box) return;
     const guardResult = rows.__pgGuardResult || null;
+    const guarded = !!guardResult;
     const agg = rsAggregate(rows);
     if(!agg.length){ box.innerHTML = ''; return; }
 
@@ -13496,17 +13513,18 @@ if(horses.length === 0){
         <th style="padding:6px 4px">場</th>
         <th style="padding:6px 4px;text-align:right">R</th>
         <th style="padding:6px 4px;text-align:right">確定</th>
-        <th style="padding:6px 4px;text-align:right">的中</th>
+        ${guarded?'<th style="padding:6px 4px;text-align:right">候補的中</th>':''}
+        <th style="padding:6px 4px;text-align:right">${guarded?'購入的中':'的中'}</th>
         <th style="padding:6px 4px;text-align:right">投資</th>
         <th style="padding:6px 4px;text-align:right">払戻</th>
         <th style="padding:6px 4px;text-align:right">収支</th>
         <th style="padding:6px 4px;text-align:right">ROI</th>
       </tr></thead><tbody>`;
-    let gBet = 0, gRet = 0, gSettledBet = 0;
+    let gBet = 0, gRet = 0, gSettledBet = 0, gCandidateHits = 0, gPurchaseHits = 0;
     agg.forEach(g => {
       const profit = g.ret - g.settledBet;
       const roi = g.settledBet ? g.ret / g.settledBet * 100 : 0;
-      gBet += g.bet; gRet += g.ret; gSettledBet += g.settledBet;
+      gBet += g.bet; gRet += g.ret; gSettledBet += g.settledBet; gCandidateHits += g.candidateHitRaces || 0; gPurchaseHits += g.hitRaces || 0;
       const pc = profit >= 0 ? 'var(--green)' : 'var(--red)';
       const rc = roi >= 100 ? 'var(--green)' : (g.settledBet ? 'var(--yellow)' : 'var(--muted)');
       h += `<tr style="border-top:1px solid var(--border)">
@@ -13514,6 +13532,7 @@ if(horses.length === 0){
         <td style="padding:6px 4px;font-weight:700">${asw_esc(g.venueName || g.venueCode)}</td>
         <td style="padding:6px 4px;text-align:right">${g.races}</td>
         <td style="padding:6px 4px;text-align:right">${g.settled}</td>
+        ${guarded?`<td style="padding:6px 4px;text-align:right;color:${g.candidateHitRaces?'var(--green)':'var(--muted)'}">${g.candidateHitRaces}</td>`:''}
         <td style="padding:6px 4px;text-align:right">${g.hitRaces}</td>
         <td style="padding:6px 4px;text-align:right">${g.bet.toLocaleString()}</td>
         <td style="padding:6px 4px;text-align:right">${g.ret.toLocaleString()}</td>
@@ -13524,7 +13543,7 @@ if(horses.length === 0){
     const gProfit = gRet - gSettledBet;
     const gRoi = gSettledBet ? gRet / gSettledBet * 100 : 0;
     h += `<tr style="border-top:2px solid var(--border);font-weight:700">
-      <td style="padding:6px 4px" colspan="5">全期間トータル</td>
+      <td style="padding:6px 4px" colspan="${guarded?6:5}">全期間トータル${guarded?`（候補的中 ${gCandidateHits}R / 購入的中 ${gPurchaseHits}R）`:''}</td>
       <td style="padding:6px 4px;text-align:right">${gBet.toLocaleString()}</td>
       <td style="padding:6px 4px;text-align:right">${gRet.toLocaleString()}</td>
       <td style="padding:6px 4px;text-align:right;color:${gProfit>=0?'var(--green)':'var(--red)'}">${gProfit>=0?'+':''}${gProfit.toLocaleString()}</td>
@@ -13554,11 +13573,17 @@ if(horses.length === 0){
           </tr>`;
           return;
         }
-        const fin = r.hasFinish ? r.finishTop.join('-') : '<span style="color:var(--muted)">未確定</span>';
+        const hasOfficialFinish = !!(r.hasFinish || r.candidateHasFinish);
+        const fin = hasOfficialFinish ? (r.finishTop || []).join('-') : '<span style="color:var(--muted)">未確定</span>';
         const pc = (r.profit || 0) >= 0 ? 'var(--green)' : 'var(--red)';
         const rc = (r.roi || 0) >= 100 ? 'var(--green)' : ((r.bet || 0) ? 'var(--yellow)' : 'var(--muted)');
-        const passNote = (r.count === 0) ? ' <span style="color:var(--muted);font-size:9px">(見送り)</span>' : '';
-        h += `<tr style="border-top:1px solid var(--border)${r.hit>0?';background:rgba(0,255,136,0.06)':''}">
+        const candidateWinner = Number(r.candidateHit || 0) > 0;
+        const passNote = r.guardStatus === 'allocating'
+          ? ` <span style="color:#fde68a;font-size:9px">(配分確定待ち${candidateWinner?'・候補的中保持':''})</span>`
+          : (candidateWinner && Number(r.hit||0)===0
+              ? ' <span style="color:#a7f3d0;font-size:9px">(候補的中・非購入)</span>'
+              : ((r.count === 0) ? ' <span style="color:var(--muted);font-size:9px">(見送り)</span>' : ''));
+        h += `<tr style="border-top:1px solid var(--border)${r.hit>0?';background:rgba(0,255,136,0.06)':(candidateWinner?';background:rgba(251,191,36,0.055)':'')}">
           <td style="padding:4px">${asw_esc(r.date)}</td>
           <td style="padding:4px">${asw_esc(r.venueName || '')}</td>
           <td style="padding:4px;font-weight:700">${r.no}R</td>
@@ -13573,7 +13598,7 @@ if(horses.length === 0){
         // v5.18.202: どの券種を何円買ったか（買い目内訳）を直下のサブ行で表示
         const tkHtml = rsTicketPartsHtml(r);
         if(tkHtml){
-          h += `<tr${r.hit>0?' style="background:rgba(0,255,136,0.06)"':''}>
+          h += `<tr${r.hit>0?' style="background:rgba(0,255,136,0.06)"':(candidateWinner?' style="background:rgba(251,191,36,0.055)"':'')}>
             <td colspan="10" style="padding:0 4px 5px 26px;font-size:10px;line-height:1.7">${tkHtml}</td>
           </tr>`;
         }
@@ -25307,7 +25332,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         if(frame.contentWindow)frame.contentWindow.postMessage(box?{type:'keibaProfitGraphLive',box:box}:{type:'keibaProfitGraphBridgeUpdate',key:BRIDGE_KEY,payload:sent&&sent.payload},targetOrigin);
       }catch(e){}
     }
-    if(sent){var provisional=!!(sent.payload&&sent.payload.data&&sent.payload.data.購入ガード&&sent.payload.data.購入ガード.暫定);setStatus((provisional?'日別上限適用済み・暫定更新':(direct?'⚡ ダイレクト更新':(loaded?'リアルタイム更新':'データ送信')))+' '+sent.count.toLocaleString()+'件 / '+new Date().toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit'}))}
+    if(sent){
+      var pg=sent.payload&&sent.payload.data&&sent.payload.data.購入ガード,provisional=!!(pg&&pg.暫定);
+      var hitInfo=pg?' / 候補的中 '+Number(pg.候補的中R||0).toLocaleString()+'R保持'+(pg.配分保留日?' / '+pg.配分保留日+'配分待ち':''):'';
+      setStatus((provisional?'日別上限適用済み・暫定更新':(direct?'⚡ ダイレクト更新':(loaded?'リアルタイム更新':'データ送信')))+' '+sent.count.toLocaleString()+'件'+hitInfo+' / '+new Date().toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit'}))
+    }
     // v5.18.270: 送信後、距離0・馬場/馬場状態/クラス未取得のまま race_id を持つ明細があれば
     // 結果ページを race_id で照会して自動補完し、一度だけ再送する。
     // 照会済みID(tkBackfillTried)は再実行しないため無限ループしない。
@@ -26085,6 +26114,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     box.innerHTML='<div class="sim-kpi-grid" style="margin-top:0">'+
       '<div class="sim-kpi"><div class="v">'+s.days+'</div><div class="l">日数</div></div>'+ 
       '<div class="sim-kpi"><div class="v">'+s.settled+'</div><div class="l">確定R</div></div>'+ 
+      '<div class="sim-kpi"><div class="v" style="color:var(--green)">'+n(result.candidateHitRaces)+'</div><div class="l">候補的中R（保持）</div></div>'+ 
       '<div class="sim-kpi"><div class="v">'+s.purchased+'</div><div class="l">購入R</div></div>'+ 
       '<div class="sim-kpi"><div class="v">'+s.points+'</div><div class="l">購入点数</div></div>'+ 
       '<div class="sim-kpi"><div class="v">'+s.capSkip+'</div><div class="l">上限見送り</div></div>'+ 
@@ -26121,7 +26151,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     });box.innerHTML=html;
   }
   function resultText(result){
-    var c=result.config,s=result.stats,lines=['購入ガード・バックテスト','購入配分\t'+allocationLabel(c),'NAR地方移補正学習\t'+narBacktestLabel(c),'1日上限\t'+c.dailyLimit+'円','1点\t'+c.pointAmount+'円','1R最大点数\t'+c.maxPoints,'新馬戦見送り\t'+(c.skipDebut?'ON':'OFF'),'メイン予算確保\t'+(c.allocationMode==='daily_rank'?'全日ランキングでは不使用':(c.reserveMain?(c.mainRaceNo+'R・各場'+c.mainReserve+'円'):'OFF')),'日数\t'+s.days,'確定R\t'+s.settled,'全日比較候補\t'+(s.candidates||0),'候補総額(参考)\t'+(s.candidateBet||0)+'円','購入R\t'+s.purchased,'購入点数\t'+s.points,'全日順位見送り\t'+(s.rankSkip||0),'メイン購入R\t'+s.mainPurchased,'メイン収支\t'+s.mainProfit+'円','メイン温存見送り\t'+s.reserveSkip,'新馬見送り\t'+s.debutSkip,'上限見送り\t'+s.capSkip,'予想見送り\t'+s.signalSkip,'実投資\t'+s.bet+'円','払戻\t'+s.ret+'円','収支\t'+s.profit+'円','回収率\t'+s.roi.toFixed(1)+'%','購入R的中率\t'+s.hitRate.toFixed(1)+'%','最大DD\t'+s.maxDrawdown+'円','','日付\t場\tR\tレース\t判定\t点\t実投資\t払戻\t収支\t理由・買い目'];
+    var c=result.config,s=result.stats,lines=['購入ガード・バックテスト','購入配分\t'+allocationLabel(c),'NAR地方移補正学習\t'+narBacktestLabel(c),'1日上限\t'+c.dailyLimit+'円','1点\t'+c.pointAmount+'円','1R最大点数\t'+c.maxPoints,'新馬戦見送り\t'+(c.skipDebut?'ON':'OFF'),'メイン予算確保\t'+(c.allocationMode==='daily_rank'?'全日ランキングでは不使用':(c.reserveMain?(c.mainRaceNo+'R・各場'+c.mainReserve+'円'):'OFF')),'日数\t'+s.days,'確定R\t'+s.settled,'候補的中R（保持）\t'+n(result.candidateHitRaces),'購入的中R\t'+n(s.hitRaces),'全日比較候補\t'+(s.candidates||0),'候補総額(参考)\t'+(s.candidateBet||0)+'円','購入R\t'+s.purchased,'購入点数\t'+s.points,'全日順位見送り\t'+(s.rankSkip||0),'メイン購入R\t'+s.mainPurchased,'メイン収支\t'+s.mainProfit+'円','メイン温存見送り\t'+s.reserveSkip,'新馬見送り\t'+s.debutSkip,'上限見送り\t'+s.capSkip,'予想見送り\t'+s.signalSkip,'実投資\t'+s.bet+'円','払戻\t'+s.ret+'円','収支\t'+s.profit+'円','回収率\t'+s.roi.toFixed(1)+'%','購入R的中率\t'+s.hitRate.toFixed(1)+'%','最大DD\t'+s.maxDrawdown+'円','','日付\t場\tR\tレース\t判定\t点\t実投資\t払戻\t収支\t理由・買い目'];
     result.rows.forEach(function(r){lines.push([r.date,r.venue,r.no+'R',r.raceName,statusLabel(r),r.points,r.bet,r.ret,r.profit,r.tickets.map(function(t){return t.type+' '+t.combo}).join(' / ')||r.reason].join('\t'))});return lines.join('\n');
   }
   function currentRows(){return Array.isArray(window.__rsLastRows)?window.__rsLastRows.slice():[]}
@@ -26155,16 +26185,53 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   function rangeByType(details){
     var out={};(details||[]).forEach(function(d){var k=String(d['券種名']||'不明'),g=out[k]||(out[k]={count:0,bet:0,ret:0,hit:0});g.count+=1;g.bet+=n(d['購入額']);g.ret+=n(d['払戻額']);g.hit+=n(d['的中'])});return out;
   }
+  // v5.18.286 HitStateSeparation:
+  // 公式結果で的中した「候補」と、購入ガードで実際に採用した「購入」を分離する。
+  // 候補の的中情報は再ランキング後も消さず、購入収支には採用券だけを計上する。
+  function candidateAudit(rows){
+    var seen={},races=0,settled=0,hitRaces=0,ticketHits=0;
+    (Array.isArray(rows)?rows:[]).forEach(function(r){
+      if(!r||r.header||r.status!=='ok')return;
+      var key=guardRowKey(r);if(seen[key])return;seen[key]=1;races++;
+      if(!r.hasFinish)return;settled++;
+      var details=Array.isArray(r.ticketDetails)?r.ticketDetails:[];
+      var detailHits=details.filter(function(d){return n(d&&((d['的中']!=null)?d['的中']:d.hit))>0||n(d&&((d['払戻額']!=null)?d['払戻額']:d.ret))>0}).length;
+      var hits=Math.max(n(r.hit),detailHits);if(hits>0){hitRaces++;ticketHits+=hits}
+    });
+    return {races:races,settled:settled,hitRaces:hitRaces,ticketHits:ticketHits};
+  }
+  function latestPreviewDate(rows){
+    var dates={};(Array.isArray(rows)?rows:[]).forEach(function(r){if(r&&!r.header&&r.status==='ok'){var d=dayOnly(r.date);if(d)dates[d]=1}});
+    var list=Object.keys(dates).sort();return list.length?list[list.length-1]:'';
+  }
+  function attachCandidateAudit(result,rows,isPreview){
+    var audit=candidateAudit(rows);result.preview=!!isPreview;result.candidateAudit=audit;result.candidateHitRaces=audit.hitRaces;result.candidateTicketHits=audit.ticketHits;
+    // 実行中の最終日だけは、まだ後続候補が増えるため購入確定扱いにしない。
+    result.provisionalDate=(isPreview&&window.__pgBacktestRunning)?latestPreviewDate(rows):'';
+    return result;
+  }
   function resultToRangeRows(rawRows,result){
     var byRid={},byKey={};(result&&Array.isArray(result.rows)?result.rows:[]).forEach(function(r){var rid=String(r.rid||'');if(rid)byRid[rid]=r;byKey[guardRowKey(r)]=r});
+    var provisionalDate=dayOnly(result&&result.provisionalDate);
     var out=(Array.isArray(rawRows)?rawRows:[]).map(function(raw){
       if(!raw||raw.header||raw.status==='error')return raw;
       var rid=String(raw.rid||raw.raceId||''),rec=(rid&&byRid[rid])||byKey[guardRowKey(raw)];if(!rec)return raw;
-      var x=Object.assign({},raw);x.date=dayOnly(raw.date);x.guardStatus=rec.status;x.guardReason=rec.reason||'';
-      if(rec.status==='buy'){
+      var x=Object.assign({},raw),rawDetails=Array.isArray(raw.ticketDetails)?raw.ticketDetails.map(function(d){return Object.assign({},d)}):[];
+      x.date=dayOnly(raw.date);x.guardStatus=rec.status;x.guardReason=rec.reason||'';
+      x.candidateHasFinish=!!raw.hasFinish;x.candidateCount=n(raw.count);x.candidateBet=n(raw.bet);x.candidateRet=n(raw.ret);x.candidateProfit=(raw.profit!=null)?n(raw.profit):n(raw.ret)-n(raw.bet);x.candidateHit=n(raw.hit);x.candidateTicketDetails=rawDetails;
+      x.guardPlannedStatus=rec.status;x.guardPlannedReason=rec.reason||'';
+      var allocating=!!(result&&result.preview&&provisionalDate&&x.date===provisionalDate);
+      if(allocating){
+        // 当日候補の収集中は、後から変わり得る選択を「購入・的中」として表示しない。
+        // 公式着順・候補的中は candidate* に保持し、次の日へ進むか全処理完了時に購入台帳へ確定する。
+        x.guardStatus='allocating';x.guardReason='当日候補の取得中・配分確定待ち';x.purchaseStatus='allocating';
+        x.status='ok';x.hasFinish=false;x.count=0;x.bet=0;x.ret=0;x.profit=0;x.roi=0;x.hit=0;x.ticketDetails=[];x.ticketTypeBreakdown=[];x.byType={};
+      }else if(rec.status==='buy'){
         var det=selectedRangeDetails(rec,raw);x.status='ok';x.count=n(rec.points);x.bet=n(rec.bet);x.ret=n(rec.ret);x.profit=x.ret-x.bet;x.roi=x.bet?x.ret/x.bet*100:0;x.hit=det.filter(function(d){return n(d['的中'])>0}).length;x.ticketDetails=det;x.ticketTypeBreakdown=[];x.byType=rangeByType(det);
+        x.purchaseStatus='confirmed';
       }else{
         x.status='ok';x.count=0;x.bet=0;x.ret=0;x.profit=0;x.roi=0;x.hit=0;x.ticketDetails=[];x.ticketTypeBreakdown=[];x.byType={};
+        x.purchaseStatus='not_purchased';
       }
       return x;
     });
@@ -26172,7 +26239,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     return out;
   }
   function previewResult(rows){
-    var cfg=configFromFields(),result=calculate(Array.isArray(rows)?rows:currentRows(),cfg);result.capValidation=validateDailyCap(result);result.preview=true;window.__pgBacktestPreviewResult=result;return result;
+    rows=Array.isArray(rows)?rows:currentRows();var cfg=configFromFields(),result=calculate(rows,cfg);result.capValidation=validateDailyCap(result);attachCandidateAudit(result,rows,true);window.__pgBacktestPreviewResult=result;return result;
   }
   window.tkGetPurchaseGuardPreviewResult=function(rows){return previewResult(rows)};
   window.tkPurchaseGuardPreviewRows=function(rows){
@@ -26199,7 +26266,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   window.recalculatePurchaseGuardBacktest=function(){
     var rows=currentRows(),cfg=applyConfig(configFromFields());
     if(!rows.length){setStatus('期間横断結果がありません。期間を指定して「期間を取得してバックテスト」を実行してください。',false);return null}
-    var result=calculate(rows,cfg),validation=validateDailyCap(result);result.capValidation=validation;result.preview=false;state.result=result;window.__pgBacktestResult=result;window.__pgBacktestLiveActive=true;window.__pgBacktestRunning=false;renderSummary(result);renderTable(result);
+    var result=calculate(rows,cfg),validation=validateDailyCap(result);result.capValidation=validation;attachCandidateAudit(result,rows,false);state.result=result;window.__pgBacktestResult=result;window.__pgBacktestLiveActive=true;window.__pgBacktestRunning=false;renderSummary(result);renderTable(result);
     var cp=$('pgBtCopyBtn');if(cp)cp.disabled=false;
     if(!validation.ok){
       var bad=validation.violations.map(function(x){return x.date+' '+money(x.used)+'円'}).join('、'),dup=validation.duplicateRaceIds.length?' / race_id重複 '+validation.duplicateRaceIds.length+'件':'';
@@ -26213,7 +26280,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     var fallback=result.stats.evFallback?' / EV未保存 '+result.stats.evFallback+'購入Rは元の買い目順を使用':'';
     var metricFallback=result.stats.metricFallback?' / 過去データに選択指標がない'+result.stats.metricFallback+'点は利用可能なEVへフォールバック':'';
     var rankInfo=result.config.allocationMode==='daily_rank'?'、全'+result.stats.candidates+'候補から全日順位見送り '+result.stats.rankSkip+'R':'';
-    setStatus('バックテスト完了（'+allocationLabel(result.config)+' / NAR地方移動補正: '+narBacktestLabel(result.config)+'）：候補総額 '+money(result.stats.candidateBet)+'円 → 実投資 '+money(result.stats.bet)+'円（'+result.stats.purchased+'R・'+result.stats.points+'点）'+rankInfo+'、メイン購入 '+result.stats.mainPurchased+'R、新馬見送り '+result.stats.debutSkip+'R。日別上限検証 OK（最大 '+money(validation.maxDailyUsed)+'円 / 上限 '+money(validation.limit)+'円）。右グラフは購入済み買い目だけで置換しました。'+extra+fallback+metricFallback,true);
+    setStatus('バックテスト完了（'+allocationLabel(result.config)+' / NAR地方移動補正: '+narBacktestLabel(result.config)+'）：候補的中 '+n(result.candidateHitRaces)+'Rを保持、購入的中 '+n(result.stats.hitRaces)+'R。候補総額 '+money(result.stats.candidateBet)+'円 → 実投資 '+money(result.stats.bet)+'円（'+result.stats.purchased+'R・'+result.stats.points+'点）'+rankInfo+'、メイン購入 '+result.stats.mainPurchased+'R、新馬見送り '+result.stats.debutSkip+'R。日別上限検証 OK（最大 '+money(validation.maxDailyUsed)+'円 / 上限 '+money(validation.limit)+'円）。右グラフは購入確定済み買い目だけで置換しました。'+extra+fallback+metricFallback,true);
     setTimeout(function(){try{if(typeof window.scheduleProfitLiveSync==='function')window.scheduleProfitLiveSync()}catch(e){}try{if(typeof window.refreshProfitLiveGraph==='function')window.refreshProfitLiveGraph()}catch(e){}},20);
     return result;
   };
@@ -26266,7 +26333,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 </script>
 
 <script>
-/* v5.18.285 CandidateLedgerSeparation: 購入ガード暫定／確定結果だけを収支グラフへ渡す */
+/* v5.18.286 HitStateSeparation: 候補的中を保持し、配分確定済み購入だけを収支グラフへ渡す */
 (function(){
   'use strict';
   function n(v){var x=Number(v==null?0:v);return Number.isFinite(x)?x:0}
@@ -26326,9 +26393,9 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     return out;
   }
   function build(result){
-    result=result||{};var cfg=result.config||{},limit=n(cfg.dailyLimit),idx=rawIndexes(),seen={},daily={},errors=[],list=[];
+    result=result||{};var cfg=result.config||{},limit=n(cfg.dailyLimit),idx=rawIndexes(),seen={},daily={},errors=[],list=[],provisionalDate=result.preview?day(result.provisionalDate):'';
     (Array.isArray(result.rows)?result.rows:[]).forEach(function(r,i){
-      if(!r||r.status!=='buy')return;
+      if(!r||r.status!=='buy'||(provisionalDate&&day(r.date)===provisionalDate))return;
       var d=day(r.date),rid=String(r.rid||''),venue=String(r.venue||r.venueName||''),no=n(r.no||r.raceNo),key=rid||[d,venue,no].join('|');
       if(!d)errors.push('日付不明の購入行');if(!venue)errors.push((rid||key)+' の開催場不明');if(seen[key])errors.push((rid||key)+' の重複');else seen[key]=1;
       var raw=rawFor(r,idx),det=selectedDetails(r,raw,cfg),bet=det.reduce(function(s,x){return s+n(x.購入額)},0),ret=det.reduce(function(s,x){return s+n(x.払戻額)},0);
@@ -26341,13 +26408,13 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       list.push(rec);
     });
     Object.keys(daily).forEach(function(d){if(daily[d]>limit)errors.push(d+' '+daily[d]+'円（上限'+limit+'円）')});
-    var totalBet=list.reduce(function(s,r){return s+n(r.投資)},0),totalRet=list.reduce(function(s,r){return s+n(r.払戻)},0),expected=n(result.stats&&result.stats.bet),max=Object.keys(daily).reduce(function(m,d){return Math.max(m,n(daily[d]))},0);
+    var totalBet=list.reduce(function(s,r){return s+n(r.投資)},0),totalRet=list.reduce(function(s,r){return s+n(r.払戻)},0),expected=(Array.isArray(result.rows)?result.rows:[]).reduce(function(s,r){return s+((r&&r.status==='buy'&&(!provisionalDate||day(r.date)!==provisionalDate))?n(r.bet):0)},0),max=Object.keys(daily).reduce(function(m,d){return Math.max(m,n(daily[d]))},0);
     if(totalBet!==expected)errors.push('投資合計 '+totalBet+'円（計算結果 '+expected+'円）');
     if(result.capValidation&&result.capValidation.ok===false)errors.push('購入ガード本体の上限検証エラー');
     if(errors.length){window.__pgBacktestCapError=errors.slice(0,5).join(' / ');return null}
     window.__pgBacktestCapError='';
     var byTicket=aggregate(list),profit=totalRet-totalBet;
-    return {product:'The競馬 EV分析',schema:'keiba-profit-graph-v1',version:window.APP_VERSION||'',exportedAt:new Date().toISOString(),説明:(result.preview?'購入ガード計算途中の暫定結果（日別上限適用済み）':'購入ガード適用後の購入買い目だけを収支グラフへ連動'),集計:{件数:list.length,投資合計:totalBet,払戻合計:totalRet,収支合計:profit,ROI:totalBet?Math.round(totalRet/totalBet*1000)/10:0},収支明細:list,券種別集計:byTicket,購入ガード:{適用済み:true,暫定:!!result.preview,候補総額:n(result.stats&&result.stats.candidateBet),実投資:totalBet,購入配分:cfg.allocationMode||'',ランキング基準:cfg.dailyRankMetric||'',一日上限:limit,一日最大使用額:max,日別上限検証:'OK',日別投資:daily},仕様:{graphs:['収支構成比','開催場別収支','券種別収支','累計収支変動'],chartSwitch:['円グラフ','棒グラフ','折れ線グラフ'],compatibleWith:'keiba_profit_spec_chart_switcher_candle_v22.html'}};
+    return {product:'The競馬 EV分析',schema:'keiba-profit-graph-v1',version:window.APP_VERSION||'',exportedAt:new Date().toISOString(),説明:(result.preview?'購入ガード計算途中。配分確定済みの日だけを連動し、処理中の日は候補的中を保持したまま収支計上を保留':'購入ガード適用後の購入買い目だけを収支グラフへ連動'),集計:{件数:list.length,投資合計:totalBet,払戻合計:totalRet,収支合計:profit,ROI:totalBet?Math.round(totalRet/totalBet*1000)/10:0},収支明細:list,券種別集計:byTicket,購入ガード:{適用済み:true,暫定:!!result.preview,配分保留日:provisionalDate,候補的中R:n(result.candidateHitRaces),候補的中券:n(result.candidateTicketHits),候補総額:n(result.stats&&result.stats.candidateBet),実投資:totalBet,購入配分:cfg.allocationMode||'',ランキング基準:cfg.dailyRankMetric||'',一日上限:limit,一日最大使用額:max,日別上限検証:'OK',日別投資:daily},仕様:{graphs:['収支構成比','開催場別収支','券種別収支','累計収支変動'],chartSwitch:['円グラフ','棒グラフ','折れ線グラフ'],compatibleWith:'keiba_profit_spec_chart_switcher_candle_v22.html'}};
   }
   window.tkBuildPurchaseGuardGraphSnapshot=build;
   window.tkDeactivatePurchaseGuardLive=function(){window.__pgBacktestLiveActive=false;window.__pgBacktestResult=null;window.__pgBacktestPreviewResult=null;window.__pgBacktestCapError='';window.__pgBacktestRunning=false};
@@ -26357,10 +26424,10 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 </script>
 
 <script>
-/* v5.18.285 CandidateLedgerSeparation: 最終通信・買い目・表示経路を固定 */
+/* v5.18.286 HitStateSeparation: 最終通信・買い目・表示経路を固定 */
 (function(){
   'use strict';
-  var VERSION='v5.18.285 CandidateLedgerSeparation';
+  var VERSION='v5.18.286 HitStateSeparation';
   function ridFromUrl(url){
     var s=String(url||'');
     if(!/^https:\/\/nar(?:\.sp)?\.netkeiba\.com\//i.test(s))return '';

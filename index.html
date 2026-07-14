@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.287 ThreePointPackage</title>
+<title>The競馬 EV分析 v5.18.288 PriorityControl</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -661,7 +661,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
   </div>
   <div style="display:flex;gap:8px;align-items:center">
     <button id="profitSplitBtn" class="btn-sm profit-split-toggle" type="button" onclick="toggleProfitLiveSplit()" aria-pressed="false">📊 横2画面</button>
-    <span class="ver">v5.18.287 ThreePointPackage</span>
+    <span class="ver">v5.18.288 PriorityControl</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -950,7 +950,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
           </div>
         </div>
         <div id="pgBtDailyRankNote" style="display:none;margin:-1px 0 8px;padding:7px 9px;border-radius:8px;background:rgba(96,165,250,.09);color:#bfdbfe;font-size:11px;line-height:1.55">
-          1Rから最終Rまでの候補を先に集め、各レースの上位3点を一組として日次上限まで採用します。3点揃わないレースは見送り、予算の端数で1点・2点だけ買うことはありません。EV＝素EV、補正EV＝確率学習による補正後、過去学習後の期待利益＝1点額×（補正EV×過去ROI補正−1）です。学習サンプル不足時は補正なしで計算します。
+          「買い目の優先方法」で各レースの3点を決めます。EV上位優先は素EV上位3点、ノーマルは設定した予想モードの出力順3点です。その3点セットを選択した「全日ランキング基準」の合計値で最終Rまで比較し、日次上限まで採用します。3点揃わないレースは見送り、予算の端数で1点・2点だけ買うことはありません。
         </div>
         <div class="field" style="margin-bottom:8px">
           <label>NAR地方移動補正のバックテスト学習</label>
@@ -1167,7 +1167,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
           </div>
         </div>
         <div id="swDailyRankNote" style="display:none;margin:-1px 0 7px;padding:7px 9px;border-radius:8px;background:rgba(96,165,250,.09);color:#bfdbfe;font-size:11px;line-height:1.55">
-          1Rから最終Rまでを先に予想し、各レースの上位3点を一組として日次上限までランキング上位を採用します。3点揃わないレースは見送り、予算の端数で部分購入しません。EV＝素EV、補正EV＝確率学習による補正後、過去学習後の期待利益＝1点額×（補正EV×過去ROI補正−1）です。学習サンプル不足時は補正なし。この方式ではメイン予算確保を使わず、メインも同じ基準で比較します。
+          「買い目の優先方法」で各レースの3点を決めます。EV上位優先は素EV上位3点、ノーマルは設定した予想モードの出力順3点です。その3点セットを選択した「全日ランキング基準」の合計値で最終Rまで比較し、日次上限まで採用します。3点揃わないレースは見送り、予算の端数で部分購入しません。この方式ではメイン予算確保を使わず、メインも同じ基準で比較します。
         </div>
         <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;margin:2px 0 7px;cursor:pointer;user-select:none">
           <input type="checkbox" id="swSkipDebut" checked style="width:18px;height:18px;accent-color:#f59e0b;margin-top:1px">
@@ -22880,7 +22880,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v5.18.287 ThreePointPackage';
+  var VERSION = 'v5.18.288 PriorityControl';
   var KEY = 'tk-sim-reservations-v1';
   var IMMEDIATE_KEY = 'tk-sweep-immediate-all-v1';
   var GUARD_KEY = 'tk-sweep-purchase-guard-v1';
@@ -23024,13 +23024,14 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   function isMainRace(rec,cfg){ return raceNoOf(rec) === Number(cfg.mainRaceNo || 11); }
   function priorityLabel(cfg){ return cfg.ticketPriority === 'normal' ? 'ノーマル（設定モード順）' : 'EV上位優先'; }
   function dailyRankMetricLabel(cfg){ return cfg.dailyRankMetric === 'adjusted_ev' ? '補正EV順' : (cfg.dailyRankMetric === 'learned_profit' ? '過去学習後の期待利益順' : 'EV順'); }
-  function allocationLabel(cfg){ return cfg.allocationMode === 'daily_rank' ? '全日ランキング・最終Rまで比較（'+dailyRankMetricLabel(cfg)+'）' : priorityLabel(cfg); }
+  function allocationLabel(cfg){ return cfg.allocationMode === 'daily_rank' ? '全日ランキング・最終Rまで比較（基準: '+dailyRankMetricLabel(cfg)+'／3点内: '+priorityLabel(cfg)+'）' : priorityLabel(cfg); }
   function refreshDailyRankUi(cfg){
     cfg=cfg||guardConfig();var on=cfg.allocationMode==='daily_rank';
     var wrap=$('swDailyRankMetricWrap'),note=$('swDailyRankNote');if(wrap)wrap.style.display=on?'':'none';if(note)note.style.display=on?'':'none';
     var reserve=$('swReserveMain'),priority=$('swTicketPriority'),mainNo=$('swMainRaceNo'),mainAmount=$('swMainReserve');
-    if(reserve)reserve.disabled=on;if(priority)priority.disabled=on;if(mainNo)mainNo.disabled=on;if(mainAmount)mainAmount.disabled=on;
+    if(reserve)reserve.disabled=on;if(priority)priority.disabled=false;if(mainNo)mainNo.disabled=on;if(mainAmount)mainAmount.disabled=on;
   }
+  window.swRefreshDailyRankUi=refreshDailyRankUi;
   function pendingMainReserve(rec,list,cfg){
     if(!cfg.reserveMain) return {count:0,amount:0};
     var seen={},count=0;
@@ -23569,13 +23570,13 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
       if(cfg.allocationMode==='daily_rank'){
         if(typeof window.tkDailyRankAllocate!=='function')throw new Error('全日ランキング配分エンジンが見つかりません');
-        dailyRankResult=window.tkDailyRankAllocate(dailyRankEntries,{dailyLimit:cfg.dailyLimit,pointAmount:cfg.pointAmount,maxPoints:MAX_POINTS,dailyRankMetric:cfg.dailyRankMetric,used:dailyUsed(date,list,'')});
+        dailyRankResult=window.tkDailyRankAllocate(dailyRankEntries,{dailyLimit:cfg.dailyLimit,pointAmount:cfg.pointAmount,maxPoints:MAX_POINTS,ticketPriority:cfg.ticketPriority,dailyRankMetric:cfg.dailyRankMetric,used:dailyUsed(date,list,'')});
         dailyRankEntries.forEach(function(entry){
           var rec=entry.rec,selected=dailyRankResult.byId[String(rec.id)]||[];
           if(!selected.length){rankExcluded++;return}
           rec.tickets=selected;rec.total=selected.length*cfg.pointAmount;rec.prepared=true;rec.prepError='';
           rec.purchaseGuard={dailyLimit:cfg.dailyLimit,pointAmount:cfg.pointAmount,maxPoints:MAX_POINTS,skipDebut:cfg.skipDebut,reserveMain:false,mainRaceNo:cfg.mainRaceNo,mainReserve:cfg.mainReserve,ticketPriority:cfg.ticketPriority,allocationMode:cfg.allocationMode,dailyRankMetric:cfg.dailyRankMetric};
-          rec.dailyRank={metric:cfg.dailyRankMetric,metricLabel:dailyRankResult.metricLabel,candidates:dailyRankResult.candidates,candidateRaces:dailyRankResult.candidateRaces,packagePoints:3,packageRank:selected[0]&&selected[0].dailyPackageRank,selectedRanks:selected.map(function(t){return t.dailyRank}),cutoff:dailyRankResult.cutoff};
+          rec.dailyRank={metric:cfg.dailyRankMetric,metricLabel:dailyRankResult.metricLabel,ticketPriority:cfg.ticketPriority,candidates:dailyRankResult.candidates,candidateRaces:dailyRankResult.candidateRaces,packagePoints:3,packageRank:selected[0]&&selected[0].dailyPackageRank,selectedRanks:selected.map(function(t){return t.dailyRank}),cutoff:dailyRankResult.cutoff};
           list.push(rec);preparedSuccess++;
           if(rec.fallbackDirect)directSuccess++;else if(rec.fallbackRange)rangeSuccess++;else normalSuccess++;
         });
@@ -25483,7 +25484,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 </script>
 
 <script>
-/* v5.18.287 ThreePointPackage: 最終Rまで3点セット単位のランキング配分 */
+/* v5.18.288 PriorityControl: 優先方法を反映した3点セット単位のランキング配分 */
 (function(){
   'use strict';
   function n(v){var x=Number(v);return Number.isFinite(x)?x:0}
@@ -25530,17 +25531,20 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   }
   function reducePool(tickets,ctx,maxPoints){
     var decorated=decorateTickets(tickets,ctx).map(function(t,i){t._dailyOrder=i;return t}),keep={},out=[],perRace=Math.min(3,Math.max(1,n(maxPoints)||3));
-    ['ev','adjusted_ev','learned_profit'].forEach(function(metric){sortMetric(decorated,metric,100).slice(0,perRace).forEach(function(t){var k=ticketKey(t);if(!keep[k]){keep[k]=1;out.push(t)}})});
+    function add(t){var k=ticketKey(t);if(!keep[k]){keep[k]=1;out.push(t)}}
+    decorated.slice(0,perRace).forEach(add);
+    ['ev','adjusted_ev','learned_profit'].forEach(function(metric){sortMetric(decorated,metric,100).slice(0,perRace).forEach(add)});
     return out.sort(function(a,b){return n(a._dailyOrder)-n(b._dailyOrder)}).map(function(t){delete t._dailyOrder;return t});
   }
   function allocate(entries,cfg){
     cfg=cfg||{};
-    var point=Math.max(100,n(cfg.pointAmount)||100),limit=Math.max(0,n(cfg.dailyLimit)),used=Math.max(0,n(cfg.used)),metric=cfg.dailyRankMetric||'ev';
+    var point=Math.max(100,n(cfg.pointAmount)||100),limit=Math.max(0,n(cfg.dailyLimit)),used=Math.max(0,n(cfg.used)),metric=cfg.dailyRankMetric||'ev',priority=cfg.ticketPriority==='normal'?'normal':'ev';
     var packagePoints=3,packageCost=point*packagePoints,packages=[],incompleteRaces=0;
     (entries||[]).forEach(function(entry,ei){
       var rec=entry&&entry.rec||{},id=String(rec.id||rec.raceId||ei),ctx={kind:rec.kind,venue:rec.venue,raceName:rec.raceName,raceId:rec.raceId};
       var valid=decorateTickets(entry&&entry.tickets||[],ctx).map(function(t,ti){t._dailyOrder=ei*10000+ti;t.dailyRankScore=metricValue(t,metric,point);return t}).filter(function(t){return t.type&&Array.isArray(t.nums)&&t.nums.length});
-      var ranked=sortMetric(valid,metric,point);
+      var hasEv=valid.some(function(t){return n(t.evRaw)>0||n(t.ev)>0});
+      var ranked=(priority==='ev'&&hasEv)?sortMetric(valid,'ev',point):valid.slice().sort(function(a,b){return n(a._dailyOrder)-n(b._dailyOrder)});
       if(ranked.length<packagePoints){incompleteRaces++;return}
       ranked=ranked.slice(0,packagePoints);
       var score=ranked.reduce(function(s,t){return s+n(t.dailyRankScore)},0);
@@ -25551,12 +25555,12 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     for(var i=0;i<packages.length&&selectedRaces<capacityRaces;i++){
       var pkg=packages[i],packageRank=selectedRaces+1;
       pkg.tickets.forEach(function(t,ti){
-        var c=Object.assign({},t);delete c._dailyOrder;c.amount=point;c.stake=point;c.dailyRank=selected.length+1;c.dailyPackageRank=packageRank;c.dailyPackagePoint=ti+1;c.dailyPackageScore=pkg.score;c.dailyRankMetric=metric;c.learnedExpectedProfit=point*(n(c.learnedEv)-1);
+        var c=Object.assign({},t);delete c._dailyOrder;c.amount=point;c.stake=point;c.dailyRank=selected.length+1;c.dailyPackageRank=packageRank;c.dailyPackagePoint=ti+1;c.dailyPackageScore=pkg.score;c.dailyRankMetric=metric;c.ticketPriority=priority;c.learnedExpectedProfit=point*(n(c.learnedEv)-1);
         selected.push(c);(byId[pkg.id]||(byId[pkg.id]=[])).push(c);
       });
       selectedRaces++;cutoff=pkg.score;
     }
-    return {metric:metric,metricLabel:metricLabel(metric),pointAmount:point,dailyLimit:limit,usedBefore:used,packagePoints:packagePoints,packageCost:packageCost,capacity:capacityRaces*packagePoints,capacityRaces:capacityRaces,candidates:packages.length*packagePoints,candidateRaces:packages.length,incompleteRaces:incompleteRaces,selected:selected,selectedRaces:selectedRaces,byId:byId,total:selectedRaces*packageCost,remaining:Math.max(0,limit-used-selectedRaces*packageCost),cutoff:selectedRaces?cutoff:0};
+    return {metric:metric,metricLabel:metricLabel(metric),ticketPriority:priority,pointAmount:point,dailyLimit:limit,usedBefore:used,packagePoints:packagePoints,packageCost:packageCost,capacity:capacityRaces*packagePoints,capacityRaces:capacityRaces,candidates:packages.length*packagePoints,candidateRaces:packages.length,incompleteRaces:incompleteRaces,selected:selected,selectedRaces:selectedRaces,byId:byId,total:selectedRaces*packageCost,remaining:Math.max(0,limit-used-selectedRaces*packageCost),cutoff:selectedRaces?cutoff:0};
   }
   window.tkDailyRankMetricLabel=metricLabel;
   window.tkDailyRankDecorateTickets=decorateTickets;
@@ -25582,7 +25586,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 /* v5.18.287 BatchSubmitAssist: 3点セット当日一括購入票＋公式投票サイト引き渡し */
 (function(){
   'use strict';
-  var VERSION='v5.18.287 ThreePointPackage';
+  var VERSION='v5.18.288 PriorityControl';
   var RES_KEY='tk-sim-reservations-v1';
   var GUARD_KEY='tk-sweep-purchase-guard-v1';
   var PREF_KEY='tk-daily-batch-provider-v1';
@@ -25756,7 +25760,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 /* v5.18.256 RangeSyncFix: 横2画面リアルタイム連動 */
 (function(){
   'use strict';
-  var V='v5.18.287 ThreePointPackage';
+  var V='v5.18.288 PriorityControl';
   function applyVersion(){
     window.APP_VERSION=V;
     var el=document.querySelector('.header .ver, .ver');
@@ -25914,9 +25918,10 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   function dayOnly(v){var s=String(v||''),m=s.match(/(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);return m?m[1]+'-'+String(m[2]).padStart(2,'0')+'-'+String(m[3]).padStart(2,'0'):s}
   function priorityLabel(cfg){return cfg&&cfg.ticketPriority==='normal'?'ノーマル（設定モード順）':'EV上位優先'}
   function metricLabel(cfg){return cfg&&cfg.dailyRankMetric==='adjusted_ev'?'補正EV順':(cfg&&cfg.dailyRankMetric==='learned_profit'?'過去学習後の期待利益順':'EV順')}
-  function allocationLabel(cfg){return cfg&&cfg.allocationMode==='daily_rank'?'全日ランキング・最終Rまで比較（'+metricLabel(cfg)+'）':priorityLabel(cfg)}
+  function allocationLabel(cfg){return cfg&&cfg.allocationMode==='daily_rank'?'全日ランキング・最終Rまで比較（基準: '+metricLabel(cfg)+'／3点内: '+priorityLabel(cfg)+'）':priorityLabel(cfg)}
   function narBacktestLabel(cfg){return cfg&&cfg.narTransitionBacktestMode==='current_frozen'?'現在の学習値を固定適用':'固定補正のみ（未来情報なし）'}
-  function toggleAllocationUi(cfg){var on=cfg&&cfg.allocationMode==='daily_rank',w=$('pgBtDailyRankMetricWrap'),sw=$('swDailyRankMetricWrap'),note=$('swDailyRankNote'),btNote=$('pgBtDailyRankNote');if(w)w.style.display=on?'':'none';if(sw)sw.style.display=on?'':'none';if(note)note.style.display=on?'':'none';if(btNote)btNote.style.display=on?'':'none';['pgBtReserveMain','pgBtMainRaceNo','pgBtMainReserve','pgBtTicketPriority','swReserveMain','swMainRaceNo','swMainReserve','swTicketPriority'].forEach(function(id){var el=$(id);if(el)el.disabled=on})}
+  function toggleAllocationUi(cfg){var on=cfg&&cfg.allocationMode==='daily_rank',w=$('pgBtDailyRankMetricWrap'),sw=$('swDailyRankMetricWrap'),note=$('swDailyRankNote'),btNote=$('pgBtDailyRankNote');if(w)w.style.display=on?'':'none';if(sw)sw.style.display=on?'':'none';if(note)note.style.display=on?'':'none';if(btNote)btNote.style.display=on?'':'none';['pgBtReserveMain','pgBtMainRaceNo','pgBtMainReserve','swReserveMain','swMainRaceNo','swMainReserve'].forEach(function(id){var el=$(id);if(el)el.disabled=on});['pgBtTicketPriority','swTicketPriority'].forEach(function(id){var el=$(id);if(el)el.disabled=false})}
+  window.tkTogglePurchaseGuardAllocationUi=toggleAllocationUi;
   function readGuard(){
     var x={};try{x=JSON.parse(localStorage.getItem(GUARD_KEY)||'{}')||{}}catch(e){}
     return {dailyLimit:cleanMoney(x.dailyLimit,2000),pointAmount:cleanMoney(x.pointAmount,100),maxPoints:MAX_POINTS,skipDebut:x.skipDebut!==false,reserveMain:x.reserveMain!==false,mainRaceNo:[9,10,11,12].indexOf(n(x.mainRaceNo))>=0?n(x.mainRaceNo):11,mainReserve:cleanMoney(x.mainReserve,300),ticketPriority:x.ticketPriority==='normal'?'normal':'ev',allocationMode:x.allocationMode==='daily_rank'?'daily_rank':'per_race',dailyRankMetric:['ev','adjusted_ev','learned_profit'].indexOf(x.dailyRankMetric)>=0?x.dailyRankMetric:'ev',narTransitionBacktestMode:x.narTransitionBacktestMode==='current_frozen'?'current_frozen':'prior_only'};
@@ -26049,9 +26054,12 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         out.push(rec);return;
       }
       if(details.length<packagePoints){rec.status='incomplete';rec.reason='3点セットが揃わないため見送り（候補'+details.length+'点）';stats.incompleteSkip++;out.push(rec);return}
-      details.sort(function(a,b){return dailyMetricValue(b,cfg)-dailyMetricValue(a,cfg)||n(b.adjustedEv)-n(a.adjustedEv)||n(b.evRaw)-n(a.evRaw)||n(b.p)-n(a.p)||a.order-b.order});
+      var hasPriorityEv=details.some(function(d){return n(d.evRaw)>0||n(d.ev)>0});
+      if(cfg.ticketPriority==='ev'&&hasPriorityEv)details.sort(function(a,b){return n(b.evRaw||b.ev)-n(a.evRaw||a.ev)||n(b.p)-n(a.p)||a.order-b.order});
+      else details.sort(function(a,b){return a.order-b.order});
+      if(cfg.ticketPriority==='ev'&&!hasPriorityEv)stats.evFallback++;
       var packageDetails=details.slice(0,packagePoints),items=packageDetails.map(function(d){return {detail:d,score:dailyMetricValue(d,cfg)}}),packageScore=items.reduce(function(s,x){return s+n(x.score)},0);
-      rec.hasEv=packageDetails.some(function(d){return d.evRaw>0||d.ev>0});rec.status='candidate';out.push(rec);
+      rec.hasEv=hasPriorityEv;rec.status='candidate';out.push(rec);
       var bucket=byDate[rec.date]||(byDate[rec.date]=[]);
       bucket.push({rec:rec,items:items,score:packageScore,topScore:n(items[0]&&items[0].score),order:index});
       stats.candidates++;stats.candidatePoints+=packagePoints;stats.candidateBet+=packageCost;
@@ -26454,10 +26462,10 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 </script>
 
 <script>
-/* v5.18.287 ThreePointPackage: 最終通信・買い目・表示経路を固定 */
+/* v5.18.288 PriorityControl: 最終通信・買い目・表示経路を固定 */
 (function(){
   'use strict';
-  var VERSION='v5.18.287 ThreePointPackage';
+  var VERSION='v5.18.288 PriorityControl';
   function ridFromUrl(url){
     var s=String(url||'');
     if(!/^https:\/\/nar(?:\.sp)?\.netkeiba\.com\//i.test(s))return '';

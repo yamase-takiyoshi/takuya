@@ -21,7 +21,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.297 NoForceFill</title>
+<title>The競馬 EV分析 v5.18.298 NarSpFirst</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -906,7 +906,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
   <div style="display:flex;gap:8px;align-items:center">
     <button id="profitSplitBtn" class="btn-sm profit-split-toggle" type="button" onclick="toggleProfitLiveSplit()" aria-pressed="false">📊 横2画面</button>
     <button id="nativeThemeBtn" class="btn-sm native-theme-btn" type="button" title="本体テーマへ自動連動。単独起動時はここで切り替え">🌙 <span class="native-theme-label">ダーク・本体連動</span></button>
-    <span class="ver">v5.18.297 NoForceFill</span>
+    <span class="ver">v5.18.298 NarSpFirst</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2241,7 +2241,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.273 SimRangeReplace';
+window.APP_VERSION = 'v5.18.298 NarSpFirst';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -7175,6 +7175,57 @@ async function fetchHtmlViaProxy(url){
   const originalUrl = String(url || '');
   const isNarDesktop = /\/\/nar\.netkeiba\.com\//i.test(originalUrl);
 
+  // v5.18.298 NarSpFirst:
+  // nar.netkeiba.com（PC版）の個別ページ（出馬表/結果/オッズ）は Referer レスだと
+  // 必ず HTTP 400 を返すため、従来は「PCで400 → SPへ再取得」の二度手間が全リクエストで
+  // 発生し、開催場検出（15場×12R）が実質2倍のリクエスト量になって遅く・「開催なし」で
+  // 止まって見える原因になっていた。個別ページだけ nar.sp.netkeiba.com を先行させ、
+  // PC版は保険の後段フォールバックに回す。
+  // ※ 一覧（race_list）は PC（Refererレス）でも通るため対象外にし、従来経路のまま。
+  const isNarIndividual = isNarDesktop &&
+    /\/race\/(shutuba|result)\.html|\/odds\//i.test(originalUrl);
+
+  if(isNarIndividual){
+    const spUrl = originalUrl.replace(
+      /\/\/nar\.netkeiba\.com\//i,
+      '//nar.sp.netkeiba.com/'
+    );
+    let spError = null;
+    try{
+      const html = await fetchHtmlViaProxyBase(spUrl);
+      if(html && !(typeof looksBlockedHtml === 'function' && looksBlockedHtml(html))){
+        window.__fetchPath = 'nar-sp-first';
+        return html;
+      }
+      spError = new Error('NAR SP版が拒否ページ/空でした');
+    }catch(e){
+      spError = e;
+    }
+
+    // SP版がダメだった場合のみ、保険で PC版を試す（Referer が通る環境なら拾える）。
+    try{
+      const status = document.getElementById('urlStatus');
+      if(status){
+        status.innerHTML =
+          '<div class="url-status">🔄 NAR SP版が取得できないため、PC版で再試行中...</div>';
+      }
+      const html = await fetchHtmlViaProxyBase(originalUrl);
+      if(!html || (typeof looksBlockedHtml === 'function' && looksBlockedHtml(html))){
+        throw new Error('NAR PC版も拒否ページでした');
+      }
+      window.__fetchPath = 'nar-pc-fallback';
+      return html;
+    }catch(pcError){
+      const s = (spError && spError.message) ? spError.message : String(spError);
+      const p = (pcError && pcError.message) ? pcError.message : String(pcError);
+      throw new Error(
+        'NARページを取得できませんでした（SP版: ' + s + ' / PC版: ' + p + '）'
+      );
+    }
+  }
+
+  // 従来経路（NAR一覧・JRA・db.netkeiba 等）。NAR一覧がPCで落ちた時の
+  // 後方互換 SP 切替も従来どおり残す。
   try{
     return await fetchHtmlViaProxyBase(originalUrl);
   }catch(primaryError){
@@ -17203,7 +17254,7 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.273 SimRangeReplace';
+  window.APP_VERSION = 'v5.18.298 NarSpFirst';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc158 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -17632,7 +17683,7 @@ function json(obj, status = 200) {
    ============================================================ */
 (function(){
   'use strict';
-  window.APP_VERSION = 'v5.18.273 SimRangeReplace';
+  window.APP_VERSION = 'v5.18.298 NarSpFirst';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const esc159 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -17929,7 +17980,7 @@ function json(obj, status = 200) {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.273 SimRangeReplace';
+  window.APP_VERSION = 'v5.18.298 NarSpFirst';
   if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
 
   const ACTION_WORDS160 = /^(?:映像|動画|レース映像|オッズ|成績|競走成績|結果|払戻|払戻金|出馬表|予想|購入|掲示板|俺プロ|お気に入り|ライブ中継|レース情報|レース一覧|詳細|変更|印|買い目)$/;
@@ -18147,7 +18198,7 @@ function json(obj, status = 200) {
 
   // 旧パッチの遅延バージョン上書き対策。
   [0, 200, 800, 1600, 3000, 5000].forEach(ms => setTimeout(()=>{
-    window.APP_VERSION = 'v5.18.273 SimRangeReplace';
+    window.APP_VERSION = 'v5.18.298 NarSpFirst';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     sanitizeRaceSelectOptions160();
   }, ms));
@@ -18447,7 +18498,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  window.APP_VERSION = 'v5.18.273 SimRangeReplace';
+  window.APP_VERSION = 'v5.18.298 NarSpFirst';
   try{
     const ver = document.querySelector('.ver');
     if(ver){
@@ -21827,7 +21878,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
   // ── 表示バージョン更新（このスクリプトが最後に実行されるためここで確定） ──
   try{
-    window.APP_VERSION = 'v5.18.273 SimRangeReplace';
+    window.APP_VERSION = 'v5.18.298 NarSpFirst';
     if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
     else document.addEventListener('DOMContentLoaded', function(){ try{ window.setAppVersionLabel(); }catch(e){} });
   }catch(e){}

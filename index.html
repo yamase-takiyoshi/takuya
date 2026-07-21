@@ -21,7 +21,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.299 NarApiRouteFix</title>
+<title>The競馬 EV分析 v5.18.300 RaceContextIsolationFix</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -906,7 +906,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
   <div style="display:flex;gap:8px;align-items:center">
     <button id="profitSplitBtn" class="btn-sm profit-split-toggle" type="button" onclick="toggleProfitLiveSplit()" aria-pressed="false">📊 横2画面</button>
     <button id="nativeThemeBtn" class="btn-sm native-theme-btn" type="button" title="本体テーマへ自動連動。単独起動時はここで切り替え">🌙 <span class="native-theme-label">ダーク・本体連動</span></button>
-    <span class="ver">v5.18.299 NarApiRouteFix</span>
+    <span class="ver">v5.18.300 RaceContextIsolationFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -27946,6 +27946,266 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   function init(){installCancel();applyVersion();}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
   [0,300,1000,3000,7000,12000,18000].forEach(function(ms){setTimeout(function(){installCancel();applyVersion();},ms);});
+  console.log('['+VERSION+'] enabled');
+})();
+</script>
+
+<script>
+/* ============================================================
+   v5.18.300 RaceContextIsolationFix
+   ・JRA/NAR・日付・開催場切替時に race_id / URL / 馬データ / 推奨結果を完全初期化
+   ・切替前に開始した非同期取得結果を破棄し、別区分のデータ混入を防止
+   ・NAR走査キャンセル用リスナー実行後に新しい開催場取得を開始
+   ・表示バージョンを v5.18.300 に固定
+   ============================================================ */
+(function(){
+  'use strict';
+  var VERSION = 'v5.18.300 RaceContextIsolationFix';
+  var epoch = Number(window.__tkRaceContextEpoch || 0);
+  var lastContextChangeAt = 0;
+  var sanitizing = false;
+
+  function el(id){ return document.getElementById(id); }
+  function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c];}); }
+  function digits(v){ return String(v || '').replace(/[^0-9]/g,''); }
+  function ridOf(v){ var m=String(v||'').match(/(?:race_id=|\/race\/)(\d{10,14})|\b(\d{10,14})\b/); return m ? (m[1] || m[2] || '') : ''; }
+  function kindOfRid(rid){ return /^(?:0[1-9]|10)$/.test(String(rid||'').slice(4,6)) ? 'JRA' : 'NAR'; }
+  function currentKind(){ return String((el('pickKind') && el('pickKind').value) || 'JRA').toUpperCase(); }
+  function currentDate(){ return String((el('pickDate') && el('pickDate').value) || ''); }
+  function currentVenue(){ return String((el('pickVenue') && el('pickVenue').value) || ''); }
+  function contextKey(){ return [currentKind(), currentDate(), currentVenue()].join('|'); }
+  function globalRid(){
+    var r='';
+    try{ r=String((typeof currentRaceId!=='undefined' && currentRaceId) || ''); }catch(e){}
+    return r || String(window.currentRaceId || '') || ridOf((el('raceIdPrimaryInput')&&el('raceIdPrimaryInput').value)||'') || ridOf((el('raceUrl')&&el('raceUrl').value)||'');
+  }
+  function ridMatchesControls(rid){
+    rid=String(rid||'');
+    if(!/^\d{10,14}$/.test(rid)) return false;
+    var kind=currentKind();
+    if(kindOfRid(rid)!==kind) return false;
+    var venue=currentVenue();
+    if(venue && rid.slice(4,6)!==String(venue).padStart(2,'0')) return false;
+    if(kind==='NAR'){
+      var d=digits(currentDate()).slice(0,8);
+      if(d.length===8){
+        var ridDate=rid.slice(0,4)+rid.slice(6,10);
+        if(ridDate!==d) return false;
+      }
+    }
+    return true;
+  }
+  function invalidatePending(){
+    epoch += 1;
+    window.__tkRaceContextEpoch = epoch;
+    lastContextChangeAt = Date.now();
+    if(window.__tkActiveRaceDataFetch) window.__tkActiveRaceDataFetch.active = false;
+    try{ if(typeof activeVenueLoadSeq!=='undefined') activeVenueLoadSeq++; }catch(e){}
+    try{ if(typeof window.__raceLoadSeq==='number') window.__raceLoadSeq++; }catch(e){}
+    return epoch;
+  }
+  function clearCurrentAnalysis(){
+    try{ horses=[]; }catch(e){}
+    try{ lastRecs=[]; }catch(e){}
+    try{ lastTickets=[]; }catch(e){}
+    try{ simTickets=[]; }catch(e){}
+    try{ if(typeof renderHorseRows==='function') renderHorseRows(); }catch(e){}
+    try{ if(typeof renderSimEditRows==='function') renderSimEditRows(); }catch(e){}
+    try{ if(typeof renderSimCandList==='function') renderSimCandList(); }catch(e){}
+    var summary=el('summaryCard'); if(summary) summary.style.display='none';
+    var tickets=el('ticketList'); if(tickets) tickets.innerHTML='<div class="empty">レースデータを取得すると表示されます。</div>';
+    var cand=el('candBody'); if(cand) cand.innerHTML='';
+  }
+  function clearRaceIdentity(message, keepRaceOptions){
+    try{ currentRaceId=''; currentRaceName=''; }catch(e){}
+    window.currentRaceId='';
+    window.currentRaceName='';
+    window.tkCurrentRaceMeta=null;
+    window.__fetchPath='';
+
+    var raceSelect=el('raceSelect');
+    if(raceSelect && !keepRaceOptions) raceSelect.innerHTML='<option value="">開催場を選んでレース一覧を取得</option>';
+    var raceUrl=el('raceUrl'); if(raceUrl) raceUrl.value='';
+    ['raceIdPrimaryInput','raceIdInput'].forEach(function(id){var x=el(id);if(x)x.value='';});
+    var box=el('raceTitleBox'); if(box){box.style.display='none';box.textContent='';}
+    var pk=el('raceIdPrimaryStatus'); if(pk) pk.innerHTML='<span style="color:var(--muted)">race_id未選択</span>';
+    var progress=el('fetchProgress'); if(progress) progress.classList.remove('show');
+    var msg=el('fetchMsg'); if(msg) msg.textContent='netkeibaからデータ取得中...';
+    clearCurrentAnalysis();
+    var status=el('urlStatus');
+    if(status) status.innerHTML=message ? '<div class="url-status">'+esc(message)+'</div>' : '';
+  }
+  function beginContextChange(message, keepRaceOptions){
+    var token=invalidatePending();
+    clearRaceIdentity(message, !!keepRaceOptions);
+    return token;
+  }
+  function selectedOptionRid(){
+    var s=el('raceSelect'), o=s&&s.selectedOptions?s.selectedOptions[0]:null;
+    return o ? (String(o.dataset.raceId||'') || ridOf(o.value) || ridOf(o.textContent)) : '';
+  }
+  function syncSelectedIdentity(rid){
+    var s=el('raceSelect'), o=s&&s.selectedOptions?s.selectedOptions[0]:null;
+    var name=o ? String(o.dataset.raceName||'') : '';
+    try{ currentRaceId=rid; currentRaceName=name; }catch(e){}
+    window.currentRaceId=rid;
+    window.currentRaceName=name;
+    var pin=el('raceIdPrimaryInput'); if(pin) pin.value=rid;
+    var pk=el('raceIdPrimaryStatus');
+    if(pk) pk.innerHTML='<span style="color:var(--green);font-weight:700">race_id選択済み</span>：'+esc(currentKind())+' '+esc(currentVenue()||'開催場未指定')+' '+esc(String(Number(rid.slice(-2))||''))+'R';
+  }
+  function sanitizeContext(){
+    if(sanitizing) return;
+    sanitizing=true;
+    try{
+      var rid=globalRid();
+      if(rid && !ridMatchesControls(rid)){
+        clearRaceIdentity('⚠️ 切替前の別区分・別開催場データを破棄しました。', false);
+        return;
+      }
+      var status=el('urlStatus');
+      if(status && Date.now()-lastContextChangeAt<120000){
+        var ids=String(status.textContent||'').match(/\b\d{12}\b/g)||[];
+        if(ids.some(function(x){return !ridMatchesControls(x);})){ status.innerHTML='<div class="url-status">🔄 条件切替前の通信結果を破棄しました。現在の条件でレース一覧を取得してください。</div>'; }
+      }
+    }finally{sanitizing=false;}
+  }
+
+  // 区分・日付変更。既存の後付けキャンセルリスナーが走り終わってから新規取得を開始する。
+  window.onRaceDateKindChanged = async function(){
+    var token=beginContextChange('条件変更のため、前のレースデータを完全に初期化しました。', false);
+    var venue=el('pickVenue'); if(venue) venue.innerHTML='<option value="">開催場を確認中...</option>';
+    window.__jraVenueFetchDone=false;
+    try{ if(typeof renderVenueOptions==='function') renderVenueOptions([]); }catch(e){}
+    await new Promise(function(resolve){setTimeout(resolve,0);});
+    if(token!==epoch) return;
+    try{
+      var fn=window.loadActiveVenuesForDate;
+      if(typeof fn!=='function'){ try{fn=loadActiveVenuesForDate;}catch(e){} }
+      if(typeof fn==='function') await fn.call(window,currentKind());
+    }catch(e){
+      if(token===epoch){var st=el('urlStatus');if(st)st.innerHTML='<div class="url-status err">❌ 開催場取得失敗: '+esc((e&&e.message)||String(e))+'</div>';}
+    }
+    if(token===epoch) sanitizeContext();
+  };
+  try{ onRaceDateKindChanged=window.onRaceDateKindChanged; }catch(e){}
+
+  // 開催場変更時もrace_id・馬データ・推奨結果まで全消去する。
+  window.resetRaceState = function(message){ beginContextChange(message||'開催場変更のためレース選択を初期化しました。', false); };
+  try{ resetRaceState=window.resetRaceState; }catch(e){}
+
+  // レース選択時、現在の区分・開催場と一致しないoptionは反映しない。
+  var previousApply=window.applySelectedRaceUrl;
+  if(typeof previousApply==='function'){
+    window.applySelectedRaceUrl=function(){
+      var rid=selectedOptionRid();
+      if(!rid){ return previousApply.apply(this,arguments); }
+      if(!ridMatchesControls(rid)){
+        clearRaceIdentity('❌ 選択中の区分・開催場とrace_idが一致しないため反映を中止しました。', false);
+        return;
+      }
+      var before=globalRid();
+      if(before && before!==rid){ invalidatePending(); clearCurrentAnalysis(); }
+      var ret=previousApply.apply(this,arguments);
+      syncSelectedIdentity(rid);
+      sanitizeContext();
+      return ret;
+    };
+    try{ applySelectedRaceUrl=window.applySelectedRaceUrl; }catch(e){}
+  }
+
+  // レース一覧取得の終了時に、古い非同期処理が混入していないか再検査する。
+  var previousList=window.loadRaceList;
+  if(typeof previousList==='function'){
+    window.loadRaceList=async function(){
+      var token=epoch, key=contextKey();
+      clearCurrentAnalysis();
+      var ret=await previousList.apply(this,arguments);
+      if(token!==epoch || key!==contextKey()){ sanitizeContext(); return ret; }
+      var rid=selectedOptionRid();
+      if(rid && ridMatchesControls(rid)) syncSelectedIdentity(rid);
+      sanitizeContext();
+      return ret;
+    };
+    try{ loadRaceList=window.loadRaceList; }catch(e){}
+  }
+
+  // レースデータ取得中に条件が変わった場合、以後のHTML応答をAbort扱いにする。
+  var previousProxy=window.fetchHtmlViaProxy;
+  if(typeof previousProxy==='function'){
+    var guardedProxy=async function(){
+      var guard=window.__tkActiveRaceDataFetch;
+      var result=await previousProxy.apply(this,arguments);
+      if(guard && (!guard.active || guard.epoch!==epoch || guard.key!==contextKey())){
+        var er=new Error('条件変更により取得を中止しました'); er.name='AbortError'; throw er;
+      }
+      return result;
+    };
+    guardedProxy.__raceContextGuard300=true;
+    guardedProxy.__previous=previousProxy;
+    window.fetchHtmlViaProxy=guardedProxy;
+    try{ fetchHtmlViaProxy=guardedProxy; }catch(e){}
+  }
+
+  var previousFetch=window.fetchRace;
+  if(typeof previousFetch==='function'){
+    window.fetchRace=async function(){
+      var rid=ridOf((el('raceUrl')&&el('raceUrl').value)||'') || ridOf((el('raceIdPrimaryInput')&&el('raceIdPrimaryInput').value)||'') || selectedOptionRid();
+      if(!rid || !ridMatchesControls(rid)){
+        var st=el('urlStatus');
+        if(st) st.innerHTML='<div class="url-status err">❌ 現在の区分・開催場に一致するレースを選択してください。</div>';
+        return;
+      }
+      syncSelectedIdentity(rid);
+      var guard={epoch:epoch,key:contextKey(),rid:rid,active:true};
+      window.__tkActiveRaceDataFetch=guard;
+      try{
+        var ret=await previousFetch.apply(this,arguments);
+        if(!guard.active || guard.epoch!==epoch || guard.key!==contextKey()){
+          sanitizeContext();
+          var s=el('urlStatus'); if(s) s.innerHTML='<div class="url-status">🔄 条件変更前のレース取得結果は破棄しました。</div>';
+          return;
+        }
+        sanitizeContext();
+        return ret;
+      }catch(e){
+        if((e&&e.name)==='AbortError' || !guard.active || guard.epoch!==epoch){
+          sanitizeContext();
+          var s2=el('urlStatus'); if(s2) s2.innerHTML='<div class="url-status">🔄 条件変更により旧レースの取得を中止しました。</div>';
+          return;
+        }
+        throw e;
+      }finally{
+        guard.active=false;
+        if(window.__tkActiveRaceDataFetch===guard) window.__tkActiveRaceDataFetch=null;
+        var p=el('fetchProgress'); if(p) p.classList.remove('show');
+      }
+    };
+    try{ fetchRace=window.fetchRace; }catch(e){}
+  }
+
+  function setVersion(){
+    window.APP_VERSION=VERSION;
+    document.title='The競馬 EV分析 '+VERSION;
+    document.querySelectorAll('.ver').forEach(function(x){x.textContent=VERSION;});
+    return VERSION;
+  }
+  window.setAppVersionLabel=function(){return setVersion();};
+
+  function installObserver(){
+    var root=el('tab-data') || document.body;
+    if(root && !root.__raceContextObserver300){
+      root.__raceContextObserver300=true;
+      var queued=false;
+      new MutationObserver(function(){
+        if(queued)return; queued=true;
+        setTimeout(function(){queued=false;sanitizeContext();setVersion();},0);
+      }).observe(root,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['value','class']});
+    }
+  }
+  function init(){ setVersion(); installObserver(); sanitizeContext(); }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',init); else init();
+  [0,100,400,1000,3000,8000,15000].forEach(function(ms){setTimeout(init,ms);});
   console.log('['+VERSION+'] enabled');
 })();
 </script>

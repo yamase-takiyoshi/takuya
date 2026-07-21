@@ -21,7 +21,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.298 NarSpFirst</title>
+<title>The競馬 EV分析 v5.18.299 NarApiRouteFix</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -906,7 +906,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
   <div style="display:flex;gap:8px;align-items:center">
     <button id="profitSplitBtn" class="btn-sm profit-split-toggle" type="button" onclick="toggleProfitLiveSplit()" aria-pressed="false">📊 横2画面</button>
     <button id="nativeThemeBtn" class="btn-sm native-theme-btn" type="button" title="本体テーマへ自動連動。単独起動時はここで切り替え">🌙 <span class="native-theme-label">ダーク・本体連動</span></button>
-    <span class="ver">v5.18.298 NarSpFirst</span>
+    <span class="ver">v5.18.299 NarApiRouteFix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -27519,12 +27519,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   }
 
   window.loadActiveVenuesForDate = async function(kind){
+    const seq = ++scanSeq;
     kind = kind || document.getElementById('pickKind')?.value || 'JRA';
     if(String(kind).toUpperCase() !== 'NAR'){
       return previousLoadVenues ? previousLoadVenues.apply(this, arguments) : undefined;
     }
-
-    const seq = ++scanSeq;
     const date = document.getElementById('pickDate')?.value || (typeof todayYmd === 'function' ? todayYmd() : '');
     const status = document.getElementById('urlStatus');
     const raceSel = document.getElementById('raceSelect');
@@ -27636,6 +27635,318 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   [0, 300, 1200, 3500, 7000, 11000].forEach(ms => setTimeout(applyVersion298, ms));
 
   console.log('[' + VERSION + '] active');
+})();
+</script>
+
+
+<script id="narApiRouteFix299">
+/* ============================================================
+   v5.18.299 NarApiRouteFix
+   ・NAR個別ページは Bridge → Worker type/race_id API → 旧経路の順で取得
+   ・NAR開催場/レース一覧は取得成功済みの地方競馬公式PCを優先
+   ・queryなしWorker直叩きのHTTP 400を異常扱いしない
+   ・NAR走査中にJRAへ切替えた場合の古い進捗表示を停止
+   ============================================================ */
+(function(){
+  'use strict';
+
+  var VERSION = 'v5.18.299 NarApiRouteFix';
+  var previousFetch = window.fetchHtmlViaProxy;
+  var previousBuild = window.buildWorkerRequestUrl;
+  var previousLoadVenues = window.loadActiveVenuesForDate;
+  var previousLoadRaces = window.loadRaceList;
+  var scanToken = 0;
+  var officialCache = window.__nar299OfficialCache = window.__nar299OfficialCache || Object.create(null);
+
+  var VENUES = [
+    ['30','門別','36'],['35','盛岡','10'],['36','水沢','11'],['42','浦和','18'],['43','船橋','19'],
+    ['44','大井','20'],['45','川崎','21'],['46','金沢','22'],['47','笠松','23'],['48','名古屋','24'],
+    ['50','園田','27'],['51','姫路','28'],['54','高知','31'],['55','佐賀','32'],['65','帯広','03']
+  ];
+
+  function el(id){ return document.getElementById(id); }
+  function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+  function ymd(v){ return String(v || '').replace(/\D/g,'').slice(0,8); }
+  function fmt(v){ var d=ymd(v); return d.length===8 ? d.slice(0,4)+'/'+d.slice(4,6)+'/'+d.slice(6,8) : String(v||''); }
+  function venue(code){ return VENUES.find(function(v){return v[0]===String(code||'').padStart(2,'0');}) || [String(code||''),String(code||''),'']; }
+  function raceId(date, code, no){ var d=ymd(date); return d.slice(0,4)+String(code).padStart(2,'0')+d.slice(4,8)+String(no).padStart(2,'0'); }
+  function workerBase(){
+    var input = el('proxyUrl') && el('proxyUrl').value ? el('proxyUrl').value.trim() : '';
+    var st = window.settings && window.settings.proxyUrl ? String(window.settings.proxyUrl).trim() : '';
+    var ls = '';
+    try{ ls = localStorage.getItem('keiba_proxy_url') || localStorage.getItem('keibaProxyUrl') || ''; }catch(e){}
+    return String(input || st || ls || '').trim().replace(/\/+$/,'');
+  }
+  function targetInfo(url){
+    var u=String(url||'');
+    if(!/\/\/(?:nar|nar\.sp)\.netkeiba\.com\//i.test(u)) return null;
+    var rid=(u.match(/race_id=(\d{10,14})/i)||[])[1]||'';
+    if(!rid) return null;
+    var type=/\/odds\//i.test(u)?'odds':(/result\.html|race_result\.html/i.test(u)?'result':(/shutuba\.html/i.test(u)?'shutuba':''));
+    return type ? {raceId:rid,type:type,kind:'NAR'} : null;
+  }
+  function apiUrl(url){
+    var info=targetInfo(url), base=workerBase();
+    if(!info || !base) return '';
+    return base+'?type='+encodeURIComponent(info.type)+'&kind=NAR&race_id='+encodeURIComponent(info.raceId)+'&_='+Date.now();
+  }
+  function bridgeUrl(url){
+    var info=targetInfo(url);
+    if(!info) return String(url||'');
+    var host='https://nar.netkeiba.com';
+    if(info.type==='result') return host+'/race/result.html?race_id='+info.raceId+'&rf=race_submenu';
+    if(info.type==='odds') return host+'/odds/index.html?race_id='+info.raceId+'&type=b1';
+    return host+'/race/shutuba.html?race_id='+info.raceId+'&rf=race_submenu';
+  }
+  function badHtml(text){
+    text=String(text||'');
+    return !text || /^\s*\{\s*"ok"\s*:\s*false/i.test(text) ||
+      /Access Denied|Just a moment|Reference\s*#|Pardon Our Interruption|akamai|Incapsula|cf-browser|errors\.edgesuite\.net/i.test(text);
+  }
+  function errorText(status,text){
+    var msg='HTTP '+status;
+    try{ var j=JSON.parse(String(text||'')); msg += j && (j.error||j.message) ? ' / '+(j.error||j.message)+(j.upstreamStatus?' (upstream '+j.upstreamStatus+')':'') : ''; }catch(e){}
+    return msg;
+  }
+
+  // buildWorkerRequestUrlを利用する既存処理にもNAR API経路を適用する。
+  window.buildWorkerRequestUrl = function(targetUrl){
+    var req=apiUrl(targetUrl);
+    if(req){ window.__lastWorkerRequestUrl=req; return req; }
+    return typeof previousBuild==='function' ? previousBuild.apply(this,arguments) : String(targetUrl||'');
+  };
+  try{ buildWorkerRequestUrl=window.buildWorkerRequestUrl; }catch(e){}
+
+  // NAR個別ページだけを補正。JRA・公式サイト・DB等は既存経路を保持する。
+  window.fetchHtmlViaProxy = async function(targetUrl){
+    var u=String(targetUrl||'').trim();
+    var info=targetInfo(u);
+    if(!info){
+      if(typeof previousFetch==='function') return await previousFetch.apply(this,arguments);
+      throw new Error('取得処理が見つかりません');
+    }
+
+    var errors=[];
+
+    // 1) 住宅IP＋Cookieを使えるBridge。nar.sp URLもBridge許可済みのPC URLへ正規化する。
+    if(typeof window.__narBridgeFetch==='function' && window.__bridgeAbsent!==true){
+      try{
+        var br=await window.__narBridgeFetch(bridgeUrl(u));
+        var bt=br && br.text ? String(br.text) : '';
+        if(br && Number(br.status)>=200 && Number(br.status)<300 && !badHtml(bt)){
+          window.__fetchPath='bridge-nar-299';
+          window.__bridgeLastError='';
+          return bt;
+        }
+        errors.push('Bridge '+(br&&br.status?br.status:'応答なし'));
+      }catch(e){ errors.push('Bridge '+((e&&e.message)||String(e))); }
+    }
+
+    // 2) Deploy済みWorkerのtype/race_id API。url=直送によるNAR upstream 400を避ける。
+    var req=apiUrl(u);
+    if(req){
+      try{
+        window.__lastWorkerRequestUrl=req;
+        var r=await fetch(req,{cache:'no-store',credentials:'omit',mode:'cors'});
+        var t=await r.text().catch(function(){return '';});
+        if(r.ok && !badHtml(t)){
+          window.__fetchPath='worker-nar-api-299';
+          window.__worker299LastError='';
+          return t;
+        }
+        var em=errorText(r.status,t);
+        window.__worker299LastError=em;
+        errors.push('Worker API '+em);
+      }catch(e){
+        var em2=(e&&e.message)||String(e);
+        window.__worker299LastError=em2;
+        errors.push('Worker API '+em2);
+      }
+    }
+
+    // 3) 後方互換。古いWorker/既存のSP→PC切替で拾える環境を残す。
+    if(typeof previousFetch==='function'){
+      try{ return await previousFetch.call(this,u); }
+      catch(e){ errors.push('旧経路 '+((e&&e.message)||String(e))); }
+    }
+    throw new Error('NAR取得失敗（'+errors.join(' / ')+'）');
+  };
+  try{ fetchHtmlViaProxy=window.fetchHtmlViaProxy; }catch(e){}
+
+  function officialUrl(date, code){
+    var d=ymd(date), v=venue(code);
+    return 'https://www.keiba.go.jp/KeibaWeb/TodayRaceInfo/RaceList?k_raceDate='+
+      d.slice(0,4)+'%2F'+d.slice(4,6)+'%2F'+d.slice(6,8)+'&k_babaCode='+encodeURIComponent(v[2]);
+  }
+  function plain(html){
+    var s=String(html||'');
+    try{ s=(new DOMParser().parseFromString(s,'text/html').body||{}).textContent||s; }catch(e){}
+    return s.replace(/[\t\r\n]+/g,' ').replace(/[\s　]+/g,' ').trim();
+  }
+  function cleanName(s,no){
+    var t=String(s||'').replace(/出馬表|オッズ|競走成績|払戻金|払戻|レース映像/g,' ').replace(/[\s　]+/g,' ').trim();
+    if(!t || t.length>80 || /^(?:前日|当日|翌日|レース一覧)$/.test(t)) return no+'R';
+    return t;
+  }
+  function parseOfficial(html,date,code){
+    var text=plain(html), out=[], seen={};
+    if(/該当データなし|開催がありません|レースはありません|本日の開催はありません/i.test(text)) return out;
+    var re=/(?:^|\s)([1-9]|1[0-2])R\s+(.{1,100}?)(?=\s+(?:出馬表|オッズ|競走成績|払戻金|レース映像)(?:\s|$))/g,m;
+    while((m=re.exec(text))){
+      var no=Number(m[1]); if(seen[no]) continue; seen[no]=1;
+      out.push({raceNo:no,raceName:cleanName(m[2],no),raceId:raceId(date,code,no)});
+    }
+    if(!out.length){
+      var re2=/(?:^|\s)([1-9]|1[0-2])R(?:\s|$)/g,m2;
+      while((m2=re2.exec(text))){ var n=Number(m2[1]); if(!seen[n]){seen[n]=1;out.push({raceNo:n,raceName:n+'R',raceId:raceId(date,code,n)});} }
+    }
+    return out.sort(function(a,b){return a.raceNo-b.raceNo;});
+  }
+  async function fetchOfficial(date,code){
+    var key=ymd(date)+'-'+String(code).padStart(2,'0');
+    if(Object.prototype.hasOwnProperty.call(officialCache,key)) return officialCache[key];
+    try{
+      var html=await window.fetchHtmlViaProxy(officialUrl(date,code));
+      var races=parseOfficial(html,date,code);
+      officialCache[key]=races;
+      return races;
+    }catch(e){
+      window.__nar299OfficialLastError=(e&&e.message)||String(e);
+      return null; // []は開催なし、nullは取得失敗
+    }
+  }
+  function defaultRaceUrl(date,rid){
+    var today=''; try{ today=typeof todayYmd==='function'?ymd(todayYmd()):''; }catch(e){}
+    var past=today && ymd(date)<today;
+    return past
+      ? 'https://nar.netkeiba.com/race/result.html?race_id='+rid+'&rf=race_submenu'
+      : 'https://nar.netkeiba.com/race/shutuba.html?race_id='+rid+'&rf=race_submenu';
+  }
+  function setVenueOptions(found){
+    var sel=el('pickVenue'); if(!sel) return;
+    sel.innerHTML=found.length ? found.map(function(x){return '<option value="'+esc(x.code)+'">'+esc(x.name)+'（'+x.count+'R）</option>';}).join('') : '<option value="">開催場なし</option>';
+  }
+  function renderRaces(races,date,code){
+    var sel=el('raceSelect'), input=el('raceUrl'), box=el('raceTitleBox'), status=el('urlStatus');
+    if(!sel) return;
+    var v=venue(code);
+    sel.innerHTML=races.map(function(r){
+      var url=defaultRaceUrl(date,r.raceId);
+      var label=fmt(date)+' '+v[1]+' '+r.raceNo+'R '+(r.raceName||r.raceNo+'R')+' / '+r.raceId;
+      return '<option value="'+esc(url)+'" data-race-id="'+esc(r.raceId)+'" data-race-name="'+esc(r.raceName||'')+'">'+esc(label)+'</option>';
+    }).join('');
+    var first=sel.options[0];
+    if(first){
+      if(input) input.value=first.value;
+      window.currentRaceId=first.dataset.raceId||'';
+      window.currentRaceName=first.dataset.raceName||'';
+      if(box){box.style.display='block';box.textContent=first.textContent||'';}
+    }
+    if(status) status.innerHTML='<div class="url-status ok">✅ '+esc(date)+' '+esc(v[1])+' '+races.length+'Rを地方競馬公式一覧から取得しました。<br><span style="font-size:11px;opacity:.85">実レースデータはBridgeまたはWorker type/race_id APIで取得します。</span></div>';
+  }
+
+  // 公式PC一覧で開催場を確定。NAR netkeibaの一覧URL（upstream 400）には依存しない。
+  window.loadActiveVenuesForDate = async function(kind){
+    var token=++scanToken;
+    kind=kind || (el('pickKind')&&el('pickKind').value) || 'JRA';
+    if(String(kind).toUpperCase()!=='NAR'){
+      return typeof previousLoadVenues==='function' ? previousLoadVenues.apply(this,arguments) : undefined;
+    }
+    var date=(el('pickDate')&&el('pickDate').value) || (typeof todayYmd==='function'?todayYmd():'');
+    var status=el('urlStatus'), found=[], failed=0;
+    if(el('raceSelect')) el('raceSelect').innerHTML='<option value="">NAR開催場を確認中...</option>';
+    for(var i=0;i<VENUES.length;i++){
+      if(token!==scanToken || String((el('pickKind')&&el('pickKind').value)||'').toUpperCase()!=='NAR') return;
+      if(status) status.innerHTML='<div class="url-status">📡 NAR '+(i+1)+'/'+VENUES.length+' '+esc(VENUES[i][1])+'：地方競馬公式一覧を確認中...</div>';
+      var races=await fetchOfficial(date,VENUES[i][0]);
+      if(token!==scanToken) return;
+      if(races===null){failed++;continue;}
+      if(races.length) found.push({code:VENUES[i][0],name:VENUES[i][1],count:races.length});
+    }
+    if(token!==scanToken) return;
+    if(found.length){
+      setVenueOptions(found);
+      if(status) status.innerHTML='<div class="url-status ok">✅ '+esc(date)+' のNAR開催場：'+found.map(function(v){return esc(v.name+'（'+v.count+'R）');}).join('、')+'<br><span style="font-size:11px;opacity:.85">NAR一覧 url= のHTTP 502/400は使用しません。</span></div>';
+      setTimeout(function(){if(token===scanToken&&String((el('pickKind')&&el('pickKind').value)||'').toUpperCase()==='NAR'){try{window.loadRaceList();}catch(e){}}},60);
+      return;
+    }
+    if(failed===VENUES.length && typeof previousLoadVenues==='function'){
+      if(status) status.innerHTML='<div class="url-status">🔄 地方競馬公式一覧を取得できないため、Bridge/netkeiba race_id確認へ切替中...</div>';
+      return previousLoadVenues.apply(this,arguments);
+    }
+    setVenueOptions([]);
+    if(status) status.innerHTML='<div class="url-status ok">ℹ️ '+esc(date)+' はNAR開催なしです。</div>';
+  };
+
+  window.loadRaceList = async function(){
+    var kind=(el('pickKind')&&el('pickKind').value)||'JRA';
+    if(String(kind).toUpperCase()!=='NAR') return typeof previousLoadRaces==='function' ? previousLoadRaces.apply(this,arguments) : undefined;
+    var date=(el('pickDate')&&el('pickDate').value)||(typeof todayYmd==='function'?todayYmd():'');
+    var code=(el('pickVenue')&&el('pickVenue').value)||'';
+    var status=el('urlStatus');
+    if(!code){if(status)status.innerHTML='<div class="url-status">開催場を選択してください。</div>';return;}
+    if(status) status.innerHTML='<div class="url-status">📅 '+esc(date)+' '+esc(venue(code)[1])+' の公式レース一覧を取得中...</div>';
+    var races=await fetchOfficial(date,code);
+    if(Array.isArray(races)&&races.length){renderRaces(races,date,code);return;}
+    if(races===null && typeof previousLoadRaces==='function'){
+      if(status) status.innerHTML='<div class="url-status">🔄 公式一覧取得失敗。netkeiba race_id確認へ切替中...</div>';
+      return previousLoadRaces.apply(this,arguments);
+    }
+    if(el('raceSelect')) el('raceSelect').innerHTML='<option value="">レースなし</option>';
+    if(status) status.innerHTML='<div class="url-status ok">ℹ️ '+esc(date)+' '+esc(venue(code)[1])+' は開催なしです。</div>';
+  };
+
+  // 接続テストは実際に使う経路だけを検査する。Workerルートのqueryなし400は仕様。
+  window.testProxy = async function(){
+    var status=el('proxyStatus'), base=workerBase();
+    if(!base){ alert('Workers URLを入力してください。'); return; }
+    try{ if(typeof saveProxy==='function')saveProxy(); else if(typeof saveSettings==='function')saveSettings(); }catch(e){}
+    if(status) status.innerHTML='<div class="url-status">🔄 NAR API/Bridge/公式一覧を接続テスト中...</div>';
+    async function probe(name,req){
+      try{
+        var r=await fetch(req,{cache:'no-store',credentials:'omit'}),t=await r.text().catch(function(){return '';});
+        return {name:name,status:r.status,ok:r.ok&&!badHtml(t),len:t.length,detail:errorText(r.status,t)};
+      }catch(e){return {name:name,status:'ERR',ok:false,len:0,detail:(e&&e.message)||String(e)};}
+    }
+    var jraRid=(String((el('raceIdInput')&&el('raceIdInput').value)||'').match(/^\d{10,14}$/)||[])[0]||'202602011101';
+    var narRid='202636060701';
+    var d=ymd((el('pickDate')&&el('pickDate').value)||'2026-06-07')||'20260607';
+    var rows=[];
+    rows.push(await probe('JRA type/race_id',base+'?type=shutuba&kind=JRA&race_id='+encodeURIComponent(jraRid)+'&_='+Date.now()));
+    rows.push(await probe('NAR type/race_id',base+'?type=result&kind=NAR&race_id='+narRid+'&_='+Date.now()));
+    rows.push(await probe('地方競馬公式PC',base+'?url='+encodeURIComponent('https://www.keiba.go.jp/KeibaWeb/TodayRaceInfo/RaceList?k_raceDate='+d.slice(0,4)+'%2F'+d.slice(4,6)+'%2F'+d.slice(6,8)+'&k_babaCode=11')+'&_='+Date.now()));
+    var bridge={name:'Bridge（NAR/住宅IP）',status:'未検出',ok:false,len:0,detail:'Userscript未検出'};
+    if(typeof window.__narBridgeFetch==='function'&&window.__bridgeAbsent!==true){
+      try{var br=await window.__narBridgeFetch('https://nar.netkeiba.com/race/result.html?race_id='+narRid+'&rf=race_submenu');var bt=br&&br.text?String(br.text):'';bridge={name:'Bridge（NAR/住宅IP）',status:br&&br.status||0,ok:!!(br&&Number(br.status)>=200&&Number(br.status)<300&&!badHtml(bt)),len:bt.length,detail:br&&br.error||''};}
+      catch(e){bridge.detail=(e&&e.message)||String(e);bridge.status='ERR';}
+    }
+    rows.push(bridge);
+    var narOk=rows[1].ok||rows[3].ok, jraOk=rows[0].ok, offOk=rows[2].ok;
+    var cls=(jraOk&&(narOk||offOk))?'ok':'err';
+    var verdict=narOk?'🟢 NAR実データ経路は正常です。':(jraOk&&offOk?'🟠 Workerと公式一覧は正常ですが、NAR実データはBridgeまたはNAR APIの回復が必要です。':'🔴 接続経路を確認してください。');
+    var html=rows.map(function(x){return '<div style="font-family:monospace;font-size:11px;margin-top:5px">'+(x.ok?'✅ ':'❌ ')+esc(x.name)+': HTTP '+esc(x.status)+' len='+esc(x.len)+(x.ok?'':'<br><span style="opacity:.7">'+esc(x.detail)+'</span>')+'</div>';}).join('');
+    if(status) status.innerHTML='<div class="url-status '+cls+'">'+verdict+'<div style="margin-top:6px">'+html+'</div><div style="margin-top:7px;font-size:11px;opacity:.85">ℹ️ Workers URLをqueryなしで直接開いたHTTP 400は「race_id/type または url が必要」という正常応答なので、故障判定から除外しました。<br>'+esc(VERSION)+'</div></div>';
+  };
+  try{ testProxy=window.testProxy; }catch(e){}
+
+  // 種別切替時は進行中のNAR公式走査を無効化する。
+  function installCancel(){
+    var kind=el('pickKind');
+    if(kind&&!kind.__nar299Cancel){kind.__nar299Cancel=true;kind.addEventListener('change',function(){scanToken++;});}
+    var date=el('pickDate');
+    if(date&&!date.__nar299Cancel){date.__nar299Cancel=true;date.addEventListener('change',function(){scanToken++;});}
+  }
+  function applyVersion(){
+    try{
+      window.APP_VERSION=VERSION;
+      document.title='The競馬 EV分析 '+VERSION;
+      document.querySelectorAll('.ver').forEach(function(x){x.textContent=VERSION;});
+    }catch(e){}
+  }
+  function init(){installCancel();applyVersion();}
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
+  [0,300,1000,3000,7000,12000,18000].forEach(function(ms){setTimeout(function(){installCancel();applyVersion();},ms);});
+  console.log('['+VERSION+'] enabled');
 })();
 </script>
 

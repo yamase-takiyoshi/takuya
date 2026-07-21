@@ -21,7 +21,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.300 RaceContextIsolationFix</title>
+<title>The競馬 EV分析 v5.18.301 NarOfficialPrimary</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -906,7 +906,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
   <div style="display:flex;gap:8px;align-items:center">
     <button id="profitSplitBtn" class="btn-sm profit-split-toggle" type="button" onclick="toggleProfitLiveSplit()" aria-pressed="false">📊 横2画面</button>
     <button id="nativeThemeBtn" class="btn-sm native-theme-btn" type="button" title="本体テーマへ自動連動。単独起動時はここで切り替え">🌙 <span class="native-theme-label">ダーク・本体連動</span></button>
-    <span class="ver">v5.18.300 RaceContextIsolationFix</span>
+    <span class="ver">v5.18.301 NarOfficialPrimary</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -28210,5 +28210,303 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 })();
 </script>
 
+
+<script>
+/* ============================================================
+   v5.18.301 NarOfficialPrimary
+   ・NAR個別データは地方競馬公式（出馬表／成績／単複オッズ）を最優先
+   ・公式HTMLを既存netkeibaパーサ互換HTMLへ正規化
+   ・公式失敗時だけ既存 Worker / Bridge / netkeiba 経路へフォールバック
+   ・接続診断を「実用経路」と「補助経路」に分離
+   ・旧パッチによる v5.18.297 表示上書きを遮断
+   ============================================================ */
+(function(){
+  'use strict';
+
+  var VERSION='v5.18.301 NarOfficialPrimary';
+  var previousProxy=window.fetchHtmlViaProxy;
+  var previousTestProxy=window.testProxy;
+  var BABA={
+    '30':'36','35':'10','36':'11','42':'18','43':'19','44':'20',
+    '45':'21','46':'22','47':'23','48':'24','50':'27','51':'28',
+    '54':'31','55':'32','65':'3'
+  };
+
+  function el(id){return document.getElementById(id);}
+  function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+  function half(v){return String(v==null?'':v).replace(/[０-９．]/g,function(c){return c==='．'?'.':String.fromCharCode(c.charCodeAt(0)-0xFEE0);});}
+  function textOf(node){return String(node&&node.textContent||'').replace(/\u00a0/g,' ').replace(/[\r\n\t]+/g,' ').replace(/[\s　]+/g,' ').trim();}
+  function cleanName(v){return textOf({textContent:v}).replace(/^[\d\s]+/,'').replace(/[\s　]+/g,'').trim();}
+  function blocked(text){return !text||/Access Denied|Just a moment|Reference\s*#|Pardon Our Interruption|akamai|Incapsula|cf-browser|errors\.edgesuite\.net|ページが見つかりません|404\s*Not\s*Found/i.test(String(text));}
+
+  function narInfo(url){
+    var s=String(url||'');
+    if(!/^https:\/\/(?:nar(?:\.sp)?\.netkeiba\.com)\//i.test(s))return null;
+    var m=s.match(/[?&]race_id=(\d{12})/); if(!m)return null;
+    var type=/\/odds(?:\/|\?|$)/i.test(s)?'odds':(/\/race\/(?:result|race_result)\.html/i.test(s)?'result':'shutuba');
+    var rid=m[1],code=rid.slice(4,6),baba=BABA[code];
+    if(!baba)return null;
+    return {url:s,type:type,raceId:rid,code:code,baba:baba,date:rid.slice(0,4)+'/'+rid.slice(6,8)+'/'+rid.slice(8,10),raceNo:Number(rid.slice(10,12))};
+  }
+
+  function officialUrl(info,type){
+    type=type||info.type;
+    var page=type==='result'?'RaceMarkTable':(type==='odds'?'OddsTanFuku':'DebaTable');
+    return 'https://www.keiba.go.jp/KeibaWeb/TodayRaceInfo/'+page+
+      '?k_babaCode='+encodeURIComponent(info.baba)+
+      '&k_raceDate='+encodeURIComponent(info.date)+
+      '&k_raceNo='+encodeURIComponent(info.raceNo);
+  }
+
+  function expandedHeaderLabels(table){
+    var labels=[],active=[];
+    var rows=Array.from(table.querySelectorAll('tr')).filter(function(r){return r.querySelector('th');}).slice(0,6);
+    rows.forEach(function(tr,rowIndex){
+      var col=0;
+      Array.from(tr.children).forEach(function(cell){
+        while(active[col]&&active[col]>rowIndex)col++;
+        var cs=Math.max(1,Number(cell.getAttribute('colspan')||1));
+        var rs=Math.max(1,Number(cell.getAttribute('rowspan')||1));
+        var tx=textOf(cell);
+        for(var j=0;j<cs;j++){
+          labels[col+j]=labels[col+j]||[];
+          if(tx&&labels[col+j].indexOf(tx)<0)labels[col+j].push(tx);
+          if(rs>1)active[col+j]=rowIndex+rs;
+        }
+        col+=cs;
+      });
+    });
+    return labels.map(function(x){return (x||[]).join(' ');});
+  }
+
+  function expandedCells(tr){
+    var out=[];
+    Array.from(tr.children).forEach(function(cell){
+      var cs=Math.max(1,Number(cell.getAttribute('colspan')||1));
+      for(var i=0;i<cs;i++)out.push(cell);
+    });
+    return out;
+  }
+
+  function idxOf(labels,re){
+    for(var i=0;i<labels.length;i++)if(re.test(String(labels[i]||'').replace(/[\s　]+/g,'')))return i;
+    return -1;
+  }
+
+  function tableCandidate(doc,type){
+    var best=null,bestScore=-1;
+    Array.from(doc.querySelectorAll('table')).forEach(function(table){
+      var labels=expandedHeaderLabels(table),joined=labels.join('|').replace(/[\s　]+/g,'');
+      var score=0;
+      if(/馬番/.test(joined))score+=20;
+      if(/馬名/.test(joined))score+=20;
+      if(/枠/.test(joined))score+=4;
+      if(type==='result'&&/着順/.test(joined))score+=18;
+      if(type==='odds'&&/単勝.*オッズ|単勝オッズ/.test(joined))score+=18;
+      if(/人気/.test(joined))score+=5;
+      score+=Math.min(12,table.querySelectorAll('tr td').length/8);
+      if(score>bestScore){bestScore=score;best={table:table,labels:labels,score:score};}
+    });
+    return best&&best.score>=35?best:null;
+  }
+
+  function numberIn(v,min,max){
+    var m=half(v).replace(/,/g,'').match(/-?\d+(?:\.\d+)?/); if(!m)return 0;
+    var n=Number(m[0]); return Number.isFinite(n)&&n>=min&&n<=max?n:0;
+  }
+  function oddsIn(v){
+    var s=half(v).replace(/[,倍\s]/g,'');
+    var m=s.match(/\d{1,4}(?:\.\d+)?/); if(!m)return 0;
+    var n=Number(m[0]); return Number.isFinite(n)&&n>=1&&n<=9999?Math.round(n*10)/10:0;
+  }
+
+  function raceTitle(doc,info){
+    var generic=/^(?:地方競馬情報サイト|出馬表|オッズ|競走成績|レース成績表|対戦表|印刷用出馬表|ライブ中継|レース映像)$/;
+    var heads=Array.from(doc.querySelectorAll('h1,h2,h3,h4,.raceTitle,.race-title,.raceName,.race_name'));
+    for(var i=0;i<heads.length;i++){
+      var t=textOf(heads[i]).replace(/^\d{4}年.*?第\d+競走\s*/,'').trim();
+      if(t&&t.length>=2&&t.length<=100&&!generic.test(t)&&!/^\d{4}年/.test(t)&&!/地方競馬情報サイト/.test(t))return t;
+    }
+    return info.raceNo+'R';
+  }
+
+  function parseOfficialRows(html,info){
+    if(blocked(html))throw new Error('公式ページがエラーまたは遮断ページです');
+    var doc=new DOMParser().parseFromString(String(html||''),'text/html');
+    var cand=tableCandidate(doc,info.type);
+    if(!cand)throw new Error('公式ページに馬番・馬名テーブルがありません');
+    var labels=cand.labels;
+    var numIdx=idxOf(labels,/馬番/),nameIdx=idxOf(labels,/馬名/),frameIdx=idxOf(labels,/^(?:枠|枠番)$/);
+    var oddsIdx=idxOf(labels,/単勝.*オッズ|単勝オッズ/),popIdx=idxOf(labels,/人気/),rankIdx=idxOf(labels,/着順/);
+    var rows=[],seen={};
+    Array.from(cand.table.querySelectorAll('tr')).forEach(function(tr){
+      if(!tr.querySelector('td'))return;
+      var cells=expandedCells(tr);
+      var num=numIdx>=0&&cells[numIdx]?numberIn(textOf(cells[numIdx]),1,18):0;
+      var name=nameIdx>=0&&cells[nameIdx]?cleanName(textOf(cells[nameIdx])):'';
+      if(!name){
+        var link=tr.querySelector('a[href*="Horse"],a[href*="horse"],a[href*="Lineage"],a[href*="lineage"]');
+        if(link)name=cleanName(textOf(link));
+      }
+      if(!num&&nameIdx>0){
+        for(var i=nameIdx-1;i>=0;i--){var n=numberIn(textOf(cells[i]),1,18);if(n){num=n;break;}}
+      }
+      if(!num||!name||seen[num])return;
+      if(/^(?:馬名|取消|除外|競走除外)$/.test(name))return;
+      var frame=frameIdx>=0&&cells[frameIdx]?numberIn(textOf(cells[frameIdx]),1,8):0;
+      if(!frame)frame=Math.min(8,Math.max(1,Math.ceil(num/2)));
+      var odds=oddsIdx>=0&&cells[oddsIdx]?oddsIn(textOf(cells[oddsIdx])):0;
+      var pop=popIdx>=0&&cells[popIdx]?numberIn(textOf(cells[popIdx]),1,18):0;
+      var rank=rankIdx>=0&&cells[rankIdx]?numberIn(textOf(cells[rankIdx]),1,99):0;
+      seen[num]=1; rows.push({num:num,name:name,frame:frame,odds:odds,pop:pop,rank:rank});
+    });
+    if(rows.length<2)throw new Error('公式ページの出走馬を2頭以上解析できませんでした（'+rows.length+'頭）');
+    var withOdds=rows.filter(function(x){return x.odds>=1;}).sort(function(a,b){return a.odds-b.odds||a.num-b.num;});
+    withOdds.forEach(function(x,i){if(!x.pop)x.pop=i+1;});
+    return {rows:rows.sort(function(a,b){return a.num-b.num;}),title:raceTitle(doc,info)};
+  }
+
+  function syntheticHtml(parsed,info,sourceUrl){
+    var result=info.type==='result';
+    var head=result?'<th>着順</th>':'';
+    var body=parsed.rows.map(function(x){
+      return '<tr class="HorseList">'+
+        (result?'<td class="Rank">'+esc(x.rank||'')+'</td>':'')+
+        '<td class="Waku">'+esc(x.frame)+'</td>'+
+        '<td class="Umaban">'+esc(x.num)+'</td>'+
+        '<td class="HorseInfo"><a href="/horse/official-'+esc(info.raceId)+'-'+esc(x.num)+'">'+esc(x.name)+'</a></td>'+
+        '<td class="Odds"><span class="OddsVal">'+esc(x.odds||'')+'</span></td>'+
+        '<td class="Popular">'+esc(x.pop||'')+'</td>'+
+        '</tr>';
+    }).join('');
+    return '<!doctype html><html lang="ja"><head><meta charset="UTF-8">'+
+      '<title>'+esc(parsed.title)+'</title><meta property="og:title" content="'+esc(parsed.title)+'">'+
+      '<meta name="the-keiba-source" content="nar-official"><meta name="the-keiba-source-url" content="'+esc(sourceUrl)+'">'+
+      '</head><body><div class="RaceName"><h1>'+esc(parsed.title)+'</h1></div>'+
+      '<div data-race-id="'+esc(info.raceId)+'">race_id='+esc(info.raceId)+'</div>'+
+      '<table class="RaceTable01"><thead><tr>'+head+'<th>枠</th><th>馬番</th><th>馬名</th><th>単勝オッズ</th><th>人気</th></tr></thead><tbody>'+body+'</tbody></table></body></html>';
+  }
+
+  async function fetchOfficialSynthetic(info){
+    var ou=officialUrl(info,info.type);
+    var raw=await previousProxy.call(this,ou);
+    var parsed=parseOfficialRows(raw,info);
+    var out=syntheticHtml(parsed,info,ou);
+    window.__narOfficialLastUrl=ou;
+    window.__narOfficialLastCount=parsed.rows.length;
+    window.__narOfficialLastError='';
+    window.__fetchPath='nar-official-'+info.type;
+    return out;
+  }
+
+  function installOfficialProxy(){
+    var current=window.fetchHtmlViaProxy;
+    if(typeof current!=='function'||current.__narOfficialPrimary301)return;
+    previousProxy=current;
+    var officialFirst=async function(targetUrl){
+      var info=narInfo(targetUrl);
+      if(!info)return await current.apply(this,arguments);
+      var officialError='';
+      try{
+        var ou=officialUrl(info,info.type);
+        var raw=await current.call(this,ou);
+        var parsed=parseOfficialRows(raw,info);
+        var out=syntheticHtml(parsed,info,ou);
+        window.__narOfficialLastUrl=ou;
+        window.__narOfficialLastCount=parsed.rows.length;
+        window.__narOfficialLastError='';
+        window.__fetchPath='nar-official-'+info.type;
+        return out;
+      }catch(e){officialError=(e&&e.message)||String(e);window.__narOfficialLastError=officialError;console.warn('[NarOfficialPrimary]',officialError);}
+      try{
+        var fallback=await current.apply(this,arguments);
+        window.__fetchPath=(window.__fetchPath||'nar-netkeiba-fallback')+' / official失敗';
+        return fallback;
+      }catch(e2){
+        var fallbackError=(e2&&e2.message)||String(e2);
+        throw new Error('NAR取得失敗（地方競馬公式: '+officialError+' / netkeiba補助経路: '+fallbackError+'）');
+      }
+    };
+    officialFirst.__narOfficialPrimary301=true;
+    officialFirst.__previous=current;
+    window.fetchHtmlViaProxy=officialFirst;
+    try{fetchHtmlViaProxy=officialFirst;}catch(e){}
+  }
+  installOfficialProxy();
+
+  function workerBase(){
+    try{return String((typeof settings!=='undefined'&&settings&&settings.proxyUrl)||el('proxyUrl')&&el('proxyUrl').value||'').replace(/\/$/,'');}catch(e){return '';}
+  }
+  async function rawProbe(req,validator){
+    try{
+      var r=await fetch(req,{cache:'no-store',credentials:'omit',mode:'cors'}),t=await r.text().catch(function(){return '';});
+      var valid=!!(r.ok&&!blocked(t)&&(typeof validator!=='function'||validator(t)));
+      return {status:r.status,ok:valid,len:t.length,detail:valid?'':('HTTP '+r.status+(r.ok?' / 内容判定NG':''))};
+    }catch(e){return {status:'ERR',ok:false,len:0,detail:(e&&e.message)||String(e)};}
+  }
+  function selectedNarRid(){
+    var vals=[el('raceIdPrimaryInput')&&el('raceIdPrimaryInput').value,el('raceIdInput')&&el('raceIdInput').value,el('raceUrl')&&el('raceUrl').value,window.currentRaceId];
+    for(var i=0;i<vals.length;i++){var m=String(vals[i]||'').match(/\b(\d{12})\b|race_id=(\d{12})/);if(m){var rid=m[1]||m[2];if(BABA[rid.slice(4,6)])return rid;}}
+    return '202636060701';
+  }
+  function probeLine(name,r){return '<div style="font-family:monospace;font-size:11px;margin-top:5px">'+(r.ok?'✅ ':'❌ ')+esc(name)+': HTTP '+esc(r.status)+' len='+esc(r.len)+(r.ok?'':'<br><span style="opacity:.72">'+esc(r.detail)+'</span>')+'</div>';}
+
+  window.testProxy=async function(){
+    var status=el('proxyStatus'),base=workerBase();
+    if(!base){alert('Workers URLを入力してください。');return;}
+    try{if(typeof saveProxy==='function')saveProxy();}catch(e){}
+    if(status)status.innerHTML='<div class="url-status">🔄 実用経路（地方競馬公式）と補助経路（netkeiba／Bridge）を診断中...</div>';
+    var rid=selectedNarRid(),info=narInfo('https://nar.netkeiba.com/race/result.html?race_id='+rid);
+    var fixedInfo=narInfo('https://nar.netkeiba.com/race/result.html?race_id=202636060701');
+    var jraRid='202602011101';
+    var jra=await rawProbe(base+'?type=shutuba&kind=JRA&race_id='+jraRid+'&_='+Date.now(),function(t){return /\/horse\/|HorseList|馬名/.test(t);});
+    var officialEntry=await rawProbe(base+'?url='+encodeURIComponent(officialUrl(info,'shutuba'))+'&_='+Date.now(),function(t){try{return parseOfficialRows(t,Object.assign({},info,{type:'shutuba'})).rows.length>=2;}catch(e){return false;}});
+    var officialOdds=await rawProbe(base+'?url='+encodeURIComponent(officialUrl(info,'odds'))+'&_='+Date.now(),function(t){try{return parseOfficialRows(t,Object.assign({},info,{type:'odds'})).rows.length>=2;}catch(e){return false;}});
+    var officialResult=await rawProbe(base+'?url='+encodeURIComponent(officialUrl(fixedInfo,'result'))+'&_='+Date.now(),function(t){try{return parseOfficialRows(t,Object.assign({},fixedInfo,{type:'result'})).rows.length>=2;}catch(e){return false;}});
+    var netkeiba=await rawProbe(base+'?type=result&kind=NAR&race_id='+encodeURIComponent(fixedInfo.raceId)+'&_='+Date.now(),function(t){return /\/horse\/|HorseList/.test(t);});
+    var bridge={status:'未検出',ok:false,len:0,detail:'Userscript未検出'};
+    if(typeof window.__narBridgeFetch==='function'&&window.__bridgeAbsent!==true){
+      try{var br=await window.__narBridgeFetch('https://nar.netkeiba.com/race/result.html?race_id='+fixedInfo.raceId+'&rf=race_submenu');var bt=String(br&&br.text||'');bridge={status:br&&br.status||0,ok:!!(br&&Number(br.status)>=200&&Number(br.status)<300&&!blocked(bt)&&/\/horse\/|HorseList/.test(bt)),len:bt.length,detail:String(br&&br.error||'')||'netkeiba本文判定NG'};}
+      catch(e){bridge={status:'ERR',ok:false,len:0,detail:(e&&e.message)||String(e)};}
+    }
+    var practical=officialEntry.ok||officialResult.ok;
+    var cls=(jra.ok&&practical)?'ok':'err';
+    var verdict=practical?'🟢 NAR実用経路は正常です。地方競馬公式を主経路として使用します。':'🔴 地方競馬公式の実用経路を取得できません。Worker設定を確認してください。';
+    var supplemental=(netkeiba.ok||bridge.ok)?'補助netkeiba経路も利用可能です。':'netkeiba補助経路は不通ですが、公式主経路が正常ならNAR取得は継続できます。';
+    var html='<div style="margin-top:7px;font-weight:800">主経路</div>'+probeLine('JRA Worker',jra)+probeLine('NAR公式 出馬表',officialEntry)+probeLine('NAR公式 単複オッズ',officialOdds)+probeLine('NAR公式 確定結果',officialResult)+
+      '<div style="margin-top:9px;font-weight:800">補助経路</div>'+probeLine('NAR netkeiba Worker',netkeiba)+probeLine('NAR Bridge（住宅IP）',bridge);
+    if(status)status.innerHTML='<div class="url-status '+cls+'">'+verdict+'<br><span style="font-size:11px;opacity:.88">'+esc(supplemental)+'</span>'+html+'<div style="margin-top:8px;font-size:11px;opacity:.82">'+esc(VERSION)+' / 選択race_id '+esc(rid)+'</div></div>';
+  };
+  try{testProxy=window.testProxy;}catch(e){}
+
+  function installVersionLock(){
+    var old=document.querySelector('.header .ver, .ver');
+    if(old&&!old.__v301Fresh){var fresh=old.cloneNode(false);fresh.__v301Fresh=true;fresh.textContent=VERSION;old.replaceWith(fresh);}
+    var oldTitle=document.querySelector('title');
+    if(oldTitle&&!oldTitle.__v301Fresh){var nt=document.createElement('title');nt.__v301Fresh=true;nt.textContent='The競馬 EV分析 '+VERSION;oldTitle.replaceWith(nt);}
+    var ver=document.querySelector('.header .ver, .ver'),title=document.querySelector('title');
+    function apply(){window.APP_VERSION=VERSION;if(ver&&ver.textContent!==VERSION)ver.textContent=VERSION;var t='The競馬 EV分析 '+VERSION;if(document.title!==t)document.title=t;}
+    apply();
+    if(ver&&!ver.__v301Observer){ver.__v301Observer=true;new MutationObserver(apply).observe(ver,{childList:true,subtree:true,characterData:true});}
+    if(title&&!title.__v301Observer){title.__v301Observer=true;new MutationObserver(apply).observe(title,{childList:true,subtree:true,characterData:true});}
+    window.setAppVersionLabel=function(){apply();return VERSION;};
+    return apply;
+  }
+
+  function updateOfficialNotes(){
+    var status=el('urlStatus');
+    if(status&&/実レースデータはBridgeまたはWorker type\/race_id API/.test(status.textContent||'')){
+      status.innerHTML=status.innerHTML.replace('実レースデータはBridgeまたはWorker type/race_id APIで取得します。','実レースデータは地方競馬公式を最優先し、失敗時だけWorker／Bridgeへ切り替えます。');
+    }
+  }
+
+  function init(){installOfficialProxy();var apply=installVersionLock();apply();updateOfficialNotes();}
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
+  [0,100,400,1000,3000,8000,16000].forEach(function(ms){setTimeout(init,ms);});
+  setInterval(function(){try{installOfficialProxy();window.setAppVersionLabel();updateOfficialNotes();}catch(e){}},2500);
+  console.log('['+VERSION+'] enabled: NAR official primary + netkeiba fallback');
+})();
+
+</script>
 </body>
 </html>

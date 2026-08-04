@@ -21,7 +21,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v6.3 NAR Calendar</title>
+<title>The競馬 EV分析 v6.4 NAR Calendar Guard</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -906,7 +906,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
   <div style="display:flex;gap:8px;align-items:center">
     <button id="profitSplitBtn" class="btn-sm profit-split-toggle" type="button" onclick="toggleProfitLiveSplit()" aria-pressed="false">📊 横2画面</button>
     <button id="nativeThemeBtn" class="btn-sm native-theme-btn" type="button" title="本体テーマへ自動連動。単独起動時はここで切り替え">🌙 <span class="native-theme-label">ダーク・本体連動</span></button>
-    <span class="ver">v6.3 NAR Calendar</span>
+    <span class="ver">v6.4 NAR Calendar Guard</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2259,7 +2259,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v6.3 NAR Calendar';
+window.APP_VERSION = 'v6.4 NAR Calendar Guard';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -14034,21 +14034,125 @@ if(horses.length === 0){
     return plan;
   }
 
-  // v6.3 NAR Calendar
-  // 指定期間の全日についてNAR公式開催一覧を先に1回ずつ確認し、
-  // 実開催が確認できた日×開催場だけを本処理へ渡す。
+  // v6.4 NAR Calendar Guard
+  // NAR公式「月別開催日程」を月ごとに取得し、開催リンクに含まれる
+  // k_raceDate / k_babaCode から実開催予定日×開催場を確定する。
+  // netkeiba日別一覧の空解析を「開催なし」と誤認しないため、対象年月・
+  // 公式ページ構造・開催リンクの3点をすべて検証してから採用する。
+  const NAR_OFFICIAL_BABA_TO_CODE = Object.freeze({
+    '36':'30','10':'35','11':'36','18':'42','19':'43','20':'44',
+    '21':'45','22':'46','23':'47','24':'48','27':'50','28':'51',
+    '31':'54','32':'55','3':'65'
+  });
+
+  function narOfficialCalendarMonthUrl(year, month){
+    return `https://www.keiba.go.jp/KeibaWeb/MonthlyConveneInfo/MonthlyConveneInfoTop?k_year=${Number(year)}&k_month=${Number(month)}`;
+  }
+
+  function narCalendarMonthsInRange(start, end){
+    const s = String(start || '').replace(/[^0-9]/g, '').slice(0,8);
+    const e = String(end || '').replace(/[^0-9]/g, '').slice(0,8);
+    if(s.length !== 8 || e.length !== 8 || s > e) return [];
+    let y = Number(s.slice(0,4)), m = Number(s.slice(4,6));
+    const ey = Number(e.slice(0,4)), em = Number(e.slice(4,6));
+    const out = [];
+    while(y < ey || (y === ey && m <= em)){
+      out.push({year:y, month:m, key:`${y}-${String(m).padStart(2,'0')}`});
+      m++;
+      if(m > 12){ y++; m = 1; }
+      if(out.length > 240) break;
+    }
+    return out;
+  }
+
+  function narCalendarPlainText(doc, raw){
+    try{
+      return String((doc && doc.body && doc.body.textContent) || '')
+        .replace(/[\t\r\n]+/g, ' ').replace(/[\s　]+/g, ' ').trim();
+    }catch(e){
+      return String(raw || '').replace(/<[^>]+>/g, ' ')
+        .replace(/[\t\r\n]+/g, ' ').replace(/[\s　]+/g, ' ').trim();
+    }
+  }
+
+  function parseNarOfficialMonthlyCalendar(html, year, month){
+    const raw = String(html || '');
+    const y = Number(year), m = Number(month);
+    const mm = String(m).padStart(2,'0');
+    if(raw.length < 500) throw new Error(`NAR公式月別日程の本文が短すぎます（${raw.length}字）`);
+    if(typeof looksBlockedHtml === 'function' && looksBlockedHtml(raw)){
+      throw new Error('NAR公式月別日程が拒否ページを返しました');
+    }
+    if(/^\s*\{/.test(raw) && /"ok"\s*:\s*false/i.test(raw)){
+      throw new Error('NAR公式月別日程の取得APIがエラーを返しました');
+    }
+
+    let doc;
+    try{ doc = new DOMParser().parseFromString(raw, 'text/html'); }
+    catch(e){ throw new Error('NAR公式月別日程をHTMLとして解析できません'); }
+    const text = narCalendarPlainText(doc, raw);
+    if(!/月別開催日程/.test(text)){
+      throw new Error('取得本文がNAR公式の月別開催日程ではありません');
+    }
+    if(!text.includes(`${y}年${m}月`)){
+      throw new Error(`NAR公式月別日程の対象年月が不一致です（要求 ${y}年${m}月）`);
+    }
+    if(!NAR_VENUES.some(v => text.includes(v[1]))){
+      throw new Error('NAR公式月別日程に競馬場行がありません');
+    }
+
+    const byDate = new Map();
+    let recognizedLinks = 0;
+    Array.from(doc.querySelectorAll('a[href]')).forEach(a => {
+      const href = String(a.getAttribute('href') || '');
+      if(!/k_raceDate=/i.test(href) || !/k_babaCode=/i.test(href)) return;
+      let url;
+      try{ url = new URL(href, 'https://www.keiba.go.jp/'); }
+      catch(e){ return; }
+      const dateDigits = String(url.searchParams.get('k_raceDate') || '').replace(/[^0-9]/g, '').slice(0,8);
+      const babaRaw = String(url.searchParams.get('k_babaCode') || '').replace(/[^0-9]/g, '');
+      const baba = babaRaw ? String(Number(babaRaw)) : '';
+      const code = NAR_OFFICIAL_BABA_TO_CODE[baba] || '';
+      if(!code || dateDigits.length !== 8 || dateDigits.slice(0,6) !== `${y}${mm}`) return;
+      const day = Number(dateDigits.slice(6,8));
+      const maxDay = new Date(y, m, 0).getDate();
+      if(day < 1 || day > maxDay) return;
+      const date = `${dateDigits.slice(0,4)}-${dateDigits.slice(4,6)}-${dateDigits.slice(6,8)}`;
+      if(!byDate.has(date)) byDate.set(date, new Set());
+      byDate.get(date).add(code);
+      recognizedLinks++;
+    });
+
+    // 月内に地方競馬の開催リンクが1件もないことは通常ない。
+    // 0件はHTML変更・ログイン/案内ページ・Workerの空応答として停止する。
+    if(recognizedLinks === 0){
+      throw new Error(`NAR公式月別日程の開催リンクを解析できません（${y}年${m}月）`);
+    }
+    return {year:y, month:m, byDate, recognizedLinks, source:'keiba.go.jp-monthly'};
+  }
+
+  async function fetchNarOfficialMonthlyCalendar(year, month){
+    const url = narOfficialCalendarMonthUrl(year, month);
+    const html = await fetchHtmlViaProxy(url);
+    return parseNarOfficialMonthlyCalendar(html, year, month);
+  }
+
   async function buildNarRangePlanByDates(venueCodes, start, end, prog){
     const wanted = new Set((venueCodes && venueCodes.length)
       ? venueCodes.map(String)
       : NAR_VENUES.map(v => String(v[0])));
     const plan = new Map();
-    plan.source = 'nar-official-calendar';
+    plan.source = 'nar-official-monthly-calendar';
     plan.reachable = false;
     plan.complete = true;
     plan.checkedDays = 0;
+    plan.checkedMonths = 0;
+    plan.totalMonths = 0;
     plan.totalDays = 0;
     plan.venueDays = 0;
     plan.failedDates = [];
+    plan.failedMonths = [];
+    plan.recognizedLinks = 0;
 
     const dates = [];
     let d = start;
@@ -14060,58 +14164,76 @@ if(horses.length === 0){
     }
     plan.totalDays = dates.length;
 
-    for(let i = 0; i < dates.length; i++){
+    const months = narCalendarMonthsInRange(start, end);
+    plan.totalMonths = months.length;
+    if(!dates.length || !months.length){
+      plan.complete = false;
+      plan.failedMonths.push({month:'期間不正', error:'開始日・終了日を確認してください'});
+      return plan;
+    }
+
+    for(let i = 0; i < months.length; i++){
       if(rsAbort) break;
-      const date = dates[i];
-      if(prog && (i === 0 || (i + 1) % 5 === 0 || i === dates.length - 1)){
-        prog.innerHTML = `<div class="url-status">📅 指定期間のNAR開催日を確認中... ${i + 1}/${dates.length}日（${date}）</div>`;
+      const monthInfo = months[i];
+      const monthDates = dates.filter(date => date.slice(0,7) === monthInfo.key);
+      if(prog){
+        prog.innerHTML = `<div class="url-status">📅 NAR公式月別開催日程を確認中... ${i + 1}/${months.length}か月（${monthInfo.key}）</div>`;
       }
 
-      let codes = null;
+      let parsed = null;
       let lastError = '';
-      // 一時的なBridge/通信失敗を「非開催日」と誤認しないよう、事前確認だけ1回再試行する。
-      for(let attempt = 0; attempt < 2 && codes === null; attempt++){
+      // 一時的なWorker/通信失敗に備え、月別日程だけ1回再試行する。
+      for(let attempt = 0; attempt < 2 && parsed === null; attempt++){
         if(rsAbort) break;
         try{
-          const html = await fetchNarOfficialRaceListHtml(date, '');
-          const raw = String(html || '');
-          if(raw.length < 200) throw new Error(`NAR公式一覧の本文が短すぎます（${raw.length}字）`);
-          if(typeof looksBlockedHtml === 'function' && looksBlockedHtml(raw)) throw new Error('NAR公式一覧が拒否ページを返しました');
-          if(/^\s*\{/.test(raw) && /"ok"\s*:\s*false/i.test(raw)) throw new Error('NAR公式一覧の取得APIがエラーを返しました');
-          codes = parseNarOfficialVenueCodesFromList(raw, date);
+          parsed = await fetchNarOfficialMonthlyCalendar(monthInfo.year, monthInfo.month);
           plan.reachable = true;
-          plan.checkedDays++;
-          rsOpenVenuesOkCount++;
+          plan.checkedMonths++;
+          plan.checkedDays += monthDates.length;
+          plan.recognizedLinks += Number(parsed.recognizedLinks || 0);
+          rsOpenVenuesOkCount += monthDates.length;
         }catch(e){
           lastError = (e && e.message) || String(e);
-          if(attempt === 0 && !rsAbort) await new Promise(resolve => setTimeout(resolve, 180));
+          if(attempt === 0 && !rsAbort) await new Promise(resolve => setTimeout(resolve, 250));
         }
       }
 
-      if(codes === null){
+      if(parsed === null){
         plan.complete = false;
-        plan.failedDates.push({date, error:lastError || '取得失敗'});
-        rsOpenVenuesFailCount++;
-        rsLastOpenVenuesError = lastError || 'NAR開催日事前確認失敗';
+        const failed = {month:monthInfo.key, error:lastError || '取得失敗'};
+        plan.failedMonths.push(failed);
+        plan.failedDates.push({date:monthInfo.key, error:failed.error});
+        rsOpenVenuesFailCount += monthDates.length;
+        rsLastOpenVenuesError = failed.error || 'NAR公式月別開催日程の確認失敗';
         continue;
       }
 
-      const open = [...new Set(codes.map(String))].filter(code => wanted.has(code));
-      if(!open.length) continue;
-      const entries = open.map(code => ({venueCode:code, venueName:venueName('NAR', code)}));
-      plan.set(date, entries);
-      plan.venueDays += entries.length;
+      monthDates.forEach(date => {
+        const codes = parsed.byDate.get(date) || new Set();
+        const open = [...codes].map(String).filter(code => wanted.has(code));
+        if(!open.length) return;
+        const entries = open.map(code => ({venueCode:code, venueName:venueName('NAR', code)}));
+        plan.set(date, entries);
+        plan.venueDays += entries.length;
+      });
     }
 
-    if(rsAbort) plan.complete = false;
+    if(rsAbort || plan.checkedMonths !== plan.totalMonths) plan.complete = false;
     return plan;
   }
 
   function rsNarPlanFailureText(plan){
+    const failedMonths = Array.isArray(plan && plan.failedMonths) ? plan.failedMonths : [];
+    if(failedMonths.length){
+      const sample = failedMonths.slice(0, 5).map(x => x.month).join('、');
+      const more = failedMonths.length > 5 ? `ほか${failedMonths.length - 5}か月` : '';
+      return `${failedMonths.length}/${Number(plan && plan.totalMonths || 0)}か月の確認に失敗${sample ? `（${sample}${more ? '、' + more : ''}）` : ''}`;
+    }
     const failed = Array.isArray(plan && plan.failedDates) ? plan.failedDates : [];
     const sample = failed.slice(0, 5).map(x => x.date).join('、');
     const more = failed.length > 5 ? `ほか${failed.length - 5}日` : '';
-    return `${failed.length}/${Number(plan && plan.totalDays || 0)}日の確認に失敗${sample ? `（${sample}${more ? '、' + more : ''}）` : ''}`;
+    if(failed.length) return `${failed.length}/${Number(plan && plan.totalDays || 0)}日の確認に失敗${sample ? `（${sample}${more ? '、' + more : ''}）` : ''}`;
+    return plan ? 'NAR公式月別開催日程の確認を完了できませんでした' : 'NAR開催日計画を作成できませんでした';
   }
 
   function rsNormalizeRowsInPlace(rows){
@@ -14735,11 +14857,11 @@ if(horses.length === 0){
         }
       }
 
-      // v6.3: NARも本処理前に指定期間の公式開催一覧を全日確認する。
+      // v6.4: NAR公式の月別開催日程を検証し、本処理前に開催日を確定する。
       // 1日でも通信失敗が残れば、不完全な期間集計を作らず開始前に停止する。
       if(kind === 'NAR'){
         const venLabel = selVenues.length ? selVenues.map(c => venueName('NAR', c)).join('・') : 'NAR全場';
-        if(prog) prog.innerHTML = `<div class="url-status">📅 ${venLabel} の指定期間開催日をNAR公式一覧で事前確認中...</div>`;
+        if(prog) prog.innerHTML = `<div class="url-status">📅 ${venLabel} の指定期間開催日をNAR公式月別日程で事前確認中...</div>`;
         try{ rsNarPlan = await buildNarRangePlanByDates(selVenues, runStart, end, prog); }
         catch(e){
           const message = (e && e.message) || String(e);
@@ -14751,11 +14873,11 @@ if(horses.length === 0){
         if(!rsNarPlan || !rsNarPlan.complete){
           const detail = rsNarPlanFailureText(rsNarPlan);
           try{ window.__rsPrecheckError = detail; }catch(_){}
-          if(prog) prog.innerHTML = `<div class="url-status err">❌ NAR開催日の事前確認を完了できませんでした：${asw_esc(detail)}。不完全な集計を避けるため本処理は開始していません。Bridge接続を確認して再実行してください。</div>`;
+          if(prog) prog.innerHTML = `<div class="url-status err">❌ NAR開催日の事前確認を完了できませんでした：${asw_esc(detail)}。不完全な集計を避けるため本処理は開始していません。Worker接続を確認して再実行してください。</div>`;
           return;
         }
         if(rsNarPlan.size === 0){
-          if(prog) prog.innerHTML = `<div class="url-status ok">📅 NAR事前確認完了：${asw_esc(venLabel)}は指定期間に開催がありません（${rsNarPlan.checkedDays}/${rsNarPlan.totalDays}日確認済み）。</div>`;
+          if(prog) prog.innerHTML = `<div class="url-status ok">📅 NAR事前確認完了：${asw_esc(venLabel)}は指定期間に開催がありません（NAR公式月別日程 ${rsNarPlan.checkedMonths}/${rsNarPlan.totalMonths}か月・${rsNarPlan.checkedDays}日分確認済み）。</div>`;
         }else if(prog){
           prog.innerHTML = `<div class="url-status ok">📅 NAR事前確認完了：${rsNarPlan.size}開催日・${rsNarPlan.venueDays}開催場日を確認。バックテストを開始します。</div>`;
         }
@@ -14942,7 +15064,7 @@ if(horses.length === 0){
         if(prog) prog.innerHTML = `<div class="url-status ok">✅ 完了：${venLabel} はこの期間に開催がありませんでした（非開催日はサーチせずスキップ）。</div>`;
       }else if(kind === 'NAR' && rsNarPlan && rsNarPlan.size === 0 && okCount === 0 && !rsAbort){
         const venLabel = selVenues.length ? selVenues.map(c => venueName('NAR', c)).join('・') : 'NAR全場';
-        if(prog) prog.innerHTML = `<div class="url-status ok">✅ 完了：${venLabel} は指定期間に開催がありませんでした（NAR公式一覧で${rsNarPlan.checkedDays}日確認済み）。</div>`;
+        if(prog) prog.innerHTML = `<div class="url-status ok">✅ 完了：${venLabel} は指定期間に開催がありませんでした（NAR公式月別日程 ${rsNarPlan.checkedMonths}/${rsNarPlan.totalMonths}か月・${rsNarPlan.checkedDays}日分確認済み）。</div>`;
       }else if(kind === 'NAR' && okCount === 0 && rsOpenVenuesOkCount === 0 && rsOpenVenuesFailCount > 0 && !rsAbort){
         // v5.18.165: NARで全日程が通信失敗（ブリッジ未検出/403等）だった場合、
         // 「開催なし」と誤認させず実際のエラー内容を表示する。
@@ -15267,7 +15389,7 @@ if(horses.length === 0){
           if(prog) prog.innerHTML = `<div class="url-status ok">✅ リジューム完了：追加で処理するレースはありませんでした（精算済み${rsSkipped}Rをスキップ）。終了日を延長すると続きを実行できます。</div>`;
         }else{
           if(prog) prog.innerHTML = kind === 'NAR'
-            ? `<div class="url-status ok">✅ 一発モード完了：NAR公式一覧で指定期間を事前確認しました。対象レースはありませんでした。</div>`
+            ? `<div class="url-status ok">✅ 一発モード完了：NAR公式月別日程で指定期間を事前確認しました。対象レースはありませんでした。</div>`
             : `<div class="url-status ok">✅ 一発モード完了：対象レースはありませんでした。</div>`;
         }
         return;
@@ -15589,7 +15711,9 @@ if(horses.length === 0){
   window.asw_collectRaces = rsCollectRaces; // v5.18.244 D1Sync: 期間横断と同じrace_id列挙を公開
   window.runRangeVenueSimulation = runRangeVenueSimulation;
   window.runRangeVenueSimulationOneShot = runRangeVenueSimulationOneShot;
-  window.__buildNarRangePlanByDates = buildNarRangePlanByDates; // v6.3 診断・回帰テスト用
+  window.__buildNarRangePlanByDates = buildNarRangePlanByDates; // v6.4 診断・回帰テスト用
+  window.__parseNarOfficialMonthlyCalendar = parseNarOfficialMonthlyCalendar;
+  window.__narOfficialCalendarMonthUrl = narOfficialCalendarMonthUrl;
   window.importRangeVenueSimulationJSON = importRangeVenueSimulationJSON;
   window.stopRangeVenueSimulation = stopRangeVenueSimulation;
   window.rsRenderVenueChecks = rsRenderVenueChecks;
@@ -29145,7 +29269,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script id="theKeibaSafeCoreV6">
 /* ============================================================
-   v6.3 NAR Calendar
+   v6.4 NAR Calendar Guard
    ・APP_VERSION / title / header version are rendered by one owner
    ・JRA/NAR, date, venue and race_id share one canonical state
    ・race_id mismatches are rejected before they reach later actions
@@ -29154,7 +29278,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  var VERSION='v6.3 NAR Calendar';
+  var VERSION='v6.4 NAR Calendar Guard';
   var oldCore=window.TheKeibaCore;
   if(oldCore&&oldCore.version===VERSION){
     try{oldCore.refresh('duplicate-load');}catch(e){}

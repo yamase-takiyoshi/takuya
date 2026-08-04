@@ -21,7 +21,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.302 JraSpRaceList</title>
+<title>The競馬 EV分析 v6.0 Safe Core</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -906,7 +906,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
   <div style="display:flex;gap:8px;align-items:center">
     <button id="profitSplitBtn" class="btn-sm profit-split-toggle" type="button" onclick="toggleProfitLiveSplit()" aria-pressed="false">📊 横2画面</button>
     <button id="nativeThemeBtn" class="btn-sm native-theme-btn" type="button" title="本体テーマへ自動連動。単独起動時はここで切り替え">🌙 <span class="native-theme-label">ダーク・本体連動</span></button>
-    <span class="ver">v5.18.302 JraSpRaceList</span>
+    <span class="ver">v6.0 Safe Core</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2241,7 +2241,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.302 JraSpRaceList';
+window.APP_VERSION = 'v6.0 Safe Core';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -24122,8 +24122,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   }
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
   [0, 600, 1800, 4000, 9000].forEach(function(ms){ setTimeout(function(){ setVer(); try{ if(!$('swVenueBox') || !$('swVenueBox').children.length) renderVenues(); refreshModeStatus(); }catch(e){} try{ window.swReflectTestClock(false); }catch(e){} }, ms); });
-  setInterval(schedulerTick, 5000);
-  setInterval(function(){ try{ refreshGuardUsage(load()); }catch(e){} }, 5000);
+  // v6 Safe Core: one scheduler heartbeat owns both five-second jobs.
+  setInterval(function(){
+    try{schedulerTick();}catch(e){}
+    try{refreshGuardUsage(load());}catch(e){}
+  },5000);
   console.log('[' + VERSION + '] enabled: venue sweep auto-purchase assist + direct NAR race_id fallback');
 })();
 </script>
@@ -27062,24 +27065,16 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   function setVersion(){
     try{window.APP_VERSION=VERSION;var el=document.querySelector('.header .ver, .ver');if(el)el.textContent=VERSION;document.title='The競馬 EV分析 '+VERSION}catch(e){}
   }
-  var versionObserver=null;
-  function lockVersionLabel(){
-    if(versionObserver||typeof MutationObserver!=='function')return;
-    versionObserver=new MutationObserver(function(){
-      var el=document.querySelector('.header .ver, .ver'),title='The競馬 EV分析 '+VERSION;
-      if(window.APP_VERSION!==VERSION||(el&&el.textContent!==VERSION)||document.title!==title)setVersion();
-    });
-    var el=document.querySelector('.header .ver, .ver'),te=document.querySelector('title');
-    if(el)versionObserver.observe(el,{childList:true,subtree:true,characterData:true});
-    if(te)versionObserver.observe(te,{childList:true,subtree:true,characterData:true});
-  }
+  // v6 Safe Core owns the single version renderer. Legacy feature patches no
+  // longer install competing MutationObservers for the label and title.
+  function lockVersionLabel(){ return false; }
   function init(){
     installFetch();installTickets();setVersion();lockVersionLabel();
     try{if(typeof updateNarTransitionSettingsUI==='function')updateNarTransitionSettingsUI()}catch(e){}
   }
   window.tkNarTransitionInstallFinalHooks=function(){installFetch();installTickets();setVersion()};
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
-  [250,500,850,1250,1700,2500,3050,5100,6550,7050,11100,11600,14100,16000].forEach(function(ms){setTimeout(function(){installFetch();installTickets();setVersion()},ms)});
+  [250,500,850,1250,1700,2500,3050,5100,6550,7050,11100,11600,14100,16000].forEach(function(ms){setTimeout(function(){installFetch();installTickets();},ms)});
 })();
 </script>
 
@@ -27951,9 +27946,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       document.querySelectorAll('.ver').forEach(function(x){x.textContent=VERSION;});
     }catch(e){}
   }
-  function init(){installCancel();applyVersion();}
+  function init(){installCancel();}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
-  [0,300,1000,3000,7000,12000,18000].forEach(function(ms){setTimeout(function(){installCancel();applyVersion();},ms);});
   console.log('['+VERSION+'] enabled');
 })();
 </script>
@@ -28201,19 +28195,20 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   window.setAppVersionLabel=function(){return setVersion();};
 
   function installObserver(){
-    var root=el('tab-data') || document.body;
-    if(root && !root.__raceContextObserver300){
-      root.__raceContextObserver300=true;
-      var queued=false;
-      new MutationObserver(function(){
-        if(queued)return; queued=true;
-        setTimeout(function(){queued=false;sanitizeContext();setVersion();},0);
-      }).observe(root,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['value','class']});
-    }
+    // v6 Safe Core: the former subtree-wide observer fired for unrelated chart,
+    // status and tab mutations. Validate only when race-context controls change.
+    ['pickKind','pickDate','pickVenue','raceSelect','raceUrl','raceIdPrimaryInput'].forEach(function(id){
+      var node=el(id);
+      if(!node||node.__raceContextListener300)return;
+      node.__raceContextListener300=true;
+      node.addEventListener('change',function(){
+        Promise.resolve().then(function(){sanitizeContext();});
+      });
+    });
+    return true;
   }
-  function init(){ setVersion(); installObserver(); sanitizeContext(); }
+  function init(){ installObserver(); sanitizeContext(); }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',init); else init();
-  [0,100,400,1000,3000,8000,15000].forEach(function(ms){setTimeout(init,ms);});
   console.log('['+VERSION+'] enabled');
 })();
 </script>
@@ -28488,15 +28483,9 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   try{testProxy=window.testProxy;}catch(e){}
 
   function installVersionLock(){
-    var old=document.querySelector('.header .ver, .ver');
-    if(old&&!old.__v301Fresh){var fresh=old.cloneNode(false);fresh.__v301Fresh=true;fresh.textContent=VERSION;old.replaceWith(fresh);}
-    var oldTitle=document.querySelector('title');
-    if(oldTitle&&!oldTitle.__v301Fresh){var nt=document.createElement('title');nt.__v301Fresh=true;nt.textContent='The競馬 EV分析 '+VERSION;oldTitle.replaceWith(nt);}
     var ver=document.querySelector('.header .ver, .ver'),title=document.querySelector('title');
     function apply(){window.APP_VERSION=VERSION;if(ver&&ver.textContent!==VERSION)ver.textContent=VERSION;var t='The競馬 EV分析 '+VERSION;if(document.title!==t)document.title=t;}
     apply();
-    if(ver&&!ver.__v301Observer){ver.__v301Observer=true;new MutationObserver(apply).observe(ver,{childList:true,subtree:true,characterData:true});}
-    if(title&&!title.__v301Observer){title.__v301Observer=true;new MutationObserver(apply).observe(title,{childList:true,subtree:true,characterData:true});}
     window.setAppVersionLabel=function(){apply();return VERSION;};
     return apply;
   }
@@ -28508,13 +28497,315 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     }
   }
 
-  function init(){installOfficialProxy();var apply=installVersionLock();apply();updateOfficialNotes();}
+  function refreshOfficial(){try{installOfficialProxy();updateOfficialNotes();}catch(e){console.warn('[NarOfficialPrimary refresh]',e);}}
+  function init(){refreshOfficial();var apply=installVersionLock();apply();}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
-  [0,100,400,1000,3000,8000,16000].forEach(function(ms){setTimeout(init,ms);});
-  setInterval(function(){try{installOfficialProxy();window.setAppVersionLabel();updateOfficialNotes();}catch(e){}},2500);
+  if(!window.__narOfficialLifecycle301){
+    window.__narOfficialLifecycle301=true;
+    window.addEventListener('pageshow',refreshOfficial);
+    document.addEventListener('visibilitychange',function(){if(!document.hidden)refreshOfficial();});
+  }
   console.log('['+VERSION+'] enabled: NAR official primary + netkeiba fallback');
 })();
 
+</script>
+
+<script id="theKeibaSafeCoreV6">
+/* ============================================================
+   v6.0 Safe Core
+   ・APP_VERSION / title / header version are rendered by one owner
+   ・JRA/NAR, date, venue and race_id share one canonical state
+   ・race_id mismatches are rejected before they reach later actions
+   ・listeners are registered once and legacy storage keys stay unchanged
+   ============================================================ */
+(function(){
+  'use strict';
+
+  var VERSION='v6.0 Safe Core';
+  var oldCore=window.TheKeibaCore;
+  if(oldCore&&oldCore.version===VERSION){
+    try{oldCore.refresh('duplicate-load');}catch(e){}
+    return;
+  }
+  if(oldCore&&typeof oldCore.destroy==='function'){
+    try{oldCore.destroy();}catch(e){}
+  }
+
+  var state={
+    kind:'JRA', date:'', venueCode:'', raceId:'', raceName:'', raceNo:0,
+    revision:0, updatedAt:'', reason:'boot'
+  };
+  var bindings=[];
+  var versionObserver=null;
+  var renderBusy=false;
+  var syncQueued=false;
+
+  function el(id){return document.getElementById(id);}
+  function text(v){return String(v==null?'':v).trim();}
+  function digits(v){return text(v).replace(/[^0-9]/g,'');}
+  function normalizeKind(v){return text(v).toUpperCase()==='NAR'?'NAR':'JRA';}
+  function normalizeDate(v){
+    var d=digits(v).slice(0,8);
+    return d.length===8?d.slice(0,4)+'-'+d.slice(4,6)+'-'+d.slice(6,8):'';
+  }
+  function normalizeVenue(v){
+    var d=digits(v).slice(0,2);
+    return d?d.padStart(2,'0'):'';
+  }
+  function raceIdOf(v){
+    var m=text(v).match(/(?:race_id=|\/race\/)(\d{10,14})|\b(\d{10,14})\b/);
+    return m?(m[1]||m[2]||''):'';
+  }
+  function kindOfRaceId(rid){
+    return /^(?:0[1-9]|10)$/.test(text(rid).slice(4,6))?'JRA':'NAR';
+  }
+  function selectedOption(){
+    var s=el('raceSelect');
+    return s&&s.selectedOptions?s.selectedOptions[0]:null;
+  }
+  function lexicalRaceId(){
+    try{return typeof currentRaceId!=='undefined'?text(currentRaceId):'';}catch(e){return '';}
+  }
+  function lexicalRaceName(){
+    try{return typeof currentRaceName!=='undefined'?text(currentRaceName):'';}catch(e){return '';}
+  }
+  function controlContext(){
+    return {
+      kind:normalizeKind(el('pickKind')&&el('pickKind').value),
+      date:normalizeDate(el('pickDate')&&el('pickDate').value),
+      venueCode:normalizeVenue(el('pickVenue')&&el('pickVenue').value)
+    };
+  }
+  function compatibility(rid,context){
+    rid=text(rid);context=context||controlContext();
+    if(!/^\d{10,14}$/.test(rid))return {ok:false,reason:'race_id形式不正'};
+    if(kindOfRaceId(rid)!==context.kind)return {ok:false,reason:'JRA/NAR不一致'};
+    if(context.venueCode&&rid.slice(4,6)!==context.venueCode)return {ok:false,reason:'開催場不一致'};
+    if(context.kind==='NAR'&&context.date){
+      var d=digits(context.date);
+      if(rid.slice(0,4)+rid.slice(6,10)!==d)return {ok:false,reason:'日付不一致'};
+    }
+    return {ok:true,reason:''};
+  }
+  function snapshot(){
+    return Object.freeze({
+      kind:state.kind,date:state.date,venueCode:state.venueCode,
+      raceId:state.raceId,raceName:state.raceName,raceNo:state.raceNo,
+      revision:state.revision,updatedAt:state.updatedAt,reason:state.reason
+    });
+  }
+  function same(a,b){
+    return a.kind===b.kind&&a.date===b.date&&a.venueCode===b.venueCode&&
+      a.raceId===b.raceId&&a.raceName===b.raceName&&a.raceNo===b.raceNo;
+  }
+  function syncLegacyGlobals(){
+    try{currentRaceId=state.raceId;currentRaceName=state.raceName;}catch(e){}
+    window.currentRaceId=state.raceId;
+    window.currentRaceName=state.raceName;
+    if(state.raceId){
+      var input=el('raceIdPrimaryInput');
+      if(input&&input.value!==state.raceId)input.value=state.raceId;
+      if(window.tkCurrentRaceMeta&&typeof window.tkCurrentRaceMeta==='object'){
+        window.tkCurrentRaceMeta.raceId=state.raceId;
+        window.tkCurrentRaceMeta.kind=state.kind;
+        window.tkCurrentRaceMeta.venueCode=state.venueCode;
+        window.tkCurrentRaceMeta.raceNo=state.raceNo;
+        if(state.raceName)window.tkCurrentRaceMeta.raceName=state.raceName;
+      }
+    }
+  }
+  function clearRejectedIdentity(rid){
+    if(!rid)return;
+    var input=el('raceIdPrimaryInput');
+    if(input&&raceIdOf(input.value)===rid)input.value='';
+    var url=el('raceUrl');
+    if(url&&raceIdOf(url.value)===rid)url.value='';
+  }
+  function commit(patch,reason){
+    patch=patch||{};
+    var before=snapshot();
+    var next={
+      kind:patch.kind!==undefined?normalizeKind(patch.kind):state.kind,
+      date:patch.date!==undefined?normalizeDate(patch.date):state.date,
+      venueCode:patch.venueCode!==undefined?normalizeVenue(patch.venueCode):state.venueCode,
+      raceId:patch.raceId!==undefined?raceIdOf(patch.raceId):state.raceId,
+      raceName:patch.raceName!==undefined?text(patch.raceName):state.raceName,
+      raceNo:0
+    };
+    var rejected='';
+    if(next.raceId){
+      var check=compatibility(next.raceId,next);
+      if(!check.ok){rejected=next.raceId;next.raceId='';next.raceName='';}
+    }
+    next.raceNo=next.raceId?Number(next.raceId.slice(-2))||0:0;
+    if(!next.raceId)next.raceName='';
+    if(!same(before,next))state.revision+=1;
+    state.kind=next.kind;
+    state.date=next.date;
+    state.venueCode=next.venueCode;
+    state.raceId=next.raceId;
+    state.raceName=next.raceName;
+    state.raceNo=next.raceNo;
+    state.updatedAt=new Date().toISOString();
+    state.reason=text(reason)||'update';
+    if(rejected)clearRejectedIdentity(rejected);
+    syncLegacyGlobals();
+    var after=snapshot();
+    if(!same(before,after)){
+      try{document.dispatchEvent(new CustomEvent('thekeiba:statechange',{detail:{state:after,previous:before}}));}catch(e){}
+    }
+    return after;
+  }
+  function readRaceIdentity(){
+    var opt=selectedOption();
+    var optionRid=raceIdOf(opt&&(opt.dataset.raceId||opt.value||opt.textContent));
+    var lexicalRid=lexicalRaceId();
+    var windowRid=raceIdOf(window.currentRaceId);
+    var candidates=[
+      el('raceIdPrimaryInput')&&el('raceIdPrimaryInput').value,
+      optionRid,
+      el('raceUrl')&&el('raceUrl').value,
+      lexicalRid,windowRid
+    ];
+    var rid='';
+    for(var i=0;i<candidates.length;i++){rid=raceIdOf(candidates[i]);if(rid)break;}
+    var name='';
+    if(rid&&optionRid===rid&&opt&&opt.dataset)name=text(opt.dataset.raceName);
+    if(!name&&rid&&lexicalRid===rid)name=lexicalRaceName();
+    if(!name&&rid&&windowRid===rid)name=text(window.currentRaceName);
+    return {raceId:rid,raceName:name};
+  }
+  function syncFromControls(reason){
+    var context=controlContext(),identity=readRaceIdentity();
+    return commit({
+      kind:context.kind,date:context.date,venueCode:context.venueCode,
+      raceId:identity.raceId,raceName:identity.raceName
+    },reason||'controls');
+  }
+  function clearRace(reason){
+    return commit({raceId:'',raceName:''},reason||'clear-race');
+  }
+  function queueSync(reason){
+    if(syncQueued)return;
+    syncQueued=true;
+    Promise.resolve().then(function(){syncQueued=false;syncFromControls(reason||'queued');});
+  }
+
+  function bindOnce(target,type,key,handler,options){
+    if(!target||typeof target.addEventListener!=='function')return false;
+    var bag=target.__theKeibaSafeCoreBindings;
+    if(!bag){
+      bag={};
+      try{Object.defineProperty(target,'__theKeibaSafeCoreBindings',{value:bag,configurable:true});}
+      catch(e){target.__theKeibaSafeCoreBindings=bag;}
+    }
+    var token=VERSION+'|'+type+'|'+key;
+    if(bag[token])return false;
+    bag[token]=handler;
+    target.addEventListener(type,handler,options||false);
+    bindings.push({target:target,type:type,token:token,handler:handler,options:options||false});
+    return true;
+  }
+  function bindContextControls(){
+    ['pickKind','pickDate','pickVenue','raceSelect','raceUrl','raceIdPrimaryInput'].forEach(function(id){
+      bindOnce(el(id),'change','state-'+id,function(){queueSync('change:'+id);});
+    });
+  }
+  function assignGlobalFunction(name,fn){
+    window[name]=fn;
+    try{
+      if(name==='applySelectedRaceUrl')applySelectedRaceUrl=fn;
+      else if(name==='resetRaceState')resetRaceState=fn;
+      else if(name==='onRaceDateKindChanged')onRaceDateKindChanged=fn;
+      else if(name==='loadRaceList')loadRaceList=fn;
+      else if(name==='fetchRace')fetchRace=fn;
+    }catch(e){}
+  }
+  function wrapAfter(name){
+    var original=window[name];
+    if(typeof original!=='function'||original.__theKeibaSafeCoreAfter===VERSION)return false;
+    var wrapped=function(){
+      var out;
+      try{out=original.apply(this,arguments);}catch(e){queueSync(name+':error');throw e;}
+      if(out&&typeof out.then==='function'){
+        return out.then(function(value){queueSync(name+':done');return value;},function(error){queueSync(name+':error');throw error;});
+      }
+      queueSync(name+':done');
+      return out;
+    };
+    wrapped.__theKeibaSafeCoreAfter=VERSION;
+    wrapped.__theKeibaSafeCoreOriginal=original;
+    assignGlobalFunction(name,wrapped);
+    return true;
+  }
+  function installHooks(){
+    ['applySelectedRaceUrl','resetRaceState','onRaceDateKindChanged','loadRaceList','fetchRace','tkApplyRaceIdPrimary'].forEach(wrapAfter);
+  }
+
+  function renderVersion(){
+    if(renderBusy)return VERSION;
+    renderBusy=true;
+    try{
+      try{window.APP_VERSION=VERSION;}catch(e){}
+      document.querySelectorAll('.ver').forEach(function(node){if(node.textContent!==VERSION)node.textContent=VERSION;});
+      var title='The競馬 EV分析 '+VERSION;
+      if(document.title!==title)document.title=title;
+    }finally{renderBusy=false;}
+    return VERSION;
+  }
+  function ownVersion(){
+    try{
+      Object.defineProperty(window,'APP_VERSION',{
+        configurable:true,enumerable:true,get:function(){return VERSION;},set:function(){}
+      });
+    }catch(e){window.APP_VERSION=VERSION;}
+    window.setAppVersionLabel=renderVersion;
+    renderVersion();
+    if(typeof MutationObserver==='function'){
+      versionObserver=new MutationObserver(renderVersion);
+      var ver=document.querySelector('.header .ver, .ver'),title=document.querySelector('title');
+      if(ver)versionObserver.observe(ver,{childList:true,subtree:true,characterData:true});
+      if(title)versionObserver.observe(title,{childList:true,subtree:true,characterData:true});
+    }
+  }
+  function refresh(reason){
+    bindContextControls();
+    installHooks();
+    renderVersion();
+    return syncFromControls(reason||'refresh');
+  }
+  function destroy(){
+    if(versionObserver){versionObserver.disconnect();versionObserver=null;}
+    bindings.forEach(function(b){
+      try{b.target.removeEventListener(b.type,b.handler,b.options);delete b.target.__theKeibaSafeCoreBindings[b.token];}catch(e){}
+    });
+    bindings=[];
+  }
+
+  var api={
+    version:VERSION,
+    snapshot:snapshot,
+    commit:commit,
+    syncFromControls:syncFromControls,
+    clearRace:clearRace,
+    isRaceIdCompatible:function(rid,context){return compatibility(rid,context||controlContext());},
+    bindOnce:bindOnce,
+    refresh:refresh,
+    renderVersion:renderVersion,
+    destroy:destroy,
+    diagnostics:function(){return {version:VERSION,state:snapshot(),bindings:bindings.length,versionObservers:versionObserver?1:0,storageSchema:'legacy-compatible'};}
+  };
+  Object.defineProperty(api,'state',{enumerable:true,get:snapshot});
+  window.TheKeibaCore=api;
+
+  ownVersion();
+  bindContextControls();
+  installHooks();
+  syncFromControls('boot');
+  bindOnce(window,'pageshow','lifecycle',function(){refresh('pageshow');});
+  bindOnce(document,'visibilitychange','lifecycle',function(){if(!document.hidden)refresh('visible');});
+  console.log('['+VERSION+'] enabled: single version owner / canonical race state / stable listeners');
+})();
 </script>
 </body>
 </html>

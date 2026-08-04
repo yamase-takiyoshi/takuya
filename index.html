@@ -21,7 +21,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v6.2 AI Rara</title>
+<title>The競馬 EV分析 v6.3 NAR Calendar</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -906,7 +906,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
   <div style="display:flex;gap:8px;align-items:center">
     <button id="profitSplitBtn" class="btn-sm profit-split-toggle" type="button" onclick="toggleProfitLiveSplit()" aria-pressed="false">📊 横2画面</button>
     <button id="nativeThemeBtn" class="btn-sm native-theme-btn" type="button" title="本体テーマへ自動連動。単独起動時はここで切り替え">🌙 <span class="native-theme-label">ダーク・本体連動</span></button>
-    <span class="ver">v6.2 AI Rara</span>
+    <span class="ver">v6.3 NAR Calendar</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1124,6 +1124,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
         </div>
         <div style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.5">
           ※チェックした場だけを対象にします。1つもチェックしなければ、各日に実際に開催されている全場を自動対象にします。<br>
+          ※JRA・NARとも、指定期間の実開催日と開催場を先に確認し、非開催日を除外してから処理を開始します。<br>
           ※期間が長いと通信回数が非常に多くなり時間がかかります。まずは2〜3日で試すことを推奨します。
         </div>
       </div>
@@ -2258,7 +2259,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v6.2 AI Rara';
+window.APP_VERSION = 'v6.3 NAR Calendar';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -14033,6 +14034,86 @@ if(horses.length === 0){
     return plan;
   }
 
+  // v6.3 NAR Calendar
+  // 指定期間の全日についてNAR公式開催一覧を先に1回ずつ確認し、
+  // 実開催が確認できた日×開催場だけを本処理へ渡す。
+  async function buildNarRangePlanByDates(venueCodes, start, end, prog){
+    const wanted = new Set((venueCodes && venueCodes.length)
+      ? venueCodes.map(String)
+      : NAR_VENUES.map(v => String(v[0])));
+    const plan = new Map();
+    plan.source = 'nar-official-calendar';
+    plan.reachable = false;
+    plan.complete = true;
+    plan.checkedDays = 0;
+    plan.totalDays = 0;
+    plan.venueDays = 0;
+    plan.failedDates = [];
+
+    const dates = [];
+    let d = start;
+    while(d <= end){
+      dates.push(d);
+      const next = addLocalDaysYmd(d, 1);
+      if(!next || next <= d) break;
+      d = next;
+    }
+    plan.totalDays = dates.length;
+
+    for(let i = 0; i < dates.length; i++){
+      if(rsAbort) break;
+      const date = dates[i];
+      if(prog && (i === 0 || (i + 1) % 5 === 0 || i === dates.length - 1)){
+        prog.innerHTML = `<div class="url-status">📅 指定期間のNAR開催日を確認中... ${i + 1}/${dates.length}日（${date}）</div>`;
+      }
+
+      let codes = null;
+      let lastError = '';
+      // 一時的なBridge/通信失敗を「非開催日」と誤認しないよう、事前確認だけ1回再試行する。
+      for(let attempt = 0; attempt < 2 && codes === null; attempt++){
+        if(rsAbort) break;
+        try{
+          const html = await fetchNarOfficialRaceListHtml(date, '');
+          const raw = String(html || '');
+          if(raw.length < 200) throw new Error(`NAR公式一覧の本文が短すぎます（${raw.length}字）`);
+          if(typeof looksBlockedHtml === 'function' && looksBlockedHtml(raw)) throw new Error('NAR公式一覧が拒否ページを返しました');
+          if(/^\s*\{/.test(raw) && /"ok"\s*:\s*false/i.test(raw)) throw new Error('NAR公式一覧の取得APIがエラーを返しました');
+          codes = parseNarOfficialVenueCodesFromList(raw, date);
+          plan.reachable = true;
+          plan.checkedDays++;
+          rsOpenVenuesOkCount++;
+        }catch(e){
+          lastError = (e && e.message) || String(e);
+          if(attempt === 0 && !rsAbort) await new Promise(resolve => setTimeout(resolve, 180));
+        }
+      }
+
+      if(codes === null){
+        plan.complete = false;
+        plan.failedDates.push({date, error:lastError || '取得失敗'});
+        rsOpenVenuesFailCount++;
+        rsLastOpenVenuesError = lastError || 'NAR開催日事前確認失敗';
+        continue;
+      }
+
+      const open = [...new Set(codes.map(String))].filter(code => wanted.has(code));
+      if(!open.length) continue;
+      const entries = open.map(code => ({venueCode:code, venueName:venueName('NAR', code)}));
+      plan.set(date, entries);
+      plan.venueDays += entries.length;
+    }
+
+    if(rsAbort) plan.complete = false;
+    return plan;
+  }
+
+  function rsNarPlanFailureText(plan){
+    const failed = Array.isArray(plan && plan.failedDates) ? plan.failedDates : [];
+    const sample = failed.slice(0, 5).map(x => x.date).join('、');
+    const more = failed.length > 5 ? `ほか${failed.length - 5}日` : '';
+    return `${failed.length}/${Number(plan && plan.totalDays || 0)}日の確認に失敗${sample ? `（${sample}${more ? '、' + more : ''}）` : ''}`;
+  }
+
   function rsNormalizeRowsInPlace(rows){
     if(!Array.isArray(rows)) return rows;
     const out = [], pos = new Map();
@@ -14602,6 +14683,7 @@ if(horses.length === 0){
     rsLastOpenVenuesError = null;
     rsOpenVenuesFailCount = 0;
     rsOpenVenuesOkCount = 0;
+    try{ window.__rsPrecheckError = ''; }catch(e){}
     if(btn){ btn.disabled = true; btn.textContent = resume ? '⏳ リジューム中...' : '⏳ 実行中...'; }
     rsSetResumeBtnsBusy(true);
     if(stopBtn) stopBtn.style.display = '';
@@ -14623,6 +14705,7 @@ if(horses.length === 0){
       // v5.18.143: JRAは「回ベース」で選択場の開催日をrace_id直接列挙して事前計画化する。
       // 日付ごとの全場プローブ／公式一覧依存を排し、Worker 502下でもブリッジだけで完結。
       let rsJraPlan = null;
+      let rsNarPlan = null;
       if(kind === 'JRA'){
         if(prog) prog.innerHTML = `<div class="url-status">🧭 JRA開催回をrace_idで探索中（回ベース）...${fastMode ? ' ⚡高速モード' : ''}</div>`;
         try{
@@ -14652,6 +14735,32 @@ if(horses.length === 0){
         }
       }
 
+      // v6.3: NARも本処理前に指定期間の公式開催一覧を全日確認する。
+      // 1日でも通信失敗が残れば、不完全な期間集計を作らず開始前に停止する。
+      if(kind === 'NAR'){
+        const venLabel = selVenues.length ? selVenues.map(c => venueName('NAR', c)).join('・') : 'NAR全場';
+        if(prog) prog.innerHTML = `<div class="url-status">📅 ${venLabel} の指定期間開催日をNAR公式一覧で事前確認中...</div>`;
+        try{ rsNarPlan = await buildNarRangePlanByDates(selVenues, runStart, end, prog); }
+        catch(e){
+          const message = (e && e.message) || String(e);
+          try{ window.__rsPrecheckError = message; }catch(_){}
+          if(prog) prog.innerHTML = `<div class="url-status err">❌ NAR開催日の事前確認に失敗しました。本処理は開始していません。原因: ${asw_esc(message)}</div>`;
+          return;
+        }
+        if(rsAbort) return;
+        if(!rsNarPlan || !rsNarPlan.complete){
+          const detail = rsNarPlanFailureText(rsNarPlan);
+          try{ window.__rsPrecheckError = detail; }catch(_){}
+          if(prog) prog.innerHTML = `<div class="url-status err">❌ NAR開催日の事前確認を完了できませんでした：${asw_esc(detail)}。不完全な集計を避けるため本処理は開始していません。Bridge接続を確認して再実行してください。</div>`;
+          return;
+        }
+        if(rsNarPlan.size === 0){
+          if(prog) prog.innerHTML = `<div class="url-status ok">📅 NAR事前確認完了：${asw_esc(venLabel)}は指定期間に開催がありません（${rsNarPlan.checkedDays}/${rsNarPlan.totalDays}日確認済み）。</div>`;
+        }else if(prog){
+          prog.innerHTML = `<div class="url-status ok">📅 NAR事前確認完了：${rsNarPlan.size}開催日・${rsNarPlan.venueDays}開催場日を確認。バックテストを開始します。</div>`;
+        }
+      }
+
       for(const date of dates){
         if(rsAbort) break;
 
@@ -14668,13 +14777,24 @@ if(horses.length === 0){
           }
         }
 
-        // v5.18.170 BetOnlyChartRecord:
-        // NARで開催場チェックがある場合は、日付ごとの「全開催場確認」を挟まず、
-        // チェックした場だけを直接レース一覧取得に進める。
-        // これで「盛岡にチェックしているのに毎日“開催場を確認中...”で止まる」挙動を避ける。
+        // NARは事前確認planに無い日を、レース一覧通信なしでスキップする。
+        if(kind === 'NAR' && rsNarPlan){
+          const pv = rsNarPlan.get(date);
+          if(!(pv && pv.length)) continue;
+        }
+
+        // NAR事前planがある場合は、実開催が確認済みの場だけを対象にする。
+        // 旧データ等でplanが無い場合だけ従来の直接確認へ退避する。
         let venues;
-        const directSelectedNar = (kind === 'NAR' && selVenues.length > 0);
-        if(directSelectedNar){
+        const plannedNar = (kind === 'NAR' && !!rsNarPlan);
+        const directSelectedNar = (kind === 'NAR' && !rsNarPlan && selVenues.length > 0);
+        if(plannedNar){
+          venues = (rsNarPlan.get(date) || []).map(v => v.venueCode);
+          if(prog){
+            const vnList = venues.map(c => venueName(kind, c)).join('・');
+            prog.innerHTML = `<div class="url-status">📅 ${date} ${vnList}（事前確認済み）のレース一覧を取得中...</div>`;
+          }
+        }else if(directSelectedNar){
           venues = selVenues.slice();
           if(prog){
             const vnList = venues.map(c => venueName(kind, c)).join('・');
@@ -14683,9 +14803,9 @@ if(horses.length === 0){
         }else{
           if(prog) prog.innerHTML = `<div class="url-status">📅 ${date} の開催場を確認中...</div>`;
 
-          const openVenues = (rsJraPlan)
+          const openVenues = rsJraPlan
             ? (rsJraPlan.get(date) || []).map(v => v.venueCode)
-            : await rsOpenVenues(kind, date);
+            : (rsNarPlan ? (rsNarPlan.get(date) || []).map(v => v.venueCode) : await rsOpenVenues(kind, date));
           if(selVenues.length){
             venues = openVenues.filter(c => selVenues.includes(c));
             // v5.18.142: 「その日に開催場として検出された場」だけを対象にする。
@@ -14719,7 +14839,7 @@ if(horses.length === 0){
             // v5.18.168: NARのチェック済み開催場を直接確認している場合、
             // その日その場にレースが無いのは通常の「非開催日」として静かにスキップする。
             // エラー行を量産せず、次の日へ進める。
-            if(kind === 'NAR' && selVenues.length){
+            if(kind === 'NAR' && selVenues.length && !rsNarPlan){
               if(prog) prog.innerHTML = `<div class="url-status">📅 ${date} ${vn} は開催なし（次の日へ）</div>`;
               continue;
             }
@@ -14820,6 +14940,9 @@ if(horses.length === 0){
       if(kind === 'JRA' && rsJraPlan && rsJraPlan.size === 0 && okCount === 0 && !rsAbort){
         const venLabel = selVenues.length ? selVenues.map(c => venueName('JRA', c)).join('・') : 'JRA';
         if(prog) prog.innerHTML = `<div class="url-status ok">✅ 完了：${venLabel} はこの期間に開催がありませんでした（非開催日はサーチせずスキップ）。</div>`;
+      }else if(kind === 'NAR' && rsNarPlan && rsNarPlan.size === 0 && okCount === 0 && !rsAbort){
+        const venLabel = selVenues.length ? selVenues.map(c => venueName('NAR', c)).join('・') : 'NAR全場';
+        if(prog) prog.innerHTML = `<div class="url-status ok">✅ 完了：${venLabel} は指定期間に開催がありませんでした（NAR公式一覧で${rsNarPlan.checkedDays}日確認済み）。</div>`;
       }else if(kind === 'NAR' && okCount === 0 && rsOpenVenuesOkCount === 0 && rsOpenVenuesFailCount > 0 && !rsAbort){
         // v5.18.165: NARで全日程が通信失敗（ブリッジ未検出/403等）だった場合、
         // 「開催なし」と誤認させず実際のエラー内容を表示する。
@@ -14980,6 +15103,7 @@ if(horses.length === 0){
   async function rsOneShotBuildTasks(kind, dates, selVenues, prog){
     const tasks = [];
     let rsJraPlan = null;
+    let rsNarPlan = null;
     if(kind === 'JRA'){
       if(prog) prog.innerHTML = `<div class="url-status">🚄 一発モード：JRA開催回を先に探索中...</div>`;
       try{
@@ -14991,17 +15115,35 @@ if(horses.length === 0){
       catch(e){ rsJraPlan = null; }
       if(rsJraPlan && rsJraPlan.size === 0 && !rsJraPlan.reachable) rsJraPlan = null;
     }
+    if(kind === 'NAR'){
+      if(prog) prog.innerHTML = `<div class="url-status">🚄 一発モード：指定期間のNAR開催日を先に確認中...</div>`;
+      rsNarPlan = await buildNarRangePlanByDates(selVenues, dates[0], dates[dates.length - 1], prog);
+      if(rsAbort) return tasks;
+      if(!rsNarPlan || !rsNarPlan.complete){
+        const detail = rsNarPlanFailureText(rsNarPlan);
+        try{ window.__rsPrecheckError = detail; }catch(_){}
+        throw new Error(`NAR開催日の事前確認未完了：${detail}。本処理は開始していません`);
+      }
+      if(prog){
+        prog.innerHTML = `<div class="url-status ok">📅 NAR事前確認完了：${rsNarPlan.size}開催日・${rsNarPlan.venueDays}開催場日。対象レースを収集します。</div>`;
+      }
+    }
     for(const date of dates){
       if(rsAbort) break;
       if(kind === 'JRA'){
         if(rsJraPlan){ if(!((rsJraPlan.get(date)||[]).length)) continue; }
         else if(!isJraPossibleRaceDay(date)) continue;
       }
+      if(kind === 'NAR' && rsNarPlan && !((rsNarPlan.get(date) || []).length)) continue;
       let venues = [];
-      if(kind === 'NAR' && selVenues.length){
+      if(kind === 'NAR' && rsNarPlan){
+        venues = (rsNarPlan.get(date) || []).map(v => v.venueCode);
+      }else if(kind === 'NAR' && selVenues.length){
         venues = selVenues.slice();
       }else{
-        const openVenues = rsJraPlan ? (rsJraPlan.get(date) || []).map(v => v.venueCode) : await rsOpenVenues(kind, date);
+        const openVenues = rsJraPlan
+          ? (rsJraPlan.get(date) || []).map(v => v.venueCode)
+          : (rsNarPlan ? (rsNarPlan.get(date) || []).map(v => v.venueCode) : await rsOpenVenues(kind, date));
         venues = selVenues.length ? openVenues.filter(c => selVenues.includes(c)) : openVenues;
       }
       for(const vc of venues){
@@ -15095,6 +15237,10 @@ if(horses.length === 0){
     const recordToChart = $('rsRecord')?.checked;
     const todayForFast = (typeof todayYmd === 'function') ? todayYmd() : new Date().toISOString().slice(0,10);
     rsAbort = false;
+    rsLastOpenVenuesError = null;
+    rsOpenVenuesFailCount = 0;
+    rsOpenVenuesOkCount = 0;
+    try{ window.__rsPrecheckError = ''; }catch(e){}
     if(!resume){
       rsLastRows = [];
       try{ window.__rsLastRows = []; }catch(e){}
@@ -15120,7 +15266,9 @@ if(horses.length === 0){
           rsRenderSummary(rsResume.rows); rsRenderTable(rsResume.rows); rsRenderChart(rsResume.rows);
           if(prog) prog.innerHTML = `<div class="url-status ok">✅ リジューム完了：追加で処理するレースはありませんでした（精算済み${rsSkipped}Rをスキップ）。終了日を延長すると続きを実行できます。</div>`;
         }else{
-          if(prog) prog.innerHTML = `<div class="url-status ok">✅ 一発モード完了：対象レースはありませんでした。</div>`;
+          if(prog) prog.innerHTML = kind === 'NAR'
+            ? `<div class="url-status ok">✅ 一発モード完了：NAR公式一覧で指定期間を事前確認しました。対象レースはありませんでした。</div>`
+            : `<div class="url-status ok">✅ 一発モード完了：対象レースはありませんでした。</div>`;
         }
         return;
       }
@@ -15441,6 +15589,7 @@ if(horses.length === 0){
   window.asw_collectRaces = rsCollectRaces; // v5.18.244 D1Sync: 期間横断と同じrace_id列挙を公開
   window.runRangeVenueSimulation = runRangeVenueSimulation;
   window.runRangeVenueSimulationOneShot = runRangeVenueSimulationOneShot;
+  window.__buildNarRangePlanByDates = buildNarRangePlanByDates; // v6.3 診断・回帰テスト用
   window.importRangeVenueSimulationJSON = importRangeVenueSimulationJSON;
   window.stopRangeVenueSimulation = stopRangeVenueSimulation;
   window.rsRenderVenueChecks = rsRenderVenueChecks;
@@ -27338,6 +27487,10 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       try{window.__rsLastRows=[]}catch(e){}
       setStatus((cfg.ticketPriority==='all_agree'?'全て同意モードで過去レースを取得・精算中です。上書き対象の設定モードで通常のEV足切りを通過した買い目だけを順位上で強制優先します。3点不足を低評価候補で補完せず、旨みラインと日内相対順位もJRA・NARとも維持します。日次上限を使い切るための追加購入はしません。':(cfg.allocationMode==='daily_rank'?'過去レースの全候補を取得・精算中です。完了後に3点すべてが最低期待回収率'+cleanRoi(cfg.dailyRankMinRoi,120)+'%を通過し、さらにJRA・NAR共通の日内相対旨みを通過したレースだけを、日付ごとに'+metricLabel(cfg)+'で順位付けします。上限枠を埋めるための追加購入はしません。':'過去レースを取得・精算中です。完了後に日次上限と1R必ず3点セットを適用します。'))+' NAR地方移動補正は「'+narBacktestLabel(cfg)+'」で学習更新を凍結します。',true);
       await window.runRangeVenueSimulation({purchaseGuard:true});
+      if(window.__rsPrecheckError){
+        setStatus('開催日の事前確認で停止しました：'+esc(window.__rsPrecheckError)+'。不完全な期間集計ではバックテストを再計算しません。接続を確認して再実行してください。',false);
+        return;
+      }
       window.recalculatePurchaseGuardBacktest();
     }catch(e){window.__pgBacktestRunning=false;console.error('[PurchaseGuardBacktest]',e);setStatus('バックテストに失敗しました：'+esc(e&&e.message||e),false)}
     finally{
@@ -28992,7 +29145,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script id="theKeibaSafeCoreV6">
 /* ============================================================
-   v6.2 AI Rara
+   v6.3 NAR Calendar
    ・APP_VERSION / title / header version are rendered by one owner
    ・JRA/NAR, date, venue and race_id share one canonical state
    ・race_id mismatches are rejected before they reach later actions
@@ -29001,7 +29154,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  var VERSION='v6.2 AI Rara';
+  var VERSION='v6.3 NAR Calendar';
   var oldCore=window.TheKeibaCore;
   if(oldCore&&oldCore.version===VERSION){
     try{oldCore.refresh('duplicate-load');}catch(e){}

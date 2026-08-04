@@ -21,7 +21,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v6.6 Fair Backtest Guard</title>
+<title>The競馬 EV分析 v6.7 Odds Integrity Guard</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -906,7 +906,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
   <div style="display:flex;gap:8px;align-items:center">
     <button id="profitSplitBtn" class="btn-sm profit-split-toggle" type="button" onclick="toggleProfitLiveSplit()" aria-pressed="false">📊 横2画面</button>
     <button id="nativeThemeBtn" class="btn-sm native-theme-btn" type="button" title="本体テーマへ自動連動。単独起動時はここで切り替え">🌙 <span class="native-theme-label">ダーク・本体連動</span></button>
-    <span class="ver">v6.6 Fair Backtest Guard</span>
+    <span class="ver">v6.7 Odds Integrity Guard</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2259,7 +2259,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v6.6 Fair Backtest Guard';
+window.APP_VERSION = 'v6.7 Odds Integrity Guard';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -6349,6 +6349,34 @@ function realPayoutStats(payouts){
   };
 }
 
+function fairFinalOddsIntegrity(horseList, finish, payouts){
+  const list = (horseList || []).filter(h => Number(h && h.num) > 0 && h && h.name);
+  const oddsMap = new Map(list.map(h => [Number(h.num), {odds:Number(h.odds || 0), pop:Number(h.pop || 0)}]));
+  const market = winOddsMapIntegrity(oddsMap, list);
+  const dedicatedValid = list.filter(h => h.oddsSource === 'dedicated-final-odds' && Number(h.odds || 0) >= 1).length;
+  const winKeys = payouts && typeof payouts === 'object'
+    ? Object.keys(payouts).filter(k => k.startsWith('単勝:'))
+    : [];
+  let payoutChecked = false, payoutMatched = true, winnerOdds = 0, payoutOdds = 0;
+  if(Array.isArray(finish) && finish.length && winKeys.length === 1){
+    const winner = Number(finish[0] && finish[0].horseNo || 0);
+    const winnerHorse = list.find(h => Number(h.num) === winner);
+    const payout = Number(payouts[`単勝:${comboKey('単勝', [winner])}`] || 0);
+    if(winnerHorse && payout > 0){
+      payoutChecked = true;
+      winnerOdds = Number(winnerHorse.odds || 0);
+      payoutOdds = payout / 100;
+      const tolerance = Math.max(0.11, payoutOdds * 0.02);
+      payoutMatched = Math.abs(winnerOdds - payoutOdds) <= tolerance;
+    }
+  }
+  return {
+    total:list.length, dedicatedValid, dedicatedFull:list.length >= 2 && dedicatedValid === list.length,
+    reciprocalSum:market.reciprocalSum, marketPlausible:market.marketPlausible,
+    payoutChecked, payoutMatched, winnerOdds, payoutOdds
+  };
+}
+
 // JRA/NARを同じ条件で比較するため、結果確定レースは
 // 「全出走馬の実オッズ＋着順＋実払戻表」が揃ったものだけを集計する。
 function requireFairBacktestData(kind, horseList, finish, payouts){
@@ -6356,15 +6384,27 @@ function requireFairBacktestData(kind, horseList, finish, payouts){
   const odds = probabilitySourceStats(horseList || [], 'final_odds');
   const pay = realPayoutStats(payouts);
   const hasFinish = Array.isArray(finish) && finish.length >= 2;
+  const integrity = fairFinalOddsIntegrity(horseList || [], finish, payouts);
   if(hasFinish && !odds.usable){
     throw new Error(`${label}確定オッズ取得不足（${odds.valid}/${odds.total}頭）。JRA/NAR共通の公平検証条件を満たさないため除外します。`);
+  }
+  if(hasFinish && !integrity.dedicatedFull){
+    throw new Error(`${label}専用オッズ表の取得証跡不足（${integrity.dedicatedValid}/${integrity.total}頭）。結果ページ由来の値は公平検証に使用しません。`);
+  }
+  if(hasFinish && !integrity.marketPlausible){
+    throw new Error(`${label}確定オッズ市場整合性エラー（逆数合計 ${integrity.reciprocalSum.toFixed(3)}）。走破タイム・馬体重等の誤読を防ぐため除外します。`);
   }
   if(hasFinish && !pay.usable){
     throw new Error(`${label}実払戻表の解析不足（${pay.count}件）。推定払戻や損失扱いにせず、公平検証から除外します。`);
   }
+  if(hasFinish && integrity.payoutChecked && !integrity.payoutMatched){
+    throw new Error(`${label}単勝オッズと実払戻が不一致（取得 ${integrity.winnerOdds.toFixed(1)}倍 / 払戻換算 ${integrity.payoutOdds.toFixed(1)}倍）。結果混入を防ぐため除外します。`);
+  }
   return {
-    mode:'fair-backtest-v1', kind:label, fair:!!(hasFinish && odds.usable && pay.usable),
+    mode:'fair-backtest-v2', kind:label, fair:!!(hasFinish && odds.usable && pay.usable && integrity.dedicatedFull && integrity.marketPlausible && integrity.payoutMatched),
     oddsValid:odds.valid, oddsTotal:odds.total, oddsCoverage:odds.coverage,
+    oddsSource:'dedicated-final-odds', reciprocalSum:integrity.reciprocalSum,
+    winnerPayoutCrossCheck:integrity.payoutChecked ? integrity.payoutMatched : null,
     payoutKeys:pay.count, realPayoutOnly:true, postResultCancellation:false
   };
 }
@@ -8314,18 +8354,16 @@ function buildNetkeibaOddsUrls(kind, raceId){
   if(!raceId) return [];
   if(kind === 'NAR'){
     return [
-      // v5.18.47: 確定済みレースは結果ページの最終単勝オッズ・人気を最優先。
-      `https://nar.netkeiba.com/race/result.html?race_id=${raceId}&rf=race_submenu`,
+      // v6.7: オッズ専用ページを最優先。result.html は走破タイム等を
+      // オッズとして誤読する余地があるため、通常取得では最後の保険に限定する。
       `https://nar.netkeiba.com/odds/index.html?race_id=${raceId}`,
       `https://nar.netkeiba.com/odds/index.html?race_id=${raceId}&type=b1`,
+      `https://nar.netkeiba.com/race/result.html?race_id=${raceId}&rf=race_submenu`,
       `https://nar.netkeiba.com/race/shutuba.html?race_id=${raceId}&rf=race_submenu`
     ];
   }
   return [
-    // v5.18.47: 確定済みレースは result.html の「最終単勝オッズ・人気」を最優先する。
-    // 未確定レースだけ odds/API → shutuba の順で補完する。
-    `https://race.netkeiba.com/race/result.html?race_id=${raceId}&rf=race_submenu`,
-    `https://race.netkeiba.com/race/result.html?race_id=${raceId}`,
+    // v6.7: JRAもオッズ専用ページ/APIを正とし、結果ページは最後の保険にする。
     `https://race.netkeiba.com/odds/index.html?race_id=${raceId}&type=b1`,
     `https://race.netkeiba.com/odds/index.html?race_id=${raceId}`,
     `https://race.netkeiba.com/odds/index.html?race_id=${raceId}&rf=shutuba_submenu`,
@@ -8337,6 +8375,8 @@ function buildNetkeibaOddsUrls(kind, raceId){
     `https://race.netkeiba.com/api/api_get_odds.html?type=b1&race_id=${raceId}`,
     `https://race.netkeiba.com/api/api_get_odds.html?race_id=${raceId}&type=1`,
     `https://race.netkeiba.com/odds/api_get_odds.html?race_id=${raceId}&type=b1`,
+    `https://race.netkeiba.com/race/result.html?race_id=${raceId}&rf=race_submenu`,
+    `https://race.netkeiba.com/race/result.html?race_id=${raceId}`,
     `https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}&rf=race_submenu`,
     `https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}`
   ];
@@ -9268,8 +9308,47 @@ function parseOddsByNameFromOddsDoc(doc){
 }
 
 
-async function fetchWinOddsPopularity(kind, raceId, expectedHorses){
+function isDedicatedWinOddsUrl(url){
+  const s = String(url || '');
+  return /\/odds\//i.test(s) || /api_get_(?:jra_)?odds/i.test(s);
+}
+
+function winOddsMapIntegrity(oddsMap, expectedHorses){
+  const list = (Array.isArray(expectedHorses) ? expectedHorses : [])
+    .filter(h => Number(h && h.num) >= 1 && Number(h && h.num) <= 18);
+  const nums = list.map(h => Number(h.num));
+  const values = [];
+  if(nums.length){
+    nums.forEach(num => {
+      const rec = oddsMap && oddsMap.get ? oddsMap.get(num) : null;
+      const odds = Number(rec && rec.odds || 0);
+      if(odds >= 1 && odds <= 999.9) values.push(odds);
+    });
+  }else if(oddsMap && oddsMap.forEach){
+    oddsMap.forEach(rec => {
+      const odds = Number(rec && rec.odds || 0);
+      if(odds >= 1 && odds <= 999.9) values.push(odds);
+    });
+  }
+  const total = nums.length || values.length;
+  const valid = values.length;
+  const full = total >= 2 && valid === total;
+  const reciprocalSum = values.reduce((sum, odds) => sum + 1 / odds, 0);
+  // 全頭揃った単勝市場の逆数合計が極端に小さい場合、走破タイム・馬体重等の誤読。
+  // 上限も広めに設け、重複セルや異なる券種の混入を拒否する。
+  const marketPlausible = !full || (reciprocalSum >= 0.55 && reciprocalSum <= 2.50);
+  return { total, valid, full, reciprocalSum, marketPlausible };
+}
+
+async function fetchWinOddsPopularity(kind, raceId, expectedHorses, options){
   if(!settings.proxyUrl || !raceId) return new Map();
+  const opts = options || {};
+  const requireFull = opts.requireFull === true;
+  const dedicatedOnly = opts.dedicatedOnly === true;
+  let urls = buildNetkeibaOddsUrls(kind, raceId);
+  if(dedicatedOnly) urls = urls.filter(isDedicatedWinOddsUrl);
+  let bestMap = new Map();
+  let bestValid = 0;
   // v5.18.58 Debug: ステータス欄にオッズ取得ログを表示
   const dbgEl = document.getElementById('urlStatus');
   const dbgLog = [];
@@ -9279,7 +9358,7 @@ async function fetchWinOddsPopularity(kind, raceId, expectedHorses){
   }
   dbgAppend(`🔍 オッズ取得開始: ${raceId}`);
 
-  for(const url of buildNetkeibaOddsUrls(kind, raceId)){
+  for(const url of urls){
     const shortUrl = url.replace('https://race.netkeiba.com','').replace('https://nar.netkeiba.com','');
     try{
       const html = await fetchHtmlViaProxy(url);
@@ -9311,8 +9390,12 @@ async function fetchWinOddsPopularity(kind, raceId, expectedHorses){
       }
 
       if(url.includes('result.html')){
-        dbgAppend(`📄 result.html → ${map.size}件取得`);
-        if(map.size >= 2) return map;
+        const check = winOddsMapIntegrity(map, expectedHorses);
+        dbgAppend(`📄 result.html → ${check.valid}/${check.total || map.size}件 / 逆数合計 ${check.reciprocalSum.toFixed(3)}`);
+        if(check.valid > bestValid && check.marketPlausible){ bestMap = map; bestValid = check.valid; }
+        if(check.marketPlausible && (requireFull ? check.full : check.valid >= 2)) return map;
+        if(!check.marketPlausible) dbgAppend('⛔ 結果ページ値を市場整合性エラーとして破棄');
+        continue;
       }
 
       const anyMap = parseWinOddsPopularityFromAnyOddsHtml(html, expectedHorses);
@@ -9328,15 +9411,17 @@ async function fetchWinOddsPopularity(kind, raceId, expectedHorses){
         map = mergeOddsMaps(map, sMap);
       }
 
-      dbgAppend(`${map.size >= 2 ? '✅' : '❌'} ${shortUrl} → ${map.size}件`);
-      if(map.size >= 2) return map;
+      const check = winOddsMapIntegrity(map, expectedHorses);
+      dbgAppend(`${check.valid >= 2 && check.marketPlausible ? '✅' : '❌'} ${shortUrl} → ${check.valid}/${check.total || map.size}件${check.full ? ` / 逆数合計 ${check.reciprocalSum.toFixed(3)}` : ''}`);
+      if(check.valid > bestValid && check.marketPlausible){ bestMap = map; bestValid = check.valid; }
+      if(check.marketPlausible && (requireFull ? check.full : check.valid >= 2)) return map;
     }catch(e){
       dbgAppend(`💥 エラー: ${shortUrl} → ${e.message || e}`);
       console.warn('odds fetch failed:', e);
     }
   }
-  dbgAppend('⚠️ オッズ取得失敗（全URL試行済み）');
-  return new Map();
+  dbgAppend(`⚠️ オッズ取得不足（最良 ${bestValid}件）`);
+  return bestMap;
 }
 
 function mergeOddsPopularityIntoHorses(baseHorses, oddsMap){
@@ -9429,6 +9514,28 @@ function applyAuthoritativeJraOdds(baseHorses, oddsMap, safeFallbackMap){
       pop: (pop >= 1 && pop <= 18) ? pop : 0
     };
   });
+}
+
+// v6.7 Odds Integrity Guard:
+// 公平バックテストでは result.html の表をオッズ源に使わない。
+// 専用オッズページ/APIで全出走馬が揃い、市場全体の逆数合計が妥当な場合だけ採用する。
+async function applyDedicatedFinalOddsForBacktest(kind, raceId, baseHorses){
+  const label = String(kind || '').toUpperCase() === 'NAR' ? 'NAR' : 'JRA';
+  const list = (baseHorses || []).filter(h => Number(h && h.num) > 0 && h && h.name);
+  if(list.length < 2) throw new Error(`${label}出走馬取得不足`);
+  const oddsMap = await fetchWinOddsPopularity(label, raceId, list, { dedicatedOnly:true, requireFull:true });
+  const check = winOddsMapIntegrity(oddsMap, list);
+  if(!check.full){
+    throw new Error(`${label}専用オッズ表の確定オッズ取得不足（${check.valid}/${check.total}頭）。結果ページ値は使用せず除外します。`);
+  }
+  if(!check.marketPlausible){
+    throw new Error(`${label}確定オッズ市場整合性エラー（逆数合計 ${check.reciprocalSum.toFixed(3)}）。走破タイム等の誤読を防ぐため除外します。`);
+  }
+  let out = label === 'JRA'
+    ? applyAuthoritativeJraOdds(list, oddsMap, new Map())
+    : mergeOddsPopularityIntoHorses(list, oddsMap);
+  out = fillNarPopularityFromOdds(out);
+  return out.map(h => ({ ...h, provisionalOdds:false, oddsSource:'dedicated-final-odds' }));
 }
 
 
@@ -9563,8 +9670,8 @@ async function fetchRace(){
     const parser = new DOMParser();
     let doc = parser.parseFromString(html, 'text/html');
 
-    // v5.18.60: 確定済みレースは、入力欄がshutuba.htmlのままでもresult.htmlを本体として反映する。
-    // オークス等の確定レースは結果ページの最終単勝オッズ・最終人気をそのまま表示する。
+    // v6.7: 確定済みレースは払戻表の存在で判定する。
+    // result.html の数値セルをオッズとして確定判定に使わない。
     const ridAuto = (activeUrl.match(/race_id=(\d{10,14})/) || [])[1] || validation.raceId || '';
     const kindAuto = document.getElementById('pickKind')?.value || (activeUrl.includes('nar.netkeiba') ? 'NAR' : 'JRA');
     if(ridAuto && /\/race\/shutuba\.html/i.test(activeUrl)){
@@ -9574,13 +9681,13 @@ async function fetchRace(){
         const resultHtml = await fetchHtmlViaProxy(resultUrl);
         const resultDoc = parser.parseFromString(resultHtml, 'text/html');
         const resultHorsesProbe = parseHorsesFromDoc(resultDoc, resultUrl);
-        const resultOddsProbe = parseFinalOddsPopularityFromResultDoc(resultDoc, resultHorsesProbe);
-        if(resultHorsesProbe.length >= 2 && resultOddsProbe.size >= resultHorsesProbe.length){
+        const resultPayoutProbe = realPayoutStats(parsePayoutsFromResultDoc(resultDoc));
+        if(resultHorsesProbe.length >= 2 && resultPayoutProbe.usable){
           activeUrl = resultUrl;
           html = resultHtml;
           doc = resultDoc;
           document.getElementById('raceUrl').value = resultUrl;
-          status.innerHTML = `<div class="url-status">🏁 確定済みのため result.html の最終値を反映中...</div>`;
+          status.innerHTML = `<div class="url-status">🏁 確定済みのため結果・払戻を反映中（オッズは専用表から取得）...</div>`;
         }
       }catch(e){
         console.log('result auto-reflect skipped:', e?.message || e);
@@ -9655,21 +9762,19 @@ async function fetchRace(){
 
     if(rid){
       if(kind === 'JRA'){
-        // Step1: 確定レース(result.html)なら、このページ内の最終単勝オッズ・最終人気を最優先。
-        // v5.18.64: result.html で2件以上取れた場合は odds/API を一切呼ばない（確定値汚染防止）。
-        let oddsMap = isResultPage ? parseFinalOddsPopularityFromResultDoc(doc, horses) : new Map();
-        const resultPageFull = isResultPage && oddsMap && oddsMap.size >= horses.length;
-        if(!resultPageFull){
-          if(!oddsMap || oddsMap.size < horses.length){
-            oddsMap = mergeOddsMaps(oddsMap, await fetchWinOddsPopularity('JRA', rid, horses));
-          }
-        }
+        // v6.7: 確定レースでもresult.htmlのセル値をオッズに使わず、専用ページ/APIを正とする。
+        let oddsMap = await fetchWinOddsPopularity('JRA', rid, horses, {
+          dedicatedOnly:isResultPage, requireFull:isResultPage
+        });
+        const dedicatedCheck = winOddsMapIntegrity(oddsMap, horses);
+        if(isResultPage && dedicatedCheck.full && !dedicatedCheck.marketPlausible) oddsMap = new Map();
+        const resultPageFull = isResultPage && dedicatedCheck.full && dedicatedCheck.marketPlausible;
 
         // Step2: 不足がある場合、既取得HTMLを保険で解析。
         // shutuba は予想オッズ列が明示されている場合のみ返すので斤量誤読なし。
-        // v5.18.64: result.html 確定値が揃っている場合はshutuba解析も不要。
+        // 確定結果ページ自体は保険に使わない。
         const shutubaOddsMap = (!resultPageFull && (!oddsMap || oddsMap.size < horses.length))
-          ? (isResultPage ? parseFinalOddsPopularityFromResultDoc(doc, horses) : parseWinOddsPopularityFromShutuba(doc))
+          ? (isResultPage ? new Map() : parseWinOddsPopularityFromShutuba(doc))
           : new Map();
 
         // Step3: JRAはここで旧オッズを全消去して、odds由来の値だけを馬番JOINする。
@@ -9686,23 +9791,34 @@ async function fetchRace(){
         // v5.18.64: result.html 確定値が揃っている場合は暫定補完もしない（確定値が正）。
         if(!resultPageFull){
           horses = fillProvisionalOddsPopularityForPrediction(horses);
+        }else{
+          horses = horses.map(h => ({...h, provisionalOdds:false, oddsSource:'dedicated-final-odds'}));
         }
       }else{
-        // NAR: 公式単複ページと既取得ページを馬番で結合する。
+        // NAR: オッズ専用ページを馬番で結合する。確定結果ページの表は混ぜない。
         // 一部だけ取得できた場合は、その部分値を全体へ混ぜずオッズを全消去して標準方式へ戻す。
         const beforeOddsMerge = horses.map(h => ({...h}));
-        let oddsMap = await fetchWinOddsPopularity(kind, rid, horses);
-        oddsMap = mergeOddsMaps(oddsMap, parseWinOddsPopularityFromDoc(doc));
+        if(isResultPage) horses = horses.map(h => ({...h, odds:0, pop:0, provisionalOdds:false}));
+        let oddsMap = await fetchWinOddsPopularity(kind, rid, horses, {
+          dedicatedOnly:isResultPage, requireFull:isResultPage
+        });
+        const narDedicatedCheck = winOddsMapIntegrity(oddsMap, horses);
+        if(isResultPage && narDedicatedCheck.full && !narDedicatedCheck.marketPlausible) oddsMap = new Map();
+        if(!isResultPage) oddsMap = mergeOddsMaps(oddsMap, parseWinOddsPopularityFromDoc(doc));
         if(oddsMap && oddsMap.size) horses = mergeOddsPopularityIntoHorses(horses, oddsMap);
         const narOddsStats = probabilitySourceStats(horses, 'final_odds');
         if(narOddsStats.usable){
           horses = fillNarPopularityFromOdds(horses);
+          const narIntegrity = winOddsMapIntegrity(oddsMap, horses);
+          if(isResultPage && narIntegrity.full && narIntegrity.marketPlausible){
+            horses = horses.map(h => ({...h, provisionalOdds:false, oddsSource:'dedicated-final-odds'}));
+          }
         }else{
           narOddsIncomplete = narOddsStats;
           horses = horses.map((h, i) => ({
             ...h,
             odds: 0,
-            pop: Number(beforeOddsMerge[i]?.pop || 0),
+            pop: isResultPage ? 0 : Number(beforeOddsMerge[i]?.pop || 0),
             provisionalOdds: false
           }));
           try{ window.__narOddsLast = {...narOddsStats,raceId:rid,stage:'coverage-incomplete',at:Date.now()}; }catch(e){}
@@ -13374,15 +13490,7 @@ if(horses.length === 0){
         const rUrl = `${host}/race/result.html?race_id=${rid}&rf=race_submenu`;
         const rHtml = await fetchHtmlViaProxy(rUrl);
         const rDoc = parser.parseFromString(rHtml, 'text/html');
-        const rHorses = parseHorsesFromDoc(rDoc, rUrl);
-        const rOdds = parseFinalOddsPopularityFromResultDoc(rDoc, rHorses);
         resultDoc = rDoc; // 精算で使い回す
-        const resultOddsReady = kind === 'NAR'
-          ? probabilitySourceStats(rHorses, 'final_odds').usable
-          : rOdds.size >= rHorses.length;
-        if(rHorses.length >= 2 && resultOddsReady){
-          activeUrl = rUrl; html = rHtml; doc = rDoc; isResultPage = true;
-        }
       }catch(e){ /* 未確定レースは結果なし */ }
     }
 
@@ -13400,32 +13508,9 @@ if(horses.length === 0){
       }
     }catch(e){}
 
-    // ── オッズ・人気（fetchRace と同じ手順）──
-    if(kind === 'JRA'){
-      let oddsMap = isResultPage ? parseFinalOddsPopularityFromResultDoc(doc, hs) : new Map();
-      const resultPageFull = isResultPage && oddsMap && oddsMap.size >= hs.length;
-      if(!resultPageFull){
-        if(!oddsMap || oddsMap.size < hs.length){
-          oddsMap = mergeOddsMaps(oddsMap, await fetchWinOddsPopularity('JRA', rid, hs));
-        }
-      }
-      const shutubaOddsMap = (!resultPageFull && (!oddsMap || oddsMap.size < hs.length))
-        ? (isResultPage ? parseFinalOddsPopularityFromResultDoc(doc, hs) : parseWinOddsPopularityFromShutuba(doc))
-        : new Map();
-      hs = applyAuthoritativeJraOdds(hs, oddsMap, shutubaOddsMap);
-      if(!resultPageFull) hs = fillNarPopularityFromOdds(hs);
-      if(!resultPageFull) hs = fillProvisionalOddsPopularityForPrediction(hs);
-    } else {
-      let oddsMap = await fetchWinOddsPopularity(kind, rid, hs);
-      const pageOddsMap = parseWinOddsPopularityFromDoc(doc);
-      oddsMap = mergeOddsMaps(oddsMap, pageOddsMap);
-      if(oddsMap && oddsMap.size) hs = mergeOddsPopularityIntoHorses(hs, oddsMap);
-      hs = fillNarPopularityFromOdds(hs);
-      const narOddsStats = probabilitySourceStats(hs, 'final_odds');
-      if(!narOddsStats.usable){
-        throw new Error(`NAR確定オッズ取得不足（${narOddsStats.valid}/${narOddsStats.total}頭）。部分オッズによる誤判定を防ぐため、このレースを集計から除外します。`);
-      }
-    }
+    // v6.7: バックテストはJRA/NARとも専用オッズ表/APIだけを使用する。
+    // result.html の走破タイム・馬体重・人気セルをオッズへ混入させない。
+    hs = await applyDedicatedFinalOddsForBacktest(kind, rid, hs);
     // v5.18.128: 単レース取得(fetchRace)と同じ誤キーガードをバッチ経路にも適用。
     // 「馬番=人気=オッズ昇順」=人気順テーブルを馬番に直貼りした誤キーの疑い。
     // この汚染オッズだと毎レース上位＝馬番1,2,3,4になり買い目が全レース同じになる。除外する。
@@ -13451,27 +13536,10 @@ if(horses.length === 0){
       const raceName = parseRaceTitleFromDoc(doc) || '';
       try{ if(typeof pgjCacheRaceMeta === 'function') pgjCacheRaceMeta(rid, doc, raceName); }catch(e){}
 
-      if(kind === 'JRA'){
-        const oddsMap = (typeof parseFinalOddsPopularityFromResultDoc === 'function')
-          ? parseFinalOddsPopularityFromResultDoc(doc, hs) : new Map();
-        if(!oddsMap || oddsMap.size < hs.length) throw new Error(`final odds not enough (${oddsMap ? oddsMap.size : 0}/${hs.length})`);
-        hs = applyAuthoritativeJraOdds(hs, oddsMap, new Map());
-        if(typeof oddsLookMisKeyedByUmaban === 'function' && oddsLookMisKeyedByUmaban(hs)){
-          throw new Error('mis-keyed odds suspected');
-        }
-        return { horses: hs, raceName, isResultPage: true, resultDoc: doc, fast: true, raceMeta: (typeof pgjRaceMetaOf === 'function' ? pgjRaceMetaOf(rid) : null) };
+      hs = await applyDedicatedFinalOddsForBacktest(kind, rid, hs);
+      if(typeof oddsLookMisKeyedByUmaban === 'function' && oddsLookMisKeyedByUmaban(hs)){
+        throw new Error('mis-keyed odds suspected');
       }
-
-      // NARはページ差が大きいので、result先読みで足りる場合だけ使う。
-      let oddsMap = (typeof parseFinalOddsPopularityFromResultDoc === 'function')
-        ? parseFinalOddsPopularityFromResultDoc(doc, hs) : new Map();
-      if(typeof parseWinOddsPopularityFromDoc === 'function'){
-        oddsMap = mergeOddsMaps(oddsMap, parseWinOddsPopularityFromDoc(doc));
-      }
-      if(oddsMap && oddsMap.size) hs = mergeOddsPopularityIntoHorses(hs, oddsMap);
-      hs = fillNarPopularityFromOdds(hs);
-      const narOddsStats = probabilitySourceStats(hs, 'final_odds');
-      if(!narOddsStats.usable) throw new Error(`NAR result odds not enough (${narOddsStats.valid}/${narOddsStats.total})`);
       return { horses: hs, raceName, isResultPage: true, resultDoc: doc, fast: true, raceMeta: (typeof pgjRaceMetaOf === 'function' ? pgjRaceMetaOf(rid) : null) };
     }catch(e){
       return await asw_loadHorses(kind, rid);
@@ -13580,7 +13648,7 @@ if(horses.length === 0){
           detail.確率ソース取得率 = Math.round(Number(t.probabilitySourceCoverage || 0) * 1000) / 10;
         }
         if(row.dataQualityFair){
-          detail.検証条件 = 'JRA・NAR共通：全頭実オッズ＋実払戻';
+          detail.検証条件 = 'JRA・NAR共通：専用オッズ表＋全頭実オッズ＋実払戻照合';
           detail.結果後購入取消 = 0;
         }
         if(t.allAgree === true || t.userForcedPriority === true){
@@ -14530,7 +14598,7 @@ if(horses.length === 0){
   function rsRenderSummary(rows){
     const sourceRows = Array.isArray(rows) ? rows.filter(r => r && !r.header) : [];
     const fairSettledRows = sourceRows.filter(r => r.dataQualityFair === true);
-    const qualityExcludedRows = sourceRows.filter(r => r.status === 'error' && /公平検証|確定オッズ取得不足|実払戻表の解析不足/.test(String(r.error || '')));
+    const qualityExcludedRows = sourceRows.filter(r => r.status === 'error' && /公平検証|確定オッズ取得不足|専用オッズ表|市場整合性|単勝オッズと実払戻|実払戻表の解析不足/.test(String(r.error || '')));
     const allErrorRows = sourceRows.filter(r => r.status === 'error');
     const fairGuardSeen = fairSettledRows.length > 0 || qualityExcludedRows.length > 0;
     rows = rsRowsForDisplay(rows || []);
@@ -14577,7 +14645,7 @@ if(horses.length === 0){
       <div style="font-size:10px;color:#fde68a;line-height:1.5;margin-top:5px"><b>比較用の仮想値であり、実購入ではありません。</b>「全候補」は外れを含む全候補3点セットを同額購入した仮定です。的中した候補だけを結果後に抽出していません。</div>
     </div>` : '';
     const guardBanner = guardResult ? `<div class="url-status ok" style="margin-bottom:8px">🛡️ 購入ガード${guardResult.preview?'暫定':'確定'}・表示中：<b>${viewLabel}</b> / 候補的中 <b>${heldCandidateHitRaces}R</b>を保持（比較確定 ${candidateHitRaces}R・候補総額 ${guardCandidateBet.toLocaleString()}円・1日上限 ${(Number(guardResult.config&&guardResult.config.dailyLimit)||0).toLocaleString()}円）${provisionalDate?`<br><span style="color:#fde68a">⏳ ${provisionalDate} は候補収集中のため、購入・払戻・ROIへの計上を保留しています。</span>`:''}</div>` : '';
-    const fairBanner = fairGuardSeen ? `<div class="url-status ok" style="margin-bottom:8px">⚖️ <b>公平バックテスト ON</b>：JRA・NAR共通で「全頭の実オッズ＋着順＋実払戻」を必須化し、結果判明後の購入取消は行いません。公平検証 <b>${fairSettledRows.length}R</b> / データ不足除外 <b>${qualityExcludedRows.length}R</b> / 全エラー <b>${allErrorRows.length}R</b></div>` : '';
+    const fairBanner = fairGuardSeen ? `<div class="url-status ok" style="margin-bottom:8px">⚖️ <b>公平バックテスト ON</b>：JRA・NAR共通で「専用オッズ表の全頭値＋着順＋実払戻照合」を必須化し、結果ページの走破タイム等はオッズに使用しません。公平検証 <b>${fairSettledRows.length}R</b> / データ不足除外 <b>${qualityExcludedRows.length}R</b> / 全エラー <b>${allErrorRows.length}R</b></div>` : '';
     box.innerHTML = fairBanner + guardBanner + compareHtml + `
       <div class="sim-kpi-grid" style="margin-top:0">
         <div class="sim-kpi"><div class="v">${days}</div><div class="l">日数</div></div>
@@ -15292,7 +15360,7 @@ if(horses.length === 0){
           detail.確率ソース取得率 = Math.round(Number(t.probabilitySourceCoverage || 0) * 1000) / 10;
         }
         if(row.dataQualityFair){
-          detail.検証条件 = 'JRA・NAR共通：全頭実オッズ＋実払戻';
+          detail.検証条件 = 'JRA・NAR共通：専用オッズ表＋全頭実オッズ＋実払戻照合';
           detail.結果後購入取消 = 0;
         }
         if(t.allAgree === true || t.userForcedPriority === true){
@@ -15934,32 +16002,9 @@ if(horses.length === 0){
 
     const raceName = bundle.raceName || (doc ? parseRaceTitleFromDoc(doc) : '') || '';
 
-    // 結果ページの「最終単勝オッズ・最終人気」を最優先（v5.18.64と同方針）。
-    const finalMap = parseFinalOddsPopularityFromResultDoc(doc, hs);
-    const finalFull = kind === 'NAR'
-      ? probabilitySourceStats(hs, 'final_odds').usable
-      : !!(finalMap && finalMap.size >= 2);
-    if(kind === 'JRA'){
-      if(finalFull){
-        hs = applyAuthoritativeJraOdds(hs, finalMap, new Map());
-      } else {
-        // 最終値が拾えない場合のみ odds/API で補完（確定後も最終値を返す）
-        let oddsMap = finalMap || new Map();
-        oddsMap = mergeOddsMaps(oddsMap, await fetchWinOddsPopularity('JRA', rid, hs));
-        hs = applyAuthoritativeJraOdds(hs, oddsMap, new Map());
-        hs = fillNarPopularityFromOdds(hs);
-        hs = fillProvisionalOddsPopularityForPrediction(hs);
-      }
-    } else {
-      let oddsMap = finalMap || new Map();
-      if(!finalFull) oddsMap = mergeOddsMaps(oddsMap, await fetchWinOddsPopularity(kind, rid, hs));
-      if(oddsMap && oddsMap.size) hs = mergeOddsPopularityIntoHorses(hs, oddsMap);
-      hs = fillNarPopularityFromOdds(hs);
-      const narOddsStats = probabilitySourceStats(hs, 'final_odds');
-      if(!narOddsStats.usable){
-        throw new Error(`NAR確定オッズ取得不足（${narOddsStats.valid}/${narOddsStats.total}頭）。部分値では予想せず、このレースを除外します。`);
-      }
-    }
+    // v6.7: 確定済み予想も結果表のセルからオッズを再構成しない。
+    // 専用オッズ表/APIの全頭値だけを使い、走破タイムの混入を遮断する。
+    hs = await applyDedicatedFinalOddsForBacktest(kind, rid, hs);
     // v5.18.128: 誤キーガード（fetchRace相当）を確定済み予想経路にも適用。
     if(typeof oddsLookMisKeyedByUmaban === 'function' && oddsLookMisKeyedByUmaban(hs)){
       throw new Error('単勝オッズが馬番=人気=オッズ昇順と一致（誤キーの疑い）のため除外。時間をおいて再取得してください。');
@@ -20596,7 +20641,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     return {
       product: 'TheKeiba EV Analysis',
       schema: 'keiba-range-venue-simulation-v1',
-      version: VERSION,
+      version: window.APP_VERSION || VERSION,
       exportedAt: new Date().toISOString(),
       conditions: {
         kind: el('rsKind') ? el('rsKind').value : '',
@@ -20871,7 +20916,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     return {
       product: 'The競馬 EV分析',
       schema: 'keiba-range-venue-simulation-v1',
-      version: VERSION,
+      version: window.APP_VERSION || VERSION,
       exportedAt: new Date().toISOString(),
       conditions: {
         kind: $('rsKind') ? $('rsKind').value : '',
@@ -21375,7 +21420,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     return {
       product: 'The競馬 EV分析',
       schema: 'keiba-range-venue-simulation-v2',
-      version: VERSION,
+      version: window.APP_VERSION || VERSION,
       exportedAt: new Date().toISOString(),
       '説明': '期間横断シミュレーション詳細出力。明細レコードは「収支明細」のみ（集計はオブジェクト形式で二重集計を防止）。競馬アプリ収支分析グラフ仕様HTML(Profit Graph Switcher)対応。',
       conditions: {
@@ -29450,7 +29495,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script id="theKeibaSafeCoreV6">
 /* ============================================================
-   v6.6 Fair Backtest Guard
+   v6.7 Odds Integrity Guard
    ・APP_VERSION / title / header version are rendered by one owner
    ・JRA/NAR, date, venue and race_id share one canonical state
    ・race_id mismatches are rejected before they reach later actions
@@ -29459,7 +29504,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  var VERSION='v6.6 Fair Backtest Guard';
+  var VERSION='v6.7 Odds Integrity Guard';
   var oldCore=window.TheKeibaCore;
   if(oldCore&&oldCore.version===VERSION){
     try{oldCore.refresh('duplicate-load');}catch(e){}

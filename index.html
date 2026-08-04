@@ -21,7 +21,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v6.0 Safe Core</title>
+<title>The競馬 EV分析 v6.1 Probability Source</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -906,7 +906,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
   <div style="display:flex;gap:8px;align-items:center">
     <button id="profitSplitBtn" class="btn-sm profit-split-toggle" type="button" onclick="toggleProfitLiveSplit()" aria-pressed="false">📊 横2画面</button>
     <button id="nativeThemeBtn" class="btn-sm native-theme-btn" type="button" title="本体テーマへ自動連動。単独起動時はここで切り替え">🌙 <span class="native-theme-label">ダーク・本体連動</span></button>
-    <span class="ver">v6.0 Safe Core</span>
+    <span class="ver">v6.1 Probability Source</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2006,6 +2006,18 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
       <div class="mode-grid" id="modeGrid"></div>
     </div>
 
+    <div class="card" id="probabilitySourceSettingsCard">
+      <h2>📐 想定確率ソース</h2>
+      <div class="settings-row">
+        <label for="setProbabilitySource">EV計算に使う確率</label>
+        <select id="setProbabilitySource" onchange="saveSettings()">
+          <option value="standard">本体標準（想定確率）</option>
+          <option value="final_odds">netkeiba確定オッズ（市場確率）</option>
+        </select>
+      </div>
+      <div id="probabilitySourceNote" class="proxy-note" style="margin-top:7px;font-size:11px;line-height:1.65"></div>
+    </div>
+
     <div class="card" id="dailyBudgetSettingsCard">
       <h2>🏁 1日予算モード</h2>
       <div class="settings-row">
@@ -2241,7 +2253,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v6.0 Safe Core';
+window.APP_VERSION = 'v6.1 Probability Source';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -2315,6 +2327,7 @@ const CHIP_CLASS = {
 let settings = {
   mode: 'roi100',
   allAgreeModes: ['roi100','roi120','ev_roi'],
+  probabilitySource: 'standard',
   nar: false,
   budget: 500,
   unit: 100,
@@ -2452,6 +2465,28 @@ function normalizeDailyBudgetSettings(){
   settings.allocationMode = settings.allocationMode === 'daily_rank' ? 'daily_rank' : 'per_race';
   settings.dailyRankMetric = ['ev','adjusted_ev','learned_profit'].includes(settings.dailyRankMetric) ? settings.dailyRankMetric : 'ev';
 }
+function normalizeProbabilitySource(value){
+  return value === 'final_odds' ? 'final_odds' : 'standard';
+}
+function probabilitySourceLabel(value){
+  return normalizeProbabilitySource(value) === 'final_odds'
+    ? 'netkeiba確定オッズ（市場確率）'
+    : '本体標準（想定確率）';
+}
+function probabilitySourceShortLabel(value){
+  return normalizeProbabilitySource(value) === 'final_odds' ? '確定オッズ' : '本体標準';
+}
+function updateProbabilitySourceUI(){
+  settings.probabilitySource = normalizeProbabilitySource(settings.probabilitySource);
+  const select = document.getElementById('setProbabilitySource');
+  if(select) select.value = settings.probabilitySource;
+  const note = document.getElementById('probabilitySourceNote');
+  if(note){
+    note.innerHTML = settings.probabilitySource === 'final_odds'
+      ? '<b>netkeiba確定オッズ換算</b>：単勝オッズの逆数を全頭で正規化し、市場確率としてEV計算に使います。確定済みレースはresult.htmlの最終単勝オッズ、未確定レースは取得時点オッズです。netkeiba AI指数とは別データです。'
+      : '<b>本体標準</b>：単勝オッズ由来80%＋人気順位由来20%を合成して想定確率を作ります。従来版と同じ計算です。';
+  }
+}
 function updateDailyBudgetSettingsUI(){
   normalizeDailyBudgetSettings();
   const mode = document.getElementById('setDailyAllocationMode'); if(mode) mode.value = settings.allocationMode;
@@ -2503,6 +2538,7 @@ function loadSettings(){
   try {
     loaded = JSON.parse(localStorage.getItem('tk-html-settings') || '{}') || {};
     Object.assign(settings, loaded);
+    settings.probabilitySource = normalizeProbabilitySource(settings.probabilitySource);
     if(!settings.proxyUrl) settings.proxyUrl = 'https://takuya.nitta-katsuhiko.workers.dev/';
     if(!settings.minEVByType) settings.minEVByType = {...DEFAULT_MIN_EV};
     TICKET_TYPES.forEach(t => { if(!settings.minEVByType[t]) settings.minEVByType[t] = DEFAULT_MIN_EV[t]; });
@@ -2521,6 +2557,7 @@ function loadSettings(){
   } catch(e) { profitHistory = []; }
 }
 function saveSettings(){
+  settings.probabilitySource = normalizeProbabilitySource(document.getElementById('setProbabilitySource')?.value);
   settings.nar = document.getElementById('setNar')?.value === '1';
   settings.budget = Number(document.getElementById('setBudget')?.value || 500);
   settings.unit = Number(document.getElementById('setUnit')?.value || 100);
@@ -2545,6 +2582,7 @@ function saveSettings(){
   });
   document.getElementById('narBadge').style.display = settings.nar ? '' : 'none';
   localStorage.setItem('tk-html-settings', JSON.stringify(settings));
+  updateProbabilitySourceUI();
   updateDailyBudgetSettingsUI();
   updateNarTransitionSettingsUI();
   syncDailyBudgetGuardStorage();
@@ -3374,6 +3412,7 @@ function applyStateSnapshot(data){
   // 設定（既存デフォルトを保ちつつ上書き）
   if(data.settings && typeof data.settings === 'object'){
     Object.assign(settings, data.settings);
+    settings.probabilitySource = normalizeProbabilitySource(settings.probabilitySource);
     if(!settings.minEVByType) settings.minEVByType = {...DEFAULT_MIN_EV};
     TICKET_TYPES.forEach(t => { if(settings.minEVByType[t] == null) settings.minEVByType[t] = DEFAULT_MIN_EV[t]; });
     if(!settings.proxyUrl) settings.proxyUrl = 'https://takuya.nitta-katsuhiko.workers.dev/';
@@ -3409,6 +3448,7 @@ function applyStateSnapshot(data){
 }
 
 function refreshSettingsUI(){
+  updateProbabilitySourceUI();
   const setNar = document.getElementById('setNar'); if(setNar) setNar.value = settings.nar ? '1' : '0';
   const setBudget = document.getElementById('setBudget'); if(setBudget) setBudget.value = settings.budget;
   const setUnit = document.getElementById('setUnit'); if(setUnit) setUnit.value = settings.unit;
@@ -3447,6 +3487,7 @@ function resetSettingsToDefault(){
   settings = {
     mode: 'roi100',
     allAgreeModes: ['roi100','roi120','ev_roi'],
+    probabilitySource: 'standard',
     nar: false,
     budget: 500,
     unit: 100,
@@ -3515,6 +3556,7 @@ function initUI(){
   document.getElementById('setUseWideUmaren').checked = settings.useWideUmaren !== false;
   document.getElementById('setNagoyaMode').checked = settings.nagoyaMode === true;
   document.getElementById('setDisabledTypeAction').value = (settings.disabledTypeAction === 'exclude') ? 'exclude' : 'skip'; // v5.18.194
+  updateProbabilitySourceUI();
   updateDailyBudgetSettingsUI();
   updateNarTransitionSettingsUI();
   syncDailyBudgetGuardStorage();
@@ -3605,8 +3647,29 @@ function evProbRaw(h, allHorses){
   const o = Number(h.odds || 0);
   const pop = Number(h.pop || 0);
   const n = Math.max(1, allHorses.length);
-  const takeback = isNAR() ? 0.30 : 0.225;
+  const probabilitySource = normalizeProbabilitySource(settings.probabilitySource);
   const validOdds = allHorses.filter(hh => Number(hh.odds||0) > 1).map(hh => Number(hh.odds));
+
+  // netkeibaの単勝オッズを市場確率へ換算する方式。
+  // result.html取得時は最終単勝オッズ、未確定レースでは取得時点オッズを使う。
+  if(probabilitySource === 'final_odds' && validOdds.length >= 2){
+    const missingWeight = 0.0001;
+    const totalWeight = allHorses.reduce((sum, hh) => {
+      const odds = Number(hh.odds || 0);
+      return sum + (odds > 1 ? 1 / odds : missingWeight);
+    }, 0);
+    if(totalWeight > 0){
+      const weight = o > 1 ? 1 / o : missingWeight;
+      try{ window.__probabilitySourceLast = {source:probabilitySource, validOdds:validOdds.length, fallback:false}; }catch(e){}
+      return weight / totalWeight;
+    }
+  }
+
+  // オッズが2頭未満なら標準方式へ安全にフォールバックする。
+  if(probabilitySource === 'final_odds'){
+    try{ window.__probabilitySourceLast = {source:probabilitySource, validOdds:validOdds.length, fallback:true}; }catch(e){}
+  }
+  const takeback = isNAR() ? 0.30 : 0.225;
   const overround = validOdds.length > 1
     ? validOdds.reduce((s, od) => s + 1/od, 0)
     : (1 / Math.max(0.01, 1 - takeback));
@@ -3640,7 +3703,8 @@ function normalizeRatedHorses(allHorses){
     const longAdj = winP < 0.08 ? (0.08 - winP) * 0.8 : 0;
     const placeP = Math.min(0.90, rawPlaceP * (1 - favAdj) * (1 - longAdj));
     const renP   = Math.min(0.82, winP * renMult + 0.015);
-    return { ...h, winP, placeP, renP, quinellaP: renP };
+    return { ...h, winP, placeP, renP, quinellaP: renP,
+             probabilitySource: normalizeProbabilitySource(settings.probabilitySource) };
   }).sort((a,b) => b.winP - a.winP);
 }
 
@@ -3722,6 +3786,7 @@ function generateCandidates(allHorses){
     const abilityRankMin = ranks.length ? Math.min(...ranks) : 99;
     const k = keyOf(type, nums);
     const item = { type, nums: nums.map(Number), p: safeP, odds: safeOdds, ev, kelly, unit,
+                   probabilitySource: normalizeProbabilitySource(settings.probabilitySource),
                    amount: unit, stake: unit, expectedReturn: ev * unit, abilityRankMin };
     const idx = recs.findIndex(x => keyOf(x.type, x.nums) === k);
     if(idx >= 0){ if(item.p*item.ev > recs[idx].p*recs[idx].ev) recs[idx] = item; }
@@ -4389,6 +4454,7 @@ function renderResult(valid, rated){
     <div class="summary-item"><div class="val">${totalBet}円</div><div class="lbl">合計投資</div></div>
     <div class="summary-item"><div class="val">${hasOdds}頭</div><div class="lbl">オッズ有</div></div>
     <div class="summary-item"><div class="val">${isNAR()?'NAR':'JRA'}</div><div class="lbl">区分</div></div>
+    <div class="summary-item"><div class="val" style="font-size:15px" title="${escapeHtml(probabilitySourceLabel(settings.probabilitySource))}">${probabilitySourceShortLabel(settings.probabilitySource)}</div><div class="lbl">確率ソース</div></div>
   `;
   try{
     const narSummary = (typeof window.tkNarTransitionRaceSummary === 'function') ? window.tkNarTransitionRaceSummary(String(currentRaceId || '')) : null;
@@ -28512,7 +28578,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script id="theKeibaSafeCoreV6">
 /* ============================================================
-   v6.0 Safe Core
+   v6.1 Probability Source
    ・APP_VERSION / title / header version are rendered by one owner
    ・JRA/NAR, date, venue and race_id share one canonical state
    ・race_id mismatches are rejected before they reach later actions
@@ -28521,7 +28587,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  var VERSION='v6.0 Safe Core';
+  var VERSION='v6.1 Probability Source';
   var oldCore=window.TheKeibaCore;
   if(oldCore&&oldCore.version===VERSION){
     try{oldCore.refresh('duplicate-load');}catch(e){}

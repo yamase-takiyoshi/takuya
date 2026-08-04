@@ -21,7 +21,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v6.4 NAR Calendar Guard</title>
+<title>The競馬 EV分析 v6.5 NAR Accuracy Guard</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -906,7 +906,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
   <div style="display:flex;gap:8px;align-items:center">
     <button id="profitSplitBtn" class="btn-sm profit-split-toggle" type="button" onclick="toggleProfitLiveSplit()" aria-pressed="false">📊 横2画面</button>
     <button id="nativeThemeBtn" class="btn-sm native-theme-btn" type="button" title="本体テーマへ自動連動。単独起動時はここで切り替え">🌙 <span class="native-theme-label">ダーク・本体連動</span></button>
-    <span class="ver">v6.4 NAR Calendar Guard</span>
+    <span class="ver">v6.5 NAR Accuracy Guard</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2259,7 +2259,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v6.4 NAR Calendar Guard';
+window.APP_VERSION = 'v6.5 NAR Accuracy Guard';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -2495,9 +2495,9 @@ function updateProbabilitySourceUI(){
   const note = document.getElementById('probabilitySourceNote');
   if(note){
     if(settings.probabilitySource === 'final_odds'){
-      note.innerHTML = '<b>netkeiba確定オッズ換算</b>：単勝オッズの逆数を全頭で正規化し、市場確率としてEV計算に使います。確定済みレースはresult.htmlの最終単勝オッズ、未確定レースは取得時点オッズです。netkeiba AI指数とは別データです。';
+      note.innerHTML = '<b>netkeiba確定オッズ換算</b>：単勝オッズの逆数を全頭で正規化し、市場確率としてEV計算に使います。出走馬全頭の実オッズが揃わないレースは、部分オッズで歪めず本体標準へ戻します。確定済みレースはresult.htmlの最終単勝オッズ、未確定レースは取得時点オッズです。netkeiba AI指数とは別データです。';
     }else if(settings.probabilitySource === 'airara'){
-      note.innerHTML = '<b>AIらら</b>：haro-blog.comの「前日予想データ」から馬番別の勝率％を取得し、全頭で正規化してEV計算に使います。通常予測・全日・期間横断で自動取得し、記事や馬番を確認できないレースだけ本体標準へ戻します。';
+      note.innerHTML = '<b>AIらら</b>：haro-blog.comの「前日予想データ」から馬番別の勝率％を取得し、出走馬全頭を照合できたレースだけ正規化してEV計算に使います。欠落・馬番不一致があるレースは、未照合馬を極小確率にせず本体標準へ戻します。';
     }else{
       note.innerHTML = '<b>本体標準</b>：単勝オッズ由来80%＋人気順位由来20%を合成して想定確率を作ります。従来版と同じ計算です。';
     }
@@ -3939,17 +3939,18 @@ async function prepareProbabilitySourceForRace(list, input){
     }
     return h;
   });
-  if(!(matched >= 2)){
-    const stage = day?.stage || 'race-not-found';
-    window.__airaraLast = {...ctx,stage,matched:0,article:day?.link||'',at:Date.now()};
-    if(!silent) airaraSetStatus(`⚠️ AIらら勝率を照合できません（${stage}）。このレースは本体標準で計算します。`,'err');
+  const sourceStats = probabilitySourceStats(out, 'airara');
+  if(!sourceStats.usable){
+    const stage = matched > 0 ? 'coverage-incomplete' : (day?.stage || 'race-not-found');
+    window.__airaraLast = {...ctx,stage,matched,total:out.length,coverage:sourceStats.coverage,article:day?.link||'',at:Date.now()};
+    if(!silent){
+      const detail = out.length ? `${matched}/${out.length}頭` : stage;
+      airaraSetStatus(`⚠️ AIらら勝率が全頭分揃いません（${detail}）。部分データは使わず、このレースは本体標準で計算します。`,'err');
+    }
     return clean;
   }
-  window.__airaraLast = {...ctx,stage:'ok',matched,total:out.length,article:day.link||'',title:day.title||'',at:Date.now()};
-  if(!silent){
-    const missing = Math.max(0, out.length - matched);
-    airaraSetStatus(`✅ AIらら ${matched}/${out.length}頭を反映しました${missing ? `（未照合${missing}頭）` : ''}：${day.title || ctx.venue}`,'ok');
-  }
+  window.__airaraLast = {...ctx,stage:'ok',matched,total:out.length,coverage:sourceStats.coverage,article:day.link||'',title:day.title||'',at:Date.now()};
+  if(!silent) airaraSetStatus(`✅ AIらら ${matched}/${out.length}頭を反映しました：${day.title || ctx.venue}`,'ok');
   return out;
 }
 async function fetchAiraraCurrentRace(){
@@ -3967,71 +3968,49 @@ async function fetchAiraraCurrentRace(){
   finally{ if(button) button.disabled = false; }
 }
 
-function resolvedProbabilitySource(allHorses){
-  const selected = normalizeProbabilitySource(settings.probabilitySource);
-  if(selected === 'final_odds'){
-    return (allHorses || []).filter(h => Number(h.odds || 0) > 1).length >= 2 ? 'final_odds' : 'standard';
+// 確率ソースは「一部だけ取れた」状態を有効扱いしない。
+// NARで2頭だけのオッズ/AI勝率が全頭へ拡大され、未取得馬がほぼ0%になる歪みを防ぐ。
+function probabilitySourceStats(allHorses, source){
+  const list = (allHorses || []).filter(h => Number(h?.num || 0) > 0 && h?.name);
+  const total = list.length;
+  let valid = 0;
+  if(source === 'final_odds'){
+    valid = list.filter(h => Number(h.odds || 0) >= 1 && h.provisionalOdds !== true).length;
+  }else if(source === 'airara'){
+    valid = list.filter(h => {
+      const p = Number(h.airaraProbability || 0);
+      return p > 0 && p <= 1;
+    }).length;
+  }else{
+    valid = total;
   }
-  if(selected === 'airara'){
-    return (allHorses || []).filter(h => Number(h.airaraProbability || 0) > 0 && Number(h.airaraProbability || 0) <= 1).length >= 2 ? 'airara' : 'standard';
-  }
-  return 'standard';
+  const coverage = total > 0 ? valid / total : 0;
+  return {source,total,valid,missing:Math.max(0,total-valid),coverage,required:total,usable:total >= 2 && valid === total};
 }
 
-function evProbRaw(h, allHorses){
+function probabilitySourceDiagnostics(allHorses){
+  const selected = normalizeProbabilitySource(settings.probabilitySource);
+  const stats = probabilitySourceStats(allHorses, selected);
+  return {...stats,selected,used:stats.usable ? selected : 'standard'};
+}
+
+function resolvedProbabilitySource(allHorses){
+  const selected = normalizeProbabilitySource(settings.probabilitySource);
+  if(selected === 'standard') return 'standard';
+  return probabilitySourceStats(allHorses, selected).usable ? selected : 'standard';
+}
+
+function standardEvProbRaw(h, allHorses){
   const o = Number(h.odds || 0);
   const pop = Number(h.pop || 0);
-  const n = Math.max(1, allHorses.length);
-  const probabilitySource = normalizeProbabilitySource(settings.probabilitySource);
-  const validOdds = allHorses.filter(hh => Number(hh.odds||0) > 1).map(hh => Number(hh.odds));
-  const validAirara = allHorses
-    .map(hh => Number(hh.airaraProbability || 0))
-    .filter(p => p > 0 && p <= 1);
-
-  // AIららの「勝率」を馬番で結合し、出走馬全体で100%になるよう正規化する。
-  // 未照合馬には極小値だけを与え、記事に2頭以上の有効値が無ければ標準方式へ戻す。
-  if(probabilitySource === 'airara' && validAirara.length >= 2){
-    const missingWeight = 0.000001;
-    const totalWeight = allHorses.reduce((sum, hh) => {
-      const p = Number(hh.airaraProbability || 0);
-      return sum + (p > 0 && p <= 1 ? p : missingWeight);
-    }, 0);
-    if(totalWeight > 0){
-      const p = Number(h.airaraProbability || 0);
-      const weight = p > 0 && p <= 1 ? p : missingWeight;
-      try{ window.__probabilitySourceLast = {source:probabilitySource, validAirara:validAirara.length, fallback:false}; }catch(e){}
-      return weight / totalWeight;
-    }
-  }
-  if(probabilitySource === 'airara'){
-    try{ window.__probabilitySourceLast = {source:probabilitySource, validAirara:validAirara.length, fallback:true}; }catch(e){}
-  }
-
-  // netkeibaの単勝オッズを市場確率へ換算する方式。
-  // result.html取得時は最終単勝オッズ、未確定レースでは取得時点オッズを使う。
-  if(probabilitySource === 'final_odds' && validOdds.length >= 2){
-    const missingWeight = 0.0001;
-    const totalWeight = allHorses.reduce((sum, hh) => {
-      const odds = Number(hh.odds || 0);
-      return sum + (odds > 1 ? 1 / odds : missingWeight);
-    }, 0);
-    if(totalWeight > 0){
-      const weight = o > 1 ? 1 / o : missingWeight;
-      try{ window.__probabilitySourceLast = {source:probabilitySource, validOdds:validOdds.length, fallback:false}; }catch(e){}
-      return weight / totalWeight;
-    }
-  }
-
-  // オッズが2頭未満なら標準方式へ安全にフォールバックする。
-  if(probabilitySource === 'final_odds'){
-    try{ window.__probabilitySourceLast = {source:probabilitySource, validOdds:validOdds.length, fallback:true}; }catch(e){}
-  }
+  const n = Math.max(1, (allHorses || []).length);
+  const validOdds = (allHorses || []).filter(hh => Number(hh.odds||0) >= 1).map(hh => Number(hh.odds));
   const takeback = isNAR() ? 0.30 : 0.225;
   const overround = validOdds.length > 1
     ? validOdds.reduce((s, od) => s + 1/od, 0)
     : (1 / Math.max(0.01, 1 - takeback));
 
-  let pOdds = o > 1 ? (1/o) / Math.max(overround, 1/(1-takeback)) : 0;
+  let pOdds = o >= 1 ? (1/o) / Math.max(overround, 1/(1-takeback)) : 0;
 
   let pPop = 0;
   if(pop > 0 && pop <= n){
@@ -4047,9 +4026,31 @@ function evProbRaw(h, allHorses){
   return 1 / n;
 }
 
+function evProbRaw(h, allHorses){
+  const selected = normalizeProbabilitySource(settings.probabilitySource);
+  const stats = probabilitySourceStats(allHorses, selected);
+  const used = selected !== 'standard' && stats.usable ? selected : 'standard';
+  try{ window.__probabilitySourceLast = {...stats,selected,used,fallback:selected !== used}; }catch(e){}
+
+  // AIららは全出走馬を照合できた場合だけ、記事の勝率を正規化する。
+  if(used === 'airara'){
+    const totalWeight = (allHorses || []).reduce((sum, hh) => sum + Number(hh.airaraProbability || 0), 0);
+    if(totalWeight > 0) return Number(h.airaraProbability || 0) / totalWeight;
+  }
+
+  // 確定オッズも全出走馬の実値が揃った場合だけ市場確率へ換算する。
+  if(used === 'final_odds'){
+    const totalWeight = (allHorses || []).reduce((sum, hh) => sum + 1 / Number(hh.odds), 0);
+    if(totalWeight > 0) return (1 / Number(h.odds)) / totalWeight;
+  }
+
+  return standardEvProbRaw(h, allHorses);
+}
+
 function normalizeRatedHorses(allHorses){
   const selectedProbabilitySource = normalizeProbabilitySource(settings.probabilitySource);
   const usedProbabilitySource = resolvedProbabilitySource(allHorses);
+  const sourceStats = probabilitySourceStats(allHorses, selectedProbabilitySource);
   const raw = allHorses.map(h => ({ ...h, raw: evProbRaw(h, allHorses) }));
   const total = raw.reduce((a,b) => a + Number(b.raw||0), 0) || 1;
   const n = Math.max(1, allHorses.length);
@@ -4064,7 +4065,10 @@ function normalizeRatedHorses(allHorses){
     const renP   = Math.min(0.82, winP * renMult + 0.015);
     return { ...h, winP, placeP, renP, quinellaP: renP,
              probabilitySource: selectedProbabilitySource,
-             probabilitySourceUsed: usedProbabilitySource };
+             probabilitySourceUsed: usedProbabilitySource,
+             probabilitySourceCoverage: sourceStats.coverage,
+             probabilitySourceValid: sourceStats.valid,
+             probabilitySourceTotal: sourceStats.total };
   }).sort((a,b) => b.winP - a.winP);
 }
 
@@ -4148,6 +4152,9 @@ function generateCandidates(allHorses){
     const item = { type, nums: nums.map(Number), p: safeP, odds: safeOdds, ev, kelly, unit,
                    probabilitySource: normalizeProbabilitySource(settings.probabilitySource),
                    probabilitySourceUsed: rated[0]?.probabilitySourceUsed || 'standard',
+                   probabilitySourceCoverage: Number(rated[0]?.probabilitySourceCoverage || 0),
+                   probabilitySourceValid: Number(rated[0]?.probabilitySourceValid || 0),
+                   probabilitySourceTotal: Number(rated[0]?.probabilitySourceTotal || 0),
                    amount: unit, stake: unit, expectedReturn: ev * unit, abilityRankMin };
     const idx = recs.findIndex(x => keyOf(x.type, x.nums) === k);
     if(idx >= 0){ if(item.p*item.ev > recs[idx].p*recs[idx].ev) recs[idx] = item; }
@@ -6277,6 +6284,10 @@ function parsePayoutsFromResultDoc(doc){
   blocks.forEach(block => {
     const type = types.find(t => block.startsWith(t));
     if(!type) return;
+    // セル単位でこの券種を1件以上取得済みなら、本文連結による誤組番を追加しない。
+    // synthetic NAR HTMLではセル境界のないtextContentが「5」「11」「2,060円」を
+    // 連結し、存在しない 1-5 等を生成することがあるため、本文解析は券種丸ごとの救済に限定する。
+    if(Object.keys(payouts).some(k => k.startsWith(type + ':'))) return;
     const amounts = [...block.matchAll(/([0-9,]+)\s*円/g)].map(m=>Number(m[1].replace(/,/g,''))).filter(n=>n>0 && n%10===0);
     if(!amounts.length) return;
     let combos = [];
@@ -6320,6 +6331,9 @@ function judgeTicketHit(ticket, finish){
 function payoutForTicket(ticket, payouts){
   const key = `${ticket.type}:${comboKey(ticket.type, ticket.nums)}`;
   if(payouts && payouts[key]) return {amount:payouts[key], source:'real'};
+  if(payouts && payouts.__strictRealPayouts){
+    throw new Error(`NAR確定払戻が不足しています（${key}）。推定払戻には置き換えず、このレースを集計から除外します。`);
+  }
   return {amount:Math.max(0, Math.round((Number(ticket.odds || 0) * 100) / 10) * 10), source:'estimate'};
 }
 
@@ -6420,7 +6434,7 @@ function renderSimulation(finish, payouts, sourceLabel){
         <div class="sim-ranking">${typeRows || '<div class="sim-note">券種別データなし</div>'}</div>
       </div>
     </div>
-    <div class="sim-note">ソース: ${escapeHtml(sourceLabel || '手入力')}。払戻表が解析できない券種は推定オッズで仮計算します。</div>
+    <div class="sim-note">ソース: ${escapeHtml(sourceLabel || '手入力')}。${payouts && payouts.__strictRealPayouts ? 'NARは公式の実払戻だけで精算し、欠落時は推定払戻へ置き換えません。' : '払戻表が解析できない券種は推定オッズで仮計算します。'}</div>
   `;
   if(box) box.innerHTML = html;
 
@@ -6458,6 +6472,10 @@ async function runSimulationFromResult(){
     const doc = new DOMParser().parseFromString(html, 'text/html');
     const finish = parseFinishFromResultDoc(doc);
     const payouts = parsePayoutsFromResultDoc(doc);
+    if(isNAR()){
+      try{ Object.defineProperty(payouts, '__strictRealPayouts', {value:true, enumerable:false}); }
+      catch(e){ payouts.__strictRealPayouts = true; }
+    }
     renderSimulation(finish, payouts, raw);
     // v5.18.244: 結果・払戻をD1へ同期
     try{ await d1AutoSyncSettlement(finish, payouts); }catch(e){ console.warn('[D1 settlement sync]', e); }
@@ -9600,9 +9618,10 @@ async function fetchRace(){
     //
     // 対策：JRAは必ず odds/index.html を先に取得し、確定値で上書きする。
     // 出馬表HTMLからのオッズ解析は「予想オッズ列が明示されている場合」のみ保険で使う。
-    // NAR側の挙動はそのまま維持し、一切変更しない。
+    // NARも公式ページを優先し、部分オッズは後段の充足率ガードで破棄する。
     const kind = document.getElementById('pickKind')?.value || (activeUrl.includes('nar.netkeiba') ? 'NAR' : 'JRA');
     const isResultPage = /\/race\/result\.html/i.test(activeUrl);
+    let narOddsIncomplete = null;
 
     if(rid){
       if(kind === 'JRA'){
@@ -9639,18 +9658,25 @@ async function fetchRace(){
           horses = fillProvisionalOddsPopularityForPrediction(horses);
         }
       }else{
-        // NAR: 既存ロジックをそのまま維持
-        const oddsMap = await fetchWinOddsPopularity(kind, rid, horses);
-        if(oddsMap.size >= 2){
-          horses = mergeOddsPopularityIntoHorses(horses, oddsMap);
+        // NAR: 公式単複ページと既取得ページを馬番で結合する。
+        // 一部だけ取得できた場合は、その部分値を全体へ混ぜずオッズを全消去して標準方式へ戻す。
+        const beforeOddsMerge = horses.map(h => ({...h}));
+        let oddsMap = await fetchWinOddsPopularity(kind, rid, horses);
+        oddsMap = mergeOddsMaps(oddsMap, parseWinOddsPopularityFromDoc(doc));
+        if(oddsMap && oddsMap.size) horses = mergeOddsPopularityIntoHorses(horses, oddsMap);
+        const narOddsStats = probabilitySourceStats(horses, 'final_odds');
+        if(narOddsStats.usable){
+          horses = fillNarPopularityFromOdds(horses);
         }else{
-          const shutubaOddsMap = parseWinOddsPopularityFromDoc(doc);
-          if(shutubaOddsMap.size >= 2){
-            horses = mergeOddsPopularityIntoHorses(horses, shutubaOddsMap);
-          }
+          narOddsIncomplete = narOddsStats;
+          horses = horses.map((h, i) => ({
+            ...h,
+            odds: 0,
+            pop: Number(beforeOddsMerge[i]?.pop || 0),
+            provisionalOdds: false
+          }));
+          try{ window.__narOddsLast = {...narOddsStats,raceId:rid,stage:'coverage-incomplete',at:Date.now()}; }catch(e){}
         }
-        // NAR補完: 人気が全馬未取得 or オッズと順番が矛盾する場合、オッズ昇順で人気を再計算
-        horses = fillNarPopularityFromOdds(horses);
       }
     }
 
@@ -9672,6 +9698,8 @@ async function fetchRace(){
     const pageNote = /\/race\/result\.html/i.test(activeUrl) ? ' / result.html最終値' : '';
     if(oddsMisKeyed){
       status.innerHTML = `<div class="url-status err">⚠️ 単勝オッズが「馬番=人気=オッズ昇順」と完全一致しました（取得元の人気順テーブルを馬番にそのまま割り当てた誤キーの疑い）。本物の値ではないため、汚染防止にオッズ・人気を破棄しました。<br>馬名・枠・馬番（${horses.length}頭）は取得済みです。時間をおいて再取得するか、各馬のオッズ/人気を手入力してください。</div>`;
+    }else if(narOddsIncomplete){
+      status.innerHTML = `<div class="url-status err">⚠️ ${escapeHtml(currentRaceName || '')} ${horses.length}頭は取得しましたが、NAR単勝オッズが ${narOddsIncomplete.valid}/${narOddsIncomplete.total}頭分しか揃いません。部分オッズは破棄し、確率ソースは本体標準へ安全に戻します。再取得または全頭分の手入力後に計算してください。</div>`;
     }else{
       status.innerHTML = `<div class="url-status ok">✅ ${escapeHtml(currentRaceName || '')} ${horses.length}頭 取得しました${pageNote} / 単勝オッズ ${oddsCount}件 / 人気 ${popCount}件 / 枠番 ${frameCount}件${oddsNote}</div>`;
     }
@@ -13314,7 +13342,10 @@ if(horses.length === 0){
         const rHorses = parseHorsesFromDoc(rDoc, rUrl);
         const rOdds = parseFinalOddsPopularityFromResultDoc(rDoc, rHorses);
         resultDoc = rDoc; // 精算で使い回す
-        if(rHorses.length >= 2 && rOdds.size >= 2){
+        const resultOddsReady = kind === 'NAR'
+          ? probabilitySourceStats(rHorses, 'final_odds').usable
+          : rOdds.size >= 2;
+        if(rHorses.length >= 2 && resultOddsReady){
           activeUrl = rUrl; html = rHtml; doc = rDoc; isResultPage = true;
         }
       }catch(e){ /* 未確定レースは結果なし */ }
@@ -13350,14 +13381,15 @@ if(horses.length === 0){
       if(!resultPageFull) hs = fillNarPopularityFromOdds(hs);
       if(!resultPageFull) hs = fillProvisionalOddsPopularityForPrediction(hs);
     } else {
-      const oddsMap = await fetchWinOddsPopularity(kind, rid, hs);
-      if(oddsMap.size >= 2){
-        hs = mergeOddsPopularityIntoHorses(hs, oddsMap);
-      } else {
-        const shutubaOddsMap = parseWinOddsPopularityFromDoc(doc);
-        if(shutubaOddsMap.size >= 2) hs = mergeOddsPopularityIntoHorses(hs, shutubaOddsMap);
-      }
+      let oddsMap = await fetchWinOddsPopularity(kind, rid, hs);
+      const pageOddsMap = parseWinOddsPopularityFromDoc(doc);
+      oddsMap = mergeOddsMaps(oddsMap, pageOddsMap);
+      if(oddsMap && oddsMap.size) hs = mergeOddsPopularityIntoHorses(hs, oddsMap);
       hs = fillNarPopularityFromOdds(hs);
+      const narOddsStats = probabilitySourceStats(hs, 'final_odds');
+      if(!narOddsStats.usable){
+        throw new Error(`NAR確定オッズ取得不足（${narOddsStats.valid}/${narOddsStats.total}頭）。部分オッズによる誤判定を防ぐため、このレースを集計から除外します。`);
+      }
     }
     // v5.18.128: 単レース取得(fetchRace)と同じ誤キーガードをバッチ経路にも適用。
     // 「馬番=人気=オッズ昇順」=人気順テーブルを馬番に直貼りした誤キーの疑い。
@@ -13398,15 +13430,14 @@ if(horses.length === 0){
       // NARはページ差が大きいので、result先読みで足りる場合だけ使う。
       let oddsMap = (typeof parseFinalOddsPopularityFromResultDoc === 'function')
         ? parseFinalOddsPopularityFromResultDoc(doc, hs) : new Map();
-      if((!oddsMap || oddsMap.size < 2) && typeof parseWinOddsPopularityFromDoc === 'function'){
-        oddsMap = parseWinOddsPopularityFromDoc(doc);
+      if(typeof parseWinOddsPopularityFromDoc === 'function'){
+        oddsMap = mergeOddsMaps(oddsMap, parseWinOddsPopularityFromDoc(doc));
       }
-      if(oddsMap && oddsMap.size >= 2){
-        hs = mergeOddsPopularityIntoHorses(hs, oddsMap);
-        hs = fillNarPopularityFromOdds(hs);
-        return { horses: hs, raceName, isResultPage: true, resultDoc: doc, fast: true, raceMeta: (typeof pgjRaceMetaOf === 'function' ? pgjRaceMetaOf(rid) : null) };
-      }
-      throw new Error('NAR result odds not enough');
+      if(oddsMap && oddsMap.size) hs = mergeOddsPopularityIntoHorses(hs, oddsMap);
+      hs = fillNarPopularityFromOdds(hs);
+      const narOddsStats = probabilitySourceStats(hs, 'final_odds');
+      if(!narOddsStats.usable) throw new Error(`NAR result odds not enough (${narOddsStats.valid}/${narOddsStats.total})`);
+      return { horses: hs, raceName, isResultPage: true, resultDoc: doc, fast: true, raceMeta: (typeof pgjRaceMetaOf === 'function' ? pgjRaceMetaOf(rid) : null) };
     }catch(e){
       return await asw_loadHorses(kind, rid);
     }
@@ -13423,6 +13454,10 @@ if(horses.length === 0){
     try{ if(typeof pgjCacheRaceMeta === 'function') pgjCacheRaceMeta(rid, doc, parseRaceTitleFromDoc(doc) || currentRaceName || ''); }catch(e){}
     const finish  = parseFinishFromResultDoc(doc);   // 内部で global horses を参照するので先にセット必須
     const payouts = parsePayoutsFromResultDoc(doc);
+    if(kind === 'NAR'){
+      try{ Object.defineProperty(payouts, '__strictRealPayouts', {value:true, enumerable:false}); }
+      catch(e){ payouts.__strictRealPayouts = true; }
+    }
     return { finish, payouts };
   }
 
@@ -13513,6 +13548,12 @@ if(horses.length === 0){
         if(Number.isFinite(Number(t.learnedExpectedProfit))) detail.学習期待利益 = Number(t.learnedExpectedProfit);
         if(Number(t.learnedRoiAdj || 0) > 0) detail.学習ROI補正 = Number(t.learnedRoiAdj);
         if(Number(t.p || 0) > 0) detail.予測確率 = Number(t.p);
+        detail.確率ソース指定 = probabilitySourceShortLabel(t.probabilitySource || 'standard');
+        detail.確率ソース実使用 = probabilitySourceShortLabel(t.probabilitySourceUsed || 'standard');
+        if(Number(t.probabilitySourceTotal || 0) > 0){
+          detail.確率ソース取得数 = `${Number(t.probabilitySourceValid || 0)}/${Number(t.probabilitySourceTotal || 0)}`;
+          detail.確率ソース取得率 = Math.round(Number(t.probabilitySourceCoverage || 0) * 1000) / 10;
+        }
         if(t.allAgree === true || t.userForcedPriority === true){
           detail.全て同意 = 1;
           detail.ユーザー強制優先 = 1;
@@ -14034,7 +14075,7 @@ if(horses.length === 0){
     return plan;
   }
 
-  // v6.4 NAR Calendar Guard
+  // v6.5 NAR Accuracy Guard
   // NAR公式「月別開催日程」を月ごとに取得し、開催リンクに含まれる
   // k_raceDate / k_babaCode から実開催予定日×開催場を確定する。
   // netkeiba日別一覧の空解析を「開催なし」と誤認しないため、対象年月・
@@ -15137,7 +15178,12 @@ if(horses.length === 0){
       doc = new DOMParser().parseFromString(html, 'text/html');
     }
     try{ if(typeof pgjCacheRaceMeta === 'function') pgjCacheRaceMeta(rid, doc, parseRaceTitleFromDoc(doc) || ''); }catch(e){}
-    return { finish: rsOneShotParseFinish(doc, localHorses), payouts: parsePayoutsFromResultDoc(doc) };
+    const payouts = parsePayoutsFromResultDoc(doc);
+    if(kind === 'NAR'){
+      try{ Object.defineProperty(payouts, '__strictRealPayouts', {value:true, enumerable:false}); }
+      catch(e){ payouts.__strictRealPayouts = true; }
+    }
+    return { finish: rsOneShotParseFinish(doc, localHorses), payouts };
   }
   function rsOneShotJudge(ticket, finish, localHorseCount){
     const nums = (finish || []).map(x => x.horseNo);
@@ -15157,6 +15203,9 @@ if(horses.length === 0){
   function rsOneShotPayout(ticket, payouts){
     const key = `${ticket.type}:${rsOneShotComboKey(ticket.type, ticket.nums)}`;
     if(payouts && payouts[key]) return {amount:payouts[key], source:'real'};
+    if(payouts && payouts.__strictRealPayouts){
+      throw new Error(`NAR確定払戻が不足しています（${key}）。推定払戻には置き換えず、このレースを集計から除外します。`);
+    }
     return {amount:Math.max(0, Math.round((Number(ticket.odds || 0) * 100) / 10) * 10), source:'estimate'};
   }
   function rsOneShotSettle(tickets, finish, payouts, localHorseCount){
@@ -15198,6 +15247,12 @@ if(horses.length === 0){
         if(Number.isFinite(Number(t.learnedExpectedProfit))) detail.学習期待利益 = Number(t.learnedExpectedProfit);
         if(Number(t.learnedRoiAdj || 0) > 0) detail.学習ROI補正 = Number(t.learnedRoiAdj);
         if(Number(t.p || 0) > 0) detail.予測確率 = Number(t.p);
+        detail.確率ソース指定 = probabilitySourceShortLabel(t.probabilitySource || 'standard');
+        detail.確率ソース実使用 = probabilitySourceShortLabel(t.probabilitySourceUsed || 'standard');
+        if(Number(t.probabilitySourceTotal || 0) > 0){
+          detail.確率ソース取得数 = `${Number(t.probabilitySourceValid || 0)}/${Number(t.probabilitySourceTotal || 0)}`;
+          detail.確率ソース取得率 = Math.round(Number(t.probabilitySourceCoverage || 0) * 1000) / 10;
+        }
         if(t.allAgree === true || t.userForcedPriority === true){
           detail.全て同意 = 1;
           detail.ユーザー強制優先 = 1;
@@ -15803,14 +15858,13 @@ if(horses.length === 0){
       hs = fillNarPopularityFromOdds(hs);
       hs = fillProvisionalOddsPopularityForPrediction(hs);
     } else {
-      const oddsMap = await fetchWinOddsPopularity(kind, rid, hs);
-      if(oddsMap.size >= 2){
-        hs = mergeOddsPopularityIntoHorses(hs, oddsMap);
-      } else {
-        const shutubaOddsMap = parseWinOddsPopularityFromDoc(doc);
-        if(shutubaOddsMap.size >= 2) hs = mergeOddsPopularityIntoHorses(hs, shutubaOddsMap);
-      }
-      hs = fillNarPopularityFromOdds(hs);
+      const beforeOddsMerge = hs.map(h => ({...h}));
+      let oddsMap = await fetchWinOddsPopularity(kind, rid, hs);
+      oddsMap = mergeOddsMaps(oddsMap, parseWinOddsPopularityFromDoc(doc));
+      if(oddsMap && oddsMap.size) hs = mergeOddsPopularityIntoHorses(hs, oddsMap);
+      const narOddsStats = probabilitySourceStats(hs, 'final_odds');
+      if(narOddsStats.usable) hs = fillNarPopularityFromOdds(hs);
+      else hs = hs.map((h,i) => ({...h,odds:0,pop:Number(beforeOddsMerge[i]?.pop||0),provisionalOdds:false}));
       hs = fillProvisionalOddsPopularityForPrediction(hs);
     }
     // v5.18.128: 誤キーガード（fetchRace相当）をバッチ予想経路にも適用。
@@ -15838,7 +15892,9 @@ if(horses.length === 0){
 
     // 結果ページの「最終単勝オッズ・最終人気」を最優先（v5.18.64と同方針）。
     const finalMap = parseFinalOddsPopularityFromResultDoc(doc, hs);
-    const finalFull = finalMap && finalMap.size >= 2;
+    const finalFull = kind === 'NAR'
+      ? probabilitySourceStats(hs, 'final_odds').usable
+      : !!(finalMap && finalMap.size >= 2);
     if(kind === 'JRA'){
       if(finalFull){
         hs = applyAuthoritativeJraOdds(hs, finalMap, new Map());
@@ -15851,14 +15907,14 @@ if(horses.length === 0){
         hs = fillProvisionalOddsPopularityForPrediction(hs);
       }
     } else {
-      if(finalFull){
-        hs = mergeOddsPopularityIntoHorses(hs, finalMap);
-      } else {
-        const oddsMap = await fetchWinOddsPopularity(kind, rid, hs);
-        if(oddsMap.size >= 2) hs = mergeOddsPopularityIntoHorses(hs, oddsMap);
-      }
+      let oddsMap = finalMap || new Map();
+      if(!finalFull) oddsMap = mergeOddsMaps(oddsMap, await fetchWinOddsPopularity(kind, rid, hs));
+      if(oddsMap && oddsMap.size) hs = mergeOddsPopularityIntoHorses(hs, oddsMap);
       hs = fillNarPopularityFromOdds(hs);
-      hs = fillProvisionalOddsPopularityForPrediction(hs);
+      const narOddsStats = probabilitySourceStats(hs, 'final_odds');
+      if(!narOddsStats.usable){
+        throw new Error(`NAR確定オッズ取得不足（${narOddsStats.valid}/${narOddsStats.total}頭）。部分値では予想せず、このレースを除外します。`);
+      }
     }
     // v5.18.128: 誤キーガード（fetchRace相当）を確定済み予想経路にも適用。
     if(typeof oddsLookMisKeyedByUmaban === 'function' && oddsLookMisKeyedByUmaban(hs)){
@@ -29090,6 +29146,77 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     return info.raceNo+'R';
   }
 
+  function canonicalPayoutType(v){
+    var s=half(v).replace(/[\s　]+/g,'');
+    if(/^単勝$/.test(s))return '単勝';
+    if(/^複勝$/.test(s))return '複勝';
+    if(/^枠連(?:複)?$/.test(s))return '枠連';
+    if(/^(?:馬連単|馬単)$/.test(s))return '馬単';
+    if(/^(?:馬連複|馬連)$/.test(s))return '馬連';
+    if(/^ワイド$/.test(s))return 'ワイド';
+    if(/^(?:三|3)連複$/.test(s))return '3連複';
+    if(/^(?:三|3)連単$/.test(s))return '3連単';
+    return '';
+  }
+
+  function payoutComboKey(type,nums){
+    var a=(nums||[]).map(Number).filter(function(n){return n>=1&&n<=18;});
+    if(['馬単','3連単'].indexOf(type)<0)a.sort(function(x,y){return x-y;});
+    return a.join('-');
+  }
+
+  // NAR公式の「払戻金」表を、既存精算器が扱う券種名と組番へ正規化する。
+  // rowspanで券種名が省略される複勝・ワイドの2行目以降も currentType で保持する。
+  function parseOfficialPayouts(html){
+    var doc=new DOMParser().parseFromString(String(html||''),'text/html');
+    var records=[],seen={};
+    Array.from(doc.querySelectorAll('table')).forEach(function(table){
+      var tableText=textOf(table);
+      if(!/単勝/.test(tableText)||!/複勝/.test(tableText)||!/円/.test(tableText))return;
+      var currentType='';
+      Array.from(table.querySelectorAll('tr')).forEach(function(tr){
+        var cells=Array.from(tr.children).map(function(c){return textOf(c);});
+        if(!cells.length)return;
+        var explicit='';
+        for(var i=0;i<cells.length;i++){
+          explicit=canonicalPayoutType(cells[i]);
+          if(explicit)break;
+        }
+        if(explicit)currentType=explicit;
+        var type=explicit||currentType;
+        if(!type)return;
+
+        var amounts=[];
+        cells.forEach(function(c){
+          Array.from(half(c).matchAll(/([\d,]+)\s*円/g)).forEach(function(m){
+            var n=Number(m[1].replace(/,/g,'')); if(n>0)amounts.push(n);
+          });
+        });
+        if(!amounts.length)return;
+
+        var comboText=cells.filter(function(c){
+          return !canonicalPayoutType(c)&&!/円/.test(c)&&!/人気/.test(c);
+        }).join(' ').replace(/[－ー―→＞>]/g,'-');
+        var combos=[];
+        if(type==='単勝'||type==='複勝'){
+          Array.from(comboText.matchAll(/(?:^|[^\d])(\d{1,2})(?=[^\d]|$)/g)).forEach(function(m){
+            var n=Number(m[1]); if(n>=1&&n<=18)combos.push([n]);
+          });
+        }else{
+          Array.from(comboText.matchAll(/(\d{1,2})\s*-\s*(\d{1,2})(?:\s*-\s*(\d{1,2}))?/g)).forEach(function(m){
+            var a=[Number(m[1]),Number(m[2])]; if(m[3])a.push(Number(m[3]));
+            if(a.every(function(n){return n>=1&&n<=18;}))combos.push(a);
+          });
+        }
+        combos.slice(0,amounts.length).forEach(function(nums,j){
+          var key=type+':'+payoutComboKey(type,nums);
+          if(!seen[key]){seen[key]=1;records.push({type:type,combo:nums.join('-'),amount:amounts[Math.min(j,amounts.length-1)]});}
+        });
+      });
+    });
+    return records;
+  }
+
   function parseOfficialRows(html,info){
     if(blocked(html))throw new Error('公式ページがエラーまたは遮断ページです');
     var doc=new DOMParser().parseFromString(String(html||''),'text/html');
@@ -29113,6 +29240,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       }
       if(!num||!name||seen[num])return;
       if(/^(?:馬名|取消|除外|競走除外)$/.test(name))return;
+      var rowStatus=textOf(tr);
+      if(/(?:^|[\s　])(取消|除外|競走除外)(?:[\s　]|$)/.test(rowStatus)||/^(?:取消|除外|競走除外)/.test(rowStatus))return;
       var frame=frameIdx>=0&&cells[frameIdx]?numberIn(textOf(cells[frameIdx]),1,8):0;
       if(!frame)frame=Math.min(8,Math.max(1,Math.ceil(num/2)));
       var odds=oddsIdx>=0&&cells[oddsIdx]?oddsIn(textOf(cells[oddsIdx])):0;
@@ -29126,7 +29255,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     return {rows:rows.sort(function(a,b){return a.num-b.num;}),title:raceTitle(doc,info)};
   }
 
-  function syntheticHtml(parsed,info,sourceUrl){
+  function syntheticHtml(parsed,info,sourceUrl,payouts){
     var result=info.type==='result';
     var head=result?'<th>着順</th>':'';
     var body=parsed.rows.map(function(x){
@@ -29139,21 +29268,27 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         '<td class="Popular">'+esc(x.pop||'')+'</td>'+
         '</tr>';
     }).join('');
+    var payoutBody=(payouts||[]).map(function(p){
+      return '<tr><th>'+esc(p.type)+'</th><td>'+esc(p.combo)+'</td><td>'+esc(Number(p.amount||0).toLocaleString('ja-JP'))+'円</td></tr>';
+    }).join('');
+    var payoutTable=payoutBody?'<h2>払戻金</h2><table class="Payout_Detail_Table" data-payout-source="nar-official"><tbody>'+payoutBody+'</tbody></table>':'';
     return '<!doctype html><html lang="ja"><head><meta charset="UTF-8">'+
       '<title>'+esc(parsed.title)+'</title><meta property="og:title" content="'+esc(parsed.title)+'">'+
       '<meta name="the-keiba-source" content="nar-official"><meta name="the-keiba-source-url" content="'+esc(sourceUrl)+'">'+
       '</head><body><div class="RaceName"><h1>'+esc(parsed.title)+'</h1></div>'+
       '<div data-race-id="'+esc(info.raceId)+'">race_id='+esc(info.raceId)+'</div>'+
-      '<table class="RaceTable01"><thead><tr>'+head+'<th>枠</th><th>馬番</th><th>馬名</th><th>単勝オッズ</th><th>人気</th></tr></thead><tbody>'+body+'</tbody></table></body></html>';
+      '<table class="RaceTable01"><thead><tr>'+head+'<th>枠</th><th>馬番</th><th>馬名</th><th>単勝オッズ</th><th>人気</th></tr></thead><tbody>'+body+'</tbody></table>'+payoutTable+'</body></html>';
   }
 
   async function fetchOfficialSynthetic(info){
     var ou=officialUrl(info,info.type);
     var raw=await previousProxy.call(this,ou);
     var parsed=parseOfficialRows(raw,info);
-    var out=syntheticHtml(parsed,info,ou);
+    var payouts=info.type==='result'?parseOfficialPayouts(raw):[];
+    var out=syntheticHtml(parsed,info,ou,payouts);
     window.__narOfficialLastUrl=ou;
     window.__narOfficialLastCount=parsed.rows.length;
+    window.__narOfficialLastPayoutCount=payouts.length;
     window.__narOfficialLastError='';
     window.__fetchPath='nar-official-'+info.type;
     return out;
@@ -29171,9 +29306,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         var ou=officialUrl(info,info.type);
         var raw=await current.call(this,ou);
         var parsed=parseOfficialRows(raw,info);
-        var out=syntheticHtml(parsed,info,ou);
+        var payouts=info.type==='result'?parseOfficialPayouts(raw):[];
+        var out=syntheticHtml(parsed,info,ou,payouts);
         window.__narOfficialLastUrl=ou;
         window.__narOfficialLastCount=parsed.rows.length;
+        window.__narOfficialLastPayoutCount=payouts.length;
         window.__narOfficialLastError='';
         window.__fetchPath='nar-official-'+info.type;
         return out;
@@ -29269,7 +29406,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script id="theKeibaSafeCoreV6">
 /* ============================================================
-   v6.4 NAR Calendar Guard
+   v6.5 NAR Accuracy Guard
    ・APP_VERSION / title / header version are rendered by one owner
    ・JRA/NAR, date, venue and race_id share one canonical state
    ・race_id mismatches are rejected before they reach later actions
@@ -29278,7 +29415,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  var VERSION='v6.4 NAR Calendar Guard';
+  var VERSION='v6.5 NAR Accuracy Guard';
   var oldCore=window.TheKeibaCore;
   if(oldCore&&oldCore.version===VERSION){
     try{oldCore.refresh('duplicate-load');}catch(e){}

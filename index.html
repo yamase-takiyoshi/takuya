@@ -21,7 +21,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v6.1 Probability Source</title>
+<title>The競馬 EV分析 v6.2 AI Rara</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -906,7 +906,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
   <div style="display:flex;gap:8px;align-items:center">
     <button id="profitSplitBtn" class="btn-sm profit-split-toggle" type="button" onclick="toggleProfitLiveSplit()" aria-pressed="false">📊 横2画面</button>
     <button id="nativeThemeBtn" class="btn-sm native-theme-btn" type="button" title="本体テーマへ自動連動。単独起動時はここで切り替え">🌙 <span class="native-theme-label">ダーク・本体連動</span></button>
-    <span class="ver">v6.1 Probability Source</span>
+    <span class="ver">v6.2 AI Rara</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2013,9 +2013,14 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
         <select id="setProbabilitySource" onchange="saveSettings()">
           <option value="standard">本体標準（想定確率）</option>
           <option value="final_odds">netkeiba確定オッズ（市場確率）</option>
+          <option value="airara">AIらら（前日予想・勝率）</option>
         </select>
       </div>
       <div id="probabilitySourceNote" class="proxy-note" style="margin-top:7px;font-size:11px;line-height:1.65"></div>
+      <div id="airaraSourceControls" style="display:none;margin-top:9px;padding-top:9px;border-top:1px solid var(--border)">
+        <button id="airaraFetchCurrentBtn" class="btn-sm" type="button" onclick="fetchAiraraCurrentRace()">🧪 現在レースのAIらら勝率を取得</button>
+        <div id="airaraSourceStatus" style="margin-top:7px;font-size:11px;line-height:1.55;color:var(--muted)">選択すると、開催日・開催場・R番号から前日予想データを自動取得します。</div>
+      </div>
     </div>
 
     <div class="card" id="dailyBudgetSettingsCard">
@@ -2253,7 +2258,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v6.1 Probability Source';
+window.APP_VERSION = 'v6.2 AI Rara';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -2466,25 +2471,35 @@ function normalizeDailyBudgetSettings(){
   settings.dailyRankMetric = ['ev','adjusted_ev','learned_profit'].includes(settings.dailyRankMetric) ? settings.dailyRankMetric : 'ev';
 }
 function normalizeProbabilitySource(value){
-  return value === 'final_odds' ? 'final_odds' : 'standard';
+  return value === 'final_odds' || value === 'airara' ? value : 'standard';
 }
 function probabilitySourceLabel(value){
-  return normalizeProbabilitySource(value) === 'final_odds'
-    ? 'netkeiba確定オッズ（市場確率）'
-    : '本体標準（想定確率）';
+  const source = normalizeProbabilitySource(value);
+  if(source === 'final_odds') return 'netkeiba確定オッズ（市場確率）';
+  if(source === 'airara') return 'AIらら（前日予想・勝率）';
+  return '本体標準（想定確率）';
 }
 function probabilitySourceShortLabel(value){
-  return normalizeProbabilitySource(value) === 'final_odds' ? '確定オッズ' : '本体標準';
+  const source = normalizeProbabilitySource(value);
+  if(source === 'final_odds') return '確定オッズ';
+  if(source === 'airara') return 'AIらら';
+  return '本体標準';
 }
 function updateProbabilitySourceUI(){
   settings.probabilitySource = normalizeProbabilitySource(settings.probabilitySource);
   const select = document.getElementById('setProbabilitySource');
   if(select) select.value = settings.probabilitySource;
+  const airaraControls = document.getElementById('airaraSourceControls');
+  if(airaraControls) airaraControls.style.display = settings.probabilitySource === 'airara' ? '' : 'none';
   const note = document.getElementById('probabilitySourceNote');
   if(note){
-    note.innerHTML = settings.probabilitySource === 'final_odds'
-      ? '<b>netkeiba確定オッズ換算</b>：単勝オッズの逆数を全頭で正規化し、市場確率としてEV計算に使います。確定済みレースはresult.htmlの最終単勝オッズ、未確定レースは取得時点オッズです。netkeiba AI指数とは別データです。'
-      : '<b>本体標準</b>：単勝オッズ由来80%＋人気順位由来20%を合成して想定確率を作ります。従来版と同じ計算です。';
+    if(settings.probabilitySource === 'final_odds'){
+      note.innerHTML = '<b>netkeiba確定オッズ換算</b>：単勝オッズの逆数を全頭で正規化し、市場確率としてEV計算に使います。確定済みレースはresult.htmlの最終単勝オッズ、未確定レースは取得時点オッズです。netkeiba AI指数とは別データです。';
+    }else if(settings.probabilitySource === 'airara'){
+      note.innerHTML = '<b>AIらら</b>：haro-blog.comの「前日予想データ」から馬番別の勝率％を取得し、全頭で正規化してEV計算に使います。通常予測・全日・期間横断で自動取得し、記事や馬番を確認できないレースだけ本体標準へ戻します。';
+    }else{
+      note.innerHTML = '<b>本体標準</b>：単勝オッズ由来80%＋人気順位由来20%を合成して想定確率を作ります。従来版と同じ計算です。';
+    }
   }
 }
 function updateDailyBudgetSettingsUI(){
@@ -3643,12 +3658,353 @@ function checkPopDuplicate(){
 // ─── EV計算モデル（結合版.jsから移植） ─────────────
 function isNAR(){ return settings.nar; }
 
+// ─── AIらら（前日予想データ）─────────────────────────
+// haro-blog.com の日付×開催場記事を1回だけ取得し、R番号×馬番で勝率を結合する。
+const AIRARA_PROB_CACHE_KEY = 'tk-airara-probability-v1';
+const AIRARA_PROB_CACHE_LIMIT = 90;
+const airaraDayMemory = new Map();
+const airaraInflight = new Map();
+
+function airaraSetStatus(message, kind){
+  const el = document.getElementById('airaraSourceStatus');
+  if(!el) return;
+  el.textContent = message || '';
+  el.style.color = kind === 'ok' ? 'var(--green)' : (kind === 'err' ? 'var(--red)' : 'var(--muted)');
+}
+function airaraNormalizeVenue(value){
+  return String(value || '')
+    .replace(/[（(].*$/,'')
+    .replace(/競馬場|競馬/g,'')
+    .replace(/[\s\u3000]/g,'')
+    .trim();
+}
+function airaraNormalizeDate(value){
+  const m = String(value || '').match(/(\d{4})[-/.]?(\d{2})[-/.]?(\d{2})/);
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : '';
+}
+function airaraDecodeHtml(value){
+  try{
+    const el = document.createElement('textarea');
+    el.innerHTML = String(value || '');
+    return el.value;
+  }catch(e){ return String(value || ''); }
+}
+function airaraCacheRead(){
+  try{
+    const data = JSON.parse(localStorage.getItem(AIRARA_PROB_CACHE_KEY) || '{}') || {};
+    return data && data.days && typeof data.days === 'object' ? data : {version:1,days:{}};
+  }catch(e){ return {version:1,days:{}}; }
+}
+function airaraCacheWrite(key, value){
+  try{
+    const data = airaraCacheRead();
+    data.version = 1;
+    data.days[key] = value;
+    const keys = Object.keys(data.days).sort((a,b) => Number(data.days[b]?.savedAt||0) - Number(data.days[a]?.savedAt||0));
+    keys.slice(AIRARA_PROB_CACHE_LIMIT).forEach(k => delete data.days[k]);
+    localStorage.setItem(AIRARA_PROB_CACHE_KEY, JSON.stringify(data));
+  }catch(e){ console.warn('[AIらら cache]', e); }
+}
+async function airaraFetchText(url){
+  const errors = [];
+  try{
+    // AIららは既存Userscriptの @connect 対象。利用可能なら住宅回線Bridgeを最優先する。
+    if(typeof window.__narBridgeFetch === 'function' && window.__bridgeAbsent !== true){
+      const res = await window.__narBridgeFetch(url, {timeout:30000});
+      if(typeof res === 'string' && res.length > 20) return res;
+      const status = Number(res && res.status || 0);
+      const text = String(res && res.text || '');
+      if(status >= 200 && status < 300 && text.length > 20) return text;
+      errors.push(status ? `Bridge HTTP ${status}` : 'Bridge応答なし');
+    }
+  }catch(e){ errors.push((e && e.message) || String(e)); }
+  try{
+    if(typeof fetchHtmlViaProxy === 'function'){
+      const text = await fetchHtmlViaProxy(url);
+      if(String(text || '').length > 20) return String(text);
+    }
+  }catch(e){ errors.push((e && e.message) || String(e)); }
+  try{
+    const res = await fetch(url, {cache:'no-store'});
+    const text = await res.text();
+    if(res.ok && text.length > 20) return text;
+    errors.push('HTTP ' + res.status);
+  }catch(e){ errors.push((e && e.message) || String(e)); }
+  throw new Error(errors.filter(Boolean).join(' / ') || 'AIらら取得失敗');
+}
+function airaraParseArticle(html){
+  let doc;
+  try{ doc = new DOMParser().parseFromString(String(html || ''), 'text/html'); }
+  catch(e){ return {}; }
+
+  const tableRows = {};
+  let currentRaceNo = 0;
+  let sequence = 0;
+  doc.querySelectorAll('h1,h2,h3,h4,table').forEach(node => {
+    if(node.tagName !== 'TABLE'){
+      const m = String(node.textContent || '').replace(/\s/g,'').match(/^R(\d{1,2})(?!\d)/i);
+      if(m){
+        const no = Number(m[1]);
+        if(no >= 1 && no <= 16) currentRaceNo = no;
+      }
+      return;
+    }
+    const rows = Array.from(node.rows || []);
+    let headerIndex = -1, winIndex = -1, horseIndex = -1;
+    for(let i=0; i<rows.length; i++){
+      const cells = Array.from(rows[i].cells || []);
+      let wi = -1, hi = -1;
+      cells.forEach((cell, index) => {
+        const text = String(cell.textContent || '').replace(/[\s\u3000]/g,'');
+        if(text === '勝率') wi = index;
+        if(text === '馬番') hi = index;
+      });
+      if(wi >= 0 && hi >= 0){ headerIndex = i; winIndex = wi; horseIndex = hi; break; }
+    }
+    if(headerIndex < 0) return;
+    const parsed = [];
+    for(let i=headerIndex+1; i<rows.length; i++){
+      const cells = Array.from(rows[i].cells || []);
+      if(cells.length <= Math.max(winIndex, horseIndex)) continue;
+      const horseMatch = String(cells[horseIndex].textContent || '').match(/\d+/);
+      const pctMatch = String(cells[winIndex].textContent || '').replace(/,/g,'').match(/[\d.]+/);
+      const no = horseMatch ? Number(horseMatch[0]) : 0;
+      const pct = pctMatch ? Number(pctMatch[0]) : 0;
+      if(!(no >= 1 && no <= 30) || !(pct > 0 && pct <= 100)) continue;
+      if(!parsed.some(x => x.no === no)) parsed.push({no, pct, prob:pct/100});
+    }
+    if(!parsed.length) return;
+    sequence++;
+    let detectedRaceNo = currentRaceNo;
+    // 旧記事はR見出しがh要素ではなく、表の直前にあるp/div要素のことがある。
+    if(!(detectedRaceNo >= 1)){
+      let el = node, hops = 0;
+      while(el && hops < 8){
+        el = el.previousElementSibling || (el.parentElement && el.parentElement !== doc.body ? el.parentElement.previousElementSibling : null);
+        hops++;
+        if(!el) continue;
+        const text = String(el.textContent || '').replace(/\s/g,'');
+        const m = text.match(/(?:^|[^0-9])(\d{1,2})R(?![0-9])/i) || text.match(/R(\d{1,2})(?![0-9])/i);
+        if(m){ detectedRaceNo = Number(m[1]); break; }
+      }
+    }
+    const raceNo = detectedRaceNo >= 1 && detectedRaceNo <= 16 ? detectedRaceNo : sequence;
+    if(!tableRows[raceNo] || parsed.length > tableRows[raceNo].length) tableRows[raceNo] = parsed;
+  });
+
+  // 新しい文章型の記事「R1 … 8【61.2%】」も保険として解析する。
+  const flowRows = {};
+  const raw = String((doc.body || doc.documentElement)?.textContent || '').replace(/\u3000/g,' ');
+  const re = /R\s*(\d{1,2})(?!\d)|(\d{1,2})\s*【\s*([\d.]+)\s*[%％]\s*】/g;
+  let current = 0, match;
+  while((match = re.exec(raw))){
+    if(match[1] != null){
+      const no = Number(match[1]);
+      if(no >= 1 && no <= 16) current = no;
+      continue;
+    }
+    if(!current) continue;
+    const no = Number(match[2]), pct = Number(match[3]);
+    if(!(no >= 1 && no <= 30) || !(pct > 0 && pct <= 100)) continue;
+    if(!flowRows[current]) flowRows[current] = [];
+    if(!flowRows[current].some(x => x.no === no)) flowRows[current].push({no,pct,prob:pct/100});
+  }
+
+  const out = {};
+  new Set([...Object.keys(tableRows), ...Object.keys(flowRows)]).forEach(key => {
+    const table = tableRows[key] || [], flow = flowRows[key] || [];
+    out[key] = flow.length > table.length ? flow : table;
+  });
+  return out;
+}
+function airaraArchiveLinks(html){
+  let doc;
+  try{ doc = new DOMParser().parseFromString(String(html || ''), 'text/html'); }
+  catch(e){ return []; }
+  return Array.from(doc.querySelectorAll('a[href*="/archives/"]')).map(a => {
+    const href = a.getAttribute('href') || '';
+    let link = href;
+    try{ link = new URL(href, 'https://haro-blog.com/').href; }catch(e){}
+    return {link, title:airaraDecodeHtml(a.textContent || '')};
+  }).filter(x => /\/archives\/\d+/.test(x.link) && x.title);
+}
+function airaraTitleMatches(title, date, venue){
+  const text = airaraDecodeHtml(title).replace(/[\s\u3000]/g,'');
+  const wantedVenue = airaraNormalizeVenue(venue);
+  const compactDate = airaraNormalizeDate(date).slice(2).replace(/-/g,'');
+  const titleDigits = text.replace(/\D/g,'');
+  // 旧題「AI地方競馬予想」と現行題「前日予想データ」の両方を対象にする。
+  return /予想/.test(text)
+    && !!wantedVenue && text.includes(wantedVenue)
+    && !!compactDate && titleDigits.includes(compactDate);
+}
+async function airaraDiscoverDay(date, venue){
+  const base = 'https://haro-blog.com';
+  const normalizedDate = airaraNormalizeDate(date);
+  const normalizedVenue = airaraNormalizeVenue(venue);
+  const prev = addLocalDaysYmd(normalizedDate, -1);
+  const next = addLocalDaysYmd(normalizedDate, 1);
+  let list = [];
+  try{
+    const url = `${base}/wp-json/wp/v2/posts?per_page=100&_fields=id,link,title,date&after=${prev}T00:00:00&before=${next}T23:59:59`;
+    const data = JSON.parse(await airaraFetchText(url));
+    if(Array.isArray(data)) list = data.map(p => ({link:p?.link || '', title:airaraDecodeHtml(p?.title?.rendered || '')}));
+  }catch(e){}
+  if(!list.some(x => airaraTitleMatches(x.title, normalizedDate, normalizedVenue))){
+    try{
+      const q = encodeURIComponent(normalizedVenue);
+      const data = JSON.parse(await airaraFetchText(`${base}/wp-json/wp/v2/posts?per_page=50&_fields=id,link,title,date&search=${q}`));
+      if(Array.isArray(data)) list.push(...data.map(p => ({link:p?.link || '', title:airaraDecodeHtml(p?.title?.rendered || '')})));
+    }catch(e){}
+  }
+  if(!list.some(x => airaraTitleMatches(x.title, normalizedDate, normalizedVenue))){
+    try{
+      const ym = normalizedDate.slice(0,7).replace('-','/');
+      list.push(...airaraArchiveLinks(await airaraFetchText(`${base}/archives/date/${ym}`)));
+    }catch(e){}
+  }
+  const hit = list.find(x => airaraTitleMatches(x.title, normalizedDate, normalizedVenue));
+  if(!hit || !hit.link) return {ok:false,stage:'article-not-found',date:normalizedDate,venue:normalizedVenue};
+  try{
+    const html = await airaraFetchText(hit.link);
+    const byR = airaraParseArticle(html);
+    if(Object.keys(byR).length < 1) return {ok:false,stage:'parse-empty',date:normalizedDate,venue:normalizedVenue,link:hit.link,title:hit.title};
+    return {ok:true,date:normalizedDate,venue:normalizedVenue,link:hit.link,title:hit.title,byR,savedAt:Date.now()};
+  }catch(e){
+    return {ok:false,stage:'article-fetch-failed',date:normalizedDate,venue:normalizedVenue,link:hit.link,error:(e&&e.message)||String(e)};
+  }
+}
+async function airaraGetDay(date, venue, force){
+  const normalizedDate = airaraNormalizeDate(date);
+  const normalizedVenue = airaraNormalizeVenue(venue);
+  const key = `${normalizedDate}|${normalizedVenue}`;
+  if(!normalizedDate || !normalizedVenue) return {ok:false,stage:'context-missing'};
+  if(force) airaraDayMemory.delete(key);
+  if(!force && airaraDayMemory.has(key)) return airaraDayMemory.get(key);
+  if(!force){
+    const saved = airaraCacheRead().days[key];
+    if(saved && saved.ok && saved.byR){ airaraDayMemory.set(key, saved); return saved; }
+  }
+  if(airaraInflight.has(key)) return airaraInflight.get(key);
+  const promise = airaraDiscoverDay(normalizedDate, normalizedVenue).then(result => {
+    // 取得失敗もセッション中は保持し、同じ開催の各Rで失敗通信を繰り返さない。
+    if(result) airaraDayMemory.set(key, result);
+    if(result && result.ok) airaraCacheWrite(key, result);
+    return result;
+  }).finally(() => airaraInflight.delete(key));
+  airaraInflight.set(key, promise);
+  return promise;
+}
+function airaraRaceContext(input){
+  const ctx = input || {};
+  const kind = ctx.kind || document.getElementById('pickKind')?.value || (settings.nar ? 'NAR' : 'JRA');
+  const raceId = String(ctx.raceId || ctx.rid || currentRaceId || '').replace(/\D/g,'');
+  const date = airaraNormalizeDate(ctx.date || document.getElementById('pickDate')?.value || '');
+  const venueCode = String(ctx.venueCode || (raceId.length >= 6 ? raceId.slice(4,6) : '') || document.getElementById('pickVenue')?.value || '');
+  let venue = ctx.venueName || ctx.venue || '';
+  if(!venue || /^\d+$/.test(String(venue))){
+    try{ venue = typeof venueName === 'function' ? venueName(kind, venueCode || venue) : venue; }catch(e){}
+  }
+  if(!venue){
+    const select = document.getElementById('pickVenue');
+    venue = select?.options?.[select.selectedIndex]?.textContent || '';
+  }
+  const raceNo = Number(ctx.raceNo || ctx.no || (raceId ? raceId.slice(-2) : 0));
+  return {kind,raceId,date,venue:airaraNormalizeVenue(venue),venueCode,raceNo};
+}
+function airaraClearProbabilities(list){
+  return (list || []).map(h => ({...h,airaraProbability:0,airaraWinPct:0,airaraSource:''}));
+}
+async function prepareProbabilitySourceForRace(list, input){
+  if(normalizeProbabilitySource(settings.probabilitySource) !== 'airara') return list || [];
+  const ctx = airaraRaceContext(input);
+  const silent = !!(input && input.silent);
+  const clean = airaraClearProbabilities(list || []);
+  if(!ctx.date || !ctx.venue || !(ctx.raceNo >= 1)){
+    window.__airaraLast = {...ctx,stage:'context-missing',matched:0,at:Date.now()};
+    if(!silent) airaraSetStatus('⚠️ 開催日・開催場・R番号を確認できないため、本体標準へ戻します。','err');
+    return clean;
+  }
+  if(!silent) airaraSetStatus(`AIらら取得中… ${ctx.date} ${ctx.venue} ${ctx.raceNo}R`,'');
+  const day = await airaraGetDay(ctx.date, ctx.venue, !!(input && input.force));
+  const rows = day && day.ok ? (day.byR?.[ctx.raceNo] || day.byR?.[String(ctx.raceNo)] || []) : [];
+  const map = new Map((rows || []).map(r => [Number(r.no), Number(r.prob)]));
+  let matched = 0;
+  const out = clean.map(h => {
+    const probability = map.get(Number(h.num));
+    if(probability > 0 && probability <= 1){
+      matched++;
+      return {...h,airaraProbability:probability,airaraWinPct:probability*100,airaraSource:day.link || ''};
+    }
+    return h;
+  });
+  if(!(matched >= 2)){
+    const stage = day?.stage || 'race-not-found';
+    window.__airaraLast = {...ctx,stage,matched:0,article:day?.link||'',at:Date.now()};
+    if(!silent) airaraSetStatus(`⚠️ AIらら勝率を照合できません（${stage}）。このレースは本体標準で計算します。`,'err');
+    return clean;
+  }
+  window.__airaraLast = {...ctx,stage:'ok',matched,total:out.length,article:day.link||'',title:day.title||'',at:Date.now()};
+  if(!silent){
+    const missing = Math.max(0, out.length - matched);
+    airaraSetStatus(`✅ AIらら ${matched}/${out.length}頭を反映しました${missing ? `（未照合${missing}頭）` : ''}：${day.title || ctx.venue}`,'ok');
+  }
+  return out;
+}
+async function fetchAiraraCurrentRace(){
+  const button = document.getElementById('airaraFetchCurrentBtn');
+  if(button) button.disabled = true;
+  try{
+    const select = document.getElementById('setProbabilitySource');
+    if(select) select.value = 'airara';
+    settings.probabilitySource = 'airara';
+    try{ localStorage.setItem('tk-html-settings', JSON.stringify(settings)); }catch(e){}
+    updateProbabilitySourceUI();
+    horses = await prepareProbabilitySourceForRace(horses, {...airaraRaceContext({}),force:true});
+    renderHorseRows();
+  }catch(e){ airaraSetStatus('❌ AIらら取得失敗: ' + ((e&&e.message)||e),'err'); }
+  finally{ if(button) button.disabled = false; }
+}
+
+function resolvedProbabilitySource(allHorses){
+  const selected = normalizeProbabilitySource(settings.probabilitySource);
+  if(selected === 'final_odds'){
+    return (allHorses || []).filter(h => Number(h.odds || 0) > 1).length >= 2 ? 'final_odds' : 'standard';
+  }
+  if(selected === 'airara'){
+    return (allHorses || []).filter(h => Number(h.airaraProbability || 0) > 0 && Number(h.airaraProbability || 0) <= 1).length >= 2 ? 'airara' : 'standard';
+  }
+  return 'standard';
+}
+
 function evProbRaw(h, allHorses){
   const o = Number(h.odds || 0);
   const pop = Number(h.pop || 0);
   const n = Math.max(1, allHorses.length);
   const probabilitySource = normalizeProbabilitySource(settings.probabilitySource);
   const validOdds = allHorses.filter(hh => Number(hh.odds||0) > 1).map(hh => Number(hh.odds));
+  const validAirara = allHorses
+    .map(hh => Number(hh.airaraProbability || 0))
+    .filter(p => p > 0 && p <= 1);
+
+  // AIららの「勝率」を馬番で結合し、出走馬全体で100%になるよう正規化する。
+  // 未照合馬には極小値だけを与え、記事に2頭以上の有効値が無ければ標準方式へ戻す。
+  if(probabilitySource === 'airara' && validAirara.length >= 2){
+    const missingWeight = 0.000001;
+    const totalWeight = allHorses.reduce((sum, hh) => {
+      const p = Number(hh.airaraProbability || 0);
+      return sum + (p > 0 && p <= 1 ? p : missingWeight);
+    }, 0);
+    if(totalWeight > 0){
+      const p = Number(h.airaraProbability || 0);
+      const weight = p > 0 && p <= 1 ? p : missingWeight;
+      try{ window.__probabilitySourceLast = {source:probabilitySource, validAirara:validAirara.length, fallback:false}; }catch(e){}
+      return weight / totalWeight;
+    }
+  }
+  if(probabilitySource === 'airara'){
+    try{ window.__probabilitySourceLast = {source:probabilitySource, validAirara:validAirara.length, fallback:true}; }catch(e){}
+  }
 
   // netkeibaの単勝オッズを市場確率へ換算する方式。
   // result.html取得時は最終単勝オッズ、未確定レースでは取得時点オッズを使う。
@@ -3691,6 +4047,8 @@ function evProbRaw(h, allHorses){
 }
 
 function normalizeRatedHorses(allHorses){
+  const selectedProbabilitySource = normalizeProbabilitySource(settings.probabilitySource);
+  const usedProbabilitySource = resolvedProbabilitySource(allHorses);
   const raw = allHorses.map(h => ({ ...h, raw: evProbRaw(h, allHorses) }));
   const total = raw.reduce((a,b) => a + Number(b.raw||0), 0) || 1;
   const n = Math.max(1, allHorses.length);
@@ -3704,7 +4062,8 @@ function normalizeRatedHorses(allHorses){
     const placeP = Math.min(0.90, rawPlaceP * (1 - favAdj) * (1 - longAdj));
     const renP   = Math.min(0.82, winP * renMult + 0.015);
     return { ...h, winP, placeP, renP, quinellaP: renP,
-             probabilitySource: normalizeProbabilitySource(settings.probabilitySource) };
+             probabilitySource: selectedProbabilitySource,
+             probabilitySourceUsed: usedProbabilitySource };
   }).sort((a,b) => b.winP - a.winP);
 }
 
@@ -3787,6 +4146,7 @@ function generateCandidates(allHorses){
     const k = keyOf(type, nums);
     const item = { type, nums: nums.map(Number), p: safeP, odds: safeOdds, ev, kelly, unit,
                    probabilitySource: normalizeProbabilitySource(settings.probabilitySource),
+                   probabilitySourceUsed: rated[0]?.probabilitySourceUsed || 'standard',
                    amount: unit, stake: unit, expectedReturn: ev * unit, abilityRankMin };
     const idx = recs.findIndex(x => keyOf(x.type, x.nums) === k);
     if(idx >= 0){ if(item.p*item.ev > recs[idx].p*recs[idx].ev) recs[idx] = item; }
@@ -4385,7 +4745,7 @@ function buildTickets(recs){
 }
 
 // ─── 予測実行 ──────────────────────────────────
-function runPredict(){
+async function runPredict(){
   // 入力反映
   document.querySelectorAll('#horseRows .horse-row').forEach((row, i) => {
     if(horses[i]){
@@ -4398,6 +4758,11 @@ function runPredict(){
       horses[i].pop   = Number(inputs[4].value||0);
     }
   });
+
+  if(normalizeProbabilitySource(settings.probabilitySource) === 'airara'){
+    horses = await prepareProbabilitySourceForRace(horses, airaraRaceContext({}));
+    renderHorseRows();
+  }
 
   const valid = horses.filter(h => h.num > 0 && h.name);
   if(valid.length < 2){
@@ -4439,6 +4804,14 @@ function runPredict(){
 // ─── 結果表示 ──────────────────────────────────
 function renderResult(valid, rated){
   const totalBet = lastTickets.reduce((a,b)=>a+b.amount,0);
+  const selectedProbabilitySource = normalizeProbabilitySource(settings.probabilitySource);
+  const usedProbabilitySource = rated?.[0]?.probabilitySourceUsed || resolvedProbabilitySource(valid);
+  const probabilitySourceDisplay = selectedProbabilitySource === usedProbabilitySource
+    ? probabilitySourceShortLabel(usedProbabilitySource)
+    : `${probabilitySourceShortLabel(selectedProbabilitySource)}→${probabilitySourceShortLabel(usedProbabilitySource)}`;
+  const probabilitySourceTitle = selectedProbabilitySource === usedProbabilitySource
+    ? probabilitySourceLabel(usedProbabilitySource)
+    : `${probabilitySourceLabel(selectedProbabilitySource)}（取得不可のため ${probabilitySourceLabel(usedProbabilitySource)}へフォールバック）`;
 
   // サマリ
   const sg = document.getElementById('summaryGrid');
@@ -4454,7 +4827,7 @@ function renderResult(valid, rated){
     <div class="summary-item"><div class="val">${totalBet}円</div><div class="lbl">合計投資</div></div>
     <div class="summary-item"><div class="val">${hasOdds}頭</div><div class="lbl">オッズ有</div></div>
     <div class="summary-item"><div class="val">${isNAR()?'NAR':'JRA'}</div><div class="lbl">区分</div></div>
-    <div class="summary-item"><div class="val" style="font-size:15px" title="${escapeHtml(probabilitySourceLabel(settings.probabilitySource))}">${probabilitySourceShortLabel(settings.probabilitySource)}</div><div class="lbl">確率ソース</div></div>
+    <div class="summary-item"><div class="val" style="font-size:15px" title="${escapeHtml(probabilitySourceTitle)}">${escapeHtml(probabilitySourceDisplay)}</div><div class="lbl">確率ソース</div></div>
   `;
   try{
     const narSummary = (typeof window.tkNarTransitionRaceSummary === 'function') ? window.tkNarTransitionRaceSummary(String(currentRaceId || '')) : null;
@@ -4790,8 +5163,12 @@ function simAddFromCand(i){
   renderSimEditRows();
 }
 
-function simAutoAddCandidates(){
+async function simAutoAddCandidates(){
   if(!lastRecs.length){
+    if(normalizeProbabilitySource(settings.probabilitySource) === 'airara'){
+      horses = await prepareProbabilitySourceForRace(horses, airaraRaceContext({}));
+      renderHorseRows();
+    }
     const valid = horses.filter(h => Number(h.num) > 0 && h.name);
     if(valid.length >= 2){
       const made = generateCandidates(valid);
@@ -4818,7 +5195,7 @@ function simAutoAddCandidates(){
 }
 
 async function runAutoSimulation(){
-  if(!simTickets.length) simAutoAddCandidates();
+  if(!simTickets.length) await simAutoAddCandidates();
   fillSimResultUrl();
   await runSimulationFromResult();
 }
@@ -13273,7 +13650,9 @@ if(horses.length === 0){
     const btn  = $('allSimBtn');
     const prog = $('allSimProgress');
     const kind = $('pickKind')?.value || 'JRA';
+    const date = $('pickDate')?.value || (typeof todayYmd === 'function' ? todayYmd() : '');
     const venueCode = $('pickVenue')?.value || '';
+    const selectedVenueName = venueName(kind, venueCode) || venueCode;
 
     asw_renderTarget();
 
@@ -13308,6 +13687,11 @@ if(horses.length === 0){
           currentRaceName = loaded.raceName || r.name || (r.no + 'R');
           row.raceName = currentRaceName;
           try{ if(typeof pgjApplyRaceMetaToRow === 'function') pgjApplyRaceMetaToRow(row, r.rid, currentRaceName); }catch(e){}
+
+          horses = await prepareProbabilitySourceForRace(horses, {
+            kind, date, venueName:selectedVenueName, venueCode,
+            raceNo:r.no, raceId:r.rid, silent:true
+          });
 
           const valid = horses.filter(h => Number(h.num) > 0 && h.name);
           if(valid.length < 2) throw new Error('有効な出走馬が2頭未満');
@@ -14368,6 +14752,11 @@ if(horses.length === 0){
               currentRaceName = loaded.raceName || r.name || (r.no + 'R');
               row.raceName = currentRaceName;
 
+              horses = await prepareProbabilitySourceForRace(horses, {
+                kind, date, venueName:vn, venueCode:vc,
+                raceNo:r.no, raceId:r.rid, silent:true
+              });
+
               const valid = horses.filter(h => Number(h.num) > 0 && h.name);
               if(valid.length < 2) throw new Error('有効な出走馬が2頭未満');
 
@@ -14637,9 +15026,13 @@ if(horses.length === 0){
       hit: 0, hasFinish: false, finishTop: [] };
     try{
       const loaded = String(task.date) < todayForFast ? await asw_loadHorsesFast(kind, task.rid) : await asw_loadHorses(kind, task.rid);
-      const localHorses = loaded.horses || [];
+      let localHorses = loaded.horses || [];
       row.raceName = loaded.raceName || task.raceName || (task.no + 'R');
       try{ if(typeof pgjApplyRaceMetaToRow === 'function') pgjApplyRaceMetaToRow(row, task.rid, row.raceName); }catch(e){}
+      localHorses = await prepareProbabilitySourceForRace(localHorses, {
+        kind, date:task.date, venueName:task.venueName, venueCode:task.venueCode,
+        raceNo:task.no, raceId:task.rid, silent:true
+      });
       let valid = localHorses.filter(h => Number(h.num) > 0 && h.name);
       if(valid.length < 2) throw new Error('有効な出走馬が2頭未満');
       // 一発モードは複数レースを並行するため、globalではなく馬ごとにrace_idを固定する。
@@ -15431,6 +15824,11 @@ if(horses.length === 0){
           row.raceName = currentRaceName;
           try{ if(typeof pgjApplyRaceMetaToRow === 'function') pgjApplyRaceMetaToRow(row, r.rid, currentRaceName); }catch(e){}
 
+          horses = await prepareProbabilitySourceForRace(horses, {
+            kind, date, venueName:venueName(kind, venueCode), venueCode,
+            raceNo:r.no, raceId:r.rid, silent:true
+          });
+
           const valid = horses.filter(h => Number(h.num) > 0 && h.name);
           if(valid.length < 2) throw new Error('有効な出走馬が2頭未満');
 
@@ -15703,6 +16101,10 @@ if(horses.length === 0){
         const loaded = chk.confirmed ? await ps_loadHorsesFromResult(kind, rid, chk.resultDoc) : await ps_loadHorsesForPredict(kind, rid);
         if(chk.confirmed) row.confirmedPredicted = true;
         horses = loaded.horses; currentRaceId = rid; currentRaceName = loaded.raceName || row.raceName; row.raceName = currentRaceName;
+        horses = await prepareProbabilitySourceForRace(horses, {
+          kind, date, venueName:venueName(kind, venueCode), venueCode,
+          raceNo:no, raceId:rid, silent:true
+        });
         const valid = horses.filter(h => Number(h.num) > 0 && h.name);
         const made = generateCandidates(valid); const tickets = buildTickets(made.recs);
         row.tickets = tickets.map(t => ({ ...t, nums:[...t.nums] })); row.count = tickets.length;
@@ -23664,6 +24066,18 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     try{
       var loaded = await window.asw_loadHorses(rec.kind, rec.raceId);
       var hs = (loaded && loaded.horses) || [];
+      var recVenueCode = String(rec.venueCode || String(rec.raceId || '').slice(4,6) || '');
+      var recVenueName = rec.venueName || rec.placeName || rec.venue || '';
+      try{ if(!recVenueName && typeof venueName === 'function') recVenueName = venueName(rec.kind, recVenueCode); }catch(e){}
+      hs = await prepareProbabilitySourceForRace(hs, {
+        kind:rec.kind,
+        date:rec.date || rec.raceDate || document.getElementById('pickDate')?.value || '',
+        venueName:recVenueName,
+        venueCode:recVenueCode,
+        raceNo:rec.raceNo || rec.no || Number(String(rec.raceId || '').slice(-2)),
+        raceId:rec.raceId,
+        silent:true
+      });
       var valid = hs.filter(function(h){ return Number(h.num) > 0 && h.name; });
       if(valid.length < 2) throw new Error('有効出走馬が2頭未満（未確定/発売前の可能性）');
       var nm = (loaded && loaded.raceName) || rec.raceName || '';
@@ -28578,7 +28992,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script id="theKeibaSafeCoreV6">
 /* ============================================================
-   v6.1 Probability Source
+   v6.2 AI Rara
    ・APP_VERSION / title / header version are rendered by one owner
    ・JRA/NAR, date, venue and race_id share one canonical state
    ・race_id mismatches are rejected before they reach later actions
@@ -28587,7 +29001,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  var VERSION='v6.1 Probability Source';
+  var VERSION='v6.2 AI Rara';
   var oldCore=window.TheKeibaCore;
   if(oldCore&&oldCore.version===VERSION){
     try{oldCore.refresh('duplicate-load');}catch(e){}

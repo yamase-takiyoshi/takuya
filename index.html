@@ -21,7 +21,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v6.7 Odds Integrity Guard</title>
+<title>The競馬 EV分析 v5.18.302 JraSpRaceList</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -906,7 +906,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
   <div style="display:flex;gap:8px;align-items:center">
     <button id="profitSplitBtn" class="btn-sm profit-split-toggle" type="button" onclick="toggleProfitLiveSplit()" aria-pressed="false">📊 横2画面</button>
     <button id="nativeThemeBtn" class="btn-sm native-theme-btn" type="button" title="本体テーマへ自動連動。単独起動時はここで切り替え">🌙 <span class="native-theme-label">ダーク・本体連動</span></button>
-    <span class="ver">v6.7 Odds Integrity Guard</span>
+    <span class="ver">v5.18.302 JraSpRaceList</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1124,7 +1124,6 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
         </div>
         <div style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.5">
           ※チェックした場だけを対象にします。1つもチェックしなければ、各日に実際に開催されている全場を自動対象にします。<br>
-          ※JRA・NARとも、指定期間の実開催日と開催場を先に確認し、非開催日を除外してから処理を開始します。<br>
           ※期間が長いと通信回数が非常に多くなり時間がかかります。まずは2〜3日で試すことを推奨します。
         </div>
       </div>
@@ -2007,23 +2006,6 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
       <div class="mode-grid" id="modeGrid"></div>
     </div>
 
-    <div class="card" id="probabilitySourceSettingsCard">
-      <h2>📐 想定確率ソース</h2>
-      <div class="settings-row">
-        <label for="setProbabilitySource">EV計算に使う確率</label>
-        <select id="setProbabilitySource" onchange="saveSettings()">
-          <option value="standard">本体標準（想定確率）</option>
-          <option value="final_odds">netkeiba確定オッズ（市場確率）</option>
-          <option value="airara">AIらら（前日予想・勝率）</option>
-        </select>
-      </div>
-      <div id="probabilitySourceNote" class="proxy-note" style="margin-top:7px;font-size:11px;line-height:1.65"></div>
-      <div id="airaraSourceControls" style="display:none;margin-top:9px;padding-top:9px;border-top:1px solid var(--border)">
-        <button id="airaraFetchCurrentBtn" class="btn-sm" type="button" onclick="fetchAiraraCurrentRace()">🧪 現在レースのAIらら勝率を取得</button>
-        <div id="airaraSourceStatus" style="margin-top:7px;font-size:11px;line-height:1.55;color:var(--muted)">選択すると、開催日・開催場・R番号から前日予想データを自動取得します。</div>
-      </div>
-    </div>
-
     <div class="card" id="dailyBudgetSettingsCard">
       <h2>🏁 1日予算モード</h2>
       <div class="settings-row">
@@ -2259,7 +2241,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v6.7 Odds Integrity Guard';
+window.APP_VERSION = 'v5.18.302 JraSpRaceList';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -2333,7 +2315,6 @@ const CHIP_CLASS = {
 let settings = {
   mode: 'roi100',
   allAgreeModes: ['roi100','roi120','ev_roi'],
-  probabilitySource: 'standard',
   nar: false,
   budget: 500,
   unit: 100,
@@ -2471,38 +2452,6 @@ function normalizeDailyBudgetSettings(){
   settings.allocationMode = settings.allocationMode === 'daily_rank' ? 'daily_rank' : 'per_race';
   settings.dailyRankMetric = ['ev','adjusted_ev','learned_profit'].includes(settings.dailyRankMetric) ? settings.dailyRankMetric : 'ev';
 }
-function normalizeProbabilitySource(value){
-  return value === 'final_odds' || value === 'airara' ? value : 'standard';
-}
-function probabilitySourceLabel(value){
-  const source = normalizeProbabilitySource(value);
-  if(source === 'final_odds') return 'netkeiba確定オッズ（市場確率）';
-  if(source === 'airara') return 'AIらら（前日予想・勝率）';
-  return '本体標準（想定確率）';
-}
-function probabilitySourceShortLabel(value){
-  const source = normalizeProbabilitySource(value);
-  if(source === 'final_odds') return '確定オッズ';
-  if(source === 'airara') return 'AIらら';
-  return '本体標準';
-}
-function updateProbabilitySourceUI(){
-  settings.probabilitySource = normalizeProbabilitySource(settings.probabilitySource);
-  const select = document.getElementById('setProbabilitySource');
-  if(select) select.value = settings.probabilitySource;
-  const airaraControls = document.getElementById('airaraSourceControls');
-  if(airaraControls) airaraControls.style.display = settings.probabilitySource === 'airara' ? '' : 'none';
-  const note = document.getElementById('probabilitySourceNote');
-  if(note){
-    if(settings.probabilitySource === 'final_odds'){
-      note.innerHTML = '<b>netkeiba確定オッズ換算</b>：単勝オッズの逆数を全頭で正規化し、市場確率としてEV計算に使います。出走馬全頭の実オッズが揃わないレースは、部分オッズで歪めず本体標準へ戻します。確定済みレースはresult.htmlの最終単勝オッズ、未確定レースは取得時点オッズです。netkeiba AI指数とは別データです。';
-    }else if(settings.probabilitySource === 'airara'){
-      note.innerHTML = '<b>AIらら</b>：haro-blog.comの「前日予想データ」から馬番別の勝率％を取得し、出走馬全頭を照合できたレースだけ正規化してEV計算に使います。欠落・馬番不一致があるレースは、未照合馬を極小確率にせず本体標準へ戻します。';
-    }else{
-      note.innerHTML = '<b>本体標準</b>：単勝オッズ由来80%＋人気順位由来20%を合成して想定確率を作ります。従来版と同じ計算です。';
-    }
-  }
-}
 function updateDailyBudgetSettingsUI(){
   normalizeDailyBudgetSettings();
   const mode = document.getElementById('setDailyAllocationMode'); if(mode) mode.value = settings.allocationMode;
@@ -2554,7 +2503,6 @@ function loadSettings(){
   try {
     loaded = JSON.parse(localStorage.getItem('tk-html-settings') || '{}') || {};
     Object.assign(settings, loaded);
-    settings.probabilitySource = normalizeProbabilitySource(settings.probabilitySource);
     if(!settings.proxyUrl) settings.proxyUrl = 'https://takuya.nitta-katsuhiko.workers.dev/';
     if(!settings.minEVByType) settings.minEVByType = {...DEFAULT_MIN_EV};
     TICKET_TYPES.forEach(t => { if(!settings.minEVByType[t]) settings.minEVByType[t] = DEFAULT_MIN_EV[t]; });
@@ -2573,7 +2521,6 @@ function loadSettings(){
   } catch(e) { profitHistory = []; }
 }
 function saveSettings(){
-  settings.probabilitySource = normalizeProbabilitySource(document.getElementById('setProbabilitySource')?.value);
   settings.nar = document.getElementById('setNar')?.value === '1';
   settings.budget = Number(document.getElementById('setBudget')?.value || 500);
   settings.unit = Number(document.getElementById('setUnit')?.value || 100);
@@ -2598,7 +2545,6 @@ function saveSettings(){
   });
   document.getElementById('narBadge').style.display = settings.nar ? '' : 'none';
   localStorage.setItem('tk-html-settings', JSON.stringify(settings));
-  updateProbabilitySourceUI();
   updateDailyBudgetSettingsUI();
   updateNarTransitionSettingsUI();
   syncDailyBudgetGuardStorage();
@@ -3428,7 +3374,6 @@ function applyStateSnapshot(data){
   // 設定（既存デフォルトを保ちつつ上書き）
   if(data.settings && typeof data.settings === 'object'){
     Object.assign(settings, data.settings);
-    settings.probabilitySource = normalizeProbabilitySource(settings.probabilitySource);
     if(!settings.minEVByType) settings.minEVByType = {...DEFAULT_MIN_EV};
     TICKET_TYPES.forEach(t => { if(settings.minEVByType[t] == null) settings.minEVByType[t] = DEFAULT_MIN_EV[t]; });
     if(!settings.proxyUrl) settings.proxyUrl = 'https://takuya.nitta-katsuhiko.workers.dev/';
@@ -3464,7 +3409,6 @@ function applyStateSnapshot(data){
 }
 
 function refreshSettingsUI(){
-  updateProbabilitySourceUI();
   const setNar = document.getElementById('setNar'); if(setNar) setNar.value = settings.nar ? '1' : '0';
   const setBudget = document.getElementById('setBudget'); if(setBudget) setBudget.value = settings.budget;
   const setUnit = document.getElementById('setUnit'); if(setUnit) setUnit.value = settings.unit;
@@ -3503,7 +3447,6 @@ function resetSettingsToDefault(){
   settings = {
     mode: 'roi100',
     allAgreeModes: ['roi100','roi120','ev_roi'],
-    probabilitySource: 'standard',
     nar: false,
     budget: 500,
     unit: 100,
@@ -3572,7 +3515,6 @@ function initUI(){
   document.getElementById('setUseWideUmaren').checked = settings.useWideUmaren !== false;
   document.getElementById('setNagoyaMode').checked = settings.nagoyaMode === true;
   document.getElementById('setDisabledTypeAction').value = (settings.disabledTypeAction === 'exclude') ? 'exclude' : 'skip'; // v5.18.194
-  updateProbabilitySourceUI();
   updateDailyBudgetSettingsUI();
   updateNarTransitionSettingsUI();
   syncDailyBudgetGuardStorage();
@@ -3659,358 +3601,17 @@ function checkPopDuplicate(){
 // ─── EV計算モデル（結合版.jsから移植） ─────────────
 function isNAR(){ return settings.nar; }
 
-// ─── AIらら（前日予想データ）─────────────────────────
-// haro-blog.com の日付×開催場記事を1回だけ取得し、R番号×馬番で勝率を結合する。
-const AIRARA_PROB_CACHE_KEY = 'tk-airara-probability-v1';
-const AIRARA_PROB_CACHE_LIMIT = 90;
-const airaraDayMemory = new Map();
-const airaraInflight = new Map();
-
-function airaraSetStatus(message, kind){
-  const el = document.getElementById('airaraSourceStatus');
-  if(!el) return;
-  el.textContent = message || '';
-  el.style.color = kind === 'ok' ? 'var(--green)' : (kind === 'err' ? 'var(--red)' : 'var(--muted)');
-}
-function airaraNormalizeVenue(value){
-  return String(value || '')
-    .replace(/[（(].*$/,'')
-    .replace(/競馬場|競馬/g,'')
-    .replace(/[\s\u3000]/g,'')
-    .trim();
-}
-function airaraNormalizeDate(value){
-  const m = String(value || '').match(/(\d{4})[-/.]?(\d{2})[-/.]?(\d{2})/);
-  return m ? `${m[1]}-${m[2]}-${m[3]}` : '';
-}
-function airaraDecodeHtml(value){
-  try{
-    const el = document.createElement('textarea');
-    el.innerHTML = String(value || '');
-    return el.value;
-  }catch(e){ return String(value || ''); }
-}
-function airaraCacheRead(){
-  try{
-    const data = JSON.parse(localStorage.getItem(AIRARA_PROB_CACHE_KEY) || '{}') || {};
-    return data && data.days && typeof data.days === 'object' ? data : {version:1,days:{}};
-  }catch(e){ return {version:1,days:{}}; }
-}
-function airaraCacheWrite(key, value){
-  try{
-    const data = airaraCacheRead();
-    data.version = 1;
-    data.days[key] = value;
-    const keys = Object.keys(data.days).sort((a,b) => Number(data.days[b]?.savedAt||0) - Number(data.days[a]?.savedAt||0));
-    keys.slice(AIRARA_PROB_CACHE_LIMIT).forEach(k => delete data.days[k]);
-    localStorage.setItem(AIRARA_PROB_CACHE_KEY, JSON.stringify(data));
-  }catch(e){ console.warn('[AIらら cache]', e); }
-}
-async function airaraFetchText(url){
-  const errors = [];
-  try{
-    // AIららは既存Userscriptの @connect 対象。利用可能なら住宅回線Bridgeを最優先する。
-    if(typeof window.__narBridgeFetch === 'function' && window.__bridgeAbsent !== true){
-      const res = await window.__narBridgeFetch(url, {timeout:30000});
-      if(typeof res === 'string' && res.length > 20) return res;
-      const status = Number(res && res.status || 0);
-      const text = String(res && res.text || '');
-      if(status >= 200 && status < 300 && text.length > 20) return text;
-      errors.push(status ? `Bridge HTTP ${status}` : 'Bridge応答なし');
-    }
-  }catch(e){ errors.push((e && e.message) || String(e)); }
-  try{
-    if(typeof fetchHtmlViaProxy === 'function'){
-      const text = await fetchHtmlViaProxy(url);
-      if(String(text || '').length > 20) return String(text);
-    }
-  }catch(e){ errors.push((e && e.message) || String(e)); }
-  try{
-    const res = await fetch(url, {cache:'no-store'});
-    const text = await res.text();
-    if(res.ok && text.length > 20) return text;
-    errors.push('HTTP ' + res.status);
-  }catch(e){ errors.push((e && e.message) || String(e)); }
-  throw new Error(errors.filter(Boolean).join(' / ') || 'AIらら取得失敗');
-}
-function airaraParseArticle(html){
-  let doc;
-  try{ doc = new DOMParser().parseFromString(String(html || ''), 'text/html'); }
-  catch(e){ return {}; }
-
-  const tableRows = {};
-  let currentRaceNo = 0;
-  let sequence = 0;
-  doc.querySelectorAll('h1,h2,h3,h4,table').forEach(node => {
-    if(node.tagName !== 'TABLE'){
-      const m = String(node.textContent || '').replace(/\s/g,'').match(/^R(\d{1,2})(?!\d)/i);
-      if(m){
-        const no = Number(m[1]);
-        if(no >= 1 && no <= 16) currentRaceNo = no;
-      }
-      return;
-    }
-    const rows = Array.from(node.rows || []);
-    let headerIndex = -1, winIndex = -1, horseIndex = -1;
-    for(let i=0; i<rows.length; i++){
-      const cells = Array.from(rows[i].cells || []);
-      let wi = -1, hi = -1;
-      cells.forEach((cell, index) => {
-        const text = String(cell.textContent || '').replace(/[\s\u3000]/g,'');
-        if(text === '勝率') wi = index;
-        if(text === '馬番') hi = index;
-      });
-      if(wi >= 0 && hi >= 0){ headerIndex = i; winIndex = wi; horseIndex = hi; break; }
-    }
-    if(headerIndex < 0) return;
-    const parsed = [];
-    for(let i=headerIndex+1; i<rows.length; i++){
-      const cells = Array.from(rows[i].cells || []);
-      if(cells.length <= Math.max(winIndex, horseIndex)) continue;
-      const horseMatch = String(cells[horseIndex].textContent || '').match(/\d+/);
-      const pctMatch = String(cells[winIndex].textContent || '').replace(/,/g,'').match(/[\d.]+/);
-      const no = horseMatch ? Number(horseMatch[0]) : 0;
-      const pct = pctMatch ? Number(pctMatch[0]) : 0;
-      if(!(no >= 1 && no <= 30) || !(pct > 0 && pct <= 100)) continue;
-      if(!parsed.some(x => x.no === no)) parsed.push({no, pct, prob:pct/100});
-    }
-    if(!parsed.length) return;
-    sequence++;
-    let detectedRaceNo = currentRaceNo;
-    // 旧記事はR見出しがh要素ではなく、表の直前にあるp/div要素のことがある。
-    if(!(detectedRaceNo >= 1)){
-      let el = node, hops = 0;
-      while(el && hops < 8){
-        el = el.previousElementSibling || (el.parentElement && el.parentElement !== doc.body ? el.parentElement.previousElementSibling : null);
-        hops++;
-        if(!el) continue;
-        const text = String(el.textContent || '').replace(/\s/g,'');
-        const m = text.match(/(?:^|[^0-9])(\d{1,2})R(?![0-9])/i) || text.match(/R(\d{1,2})(?![0-9])/i);
-        if(m){ detectedRaceNo = Number(m[1]); break; }
-      }
-    }
-    const raceNo = detectedRaceNo >= 1 && detectedRaceNo <= 16 ? detectedRaceNo : sequence;
-    if(!tableRows[raceNo] || parsed.length > tableRows[raceNo].length) tableRows[raceNo] = parsed;
-  });
-
-  // 新しい文章型の記事「R1 … 8【61.2%】」も保険として解析する。
-  const flowRows = {};
-  const raw = String((doc.body || doc.documentElement)?.textContent || '').replace(/\u3000/g,' ');
-  const re = /R\s*(\d{1,2})(?!\d)|(\d{1,2})\s*【\s*([\d.]+)\s*[%％]\s*】/g;
-  let current = 0, match;
-  while((match = re.exec(raw))){
-    if(match[1] != null){
-      const no = Number(match[1]);
-      if(no >= 1 && no <= 16) current = no;
-      continue;
-    }
-    if(!current) continue;
-    const no = Number(match[2]), pct = Number(match[3]);
-    if(!(no >= 1 && no <= 30) || !(pct > 0 && pct <= 100)) continue;
-    if(!flowRows[current]) flowRows[current] = [];
-    if(!flowRows[current].some(x => x.no === no)) flowRows[current].push({no,pct,prob:pct/100});
-  }
-
-  const out = {};
-  new Set([...Object.keys(tableRows), ...Object.keys(flowRows)]).forEach(key => {
-    const table = tableRows[key] || [], flow = flowRows[key] || [];
-    out[key] = flow.length > table.length ? flow : table;
-  });
-  return out;
-}
-function airaraArchiveLinks(html){
-  let doc;
-  try{ doc = new DOMParser().parseFromString(String(html || ''), 'text/html'); }
-  catch(e){ return []; }
-  return Array.from(doc.querySelectorAll('a[href*="/archives/"]')).map(a => {
-    const href = a.getAttribute('href') || '';
-    let link = href;
-    try{ link = new URL(href, 'https://haro-blog.com/').href; }catch(e){}
-    return {link, title:airaraDecodeHtml(a.textContent || '')};
-  }).filter(x => /\/archives\/\d+/.test(x.link) && x.title);
-}
-function airaraTitleMatches(title, date, venue){
-  const text = airaraDecodeHtml(title).replace(/[\s\u3000]/g,'');
-  const wantedVenue = airaraNormalizeVenue(venue);
-  const compactDate = airaraNormalizeDate(date).slice(2).replace(/-/g,'');
-  const titleDigits = text.replace(/\D/g,'');
-  // 旧題「AI地方競馬予想」と現行題「前日予想データ」の両方を対象にする。
-  return /予想/.test(text)
-    && !!wantedVenue && text.includes(wantedVenue)
-    && !!compactDate && titleDigits.includes(compactDate);
-}
-async function airaraDiscoverDay(date, venue){
-  const base = 'https://haro-blog.com';
-  const normalizedDate = airaraNormalizeDate(date);
-  const normalizedVenue = airaraNormalizeVenue(venue);
-  const prev = addLocalDaysYmd(normalizedDate, -1);
-  const next = addLocalDaysYmd(normalizedDate, 1);
-  let list = [];
-  try{
-    const url = `${base}/wp-json/wp/v2/posts?per_page=100&_fields=id,link,title,date&after=${prev}T00:00:00&before=${next}T23:59:59`;
-    const data = JSON.parse(await airaraFetchText(url));
-    if(Array.isArray(data)) list = data.map(p => ({link:p?.link || '', title:airaraDecodeHtml(p?.title?.rendered || '')}));
-  }catch(e){}
-  if(!list.some(x => airaraTitleMatches(x.title, normalizedDate, normalizedVenue))){
-    try{
-      const q = encodeURIComponent(normalizedVenue);
-      const data = JSON.parse(await airaraFetchText(`${base}/wp-json/wp/v2/posts?per_page=50&_fields=id,link,title,date&search=${q}`));
-      if(Array.isArray(data)) list.push(...data.map(p => ({link:p?.link || '', title:airaraDecodeHtml(p?.title?.rendered || '')})));
-    }catch(e){}
-  }
-  if(!list.some(x => airaraTitleMatches(x.title, normalizedDate, normalizedVenue))){
-    try{
-      const ym = normalizedDate.slice(0,7).replace('-','/');
-      list.push(...airaraArchiveLinks(await airaraFetchText(`${base}/archives/date/${ym}`)));
-    }catch(e){}
-  }
-  const hit = list.find(x => airaraTitleMatches(x.title, normalizedDate, normalizedVenue));
-  if(!hit || !hit.link) return {ok:false,stage:'article-not-found',date:normalizedDate,venue:normalizedVenue};
-  try{
-    const html = await airaraFetchText(hit.link);
-    const byR = airaraParseArticle(html);
-    if(Object.keys(byR).length < 1) return {ok:false,stage:'parse-empty',date:normalizedDate,venue:normalizedVenue,link:hit.link,title:hit.title};
-    return {ok:true,date:normalizedDate,venue:normalizedVenue,link:hit.link,title:hit.title,byR,savedAt:Date.now()};
-  }catch(e){
-    return {ok:false,stage:'article-fetch-failed',date:normalizedDate,venue:normalizedVenue,link:hit.link,error:(e&&e.message)||String(e)};
-  }
-}
-async function airaraGetDay(date, venue, force){
-  const normalizedDate = airaraNormalizeDate(date);
-  const normalizedVenue = airaraNormalizeVenue(venue);
-  const key = `${normalizedDate}|${normalizedVenue}`;
-  if(!normalizedDate || !normalizedVenue) return {ok:false,stage:'context-missing'};
-  if(force) airaraDayMemory.delete(key);
-  if(!force && airaraDayMemory.has(key)) return airaraDayMemory.get(key);
-  if(!force){
-    const saved = airaraCacheRead().days[key];
-    if(saved && saved.ok && saved.byR){ airaraDayMemory.set(key, saved); return saved; }
-  }
-  if(airaraInflight.has(key)) return airaraInflight.get(key);
-  const promise = airaraDiscoverDay(normalizedDate, normalizedVenue).then(result => {
-    // 取得失敗もセッション中は保持し、同じ開催の各Rで失敗通信を繰り返さない。
-    if(result) airaraDayMemory.set(key, result);
-    if(result && result.ok) airaraCacheWrite(key, result);
-    return result;
-  }).finally(() => airaraInflight.delete(key));
-  airaraInflight.set(key, promise);
-  return promise;
-}
-function airaraRaceContext(input){
-  const ctx = input || {};
-  const kind = ctx.kind || document.getElementById('pickKind')?.value || (settings.nar ? 'NAR' : 'JRA');
-  const raceId = String(ctx.raceId || ctx.rid || currentRaceId || '').replace(/\D/g,'');
-  const date = airaraNormalizeDate(ctx.date || document.getElementById('pickDate')?.value || '');
-  const venueCode = String(ctx.venueCode || (raceId.length >= 6 ? raceId.slice(4,6) : '') || document.getElementById('pickVenue')?.value || '');
-  let venue = ctx.venueName || ctx.venue || '';
-  if(!venue || /^\d+$/.test(String(venue))){
-    try{ venue = typeof venueName === 'function' ? venueName(kind, venueCode || venue) : venue; }catch(e){}
-  }
-  if(!venue){
-    const select = document.getElementById('pickVenue');
-    venue = select?.options?.[select.selectedIndex]?.textContent || '';
-  }
-  const raceNo = Number(ctx.raceNo || ctx.no || (raceId ? raceId.slice(-2) : 0));
-  return {kind,raceId,date,venue:airaraNormalizeVenue(venue),venueCode,raceNo};
-}
-function airaraClearProbabilities(list){
-  return (list || []).map(h => ({...h,airaraProbability:0,airaraWinPct:0,airaraSource:''}));
-}
-async function prepareProbabilitySourceForRace(list, input){
-  if(normalizeProbabilitySource(settings.probabilitySource) !== 'airara') return list || [];
-  const ctx = airaraRaceContext(input);
-  const silent = !!(input && input.silent);
-  const clean = airaraClearProbabilities(list || []);
-  if(!ctx.date || !ctx.venue || !(ctx.raceNo >= 1)){
-    window.__airaraLast = {...ctx,stage:'context-missing',matched:0,at:Date.now()};
-    if(!silent) airaraSetStatus('⚠️ 開催日・開催場・R番号を確認できないため、本体標準へ戻します。','err');
-    return clean;
-  }
-  if(!silent) airaraSetStatus(`AIらら取得中… ${ctx.date} ${ctx.venue} ${ctx.raceNo}R`,'');
-  const day = await airaraGetDay(ctx.date, ctx.venue, !!(input && input.force));
-  const rows = day && day.ok ? (day.byR?.[ctx.raceNo] || day.byR?.[String(ctx.raceNo)] || []) : [];
-  const map = new Map((rows || []).map(r => [Number(r.no), Number(r.prob)]));
-  let matched = 0;
-  const out = clean.map(h => {
-    const probability = map.get(Number(h.num));
-    if(probability > 0 && probability <= 1){
-      matched++;
-      return {...h,airaraProbability:probability,airaraWinPct:probability*100,airaraSource:day.link || ''};
-    }
-    return h;
-  });
-  const sourceStats = probabilitySourceStats(out, 'airara');
-  if(!sourceStats.usable){
-    const stage = matched > 0 ? 'coverage-incomplete' : (day?.stage || 'race-not-found');
-    window.__airaraLast = {...ctx,stage,matched,total:out.length,coverage:sourceStats.coverage,article:day?.link||'',at:Date.now()};
-    if(!silent){
-      const detail = out.length ? `${matched}/${out.length}頭` : stage;
-      airaraSetStatus(`⚠️ AIらら勝率が全頭分揃いません（${detail}）。部分データは使わず、このレースは本体標準で計算します。`,'err');
-    }
-    return clean;
-  }
-  window.__airaraLast = {...ctx,stage:'ok',matched,total:out.length,coverage:sourceStats.coverage,article:day.link||'',title:day.title||'',at:Date.now()};
-  if(!silent) airaraSetStatus(`✅ AIらら ${matched}/${out.length}頭を反映しました：${day.title || ctx.venue}`,'ok');
-  return out;
-}
-async function fetchAiraraCurrentRace(){
-  const button = document.getElementById('airaraFetchCurrentBtn');
-  if(button) button.disabled = true;
-  try{
-    const select = document.getElementById('setProbabilitySource');
-    if(select) select.value = 'airara';
-    settings.probabilitySource = 'airara';
-    try{ localStorage.setItem('tk-html-settings', JSON.stringify(settings)); }catch(e){}
-    updateProbabilitySourceUI();
-    horses = await prepareProbabilitySourceForRace(horses, {...airaraRaceContext({}),force:true});
-    renderHorseRows();
-  }catch(e){ airaraSetStatus('❌ AIらら取得失敗: ' + ((e&&e.message)||e),'err'); }
-  finally{ if(button) button.disabled = false; }
-}
-
-// 確率ソースは「一部だけ取れた」状態を有効扱いしない。
-// NARで2頭だけのオッズ/AI勝率が全頭へ拡大され、未取得馬がほぼ0%になる歪みを防ぐ。
-function probabilitySourceStats(allHorses, source){
-  const list = (allHorses || []).filter(h => Number(h?.num || 0) > 0 && h?.name);
-  const total = list.length;
-  let valid = 0;
-  if(source === 'final_odds'){
-    valid = list.filter(h => Number(h.odds || 0) >= 1 && h.provisionalOdds !== true).length;
-  }else if(source === 'airara'){
-    valid = list.filter(h => {
-      const p = Number(h.airaraProbability || 0);
-      return p > 0 && p <= 1;
-    }).length;
-  }else{
-    valid = total;
-  }
-  const coverage = total > 0 ? valid / total : 0;
-  return {source,total,valid,missing:Math.max(0,total-valid),coverage,required:total,usable:total >= 2 && valid === total};
-}
-
-function probabilitySourceDiagnostics(allHorses){
-  const selected = normalizeProbabilitySource(settings.probabilitySource);
-  const stats = probabilitySourceStats(allHorses, selected);
-  return {...stats,selected,used:stats.usable ? selected : 'standard'};
-}
-
-function resolvedProbabilitySource(allHorses){
-  const selected = normalizeProbabilitySource(settings.probabilitySource);
-  if(selected === 'standard') return 'standard';
-  return probabilitySourceStats(allHorses, selected).usable ? selected : 'standard';
-}
-
-function standardEvProbRaw(h, allHorses){
+function evProbRaw(h, allHorses){
   const o = Number(h.odds || 0);
   const pop = Number(h.pop || 0);
-  const n = Math.max(1, (allHorses || []).length);
-  const validOdds = (allHorses || []).filter(hh => Number(hh.odds||0) >= 1).map(hh => Number(hh.odds));
+  const n = Math.max(1, allHorses.length);
   const takeback = isNAR() ? 0.30 : 0.225;
+  const validOdds = allHorses.filter(hh => Number(hh.odds||0) > 1).map(hh => Number(hh.odds));
   const overround = validOdds.length > 1
     ? validOdds.reduce((s, od) => s + 1/od, 0)
     : (1 / Math.max(0.01, 1 - takeback));
 
-  let pOdds = o >= 1 ? (1/o) / Math.max(overround, 1/(1-takeback)) : 0;
+  let pOdds = o > 1 ? (1/o) / Math.max(overround, 1/(1-takeback)) : 0;
 
   let pPop = 0;
   if(pop > 0 && pop <= n){
@@ -4026,31 +3627,7 @@ function standardEvProbRaw(h, allHorses){
   return 1 / n;
 }
 
-function evProbRaw(h, allHorses){
-  const selected = normalizeProbabilitySource(settings.probabilitySource);
-  const stats = probabilitySourceStats(allHorses, selected);
-  const used = selected !== 'standard' && stats.usable ? selected : 'standard';
-  try{ window.__probabilitySourceLast = {...stats,selected,used,fallback:selected !== used}; }catch(e){}
-
-  // AIららは全出走馬を照合できた場合だけ、記事の勝率を正規化する。
-  if(used === 'airara'){
-    const totalWeight = (allHorses || []).reduce((sum, hh) => sum + Number(hh.airaraProbability || 0), 0);
-    if(totalWeight > 0) return Number(h.airaraProbability || 0) / totalWeight;
-  }
-
-  // 確定オッズも全出走馬の実値が揃った場合だけ市場確率へ換算する。
-  if(used === 'final_odds'){
-    const totalWeight = (allHorses || []).reduce((sum, hh) => sum + 1 / Number(hh.odds), 0);
-    if(totalWeight > 0) return (1 / Number(h.odds)) / totalWeight;
-  }
-
-  return standardEvProbRaw(h, allHorses);
-}
-
 function normalizeRatedHorses(allHorses){
-  const selectedProbabilitySource = normalizeProbabilitySource(settings.probabilitySource);
-  const usedProbabilitySource = resolvedProbabilitySource(allHorses);
-  const sourceStats = probabilitySourceStats(allHorses, selectedProbabilitySource);
   const raw = allHorses.map(h => ({ ...h, raw: evProbRaw(h, allHorses) }));
   const total = raw.reduce((a,b) => a + Number(b.raw||0), 0) || 1;
   const n = Math.max(1, allHorses.length);
@@ -4063,12 +3640,7 @@ function normalizeRatedHorses(allHorses){
     const longAdj = winP < 0.08 ? (0.08 - winP) * 0.8 : 0;
     const placeP = Math.min(0.90, rawPlaceP * (1 - favAdj) * (1 - longAdj));
     const renP   = Math.min(0.82, winP * renMult + 0.015);
-    return { ...h, winP, placeP, renP, quinellaP: renP,
-             probabilitySource: selectedProbabilitySource,
-             probabilitySourceUsed: usedProbabilitySource,
-             probabilitySourceCoverage: sourceStats.coverage,
-             probabilitySourceValid: sourceStats.valid,
-             probabilitySourceTotal: sourceStats.total };
+    return { ...h, winP, placeP, renP, quinellaP: renP };
   }).sort((a,b) => b.winP - a.winP);
 }
 
@@ -4150,11 +3722,6 @@ function generateCandidates(allHorses){
     const abilityRankMin = ranks.length ? Math.min(...ranks) : 99;
     const k = keyOf(type, nums);
     const item = { type, nums: nums.map(Number), p: safeP, odds: safeOdds, ev, kelly, unit,
-                   probabilitySource: normalizeProbabilitySource(settings.probabilitySource),
-                   probabilitySourceUsed: rated[0]?.probabilitySourceUsed || 'standard',
-                   probabilitySourceCoverage: Number(rated[0]?.probabilitySourceCoverage || 0),
-                   probabilitySourceValid: Number(rated[0]?.probabilitySourceValid || 0),
-                   probabilitySourceTotal: Number(rated[0]?.probabilitySourceTotal || 0),
                    amount: unit, stake: unit, expectedReturn: ev * unit, abilityRankMin };
     const idx = recs.findIndex(x => keyOf(x.type, x.nums) === k);
     if(idx >= 0){ if(item.p*item.ev > recs[idx].p*recs[idx].ev) recs[idx] = item; }
@@ -4753,7 +4320,7 @@ function buildTickets(recs){
 }
 
 // ─── 予測実行 ──────────────────────────────────
-async function runPredict(){
+function runPredict(){
   // 入力反映
   document.querySelectorAll('#horseRows .horse-row').forEach((row, i) => {
     if(horses[i]){
@@ -4766,11 +4333,6 @@ async function runPredict(){
       horses[i].pop   = Number(inputs[4].value||0);
     }
   });
-
-  if(normalizeProbabilitySource(settings.probabilitySource) === 'airara'){
-    horses = await prepareProbabilitySourceForRace(horses, airaraRaceContext({}));
-    renderHorseRows();
-  }
 
   const valid = horses.filter(h => h.num > 0 && h.name);
   if(valid.length < 2){
@@ -4812,14 +4374,6 @@ async function runPredict(){
 // ─── 結果表示 ──────────────────────────────────
 function renderResult(valid, rated){
   const totalBet = lastTickets.reduce((a,b)=>a+b.amount,0);
-  const selectedProbabilitySource = normalizeProbabilitySource(settings.probabilitySource);
-  const usedProbabilitySource = rated?.[0]?.probabilitySourceUsed || resolvedProbabilitySource(valid);
-  const probabilitySourceDisplay = selectedProbabilitySource === usedProbabilitySource
-    ? probabilitySourceShortLabel(usedProbabilitySource)
-    : `${probabilitySourceShortLabel(selectedProbabilitySource)}→${probabilitySourceShortLabel(usedProbabilitySource)}`;
-  const probabilitySourceTitle = selectedProbabilitySource === usedProbabilitySource
-    ? probabilitySourceLabel(usedProbabilitySource)
-    : `${probabilitySourceLabel(selectedProbabilitySource)}（取得不可のため ${probabilitySourceLabel(usedProbabilitySource)}へフォールバック）`;
 
   // サマリ
   const sg = document.getElementById('summaryGrid');
@@ -4835,7 +4389,6 @@ function renderResult(valid, rated){
     <div class="summary-item"><div class="val">${totalBet}円</div><div class="lbl">合計投資</div></div>
     <div class="summary-item"><div class="val">${hasOdds}頭</div><div class="lbl">オッズ有</div></div>
     <div class="summary-item"><div class="val">${isNAR()?'NAR':'JRA'}</div><div class="lbl">区分</div></div>
-    <div class="summary-item"><div class="val" style="font-size:15px" title="${escapeHtml(probabilitySourceTitle)}">${escapeHtml(probabilitySourceDisplay)}</div><div class="lbl">確率ソース</div></div>
   `;
   try{
     const narSummary = (typeof window.tkNarTransitionRaceSummary === 'function') ? window.tkNarTransitionRaceSummary(String(currentRaceId || '')) : null;
@@ -5171,12 +4724,8 @@ function simAddFromCand(i){
   renderSimEditRows();
 }
 
-async function simAutoAddCandidates(){
+function simAutoAddCandidates(){
   if(!lastRecs.length){
-    if(normalizeProbabilitySource(settings.probabilitySource) === 'airara'){
-      horses = await prepareProbabilitySourceForRace(horses, airaraRaceContext({}));
-      renderHorseRows();
-    }
     const valid = horses.filter(h => Number(h.num) > 0 && h.name);
     if(valid.length >= 2){
       const made = generateCandidates(valid);
@@ -5203,7 +4752,7 @@ async function simAutoAddCandidates(){
 }
 
 async function runAutoSimulation(){
-  if(!simTickets.length) await simAutoAddCandidates();
+  if(!simTickets.length) simAutoAddCandidates();
   fillSimResultUrl();
   await runSimulationFromResult();
 }
@@ -6284,10 +5833,6 @@ function parsePayoutsFromResultDoc(doc){
   blocks.forEach(block => {
     const type = types.find(t => block.startsWith(t));
     if(!type) return;
-    // セル単位でこの券種を1件以上取得済みなら、本文連結による誤組番を追加しない。
-    // synthetic NAR HTMLではセル境界のないtextContentが「5」「11」「2,060円」を
-    // 連結し、存在しない 1-5 等を生成することがあるため、本文解析は券種丸ごとの救済に限定する。
-    if(Object.keys(payouts).some(k => k.startsWith(type + ':'))) return;
     const amounts = [...block.matchAll(/([0-9,]+)\s*円/g)].map(m=>Number(m[1].replace(/,/g,''))).filter(n=>n>0 && n%10===0);
     if(!amounts.length) return;
     let combos = [];
@@ -6331,82 +5876,7 @@ function judgeTicketHit(ticket, finish){
 function payoutForTicket(ticket, payouts){
   const key = `${ticket.type}:${comboKey(ticket.type, ticket.nums)}`;
   if(payouts && payouts[key]) return {amount:payouts[key], source:'real'};
-  if(payouts && payouts.__strictRealPayouts){
-    throw new Error(`確定払戻が不足しています（${key}）。推定払戻には置き換えず、このレースを集計から除外します。`);
-  }
   return {amount:Math.max(0, Math.round((Number(ticket.odds || 0) * 100) / 10) * 10), source:'estimate'};
-}
-
-function realPayoutStats(payouts){
-  const keys = payouts && typeof payouts === 'object'
-    ? Object.keys(payouts).filter(k => /^(?:単勝|複勝|枠連|馬連|ワイド|馬単|3連複|3連単):/.test(k))
-    : [];
-  return {
-    count: keys.length,
-    hasWin: keys.some(k => k.startsWith('単勝:')),
-    hasPlace: keys.some(k => k.startsWith('複勝:')),
-    usable: keys.some(k => k.startsWith('単勝:')) && keys.some(k => k.startsWith('複勝:'))
-  };
-}
-
-function fairFinalOddsIntegrity(horseList, finish, payouts){
-  const list = (horseList || []).filter(h => Number(h && h.num) > 0 && h && h.name);
-  const oddsMap = new Map(list.map(h => [Number(h.num), {odds:Number(h.odds || 0), pop:Number(h.pop || 0)}]));
-  const market = winOddsMapIntegrity(oddsMap, list);
-  const dedicatedValid = list.filter(h => h.oddsSource === 'dedicated-final-odds' && Number(h.odds || 0) >= 1).length;
-  const winKeys = payouts && typeof payouts === 'object'
-    ? Object.keys(payouts).filter(k => k.startsWith('単勝:'))
-    : [];
-  let payoutChecked = false, payoutMatched = true, winnerOdds = 0, payoutOdds = 0;
-  if(Array.isArray(finish) && finish.length && winKeys.length === 1){
-    const winner = Number(finish[0] && finish[0].horseNo || 0);
-    const winnerHorse = list.find(h => Number(h.num) === winner);
-    const payout = Number(payouts[`単勝:${comboKey('単勝', [winner])}`] || 0);
-    if(winnerHorse && payout > 0){
-      payoutChecked = true;
-      winnerOdds = Number(winnerHorse.odds || 0);
-      payoutOdds = payout / 100;
-      const tolerance = Math.max(0.11, payoutOdds * 0.02);
-      payoutMatched = Math.abs(winnerOdds - payoutOdds) <= tolerance;
-    }
-  }
-  return {
-    total:list.length, dedicatedValid, dedicatedFull:list.length >= 2 && dedicatedValid === list.length,
-    reciprocalSum:market.reciprocalSum, marketPlausible:market.marketPlausible,
-    payoutChecked, payoutMatched, winnerOdds, payoutOdds
-  };
-}
-
-// JRA/NARを同じ条件で比較するため、結果確定レースは
-// 「全出走馬の実オッズ＋着順＋実払戻表」が揃ったものだけを集計する。
-function requireFairBacktestData(kind, horseList, finish, payouts){
-  const label = String(kind || '').toUpperCase() === 'NAR' ? 'NAR' : 'JRA';
-  const odds = probabilitySourceStats(horseList || [], 'final_odds');
-  const pay = realPayoutStats(payouts);
-  const hasFinish = Array.isArray(finish) && finish.length >= 2;
-  const integrity = fairFinalOddsIntegrity(horseList || [], finish, payouts);
-  if(hasFinish && !odds.usable){
-    throw new Error(`${label}確定オッズ取得不足（${odds.valid}/${odds.total}頭）。JRA/NAR共通の公平検証条件を満たさないため除外します。`);
-  }
-  if(hasFinish && !integrity.dedicatedFull){
-    throw new Error(`${label}専用オッズ表の取得証跡不足（${integrity.dedicatedValid}/${integrity.total}頭）。結果ページ由来の値は公平検証に使用しません。`);
-  }
-  if(hasFinish && !integrity.marketPlausible){
-    throw new Error(`${label}確定オッズ市場整合性エラー（逆数合計 ${integrity.reciprocalSum.toFixed(3)}）。走破タイム・馬体重等の誤読を防ぐため除外します。`);
-  }
-  if(hasFinish && !pay.usable){
-    throw new Error(`${label}実払戻表の解析不足（${pay.count}件）。推定払戻や損失扱いにせず、公平検証から除外します。`);
-  }
-  if(hasFinish && integrity.payoutChecked && !integrity.payoutMatched){
-    throw new Error(`${label}単勝オッズと実払戻が不一致（取得 ${integrity.winnerOdds.toFixed(1)}倍 / 払戻換算 ${integrity.payoutOdds.toFixed(1)}倍）。結果混入を防ぐため除外します。`);
-  }
-  return {
-    mode:'fair-backtest-v2', kind:label, fair:!!(hasFinish && odds.usable && pay.usable && integrity.dedicatedFull && integrity.marketPlausible && integrity.payoutMatched),
-    oddsValid:odds.valid, oddsTotal:odds.total, oddsCoverage:odds.coverage,
-    oddsSource:'dedicated-final-odds', reciprocalSum:integrity.reciprocalSum,
-    winnerPayoutCrossCheck:integrity.payoutChecked ? integrity.payoutMatched : null,
-    payoutKeys:pay.count, realPayoutOnly:true, postResultCancellation:false
-  };
 }
 
 function renderSimulation(finish, payouts, sourceLabel){
@@ -6506,7 +5976,7 @@ function renderSimulation(finish, payouts, sourceLabel){
         <div class="sim-ranking">${typeRows || '<div class="sim-note">券種別データなし</div>'}</div>
       </div>
     </div>
-    <div class="sim-note">ソース: ${escapeHtml(sourceLabel || '手入力')}。${payouts && payouts.__strictRealPayouts ? 'JRA・NARとも実払戻だけで精算し、欠落時は推定払戻へ置き換えません。' : '払戻表が解析できない券種は推定オッズで仮計算します。'}</div>
+    <div class="sim-note">ソース: ${escapeHtml(sourceLabel || '手入力')}。払戻表が解析できない券種は推定オッズで仮計算します。</div>
   `;
   if(box) box.innerHTML = html;
 
@@ -6544,8 +6014,6 @@ async function runSimulationFromResult(){
     const doc = new DOMParser().parseFromString(html, 'text/html');
     const finish = parseFinishFromResultDoc(doc);
     const payouts = parsePayoutsFromResultDoc(doc);
-    try{ Object.defineProperty(payouts, '__strictRealPayouts', {value:true, enumerable:false}); }
-    catch(e){ payouts.__strictRealPayouts = true; }
     renderSimulation(finish, payouts, raw);
     // v5.18.244: 結果・払戻をD1へ同期
     try{ await d1AutoSyncSettlement(finish, payouts); }catch(e){ console.warn('[D1 settlement sync]', e); }
@@ -8354,16 +7822,18 @@ function buildNetkeibaOddsUrls(kind, raceId){
   if(!raceId) return [];
   if(kind === 'NAR'){
     return [
-      // v6.7: オッズ専用ページを最優先。result.html は走破タイム等を
-      // オッズとして誤読する余地があるため、通常取得では最後の保険に限定する。
+      // v5.18.47: 確定済みレースは結果ページの最終単勝オッズ・人気を最優先。
+      `https://nar.netkeiba.com/race/result.html?race_id=${raceId}&rf=race_submenu`,
       `https://nar.netkeiba.com/odds/index.html?race_id=${raceId}`,
       `https://nar.netkeiba.com/odds/index.html?race_id=${raceId}&type=b1`,
-      `https://nar.netkeiba.com/race/result.html?race_id=${raceId}&rf=race_submenu`,
       `https://nar.netkeiba.com/race/shutuba.html?race_id=${raceId}&rf=race_submenu`
     ];
   }
   return [
-    // v6.7: JRAもオッズ専用ページ/APIを正とし、結果ページは最後の保険にする。
+    // v5.18.47: 確定済みレースは result.html の「最終単勝オッズ・人気」を最優先する。
+    // 未確定レースだけ odds/API → shutuba の順で補完する。
+    `https://race.netkeiba.com/race/result.html?race_id=${raceId}&rf=race_submenu`,
+    `https://race.netkeiba.com/race/result.html?race_id=${raceId}`,
     `https://race.netkeiba.com/odds/index.html?race_id=${raceId}&type=b1`,
     `https://race.netkeiba.com/odds/index.html?race_id=${raceId}`,
     `https://race.netkeiba.com/odds/index.html?race_id=${raceId}&rf=shutuba_submenu`,
@@ -8375,8 +7845,6 @@ function buildNetkeibaOddsUrls(kind, raceId){
     `https://race.netkeiba.com/api/api_get_odds.html?type=b1&race_id=${raceId}`,
     `https://race.netkeiba.com/api/api_get_odds.html?race_id=${raceId}&type=1`,
     `https://race.netkeiba.com/odds/api_get_odds.html?race_id=${raceId}&type=b1`,
-    `https://race.netkeiba.com/race/result.html?race_id=${raceId}&rf=race_submenu`,
-    `https://race.netkeiba.com/race/result.html?race_id=${raceId}`,
     `https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}&rf=race_submenu`,
     `https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}`
   ];
@@ -9308,47 +8776,8 @@ function parseOddsByNameFromOddsDoc(doc){
 }
 
 
-function isDedicatedWinOddsUrl(url){
-  const s = String(url || '');
-  return /\/odds\//i.test(s) || /api_get_(?:jra_)?odds/i.test(s);
-}
-
-function winOddsMapIntegrity(oddsMap, expectedHorses){
-  const list = (Array.isArray(expectedHorses) ? expectedHorses : [])
-    .filter(h => Number(h && h.num) >= 1 && Number(h && h.num) <= 18);
-  const nums = list.map(h => Number(h.num));
-  const values = [];
-  if(nums.length){
-    nums.forEach(num => {
-      const rec = oddsMap && oddsMap.get ? oddsMap.get(num) : null;
-      const odds = Number(rec && rec.odds || 0);
-      if(odds >= 1 && odds <= 999.9) values.push(odds);
-    });
-  }else if(oddsMap && oddsMap.forEach){
-    oddsMap.forEach(rec => {
-      const odds = Number(rec && rec.odds || 0);
-      if(odds >= 1 && odds <= 999.9) values.push(odds);
-    });
-  }
-  const total = nums.length || values.length;
-  const valid = values.length;
-  const full = total >= 2 && valid === total;
-  const reciprocalSum = values.reduce((sum, odds) => sum + 1 / odds, 0);
-  // 全頭揃った単勝市場の逆数合計が極端に小さい場合、走破タイム・馬体重等の誤読。
-  // 上限も広めに設け、重複セルや異なる券種の混入を拒否する。
-  const marketPlausible = !full || (reciprocalSum >= 0.55 && reciprocalSum <= 2.50);
-  return { total, valid, full, reciprocalSum, marketPlausible };
-}
-
-async function fetchWinOddsPopularity(kind, raceId, expectedHorses, options){
+async function fetchWinOddsPopularity(kind, raceId, expectedHorses){
   if(!settings.proxyUrl || !raceId) return new Map();
-  const opts = options || {};
-  const requireFull = opts.requireFull === true;
-  const dedicatedOnly = opts.dedicatedOnly === true;
-  let urls = buildNetkeibaOddsUrls(kind, raceId);
-  if(dedicatedOnly) urls = urls.filter(isDedicatedWinOddsUrl);
-  let bestMap = new Map();
-  let bestValid = 0;
   // v5.18.58 Debug: ステータス欄にオッズ取得ログを表示
   const dbgEl = document.getElementById('urlStatus');
   const dbgLog = [];
@@ -9358,7 +8787,7 @@ async function fetchWinOddsPopularity(kind, raceId, expectedHorses, options){
   }
   dbgAppend(`🔍 オッズ取得開始: ${raceId}`);
 
-  for(const url of urls){
+  for(const url of buildNetkeibaOddsUrls(kind, raceId)){
     const shortUrl = url.replace('https://race.netkeiba.com','').replace('https://nar.netkeiba.com','');
     try{
       const html = await fetchHtmlViaProxy(url);
@@ -9390,12 +8819,8 @@ async function fetchWinOddsPopularity(kind, raceId, expectedHorses, options){
       }
 
       if(url.includes('result.html')){
-        const check = winOddsMapIntegrity(map, expectedHorses);
-        dbgAppend(`📄 result.html → ${check.valid}/${check.total || map.size}件 / 逆数合計 ${check.reciprocalSum.toFixed(3)}`);
-        if(check.valid > bestValid && check.marketPlausible){ bestMap = map; bestValid = check.valid; }
-        if(check.marketPlausible && (requireFull ? check.full : check.valid >= 2)) return map;
-        if(!check.marketPlausible) dbgAppend('⛔ 結果ページ値を市場整合性エラーとして破棄');
-        continue;
+        dbgAppend(`📄 result.html → ${map.size}件取得`);
+        if(map.size >= 2) return map;
       }
 
       const anyMap = parseWinOddsPopularityFromAnyOddsHtml(html, expectedHorses);
@@ -9411,17 +8836,15 @@ async function fetchWinOddsPopularity(kind, raceId, expectedHorses, options){
         map = mergeOddsMaps(map, sMap);
       }
 
-      const check = winOddsMapIntegrity(map, expectedHorses);
-      dbgAppend(`${check.valid >= 2 && check.marketPlausible ? '✅' : '❌'} ${shortUrl} → ${check.valid}/${check.total || map.size}件${check.full ? ` / 逆数合計 ${check.reciprocalSum.toFixed(3)}` : ''}`);
-      if(check.valid > bestValid && check.marketPlausible){ bestMap = map; bestValid = check.valid; }
-      if(check.marketPlausible && (requireFull ? check.full : check.valid >= 2)) return map;
+      dbgAppend(`${map.size >= 2 ? '✅' : '❌'} ${shortUrl} → ${map.size}件`);
+      if(map.size >= 2) return map;
     }catch(e){
       dbgAppend(`💥 エラー: ${shortUrl} → ${e.message || e}`);
       console.warn('odds fetch failed:', e);
     }
   }
-  dbgAppend(`⚠️ オッズ取得不足（最良 ${bestValid}件）`);
-  return bestMap;
+  dbgAppend('⚠️ オッズ取得失敗（全URL試行済み）');
+  return new Map();
 }
 
 function mergeOddsPopularityIntoHorses(baseHorses, oddsMap){
@@ -9514,28 +8937,6 @@ function applyAuthoritativeJraOdds(baseHorses, oddsMap, safeFallbackMap){
       pop: (pop >= 1 && pop <= 18) ? pop : 0
     };
   });
-}
-
-// v6.7 Odds Integrity Guard:
-// 公平バックテストでは result.html の表をオッズ源に使わない。
-// 専用オッズページ/APIで全出走馬が揃い、市場全体の逆数合計が妥当な場合だけ採用する。
-async function applyDedicatedFinalOddsForBacktest(kind, raceId, baseHorses){
-  const label = String(kind || '').toUpperCase() === 'NAR' ? 'NAR' : 'JRA';
-  const list = (baseHorses || []).filter(h => Number(h && h.num) > 0 && h && h.name);
-  if(list.length < 2) throw new Error(`${label}出走馬取得不足`);
-  const oddsMap = await fetchWinOddsPopularity(label, raceId, list, { dedicatedOnly:true, requireFull:true });
-  const check = winOddsMapIntegrity(oddsMap, list);
-  if(!check.full){
-    throw new Error(`${label}専用オッズ表の確定オッズ取得不足（${check.valid}/${check.total}頭）。結果ページ値は使用せず除外します。`);
-  }
-  if(!check.marketPlausible){
-    throw new Error(`${label}確定オッズ市場整合性エラー（逆数合計 ${check.reciprocalSum.toFixed(3)}）。走破タイム等の誤読を防ぐため除外します。`);
-  }
-  let out = label === 'JRA'
-    ? applyAuthoritativeJraOdds(list, oddsMap, new Map())
-    : mergeOddsPopularityIntoHorses(list, oddsMap);
-  out = fillNarPopularityFromOdds(out);
-  return out.map(h => ({ ...h, provisionalOdds:false, oddsSource:'dedicated-final-odds' }));
 }
 
 
@@ -9670,8 +9071,8 @@ async function fetchRace(){
     const parser = new DOMParser();
     let doc = parser.parseFromString(html, 'text/html');
 
-    // v6.7: 確定済みレースは払戻表の存在で判定する。
-    // result.html の数値セルをオッズとして確定判定に使わない。
+    // v5.18.60: 確定済みレースは、入力欄がshutuba.htmlのままでもresult.htmlを本体として反映する。
+    // オークス等の確定レースは結果ページの最終単勝オッズ・最終人気をそのまま表示する。
     const ridAuto = (activeUrl.match(/race_id=(\d{10,14})/) || [])[1] || validation.raceId || '';
     const kindAuto = document.getElementById('pickKind')?.value || (activeUrl.includes('nar.netkeiba') ? 'NAR' : 'JRA');
     if(ridAuto && /\/race\/shutuba\.html/i.test(activeUrl)){
@@ -9681,13 +9082,13 @@ async function fetchRace(){
         const resultHtml = await fetchHtmlViaProxy(resultUrl);
         const resultDoc = parser.parseFromString(resultHtml, 'text/html');
         const resultHorsesProbe = parseHorsesFromDoc(resultDoc, resultUrl);
-        const resultPayoutProbe = realPayoutStats(parsePayoutsFromResultDoc(resultDoc));
-        if(resultHorsesProbe.length >= 2 && resultPayoutProbe.usable){
+        const resultOddsProbe = parseFinalOddsPopularityFromResultDoc(resultDoc, resultHorsesProbe);
+        if(resultHorsesProbe.length >= 2 && resultOddsProbe.size >= 2){
           activeUrl = resultUrl;
           html = resultHtml;
           doc = resultDoc;
           document.getElementById('raceUrl').value = resultUrl;
-          status.innerHTML = `<div class="url-status">🏁 確定済みのため結果・払戻を反映中（オッズは専用表から取得）...</div>`;
+          status.innerHTML = `<div class="url-status">🏁 確定済みのため result.html の最終値を反映中...</div>`;
         }
       }catch(e){
         console.log('result auto-reflect skipped:', e?.message || e);
@@ -9755,26 +9156,27 @@ async function fetchRace(){
     //
     // 対策：JRAは必ず odds/index.html を先に取得し、確定値で上書きする。
     // 出馬表HTMLからのオッズ解析は「予想オッズ列が明示されている場合」のみ保険で使う。
-    // NARも公式ページを優先し、部分オッズは後段の充足率ガードで破棄する。
+    // NAR側の挙動はそのまま維持し、一切変更しない。
     const kind = document.getElementById('pickKind')?.value || (activeUrl.includes('nar.netkeiba') ? 'NAR' : 'JRA');
     const isResultPage = /\/race\/result\.html/i.test(activeUrl);
-    let narOddsIncomplete = null;
 
     if(rid){
       if(kind === 'JRA'){
-        // v6.7: 確定レースでもresult.htmlのセル値をオッズに使わず、専用ページ/APIを正とする。
-        let oddsMap = await fetchWinOddsPopularity('JRA', rid, horses, {
-          dedicatedOnly:isResultPage, requireFull:isResultPage
-        });
-        const dedicatedCheck = winOddsMapIntegrity(oddsMap, horses);
-        if(isResultPage && dedicatedCheck.full && !dedicatedCheck.marketPlausible) oddsMap = new Map();
-        const resultPageFull = isResultPage && dedicatedCheck.full && dedicatedCheck.marketPlausible;
+        // Step1: 確定レース(result.html)なら、このページ内の最終単勝オッズ・最終人気を最優先。
+        // v5.18.64: result.html で2件以上取れた場合は odds/API を一切呼ばない（確定値汚染防止）。
+        let oddsMap = isResultPage ? parseFinalOddsPopularityFromResultDoc(doc, horses) : new Map();
+        const resultPageFull = isResultPage && oddsMap && oddsMap.size >= 2;
+        if(!resultPageFull){
+          if(!oddsMap || oddsMap.size < horses.length){
+            oddsMap = mergeOddsMaps(oddsMap, await fetchWinOddsPopularity('JRA', rid, horses));
+          }
+        }
 
         // Step2: 不足がある場合、既取得HTMLを保険で解析。
         // shutuba は予想オッズ列が明示されている場合のみ返すので斤量誤読なし。
-        // 確定結果ページ自体は保険に使わない。
+        // v5.18.64: result.html 確定値が揃っている場合はshutuba解析も不要。
         const shutubaOddsMap = (!resultPageFull && (!oddsMap || oddsMap.size < horses.length))
-          ? (isResultPage ? new Map() : parseWinOddsPopularityFromShutuba(doc))
+          ? (isResultPage ? parseFinalOddsPopularityFromResultDoc(doc, horses) : parseWinOddsPopularityFromShutuba(doc))
           : new Map();
 
         // Step3: JRAはここで旧オッズを全消去して、odds由来の値だけを馬番JOINする。
@@ -9791,38 +9193,20 @@ async function fetchRace(){
         // v5.18.64: result.html 確定値が揃っている場合は暫定補完もしない（確定値が正）。
         if(!resultPageFull){
           horses = fillProvisionalOddsPopularityForPrediction(horses);
-        }else{
-          horses = horses.map(h => ({...h, provisionalOdds:false, oddsSource:'dedicated-final-odds'}));
         }
       }else{
-        // NAR: オッズ専用ページを馬番で結合する。確定結果ページの表は混ぜない。
-        // 一部だけ取得できた場合は、その部分値を全体へ混ぜずオッズを全消去して標準方式へ戻す。
-        const beforeOddsMerge = horses.map(h => ({...h}));
-        if(isResultPage) horses = horses.map(h => ({...h, odds:0, pop:0, provisionalOdds:false}));
-        let oddsMap = await fetchWinOddsPopularity(kind, rid, horses, {
-          dedicatedOnly:isResultPage, requireFull:isResultPage
-        });
-        const narDedicatedCheck = winOddsMapIntegrity(oddsMap, horses);
-        if(isResultPage && narDedicatedCheck.full && !narDedicatedCheck.marketPlausible) oddsMap = new Map();
-        if(!isResultPage) oddsMap = mergeOddsMaps(oddsMap, parseWinOddsPopularityFromDoc(doc));
-        if(oddsMap && oddsMap.size) horses = mergeOddsPopularityIntoHorses(horses, oddsMap);
-        const narOddsStats = probabilitySourceStats(horses, 'final_odds');
-        if(narOddsStats.usable){
-          horses = fillNarPopularityFromOdds(horses);
-          const narIntegrity = winOddsMapIntegrity(oddsMap, horses);
-          if(isResultPage && narIntegrity.full && narIntegrity.marketPlausible){
-            horses = horses.map(h => ({...h, provisionalOdds:false, oddsSource:'dedicated-final-odds'}));
-          }
+        // NAR: 既存ロジックをそのまま維持
+        const oddsMap = await fetchWinOddsPopularity(kind, rid, horses);
+        if(oddsMap.size >= 2){
+          horses = mergeOddsPopularityIntoHorses(horses, oddsMap);
         }else{
-          narOddsIncomplete = narOddsStats;
-          horses = horses.map((h, i) => ({
-            ...h,
-            odds: 0,
-            pop: isResultPage ? 0 : Number(beforeOddsMerge[i]?.pop || 0),
-            provisionalOdds: false
-          }));
-          try{ window.__narOddsLast = {...narOddsStats,raceId:rid,stage:'coverage-incomplete',at:Date.now()}; }catch(e){}
+          const shutubaOddsMap = parseWinOddsPopularityFromDoc(doc);
+          if(shutubaOddsMap.size >= 2){
+            horses = mergeOddsPopularityIntoHorses(horses, shutubaOddsMap);
+          }
         }
+        // NAR補完: 人気が全馬未取得 or オッズと順番が矛盾する場合、オッズ昇順で人気を再計算
+        horses = fillNarPopularityFromOdds(horses);
       }
     }
 
@@ -9844,8 +9228,6 @@ async function fetchRace(){
     const pageNote = /\/race\/result\.html/i.test(activeUrl) ? ' / result.html最終値' : '';
     if(oddsMisKeyed){
       status.innerHTML = `<div class="url-status err">⚠️ 単勝オッズが「馬番=人気=オッズ昇順」と完全一致しました（取得元の人気順テーブルを馬番にそのまま割り当てた誤キーの疑い）。本物の値ではないため、汚染防止にオッズ・人気を破棄しました。<br>馬名・枠・馬番（${horses.length}頭）は取得済みです。時間をおいて再取得するか、各馬のオッズ/人気を手入力してください。</div>`;
-    }else if(narOddsIncomplete){
-      status.innerHTML = `<div class="url-status err">⚠️ ${escapeHtml(currentRaceName || '')} ${horses.length}頭は取得しましたが、NAR単勝オッズが ${narOddsIncomplete.valid}/${narOddsIncomplete.total}頭分しか揃いません。部分オッズは破棄し、確率ソースは本体標準へ安全に戻します。再取得または全頭分の手入力後に計算してください。</div>`;
     }else{
       status.innerHTML = `<div class="url-status ok">✅ ${escapeHtml(currentRaceName || '')} ${horses.length}頭 取得しました${pageNote} / 単勝オッズ ${oddsCount}件 / 人気 ${popCount}件 / 枠番 ${frameCount}件${oddsNote}</div>`;
     }
@@ -10171,9 +9553,6 @@ function parseHorsesFromDoc(doc, url){
 
     const horseLink = tr.querySelector('a[href*="/horse/"]');
     if(!horseLink) return;
-    // 取消・競走除外は発売対象外。中止・失格は実際に出走しているため残す。
-    const rowStatusText = normCellText(tr);
-    if(/取消|競走除外|(?:^|\s)除外(?:\s|$)/.test(rowStatusText)) return;
 
     const horseName = normCellText(horseLink)
       .replace(/のデータベース/g,'')
@@ -10297,8 +9676,6 @@ function parseHorsesFromDbDoc(doc){
   Array.from(table.querySelectorAll('tr')).forEach(tr => {
     const horseLink = tr.querySelector('a[href*="/horse/"]');
     if(!horseLink) return;
-    const rowStatusText = normCellText(tr);
-    if(/取消|競走除外|(?:^|\s)除外(?:\s|$)/.test(rowStatusText)) return;
     const cells = Array.from(tr.children);
 
     const name = normCellText(horseLink).replace(/のデータベース/g,'').replace(/データベース/g,'').replace(/\s+/g,'').trim();
@@ -13490,7 +12867,12 @@ if(horses.length === 0){
         const rUrl = `${host}/race/result.html?race_id=${rid}&rf=race_submenu`;
         const rHtml = await fetchHtmlViaProxy(rUrl);
         const rDoc = parser.parseFromString(rHtml, 'text/html');
+        const rHorses = parseHorsesFromDoc(rDoc, rUrl);
+        const rOdds = parseFinalOddsPopularityFromResultDoc(rDoc, rHorses);
         resultDoc = rDoc; // 精算で使い回す
+        if(rHorses.length >= 2 && rOdds.size >= 2){
+          activeUrl = rUrl; html = rHtml; doc = rDoc; isResultPage = true;
+        }
       }catch(e){ /* 未確定レースは結果なし */ }
     }
 
@@ -13508,9 +12890,31 @@ if(horses.length === 0){
       }
     }catch(e){}
 
-    // v6.7: バックテストはJRA/NARとも専用オッズ表/APIだけを使用する。
-    // result.html の走破タイム・馬体重・人気セルをオッズへ混入させない。
-    hs = await applyDedicatedFinalOddsForBacktest(kind, rid, hs);
+    // ── オッズ・人気（fetchRace と同じ手順）──
+    if(kind === 'JRA'){
+      let oddsMap = isResultPage ? parseFinalOddsPopularityFromResultDoc(doc, hs) : new Map();
+      const resultPageFull = isResultPage && oddsMap && oddsMap.size >= 2;
+      if(!resultPageFull){
+        if(!oddsMap || oddsMap.size < hs.length){
+          oddsMap = mergeOddsMaps(oddsMap, await fetchWinOddsPopularity('JRA', rid, hs));
+        }
+      }
+      const shutubaOddsMap = (!resultPageFull && (!oddsMap || oddsMap.size < hs.length))
+        ? (isResultPage ? parseFinalOddsPopularityFromResultDoc(doc, hs) : parseWinOddsPopularityFromShutuba(doc))
+        : new Map();
+      hs = applyAuthoritativeJraOdds(hs, oddsMap, shutubaOddsMap);
+      if(!resultPageFull) hs = fillNarPopularityFromOdds(hs);
+      if(!resultPageFull) hs = fillProvisionalOddsPopularityForPrediction(hs);
+    } else {
+      const oddsMap = await fetchWinOddsPopularity(kind, rid, hs);
+      if(oddsMap.size >= 2){
+        hs = mergeOddsPopularityIntoHorses(hs, oddsMap);
+      } else {
+        const shutubaOddsMap = parseWinOddsPopularityFromDoc(doc);
+        if(shutubaOddsMap.size >= 2) hs = mergeOddsPopularityIntoHorses(hs, shutubaOddsMap);
+      }
+      hs = fillNarPopularityFromOdds(hs);
+    }
     // v5.18.128: 単レース取得(fetchRace)と同じ誤キーガードをバッチ経路にも適用。
     // 「馬番=人気=オッズ昇順」=人気順テーブルを馬番に直貼りした誤キーの疑い。
     // この汚染オッズだと毎レース上位＝馬番1,2,3,4になり買い目が全レース同じになる。除外する。
@@ -13536,11 +12940,29 @@ if(horses.length === 0){
       const raceName = parseRaceTitleFromDoc(doc) || '';
       try{ if(typeof pgjCacheRaceMeta === 'function') pgjCacheRaceMeta(rid, doc, raceName); }catch(e){}
 
-      hs = await applyDedicatedFinalOddsForBacktest(kind, rid, hs);
-      if(typeof oddsLookMisKeyedByUmaban === 'function' && oddsLookMisKeyedByUmaban(hs)){
-        throw new Error('mis-keyed odds suspected');
+      if(kind === 'JRA'){
+        const oddsMap = (typeof parseFinalOddsPopularityFromResultDoc === 'function')
+          ? parseFinalOddsPopularityFromResultDoc(doc, hs) : new Map();
+        if(!oddsMap || oddsMap.size < 2) throw new Error('final odds not enough');
+        hs = applyAuthoritativeJraOdds(hs, oddsMap, new Map());
+        if(typeof oddsLookMisKeyedByUmaban === 'function' && oddsLookMisKeyedByUmaban(hs)){
+          throw new Error('mis-keyed odds suspected');
+        }
+        return { horses: hs, raceName, isResultPage: true, resultDoc: doc, fast: true, raceMeta: (typeof pgjRaceMetaOf === 'function' ? pgjRaceMetaOf(rid) : null) };
       }
-      return { horses: hs, raceName, isResultPage: true, resultDoc: doc, fast: true, raceMeta: (typeof pgjRaceMetaOf === 'function' ? pgjRaceMetaOf(rid) : null) };
+
+      // NARはページ差が大きいので、result先読みで足りる場合だけ使う。
+      let oddsMap = (typeof parseFinalOddsPopularityFromResultDoc === 'function')
+        ? parseFinalOddsPopularityFromResultDoc(doc, hs) : new Map();
+      if((!oddsMap || oddsMap.size < 2) && typeof parseWinOddsPopularityFromDoc === 'function'){
+        oddsMap = parseWinOddsPopularityFromDoc(doc);
+      }
+      if(oddsMap && oddsMap.size >= 2){
+        hs = mergeOddsPopularityIntoHorses(hs, oddsMap);
+        hs = fillNarPopularityFromOdds(hs);
+        return { horses: hs, raceName, isResultPage: true, resultDoc: doc, fast: true, raceMeta: (typeof pgjRaceMetaOf === 'function' ? pgjRaceMetaOf(rid) : null) };
+      }
+      throw new Error('NAR result odds not enough');
     }catch(e){
       return await asw_loadHorses(kind, rid);
     }
@@ -13557,8 +12979,6 @@ if(horses.length === 0){
     try{ if(typeof pgjCacheRaceMeta === 'function') pgjCacheRaceMeta(rid, doc, parseRaceTitleFromDoc(doc) || currentRaceName || ''); }catch(e){}
     const finish  = parseFinishFromResultDoc(doc);   // 内部で global horses を参照するので先にセット必須
     const payouts = parsePayoutsFromResultDoc(doc);
-    try{ Object.defineProperty(payouts, '__strictRealPayouts', {value:true, enumerable:false}); }
-    catch(e){ payouts.__strictRealPayouts = true; }
     return { finish, payouts };
   }
 
@@ -13580,12 +13000,17 @@ if(horses.length === 0){
       ret += r;
     });
 
-    // v6.6 Fair Backtest Guard:
-    // 結果を見た後に「累計ROIが下がるレース」を投資0円へ変更する旧処理は後知恵になるため禁止。
-    // 学習状態には実績を時系列で記録するが、当該レースの購入・払戻は必ずそのまま集計する。
-    let postResultRoiDeclineObserved = false;
+    // v5.18.213 DirectBridge:
+    // 学習モードでは、確定済みシミュレーションの累計ROIが前回値を下回る購入は見送り扱いにする。
+    // 期間横断・一発モード・全レース一括はこの精算関数を通るため、実績ベースの収支線が右肩下がりにならない。
     try{
-      if(typeof settings !== 'undefined' && settings && settings.mode === 'learning' && hasFinish && bet > 0){
+      // v5.18.216 NormalLearning: 学習強度が「ノーマル」ならガードOFF（累計ROI低下でも見送りしない）。
+      let _rlGuardOff = false;
+      try{
+        if(typeof window.tkLearnGuardOff === 'function') _rlGuardOff = !!window.tkLearnGuardOff();
+        else _rlGuardOff = (localStorage.getItem('tk-learn-strength') === 'norm');
+      }catch(e){ _rlGuardOff = false; }
+      if(typeof settings !== 'undefined' && settings && settings.mode === 'learning' && !_rlGuardOff && hasFinish && bet > 0){
         let st = window.tkRisingLearningState;
         if(!st){
           let baseBet = 0, baseRet = 0;
@@ -13598,14 +13023,17 @@ if(horses.length === 0){
         }
         const beforeRoi = st.bet > 0 ? st.ret / st.bet : 1.0;
         const afterRoi  = (st.bet + bet) > 0 ? (st.ret + ret) / (st.bet + bet) : 1.0;
-        postResultRoiDeclineObserved = afterRoi + 1e-9 < beforeRoi;
-        if(postResultRoiDeclineObserved) st.observedDeclines = Number(st.observedDeclines || 0) + 1;
+        if(afterRoi + 1e-9 < beforeRoi){
+          (tickets || []).forEach(t => { t.amount = 0; t.stake = 0; t.risingLearningSkipped = true; });
+          st.skipped = Number(st.skipped || 0) + 1;
+          return { bet: 0, ret: 0, hit: 0, profit: 0, roi: 0, count: 0, hasFinish, risingLearningSkipped: true,
+                   risingLearningReason: '累計ROI低下回避', beforeRoi: beforeRoi * 100, afterRoi: afterRoi * 100 };
+        }
         st.bet += bet; st.ret += ret; st.accepted = Number(st.accepted || 0) + 1;
       }
     }catch(e){}
 
-    return { bet, ret, hit, profit: ret - bet, roi: bet ? ret / bet * 100 : 0, count: tickets.length, hasFinish,
-             fairBacktest:true, postResultCancellation:false, postResultRoiDeclineObserved };
+    return { bet, ret, hit, profit: ret - bet, roi: bet ? ret / bet * 100 : 0, count: tickets.length, hasFinish };
   }
 
   // v5.18.195 RangeSimFastMode:
@@ -13641,16 +13069,6 @@ if(horses.length === 0){
         if(Number.isFinite(Number(t.learnedExpectedProfit))) detail.学習期待利益 = Number(t.learnedExpectedProfit);
         if(Number(t.learnedRoiAdj || 0) > 0) detail.学習ROI補正 = Number(t.learnedRoiAdj);
         if(Number(t.p || 0) > 0) detail.予測確率 = Number(t.p);
-        detail.確率ソース指定 = probabilitySourceShortLabel(t.probabilitySource || 'standard');
-        detail.確率ソース実使用 = probabilitySourceShortLabel(t.probabilitySourceUsed || 'standard');
-        if(Number(t.probabilitySourceTotal || 0) > 0){
-          detail.確率ソース取得数 = `${Number(t.probabilitySourceValid || 0)}/${Number(t.probabilitySourceTotal || 0)}`;
-          detail.確率ソース取得率 = Math.round(Number(t.probabilitySourceCoverage || 0) * 1000) / 10;
-        }
-        if(row.dataQualityFair){
-          detail.検証条件 = 'JRA・NAR共通：専用オッズ表＋全頭実オッズ＋実払戻照合';
-          detail.結果後購入取消 = 0;
-        }
         if(t.allAgree === true || t.userForcedPriority === true){
           detail.全て同意 = 1;
           detail.ユーザー強制優先 = 1;
@@ -13789,9 +13207,7 @@ if(horses.length === 0){
     const btn  = $('allSimBtn');
     const prog = $('allSimProgress');
     const kind = $('pickKind')?.value || 'JRA';
-    const date = $('pickDate')?.value || (typeof todayYmd === 'function' ? todayYmd() : '');
     const venueCode = $('pickVenue')?.value || '';
-    const selectedVenueName = venueName(kind, venueCode) || venueCode;
 
     asw_renderTarget();
 
@@ -13827,11 +13243,6 @@ if(horses.length === 0){
           row.raceName = currentRaceName;
           try{ if(typeof pgjApplyRaceMetaToRow === 'function') pgjApplyRaceMetaToRow(row, r.rid, currentRaceName); }catch(e){}
 
-          horses = await prepareProbabilitySourceForRace(horses, {
-            kind, date, venueName:selectedVenueName, venueCode,
-            raceNo:r.no, raceId:r.rid, silent:true
-          });
-
           const valid = horses.filter(h => Number(h.num) > 0 && h.name);
           if(valid.length < 2) throw new Error('有効な出走馬が2頭未満');
 
@@ -13847,8 +13258,6 @@ if(horses.length === 0){
           try{ if(typeof pgjApplyRaceMetaToRow === 'function') pgjApplyRaceMetaToRow(row, r.rid, currentRaceName); }catch(e){}
           row.hasFinish = finish && finish.length >= 2;
           row.finishTop = row.hasFinish ? finish.slice(0, 3).map(x => x.horseNo) : [];
-          row.dataQuality = requireFairBacktestData(kind, valid, finish, payouts);
-          row.dataQualityFair = !!row.dataQuality.fair;
 
           // 4) 精算
           const s = asw_settle(simTickets, finish, payouts);
@@ -14174,208 +13583,6 @@ if(horses.length === 0){
     return plan;
   }
 
-  // v6.6 Fair Backtest Guard
-  // NAR公式「月別開催日程」を月ごとに取得し、開催リンクに含まれる
-  // k_raceDate / k_babaCode から実開催予定日×開催場を確定する。
-  // netkeiba日別一覧の空解析を「開催なし」と誤認しないため、対象年月・
-  // 公式ページ構造・開催リンクの3点をすべて検証してから採用する。
-  const NAR_OFFICIAL_BABA_TO_CODE = Object.freeze({
-    '36':'30','10':'35','11':'36','18':'42','19':'43','20':'44',
-    '21':'45','22':'46','23':'47','24':'48','27':'50','28':'51',
-    '31':'54','32':'55','3':'65'
-  });
-
-  function narOfficialCalendarMonthUrl(year, month){
-    return `https://www.keiba.go.jp/KeibaWeb/MonthlyConveneInfo/MonthlyConveneInfoTop?k_year=${Number(year)}&k_month=${Number(month)}`;
-  }
-
-  function narCalendarMonthsInRange(start, end){
-    const s = String(start || '').replace(/[^0-9]/g, '').slice(0,8);
-    const e = String(end || '').replace(/[^0-9]/g, '').slice(0,8);
-    if(s.length !== 8 || e.length !== 8 || s > e) return [];
-    let y = Number(s.slice(0,4)), m = Number(s.slice(4,6));
-    const ey = Number(e.slice(0,4)), em = Number(e.slice(4,6));
-    const out = [];
-    while(y < ey || (y === ey && m <= em)){
-      out.push({year:y, month:m, key:`${y}-${String(m).padStart(2,'0')}`});
-      m++;
-      if(m > 12){ y++; m = 1; }
-      if(out.length > 240) break;
-    }
-    return out;
-  }
-
-  function narCalendarPlainText(doc, raw){
-    try{
-      return String((doc && doc.body && doc.body.textContent) || '')
-        .replace(/[\t\r\n]+/g, ' ').replace(/[\s　]+/g, ' ').trim();
-    }catch(e){
-      return String(raw || '').replace(/<[^>]+>/g, ' ')
-        .replace(/[\t\r\n]+/g, ' ').replace(/[\s　]+/g, ' ').trim();
-    }
-  }
-
-  function parseNarOfficialMonthlyCalendar(html, year, month){
-    const raw = String(html || '');
-    const y = Number(year), m = Number(month);
-    const mm = String(m).padStart(2,'0');
-    if(raw.length < 500) throw new Error(`NAR公式月別日程の本文が短すぎます（${raw.length}字）`);
-    if(typeof looksBlockedHtml === 'function' && looksBlockedHtml(raw)){
-      throw new Error('NAR公式月別日程が拒否ページを返しました');
-    }
-    if(/^\s*\{/.test(raw) && /"ok"\s*:\s*false/i.test(raw)){
-      throw new Error('NAR公式月別日程の取得APIがエラーを返しました');
-    }
-
-    let doc;
-    try{ doc = new DOMParser().parseFromString(raw, 'text/html'); }
-    catch(e){ throw new Error('NAR公式月別日程をHTMLとして解析できません'); }
-    const text = narCalendarPlainText(doc, raw);
-    if(!/月別開催日程/.test(text)){
-      throw new Error('取得本文がNAR公式の月別開催日程ではありません');
-    }
-    if(!text.includes(`${y}年${m}月`)){
-      throw new Error(`NAR公式月別日程の対象年月が不一致です（要求 ${y}年${m}月）`);
-    }
-    if(!NAR_VENUES.some(v => text.includes(v[1]))){
-      throw new Error('NAR公式月別日程に競馬場行がありません');
-    }
-
-    const byDate = new Map();
-    let recognizedLinks = 0;
-    Array.from(doc.querySelectorAll('a[href]')).forEach(a => {
-      const href = String(a.getAttribute('href') || '');
-      if(!/k_raceDate=/i.test(href) || !/k_babaCode=/i.test(href)) return;
-      let url;
-      try{ url = new URL(href, 'https://www.keiba.go.jp/'); }
-      catch(e){ return; }
-      const dateDigits = String(url.searchParams.get('k_raceDate') || '').replace(/[^0-9]/g, '').slice(0,8);
-      const babaRaw = String(url.searchParams.get('k_babaCode') || '').replace(/[^0-9]/g, '');
-      const baba = babaRaw ? String(Number(babaRaw)) : '';
-      const code = NAR_OFFICIAL_BABA_TO_CODE[baba] || '';
-      if(!code || dateDigits.length !== 8 || dateDigits.slice(0,6) !== `${y}${mm}`) return;
-      const day = Number(dateDigits.slice(6,8));
-      const maxDay = new Date(y, m, 0).getDate();
-      if(day < 1 || day > maxDay) return;
-      const date = `${dateDigits.slice(0,4)}-${dateDigits.slice(4,6)}-${dateDigits.slice(6,8)}`;
-      if(!byDate.has(date)) byDate.set(date, new Set());
-      byDate.get(date).add(code);
-      recognizedLinks++;
-    });
-
-    // 月内に地方競馬の開催リンクが1件もないことは通常ない。
-    // 0件はHTML変更・ログイン/案内ページ・Workerの空応答として停止する。
-    if(recognizedLinks === 0){
-      throw new Error(`NAR公式月別日程の開催リンクを解析できません（${y}年${m}月）`);
-    }
-    return {year:y, month:m, byDate, recognizedLinks, source:'keiba.go.jp-monthly'};
-  }
-
-  async function fetchNarOfficialMonthlyCalendar(year, month){
-    const url = narOfficialCalendarMonthUrl(year, month);
-    const html = await fetchHtmlViaProxy(url);
-    return parseNarOfficialMonthlyCalendar(html, year, month);
-  }
-
-  async function buildNarRangePlanByDates(venueCodes, start, end, prog){
-    const wanted = new Set((venueCodes && venueCodes.length)
-      ? venueCodes.map(String)
-      : NAR_VENUES.map(v => String(v[0])));
-    const plan = new Map();
-    plan.source = 'nar-official-monthly-calendar';
-    plan.reachable = false;
-    plan.complete = true;
-    plan.checkedDays = 0;
-    plan.checkedMonths = 0;
-    plan.totalMonths = 0;
-    plan.totalDays = 0;
-    plan.venueDays = 0;
-    plan.failedDates = [];
-    plan.failedMonths = [];
-    plan.recognizedLinks = 0;
-
-    const dates = [];
-    let d = start;
-    while(d <= end){
-      dates.push(d);
-      const next = addLocalDaysYmd(d, 1);
-      if(!next || next <= d) break;
-      d = next;
-    }
-    plan.totalDays = dates.length;
-
-    const months = narCalendarMonthsInRange(start, end);
-    plan.totalMonths = months.length;
-    if(!dates.length || !months.length){
-      plan.complete = false;
-      plan.failedMonths.push({month:'期間不正', error:'開始日・終了日を確認してください'});
-      return plan;
-    }
-
-    for(let i = 0; i < months.length; i++){
-      if(rsAbort) break;
-      const monthInfo = months[i];
-      const monthDates = dates.filter(date => date.slice(0,7) === monthInfo.key);
-      if(prog){
-        prog.innerHTML = `<div class="url-status">📅 NAR公式月別開催日程を確認中... ${i + 1}/${months.length}か月（${monthInfo.key}）</div>`;
-      }
-
-      let parsed = null;
-      let lastError = '';
-      // 一時的なWorker/通信失敗に備え、月別日程だけ1回再試行する。
-      for(let attempt = 0; attempt < 2 && parsed === null; attempt++){
-        if(rsAbort) break;
-        try{
-          parsed = await fetchNarOfficialMonthlyCalendar(monthInfo.year, monthInfo.month);
-          plan.reachable = true;
-          plan.checkedMonths++;
-          plan.checkedDays += monthDates.length;
-          plan.recognizedLinks += Number(parsed.recognizedLinks || 0);
-          rsOpenVenuesOkCount += monthDates.length;
-        }catch(e){
-          lastError = (e && e.message) || String(e);
-          if(attempt === 0 && !rsAbort) await new Promise(resolve => setTimeout(resolve, 250));
-        }
-      }
-
-      if(parsed === null){
-        plan.complete = false;
-        const failed = {month:monthInfo.key, error:lastError || '取得失敗'};
-        plan.failedMonths.push(failed);
-        plan.failedDates.push({date:monthInfo.key, error:failed.error});
-        rsOpenVenuesFailCount += monthDates.length;
-        rsLastOpenVenuesError = failed.error || 'NAR公式月別開催日程の確認失敗';
-        continue;
-      }
-
-      monthDates.forEach(date => {
-        const codes = parsed.byDate.get(date) || new Set();
-        const open = [...codes].map(String).filter(code => wanted.has(code));
-        if(!open.length) return;
-        const entries = open.map(code => ({venueCode:code, venueName:venueName('NAR', code)}));
-        plan.set(date, entries);
-        plan.venueDays += entries.length;
-      });
-    }
-
-    if(rsAbort || plan.checkedMonths !== plan.totalMonths) plan.complete = false;
-    return plan;
-  }
-
-  function rsNarPlanFailureText(plan){
-    const failedMonths = Array.isArray(plan && plan.failedMonths) ? plan.failedMonths : [];
-    if(failedMonths.length){
-      const sample = failedMonths.slice(0, 5).map(x => x.month).join('、');
-      const more = failedMonths.length > 5 ? `ほか${failedMonths.length - 5}か月` : '';
-      return `${failedMonths.length}/${Number(plan && plan.totalMonths || 0)}か月の確認に失敗${sample ? `（${sample}${more ? '、' + more : ''}）` : ''}`;
-    }
-    const failed = Array.isArray(plan && plan.failedDates) ? plan.failedDates : [];
-    const sample = failed.slice(0, 5).map(x => x.date).join('、');
-    const more = failed.length > 5 ? `ほか${failed.length - 5}日` : '';
-    if(failed.length) return `${failed.length}/${Number(plan && plan.totalDays || 0)}日の確認に失敗${sample ? `（${sample}${more ? '、' + more : ''}）` : ''}`;
-    return plan ? 'NAR公式月別開催日程の確認を完了できませんでした' : 'NAR開催日計画を作成できませんでした';
-  }
-
   function rsNormalizeRowsInPlace(rows){
     if(!Array.isArray(rows)) return rows;
     const out = [], pos = new Map();
@@ -14596,11 +13803,6 @@ if(horses.length === 0){
   function rsCopyDetailText(ev){ rsCopyText(rsBuildDetailText(rsLastRows), ev && ev.currentTarget); }
 
   function rsRenderSummary(rows){
-    const sourceRows = Array.isArray(rows) ? rows.filter(r => r && !r.header) : [];
-    const fairSettledRows = sourceRows.filter(r => r.dataQualityFair === true);
-    const qualityExcludedRows = sourceRows.filter(r => r.status === 'error' && /公平検証|確定オッズ取得不足|専用オッズ表|市場整合性|単勝オッズと実払戻|実払戻表の解析不足/.test(String(r.error || '')));
-    const allErrorRows = sourceRows.filter(r => r.status === 'error');
-    const fairGuardSeen = fairSettledRows.length > 0 || qualityExcludedRows.length > 0;
     rows = rsRowsForDisplay(rows || []);
     const box = $('rsSummary');
     if(!box) return;
@@ -14645,14 +13847,12 @@ if(horses.length === 0){
       <div style="font-size:10px;color:#fde68a;line-height:1.5;margin-top:5px"><b>比較用の仮想値であり、実購入ではありません。</b>「全候補」は外れを含む全候補3点セットを同額購入した仮定です。的中した候補だけを結果後に抽出していません。</div>
     </div>` : '';
     const guardBanner = guardResult ? `<div class="url-status ok" style="margin-bottom:8px">🛡️ 購入ガード${guardResult.preview?'暫定':'確定'}・表示中：<b>${viewLabel}</b> / 候補的中 <b>${heldCandidateHitRaces}R</b>を保持（比較確定 ${candidateHitRaces}R・候補総額 ${guardCandidateBet.toLocaleString()}円・1日上限 ${(Number(guardResult.config&&guardResult.config.dailyLimit)||0).toLocaleString()}円）${provisionalDate?`<br><span style="color:#fde68a">⏳ ${provisionalDate} は候補収集中のため、購入・払戻・ROIへの計上を保留しています。</span>`:''}</div>` : '';
-    const fairBanner = fairGuardSeen ? `<div class="url-status ok" style="margin-bottom:8px">⚖️ <b>公平バックテスト ON</b>：JRA・NAR共通で「専用オッズ表の全頭値＋着順＋実払戻照合」を必須化し、結果ページの走破タイム等はオッズに使用しません。公平検証 <b>${fairSettledRows.length}R</b> / データ不足除外 <b>${qualityExcludedRows.length}R</b> / 全エラー <b>${allErrorRows.length}R</b></div>` : '';
-    box.innerHTML = fairBanner + guardBanner + compareHtml + `
+    box.innerHTML = guardBanner + compareHtml + `
       <div class="sim-kpi-grid" style="margin-top:0">
         <div class="sim-kpi"><div class="v">${days}</div><div class="l">日数</div></div>
         <div class="sim-kpi"><div class="v">${venues}</div><div class="l">延べ開催場</div></div>
         <div class="sim-kpi"><div class="v">${ok.length}</div><div class="l">処理R</div></div>
         <div class="sim-kpi"><div class="v">${resultSettled.length}</div><div class="l">結果確定R</div></div>
-        ${fairGuardSeen?`<div class="sim-kpi"><div class="v">${fairSettledRows.length}</div><div class="l">公平検証R</div></div><div class="sim-kpi"><div class="v">${qualityExcludedRows.length}</div><div class="l">データ不足除外R</div></div>`:''}
         ${guardResult?`<div class="sim-kpi"><div class="v" style="color:var(--green)">${viewMode==='candidate'?purchaseHitRaces:candidateHitRaces}</div><div class="l">${viewMode==='candidate'?'購入的中R（比較確定）':'候補的中R（比較確定）'}</div></div>`:''}
         <div class="sim-kpi"><div class="v">${hitRaces}</div><div class="l">${guardResult?(viewMode==='candidate'?'候補的中R':'購入的中R'):'的中R'}</div></div>
         <div class="sim-kpi"><div class="v">${hitRate.toFixed(1)}%</div><div class="l">${guardResult?(viewMode==='candidate'?'候補的中率':'購入的中率'):'的中率'}</div></div>
@@ -14952,7 +14152,6 @@ if(horses.length === 0){
     rsLastOpenVenuesError = null;
     rsOpenVenuesFailCount = 0;
     rsOpenVenuesOkCount = 0;
-    try{ window.__rsPrecheckError = ''; }catch(e){}
     if(btn){ btn.disabled = true; btn.textContent = resume ? '⏳ リジューム中...' : '⏳ 実行中...'; }
     rsSetResumeBtnsBusy(true);
     if(stopBtn) stopBtn.style.display = '';
@@ -14974,7 +14173,6 @@ if(horses.length === 0){
       // v5.18.143: JRAは「回ベース」で選択場の開催日をrace_id直接列挙して事前計画化する。
       // 日付ごとの全場プローブ／公式一覧依存を排し、Worker 502下でもブリッジだけで完結。
       let rsJraPlan = null;
-      let rsNarPlan = null;
       if(kind === 'JRA'){
         if(prog) prog.innerHTML = `<div class="url-status">🧭 JRA開催回をrace_idで探索中（回ベース）...${fastMode ? ' ⚡高速モード' : ''}</div>`;
         try{
@@ -15004,32 +14202,6 @@ if(horses.length === 0){
         }
       }
 
-      // v6.4: NAR公式の月別開催日程を検証し、本処理前に開催日を確定する。
-      // 1日でも通信失敗が残れば、不完全な期間集計を作らず開始前に停止する。
-      if(kind === 'NAR'){
-        const venLabel = selVenues.length ? selVenues.map(c => venueName('NAR', c)).join('・') : 'NAR全場';
-        if(prog) prog.innerHTML = `<div class="url-status">📅 ${venLabel} の指定期間開催日をNAR公式月別日程で事前確認中...</div>`;
-        try{ rsNarPlan = await buildNarRangePlanByDates(selVenues, runStart, end, prog); }
-        catch(e){
-          const message = (e && e.message) || String(e);
-          try{ window.__rsPrecheckError = message; }catch(_){}
-          if(prog) prog.innerHTML = `<div class="url-status err">❌ NAR開催日の事前確認に失敗しました。本処理は開始していません。原因: ${asw_esc(message)}</div>`;
-          return;
-        }
-        if(rsAbort) return;
-        if(!rsNarPlan || !rsNarPlan.complete){
-          const detail = rsNarPlanFailureText(rsNarPlan);
-          try{ window.__rsPrecheckError = detail; }catch(_){}
-          if(prog) prog.innerHTML = `<div class="url-status err">❌ NAR開催日の事前確認を完了できませんでした：${asw_esc(detail)}。不完全な集計を避けるため本処理は開始していません。Worker接続を確認して再実行してください。</div>`;
-          return;
-        }
-        if(rsNarPlan.size === 0){
-          if(prog) prog.innerHTML = `<div class="url-status ok">📅 NAR事前確認完了：${asw_esc(venLabel)}は指定期間に開催がありません（NAR公式月別日程 ${rsNarPlan.checkedMonths}/${rsNarPlan.totalMonths}か月・${rsNarPlan.checkedDays}日分確認済み）。</div>`;
-        }else if(prog){
-          prog.innerHTML = `<div class="url-status ok">📅 NAR事前確認完了：${rsNarPlan.size}開催日・${rsNarPlan.venueDays}開催場日を確認。バックテストを開始します。</div>`;
-        }
-      }
-
       for(const date of dates){
         if(rsAbort) break;
 
@@ -15046,24 +14218,13 @@ if(horses.length === 0){
           }
         }
 
-        // NARは事前確認planに無い日を、レース一覧通信なしでスキップする。
-        if(kind === 'NAR' && rsNarPlan){
-          const pv = rsNarPlan.get(date);
-          if(!(pv && pv.length)) continue;
-        }
-
-        // NAR事前planがある場合は、実開催が確認済みの場だけを対象にする。
-        // 旧データ等でplanが無い場合だけ従来の直接確認へ退避する。
+        // v5.18.170 BetOnlyChartRecord:
+        // NARで開催場チェックがある場合は、日付ごとの「全開催場確認」を挟まず、
+        // チェックした場だけを直接レース一覧取得に進める。
+        // これで「盛岡にチェックしているのに毎日“開催場を確認中...”で止まる」挙動を避ける。
         let venues;
-        const plannedNar = (kind === 'NAR' && !!rsNarPlan);
-        const directSelectedNar = (kind === 'NAR' && !rsNarPlan && selVenues.length > 0);
-        if(plannedNar){
-          venues = (rsNarPlan.get(date) || []).map(v => v.venueCode);
-          if(prog){
-            const vnList = venues.map(c => venueName(kind, c)).join('・');
-            prog.innerHTML = `<div class="url-status">📅 ${date} ${vnList}（事前確認済み）のレース一覧を取得中...</div>`;
-          }
-        }else if(directSelectedNar){
+        const directSelectedNar = (kind === 'NAR' && selVenues.length > 0);
+        if(directSelectedNar){
           venues = selVenues.slice();
           if(prog){
             const vnList = venues.map(c => venueName(kind, c)).join('・');
@@ -15072,9 +14233,9 @@ if(horses.length === 0){
         }else{
           if(prog) prog.innerHTML = `<div class="url-status">📅 ${date} の開催場を確認中...</div>`;
 
-          const openVenues = rsJraPlan
+          const openVenues = (rsJraPlan)
             ? (rsJraPlan.get(date) || []).map(v => v.venueCode)
-            : (rsNarPlan ? (rsNarPlan.get(date) || []).map(v => v.venueCode) : await rsOpenVenues(kind, date));
+            : await rsOpenVenues(kind, date);
           if(selVenues.length){
             venues = openVenues.filter(c => selVenues.includes(c));
             // v5.18.142: 「その日に開催場として検出された場」だけを対象にする。
@@ -15108,7 +14269,7 @@ if(horses.length === 0){
             // v5.18.168: NARのチェック済み開催場を直接確認している場合、
             // その日その場にレースが無いのは通常の「非開催日」として静かにスキップする。
             // エラー行を量産せず、次の日へ進める。
-            if(kind === 'NAR' && selVenues.length && !rsNarPlan){
+            if(kind === 'NAR' && selVenues.length){
               if(prog) prog.innerHTML = `<div class="url-status">📅 ${date} ${vn} は開催なし（次の日へ）</div>`;
               continue;
             }
@@ -15141,11 +14302,6 @@ if(horses.length === 0){
               currentRaceName = loaded.raceName || r.name || (r.no + 'R');
               row.raceName = currentRaceName;
 
-              horses = await prepareProbabilitySourceForRace(horses, {
-                kind, date, venueName:vn, venueCode:vc,
-                raceNo:r.no, raceId:r.rid, silent:true
-              });
-
               const valid = horses.filter(h => Number(h.num) > 0 && h.name);
               if(valid.length < 2) throw new Error('有効な出走馬が2頭未満');
 
@@ -15158,8 +14314,6 @@ if(horses.length === 0){
               const { finish, payouts } = await asw_getResult(kind, r.rid, loaded.resultDoc);
               row.hasFinish = finish && finish.length >= 2;
               row.finishTop = row.hasFinish ? finish.slice(0, 3).map(x => x.horseNo) : [];
-              row.dataQuality = requireFairBacktestData(kind, valid, finish, payouts);
-              row.dataQualityFair = !!row.dataQuality.fair;
 
               const s = asw_settle(simTickets, finish, payouts);
               row.bet = s.bet; row.ret = s.ret; row.profit = s.profit; row.roi = s.roi; row.hit = s.hit;
@@ -15211,9 +14365,6 @@ if(horses.length === 0){
       if(kind === 'JRA' && rsJraPlan && rsJraPlan.size === 0 && okCount === 0 && !rsAbort){
         const venLabel = selVenues.length ? selVenues.map(c => venueName('JRA', c)).join('・') : 'JRA';
         if(prog) prog.innerHTML = `<div class="url-status ok">✅ 完了：${venLabel} はこの期間に開催がありませんでした（非開催日はサーチせずスキップ）。</div>`;
-      }else if(kind === 'NAR' && rsNarPlan && rsNarPlan.size === 0 && okCount === 0 && !rsAbort){
-        const venLabel = selVenues.length ? selVenues.map(c => venueName('NAR', c)).join('・') : 'NAR全場';
-        if(prog) prog.innerHTML = `<div class="url-status ok">✅ 完了：${venLabel} は指定期間に開催がありませんでした（NAR公式月別日程 ${rsNarPlan.checkedMonths}/${rsNarPlan.totalMonths}か月・${rsNarPlan.checkedDays}日分確認済み）。</div>`;
       }else if(kind === 'NAR' && okCount === 0 && rsOpenVenuesOkCount === 0 && rsOpenVenuesFailCount > 0 && !rsAbort){
         // v5.18.165: NARで全日程が通信失敗（ブリッジ未検出/403等）だった場合、
         // 「開催なし」と誤認させず実際のエラー内容を表示する。
@@ -15286,10 +14437,7 @@ if(horses.length === 0){
       doc = new DOMParser().parseFromString(html, 'text/html');
     }
     try{ if(typeof pgjCacheRaceMeta === 'function') pgjCacheRaceMeta(rid, doc, parseRaceTitleFromDoc(doc) || ''); }catch(e){}
-    const payouts = parsePayoutsFromResultDoc(doc);
-    try{ Object.defineProperty(payouts, '__strictRealPayouts', {value:true, enumerable:false}); }
-    catch(e){ payouts.__strictRealPayouts = true; }
-    return { finish: rsOneShotParseFinish(doc, localHorses), payouts };
+    return { finish: rsOneShotParseFinish(doc, localHorses), payouts: parsePayoutsFromResultDoc(doc) };
   }
   function rsOneShotJudge(ticket, finish, localHorseCount){
     const nums = (finish || []).map(x => x.horseNo);
@@ -15309,9 +14457,6 @@ if(horses.length === 0){
   function rsOneShotPayout(ticket, payouts){
     const key = `${ticket.type}:${rsOneShotComboKey(ticket.type, ticket.nums)}`;
     if(payouts && payouts[key]) return {amount:payouts[key], source:'real'};
-    if(payouts && payouts.__strictRealPayouts){
-      throw new Error(`確定払戻が不足しています（${key}）。推定払戻には置き換えず、このレースを集計から除外します。`);
-    }
     return {amount:Math.max(0, Math.round((Number(ticket.odds || 0) * 100) / 10) * 10), source:'estimate'};
   }
   function rsOneShotSettle(tickets, finish, payouts, localHorseCount){
@@ -15353,16 +14498,6 @@ if(horses.length === 0){
         if(Number.isFinite(Number(t.learnedExpectedProfit))) detail.学習期待利益 = Number(t.learnedExpectedProfit);
         if(Number(t.learnedRoiAdj || 0) > 0) detail.学習ROI補正 = Number(t.learnedRoiAdj);
         if(Number(t.p || 0) > 0) detail.予測確率 = Number(t.p);
-        detail.確率ソース指定 = probabilitySourceShortLabel(t.probabilitySource || 'standard');
-        detail.確率ソース実使用 = probabilitySourceShortLabel(t.probabilitySourceUsed || 'standard');
-        if(Number(t.probabilitySourceTotal || 0) > 0){
-          detail.確率ソース取得数 = `${Number(t.probabilitySourceValid || 0)}/${Number(t.probabilitySourceTotal || 0)}`;
-          detail.確率ソース取得率 = Math.round(Number(t.probabilitySourceCoverage || 0) * 1000) / 10;
-        }
-        if(row.dataQualityFair){
-          detail.検証条件 = 'JRA・NAR共通：専用オッズ表＋全頭実オッズ＋実払戻照合';
-          detail.結果後購入取消 = 0;
-        }
         if(t.allAgree === true || t.userForcedPriority === true){
           detail.全て同意 = 1;
           detail.ユーザー強制優先 = 1;
@@ -15390,7 +14525,6 @@ if(horses.length === 0){
   async function rsOneShotBuildTasks(kind, dates, selVenues, prog){
     const tasks = [];
     let rsJraPlan = null;
-    let rsNarPlan = null;
     if(kind === 'JRA'){
       if(prog) prog.innerHTML = `<div class="url-status">🚄 一発モード：JRA開催回を先に探索中...</div>`;
       try{
@@ -15402,35 +14536,17 @@ if(horses.length === 0){
       catch(e){ rsJraPlan = null; }
       if(rsJraPlan && rsJraPlan.size === 0 && !rsJraPlan.reachable) rsJraPlan = null;
     }
-    if(kind === 'NAR'){
-      if(prog) prog.innerHTML = `<div class="url-status">🚄 一発モード：指定期間のNAR開催日を先に確認中...</div>`;
-      rsNarPlan = await buildNarRangePlanByDates(selVenues, dates[0], dates[dates.length - 1], prog);
-      if(rsAbort) return tasks;
-      if(!rsNarPlan || !rsNarPlan.complete){
-        const detail = rsNarPlanFailureText(rsNarPlan);
-        try{ window.__rsPrecheckError = detail; }catch(_){}
-        throw new Error(`NAR開催日の事前確認未完了：${detail}。本処理は開始していません`);
-      }
-      if(prog){
-        prog.innerHTML = `<div class="url-status ok">📅 NAR事前確認完了：${rsNarPlan.size}開催日・${rsNarPlan.venueDays}開催場日。対象レースを収集します。</div>`;
-      }
-    }
     for(const date of dates){
       if(rsAbort) break;
       if(kind === 'JRA'){
         if(rsJraPlan){ if(!((rsJraPlan.get(date)||[]).length)) continue; }
         else if(!isJraPossibleRaceDay(date)) continue;
       }
-      if(kind === 'NAR' && rsNarPlan && !((rsNarPlan.get(date) || []).length)) continue;
       let venues = [];
-      if(kind === 'NAR' && rsNarPlan){
-        venues = (rsNarPlan.get(date) || []).map(v => v.venueCode);
-      }else if(kind === 'NAR' && selVenues.length){
+      if(kind === 'NAR' && selVenues.length){
         venues = selVenues.slice();
       }else{
-        const openVenues = rsJraPlan
-          ? (rsJraPlan.get(date) || []).map(v => v.venueCode)
-          : (rsNarPlan ? (rsNarPlan.get(date) || []).map(v => v.venueCode) : await rsOpenVenues(kind, date));
+        const openVenues = rsJraPlan ? (rsJraPlan.get(date) || []).map(v => v.venueCode) : await rsOpenVenues(kind, date);
         venues = selVenues.length ? openVenues.filter(c => selVenues.includes(c)) : openVenues;
       }
       for(const vc of venues){
@@ -15455,13 +14571,9 @@ if(horses.length === 0){
       hit: 0, hasFinish: false, finishTop: [] };
     try{
       const loaded = String(task.date) < todayForFast ? await asw_loadHorsesFast(kind, task.rid) : await asw_loadHorses(kind, task.rid);
-      let localHorses = loaded.horses || [];
+      const localHorses = loaded.horses || [];
       row.raceName = loaded.raceName || task.raceName || (task.no + 'R');
       try{ if(typeof pgjApplyRaceMetaToRow === 'function') pgjApplyRaceMetaToRow(row, task.rid, row.raceName); }catch(e){}
-      localHorses = await prepareProbabilitySourceForRace(localHorses, {
-        kind, date:task.date, venueName:task.venueName, venueCode:task.venueCode,
-        raceNo:task.no, raceId:task.rid, silent:true
-      });
       let valid = localHorses.filter(h => Number(h.num) > 0 && h.name);
       if(valid.length < 2) throw new Error('有効な出走馬が2頭未満');
       // 一発モードは複数レースを並行するため、globalではなく馬ごとにrace_idを固定する。
@@ -15481,8 +14593,6 @@ if(horses.length === 0){
       try{ if(typeof pgjApplyRaceMetaToRow === 'function') pgjApplyRaceMetaToRow(row, task.rid, row.raceName); }catch(e){}
       row.hasFinish = finish && finish.length >= 2;
       row.finishTop = row.hasFinish ? finish.slice(0, 3).map(x => x.horseNo) : [];
-      row.dataQuality = requireFairBacktestData(kind, valid, finish, payouts);
-      row.dataQualityFair = !!row.dataQuality.fair;
       if(row.hasFinish && typeof window.tkNarTransitionSettle === 'function'){
         try{ window.tkNarTransitionSettle(task.rid, finish); }catch(e){}
       }
@@ -15526,10 +14636,6 @@ if(horses.length === 0){
     const recordToChart = $('rsRecord')?.checked;
     const todayForFast = (typeof todayYmd === 'function') ? todayYmd() : new Date().toISOString().slice(0,10);
     rsAbort = false;
-    rsLastOpenVenuesError = null;
-    rsOpenVenuesFailCount = 0;
-    rsOpenVenuesOkCount = 0;
-    try{ window.__rsPrecheckError = ''; }catch(e){}
     if(!resume){
       rsLastRows = [];
       try{ window.__rsLastRows = []; }catch(e){}
@@ -15555,9 +14661,7 @@ if(horses.length === 0){
           rsRenderSummary(rsResume.rows); rsRenderTable(rsResume.rows); rsRenderChart(rsResume.rows);
           if(prog) prog.innerHTML = `<div class="url-status ok">✅ リジューム完了：追加で処理するレースはありませんでした（精算済み${rsSkipped}Rをスキップ）。終了日を延長すると続きを実行できます。</div>`;
         }else{
-          if(prog) prog.innerHTML = kind === 'NAR'
-            ? `<div class="url-status ok">✅ 一発モード完了：NAR公式月別日程で指定期間を事前確認しました。対象レースはありませんでした。</div>`
-            : `<div class="url-status ok">✅ 一発モード完了：対象レースはありませんでした。</div>`;
+          if(prog) prog.innerHTML = `<div class="url-status ok">✅ 一発モード完了：対象レースはありませんでした。</div>`;
         }
         return;
       }
@@ -15878,9 +14982,6 @@ if(horses.length === 0){
   window.asw_collectRaces = rsCollectRaces; // v5.18.244 D1Sync: 期間横断と同じrace_id列挙を公開
   window.runRangeVenueSimulation = runRangeVenueSimulation;
   window.runRangeVenueSimulationOneShot = runRangeVenueSimulationOneShot;
-  window.__buildNarRangePlanByDates = buildNarRangePlanByDates; // v6.4 診断・回帰テスト用
-  window.__parseNarOfficialMonthlyCalendar = parseNarOfficialMonthlyCalendar;
-  window.__narOfficialCalendarMonthUrl = narOfficialCalendarMonthUrl;
   window.importRangeVenueSimulationJSON = importRangeVenueSimulationJSON;
   window.stopRangeVenueSimulation = stopRangeVenueSimulation;
   window.rsRenderVenueChecks = rsRenderVenueChecks;
@@ -15970,13 +15071,14 @@ if(horses.length === 0){
       hs = fillNarPopularityFromOdds(hs);
       hs = fillProvisionalOddsPopularityForPrediction(hs);
     } else {
-      const beforeOddsMerge = hs.map(h => ({...h}));
-      let oddsMap = await fetchWinOddsPopularity(kind, rid, hs);
-      oddsMap = mergeOddsMaps(oddsMap, parseWinOddsPopularityFromDoc(doc));
-      if(oddsMap && oddsMap.size) hs = mergeOddsPopularityIntoHorses(hs, oddsMap);
-      const narOddsStats = probabilitySourceStats(hs, 'final_odds');
-      if(narOddsStats.usable) hs = fillNarPopularityFromOdds(hs);
-      else hs = hs.map((h,i) => ({...h,odds:0,pop:Number(beforeOddsMerge[i]?.pop||0),provisionalOdds:false}));
+      const oddsMap = await fetchWinOddsPopularity(kind, rid, hs);
+      if(oddsMap.size >= 2){
+        hs = mergeOddsPopularityIntoHorses(hs, oddsMap);
+      } else {
+        const shutubaOddsMap = parseWinOddsPopularityFromDoc(doc);
+        if(shutubaOddsMap.size >= 2) hs = mergeOddsPopularityIntoHorses(hs, shutubaOddsMap);
+      }
+      hs = fillNarPopularityFromOdds(hs);
       hs = fillProvisionalOddsPopularityForPrediction(hs);
     }
     // v5.18.128: 誤キーガード（fetchRace相当）をバッチ予想経路にも適用。
@@ -16002,9 +15104,30 @@ if(horses.length === 0){
 
     const raceName = bundle.raceName || (doc ? parseRaceTitleFromDoc(doc) : '') || '';
 
-    // v6.7: 確定済み予想も結果表のセルからオッズを再構成しない。
-    // 専用オッズ表/APIの全頭値だけを使い、走破タイムの混入を遮断する。
-    hs = await applyDedicatedFinalOddsForBacktest(kind, rid, hs);
+    // 結果ページの「最終単勝オッズ・最終人気」を最優先（v5.18.64と同方針）。
+    const finalMap = parseFinalOddsPopularityFromResultDoc(doc, hs);
+    const finalFull = finalMap && finalMap.size >= 2;
+    if(kind === 'JRA'){
+      if(finalFull){
+        hs = applyAuthoritativeJraOdds(hs, finalMap, new Map());
+      } else {
+        // 最終値が拾えない場合のみ odds/API で補完（確定後も最終値を返す）
+        let oddsMap = finalMap || new Map();
+        oddsMap = mergeOddsMaps(oddsMap, await fetchWinOddsPopularity('JRA', rid, hs));
+        hs = applyAuthoritativeJraOdds(hs, oddsMap, new Map());
+        hs = fillNarPopularityFromOdds(hs);
+        hs = fillProvisionalOddsPopularityForPrediction(hs);
+      }
+    } else {
+      if(finalFull){
+        hs = mergeOddsPopularityIntoHorses(hs, finalMap);
+      } else {
+        const oddsMap = await fetchWinOddsPopularity(kind, rid, hs);
+        if(oddsMap.size >= 2) hs = mergeOddsPopularityIntoHorses(hs, oddsMap);
+      }
+      hs = fillNarPopularityFromOdds(hs);
+      hs = fillProvisionalOddsPopularityForPrediction(hs);
+    }
     // v5.18.128: 誤キーガード（fetchRace相当）を確定済み予想経路にも適用。
     if(typeof oddsLookMisKeyedByUmaban === 'function' && oddsLookMisKeyedByUmaban(hs)){
       throw new Error('単勝オッズが馬番=人気=オッズ昇順と一致（誤キーの疑い）のため除外。時間をおいて再取得してください。');
@@ -16241,11 +15364,6 @@ if(horses.length === 0){
           currentRaceName = loaded.raceName || r.name || (r.no + 'R');
           row.raceName = currentRaceName;
           try{ if(typeof pgjApplyRaceMetaToRow === 'function') pgjApplyRaceMetaToRow(row, r.rid, currentRaceName); }catch(e){}
-
-          horses = await prepareProbabilitySourceForRace(horses, {
-            kind, date, venueName:venueName(kind, venueCode), venueCode,
-            raceNo:r.no, raceId:r.rid, silent:true
-          });
 
           const valid = horses.filter(h => Number(h.num) > 0 && h.name);
           if(valid.length < 2) throw new Error('有効な出走馬が2頭未満');
@@ -16519,10 +15637,6 @@ if(horses.length === 0){
         const loaded = chk.confirmed ? await ps_loadHorsesFromResult(kind, rid, chk.resultDoc) : await ps_loadHorsesForPredict(kind, rid);
         if(chk.confirmed) row.confirmedPredicted = true;
         horses = loaded.horses; currentRaceId = rid; currentRaceName = loaded.raceName || row.raceName; row.raceName = currentRaceName;
-        horses = await prepareProbabilitySourceForRace(horses, {
-          kind, date, venueName:venueName(kind, venueCode), venueCode,
-          raceNo:no, raceId:rid, silent:true
-        });
         const valid = horses.filter(h => Number(h.num) > 0 && h.name);
         const made = generateCandidates(valid); const tickets = buildTickets(made.recs);
         row.tickets = tickets.map(t => ({ ...t, nums:[...t.nums] })); row.count = tickets.length;
@@ -20641,7 +19755,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     return {
       product: 'TheKeiba EV Analysis',
       schema: 'keiba-range-venue-simulation-v1',
-      version: window.APP_VERSION || VERSION,
+      version: VERSION,
       exportedAt: new Date().toISOString(),
       conditions: {
         kind: el('rsKind') ? el('rsKind').value : '',
@@ -20916,7 +20030,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     return {
       product: 'The競馬 EV分析',
       schema: 'keiba-range-venue-simulation-v1',
-      version: window.APP_VERSION || VERSION,
+      version: VERSION,
       exportedAt: new Date().toISOString(),
       conditions: {
         kind: $('rsKind') ? $('rsKind').value : '',
@@ -21420,7 +20534,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     return {
       product: 'The競馬 EV分析',
       schema: 'keiba-range-venue-simulation-v2',
-      version: window.APP_VERSION || VERSION,
+      version: VERSION,
       exportedAt: new Date().toISOString(),
       '説明': '期間横断シミュレーション詳細出力。明細レコードは「収支明細」のみ（集計はオブジェクト形式で二重集計を防止）。競馬アプリ収支分析グラフ仕様HTML(Profit Graph Switcher)対応。',
       conditions: {
@@ -22786,9 +21900,9 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 <script>
 /* ═══════════════════════════════════════════════════════════════
    v5.18.213 DirectBridge
-   学習モード専用：予測時点の期待値だけで買い目を選別。
+   学習モード専用：累計回収率を下げる買い目を自動見送り。
    ・予想時：期待値ベースで、現在の累計ROIを下げる組み合わせを買わない。
-   ・確定シミュレーション時：結果判明後の購入取消は v6.6 で禁止。
+   ・確定シミュレーション時：実績ベースで、累計ROIが下がるレースを投資0円扱いにする。
    ═══════════════════════════════════════════════════════════════ */
 (function(){
   'use strict';
@@ -24484,18 +23598,6 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     try{
       var loaded = await window.asw_loadHorses(rec.kind, rec.raceId);
       var hs = (loaded && loaded.horses) || [];
-      var recVenueCode = String(rec.venueCode || String(rec.raceId || '').slice(4,6) || '');
-      var recVenueName = rec.venueName || rec.placeName || rec.venue || '';
-      try{ if(!recVenueName && typeof venueName === 'function') recVenueName = venueName(rec.kind, recVenueCode); }catch(e){}
-      hs = await prepareProbabilitySourceForRace(hs, {
-        kind:rec.kind,
-        date:rec.date || rec.raceDate || document.getElementById('pickDate')?.value || '',
-        venueName:recVenueName,
-        venueCode:recVenueCode,
-        raceNo:rec.raceNo || rec.no || Number(String(rec.raceId || '').slice(-2)),
-        raceId:rec.raceId,
-        silent:true
-      });
       var valid = hs.filter(function(h){ return Number(h.num) > 0 && h.name; });
       if(valid.length < 2) throw new Error('有効出走馬が2頭未満（未確定/発売前の可能性）');
       var nm = (loaded && loaded.raceName) || rec.raceName || '';
@@ -25020,11 +24122,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   }
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
   [0, 600, 1800, 4000, 9000].forEach(function(ms){ setTimeout(function(){ setVer(); try{ if(!$('swVenueBox') || !$('swVenueBox').children.length) renderVenues(); refreshModeStatus(); }catch(e){} try{ window.swReflectTestClock(false); }catch(e){} }, ms); });
-  // v6 Safe Core: one scheduler heartbeat owns both five-second jobs.
-  setInterval(function(){
-    try{schedulerTick();}catch(e){}
-    try{refreshGuardUsage(load());}catch(e){}
-  },5000);
+  setInterval(schedulerTick, 5000);
+  setInterval(function(){ try{ refreshGuardUsage(load()); }catch(e){} }, 5000);
   console.log('[' + VERSION + '] enabled: venue sweep auto-purchase assist + direct NAR race_id fallback');
 })();
 </script>
@@ -27756,10 +26855,6 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       try{window.__rsLastRows=[]}catch(e){}
       setStatus((cfg.ticketPriority==='all_agree'?'全て同意モードで過去レースを取得・精算中です。上書き対象の設定モードで通常のEV足切りを通過した買い目だけを順位上で強制優先します。3点不足を低評価候補で補完せず、旨みラインと日内相対順位もJRA・NARとも維持します。日次上限を使い切るための追加購入はしません。':(cfg.allocationMode==='daily_rank'?'過去レースの全候補を取得・精算中です。完了後に3点すべてが最低期待回収率'+cleanRoi(cfg.dailyRankMinRoi,120)+'%を通過し、さらにJRA・NAR共通の日内相対旨みを通過したレースだけを、日付ごとに'+metricLabel(cfg)+'で順位付けします。上限枠を埋めるための追加購入はしません。':'過去レースを取得・精算中です。完了後に日次上限と1R必ず3点セットを適用します。'))+' NAR地方移動補正は「'+narBacktestLabel(cfg)+'」で学習更新を凍結します。',true);
       await window.runRangeVenueSimulation({purchaseGuard:true});
-      if(window.__rsPrecheckError){
-        setStatus('開催日の事前確認で停止しました：'+esc(window.__rsPrecheckError)+'。不完全な期間集計ではバックテストを再計算しません。接続を確認して再実行してください。',false);
-        return;
-      }
       window.recalculatePurchaseGuardBacktest();
     }catch(e){window.__pgBacktestRunning=false;console.error('[PurchaseGuardBacktest]',e);setStatus('バックテストに失敗しました：'+esc(e&&e.message||e),false)}
     finally{
@@ -27967,16 +27062,24 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   function setVersion(){
     try{window.APP_VERSION=VERSION;var el=document.querySelector('.header .ver, .ver');if(el)el.textContent=VERSION;document.title='The競馬 EV分析 '+VERSION}catch(e){}
   }
-  // v6 Safe Core owns the single version renderer. Legacy feature patches no
-  // longer install competing MutationObservers for the label and title.
-  function lockVersionLabel(){ return false; }
+  var versionObserver=null;
+  function lockVersionLabel(){
+    if(versionObserver||typeof MutationObserver!=='function')return;
+    versionObserver=new MutationObserver(function(){
+      var el=document.querySelector('.header .ver, .ver'),title='The競馬 EV分析 '+VERSION;
+      if(window.APP_VERSION!==VERSION||(el&&el.textContent!==VERSION)||document.title!==title)setVersion();
+    });
+    var el=document.querySelector('.header .ver, .ver'),te=document.querySelector('title');
+    if(el)versionObserver.observe(el,{childList:true,subtree:true,characterData:true});
+    if(te)versionObserver.observe(te,{childList:true,subtree:true,characterData:true});
+  }
   function init(){
     installFetch();installTickets();setVersion();lockVersionLabel();
     try{if(typeof updateNarTransitionSettingsUI==='function')updateNarTransitionSettingsUI()}catch(e){}
   }
   window.tkNarTransitionInstallFinalHooks=function(){installFetch();installTickets();setVersion()};
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
-  [250,500,850,1250,1700,2500,3050,5100,6550,7050,11100,11600,14100,16000].forEach(function(ms){setTimeout(function(){installFetch();installTickets();},ms)});
+  [250,500,850,1250,1700,2500,3050,5100,6550,7050,11100,11600,14100,16000].forEach(function(ms){setTimeout(function(){installFetch();installTickets();setVersion()},ms)});
 })();
 </script>
 
@@ -28848,8 +27951,9 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       document.querySelectorAll('.ver').forEach(function(x){x.textContent=VERSION;});
     }catch(e){}
   }
-  function init(){installCancel();}
+  function init(){installCancel();applyVersion();}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
+  [0,300,1000,3000,7000,12000,18000].forEach(function(ms){setTimeout(function(){installCancel();applyVersion();},ms);});
   console.log('['+VERSION+'] enabled');
 })();
 </script>
@@ -29097,20 +28201,19 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   window.setAppVersionLabel=function(){return setVersion();};
 
   function installObserver(){
-    // v6 Safe Core: the former subtree-wide observer fired for unrelated chart,
-    // status and tab mutations. Validate only when race-context controls change.
-    ['pickKind','pickDate','pickVenue','raceSelect','raceUrl','raceIdPrimaryInput'].forEach(function(id){
-      var node=el(id);
-      if(!node||node.__raceContextListener300)return;
-      node.__raceContextListener300=true;
-      node.addEventListener('change',function(){
-        Promise.resolve().then(function(){sanitizeContext();});
-      });
-    });
-    return true;
+    var root=el('tab-data') || document.body;
+    if(root && !root.__raceContextObserver300){
+      root.__raceContextObserver300=true;
+      var queued=false;
+      new MutationObserver(function(){
+        if(queued)return; queued=true;
+        setTimeout(function(){queued=false;sanitizeContext();setVersion();},0);
+      }).observe(root,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['value','class']});
+    }
   }
-  function init(){ installObserver(); sanitizeContext(); }
+  function init(){ setVersion(); installObserver(); sanitizeContext(); }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',init); else init();
+  [0,100,400,1000,3000,8000,15000].forEach(function(ms){setTimeout(init,ms);});
   console.log('['+VERSION+'] enabled');
 })();
 </script>
@@ -29235,77 +28338,6 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     return info.raceNo+'R';
   }
 
-  function canonicalPayoutType(v){
-    var s=half(v).replace(/[\s　]+/g,'');
-    if(/^単勝$/.test(s))return '単勝';
-    if(/^複勝$/.test(s))return '複勝';
-    if(/^枠連(?:複)?$/.test(s))return '枠連';
-    if(/^(?:馬連単|馬単)$/.test(s))return '馬単';
-    if(/^(?:馬連複|馬連)$/.test(s))return '馬連';
-    if(/^ワイド$/.test(s))return 'ワイド';
-    if(/^(?:三|3)連複$/.test(s))return '3連複';
-    if(/^(?:三|3)連単$/.test(s))return '3連単';
-    return '';
-  }
-
-  function payoutComboKey(type,nums){
-    var a=(nums||[]).map(Number).filter(function(n){return n>=1&&n<=18;});
-    if(['馬単','3連単'].indexOf(type)<0)a.sort(function(x,y){return x-y;});
-    return a.join('-');
-  }
-
-  // NAR公式の「払戻金」表を、既存精算器が扱う券種名と組番へ正規化する。
-  // rowspanで券種名が省略される複勝・ワイドの2行目以降も currentType で保持する。
-  function parseOfficialPayouts(html){
-    var doc=new DOMParser().parseFromString(String(html||''),'text/html');
-    var records=[],seen={};
-    Array.from(doc.querySelectorAll('table')).forEach(function(table){
-      var tableText=textOf(table);
-      if(!/単勝/.test(tableText)||!/複勝/.test(tableText)||!/円/.test(tableText))return;
-      var currentType='';
-      Array.from(table.querySelectorAll('tr')).forEach(function(tr){
-        var cells=Array.from(tr.children).map(function(c){return textOf(c);});
-        if(!cells.length)return;
-        var explicit='';
-        for(var i=0;i<cells.length;i++){
-          explicit=canonicalPayoutType(cells[i]);
-          if(explicit)break;
-        }
-        if(explicit)currentType=explicit;
-        var type=explicit||currentType;
-        if(!type)return;
-
-        var amounts=[];
-        cells.forEach(function(c){
-          Array.from(half(c).matchAll(/([\d,]+)\s*円/g)).forEach(function(m){
-            var n=Number(m[1].replace(/,/g,'')); if(n>0)amounts.push(n);
-          });
-        });
-        if(!amounts.length)return;
-
-        var comboText=cells.filter(function(c){
-          return !canonicalPayoutType(c)&&!/円/.test(c)&&!/人気/.test(c);
-        }).join(' ').replace(/[－ー―→＞>]/g,'-');
-        var combos=[];
-        if(type==='単勝'||type==='複勝'){
-          Array.from(comboText.matchAll(/(?:^|[^\d])(\d{1,2})(?=[^\d]|$)/g)).forEach(function(m){
-            var n=Number(m[1]); if(n>=1&&n<=18)combos.push([n]);
-          });
-        }else{
-          Array.from(comboText.matchAll(/(\d{1,2})\s*-\s*(\d{1,2})(?:\s*-\s*(\d{1,2}))?/g)).forEach(function(m){
-            var a=[Number(m[1]),Number(m[2])]; if(m[3])a.push(Number(m[3]));
-            if(a.every(function(n){return n>=1&&n<=18;}))combos.push(a);
-          });
-        }
-        combos.slice(0,amounts.length).forEach(function(nums,j){
-          var key=type+':'+payoutComboKey(type,nums);
-          if(!seen[key]){seen[key]=1;records.push({type:type,combo:nums.join('-'),amount:amounts[Math.min(j,amounts.length-1)]});}
-        });
-      });
-    });
-    return records;
-  }
-
   function parseOfficialRows(html,info){
     if(blocked(html))throw new Error('公式ページがエラーまたは遮断ページです');
     var doc=new DOMParser().parseFromString(String(html||''),'text/html');
@@ -29329,8 +28361,6 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       }
       if(!num||!name||seen[num])return;
       if(/^(?:馬名|取消|除外|競走除外)$/.test(name))return;
-      var rowStatus=textOf(tr);
-      if(/(?:^|[\s　])(取消|除外|競走除外)(?:[\s　]|$)/.test(rowStatus)||/^(?:取消|除外|競走除外)/.test(rowStatus))return;
       var frame=frameIdx>=0&&cells[frameIdx]?numberIn(textOf(cells[frameIdx]),1,8):0;
       if(!frame)frame=Math.min(8,Math.max(1,Math.ceil(num/2)));
       var odds=oddsIdx>=0&&cells[oddsIdx]?oddsIn(textOf(cells[oddsIdx])):0;
@@ -29344,7 +28374,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     return {rows:rows.sort(function(a,b){return a.num-b.num;}),title:raceTitle(doc,info)};
   }
 
-  function syntheticHtml(parsed,info,sourceUrl,payouts){
+  function syntheticHtml(parsed,info,sourceUrl){
     var result=info.type==='result';
     var head=result?'<th>着順</th>':'';
     var body=parsed.rows.map(function(x){
@@ -29357,27 +28387,21 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         '<td class="Popular">'+esc(x.pop||'')+'</td>'+
         '</tr>';
     }).join('');
-    var payoutBody=(payouts||[]).map(function(p){
-      return '<tr><th>'+esc(p.type)+'</th><td>'+esc(p.combo)+'</td><td>'+esc(Number(p.amount||0).toLocaleString('ja-JP'))+'円</td></tr>';
-    }).join('');
-    var payoutTable=payoutBody?'<h2>払戻金</h2><table class="Payout_Detail_Table" data-payout-source="nar-official"><tbody>'+payoutBody+'</tbody></table>':'';
     return '<!doctype html><html lang="ja"><head><meta charset="UTF-8">'+
       '<title>'+esc(parsed.title)+'</title><meta property="og:title" content="'+esc(parsed.title)+'">'+
       '<meta name="the-keiba-source" content="nar-official"><meta name="the-keiba-source-url" content="'+esc(sourceUrl)+'">'+
       '</head><body><div class="RaceName"><h1>'+esc(parsed.title)+'</h1></div>'+
       '<div data-race-id="'+esc(info.raceId)+'">race_id='+esc(info.raceId)+'</div>'+
-      '<table class="RaceTable01"><thead><tr>'+head+'<th>枠</th><th>馬番</th><th>馬名</th><th>単勝オッズ</th><th>人気</th></tr></thead><tbody>'+body+'</tbody></table>'+payoutTable+'</body></html>';
+      '<table class="RaceTable01"><thead><tr>'+head+'<th>枠</th><th>馬番</th><th>馬名</th><th>単勝オッズ</th><th>人気</th></tr></thead><tbody>'+body+'</tbody></table></body></html>';
   }
 
   async function fetchOfficialSynthetic(info){
     var ou=officialUrl(info,info.type);
     var raw=await previousProxy.call(this,ou);
     var parsed=parseOfficialRows(raw,info);
-    var payouts=info.type==='result'?parseOfficialPayouts(raw):[];
-    var out=syntheticHtml(parsed,info,ou,payouts);
+    var out=syntheticHtml(parsed,info,ou);
     window.__narOfficialLastUrl=ou;
     window.__narOfficialLastCount=parsed.rows.length;
-    window.__narOfficialLastPayoutCount=payouts.length;
     window.__narOfficialLastError='';
     window.__fetchPath='nar-official-'+info.type;
     return out;
@@ -29395,11 +28419,9 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         var ou=officialUrl(info,info.type);
         var raw=await current.call(this,ou);
         var parsed=parseOfficialRows(raw,info);
-        var payouts=info.type==='result'?parseOfficialPayouts(raw):[];
-        var out=syntheticHtml(parsed,info,ou,payouts);
+        var out=syntheticHtml(parsed,info,ou);
         window.__narOfficialLastUrl=ou;
         window.__narOfficialLastCount=parsed.rows.length;
-        window.__narOfficialLastPayoutCount=payouts.length;
         window.__narOfficialLastError='';
         window.__fetchPath='nar-official-'+info.type;
         return out;
@@ -29466,9 +28488,15 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   try{testProxy=window.testProxy;}catch(e){}
 
   function installVersionLock(){
+    var old=document.querySelector('.header .ver, .ver');
+    if(old&&!old.__v301Fresh){var fresh=old.cloneNode(false);fresh.__v301Fresh=true;fresh.textContent=VERSION;old.replaceWith(fresh);}
+    var oldTitle=document.querySelector('title');
+    if(oldTitle&&!oldTitle.__v301Fresh){var nt=document.createElement('title');nt.__v301Fresh=true;nt.textContent='The競馬 EV分析 '+VERSION;oldTitle.replaceWith(nt);}
     var ver=document.querySelector('.header .ver, .ver'),title=document.querySelector('title');
     function apply(){window.APP_VERSION=VERSION;if(ver&&ver.textContent!==VERSION)ver.textContent=VERSION;var t='The競馬 EV分析 '+VERSION;if(document.title!==t)document.title=t;}
     apply();
+    if(ver&&!ver.__v301Observer){ver.__v301Observer=true;new MutationObserver(apply).observe(ver,{childList:true,subtree:true,characterData:true});}
+    if(title&&!title.__v301Observer){title.__v301Observer=true;new MutationObserver(apply).observe(title,{childList:true,subtree:true,characterData:true});}
     window.setAppVersionLabel=function(){apply();return VERSION;};
     return apply;
   }
@@ -29480,315 +28508,13 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     }
   }
 
-  function refreshOfficial(){try{installOfficialProxy();updateOfficialNotes();}catch(e){console.warn('[NarOfficialPrimary refresh]',e);}}
-  function init(){refreshOfficial();var apply=installVersionLock();apply();}
+  function init(){installOfficialProxy();var apply=installVersionLock();apply();updateOfficialNotes();}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
-  if(!window.__narOfficialLifecycle301){
-    window.__narOfficialLifecycle301=true;
-    window.addEventListener('pageshow',refreshOfficial);
-    document.addEventListener('visibilitychange',function(){if(!document.hidden)refreshOfficial();});
-  }
+  [0,100,400,1000,3000,8000,16000].forEach(function(ms){setTimeout(init,ms);});
+  setInterval(function(){try{installOfficialProxy();window.setAppVersionLabel();updateOfficialNotes();}catch(e){}},2500);
   console.log('['+VERSION+'] enabled: NAR official primary + netkeiba fallback');
 })();
 
-</script>
-
-<script id="theKeibaSafeCoreV6">
-/* ============================================================
-   v6.7 Odds Integrity Guard
-   ・APP_VERSION / title / header version are rendered by one owner
-   ・JRA/NAR, date, venue and race_id share one canonical state
-   ・race_id mismatches are rejected before they reach later actions
-   ・listeners are registered once and legacy storage keys stay unchanged
-   ============================================================ */
-(function(){
-  'use strict';
-
-  var VERSION='v6.7 Odds Integrity Guard';
-  var oldCore=window.TheKeibaCore;
-  if(oldCore&&oldCore.version===VERSION){
-    try{oldCore.refresh('duplicate-load');}catch(e){}
-    return;
-  }
-  if(oldCore&&typeof oldCore.destroy==='function'){
-    try{oldCore.destroy();}catch(e){}
-  }
-
-  var state={
-    kind:'JRA', date:'', venueCode:'', raceId:'', raceName:'', raceNo:0,
-    revision:0, updatedAt:'', reason:'boot'
-  };
-  var bindings=[];
-  var versionObserver=null;
-  var renderBusy=false;
-  var syncQueued=false;
-
-  function el(id){return document.getElementById(id);}
-  function text(v){return String(v==null?'':v).trim();}
-  function digits(v){return text(v).replace(/[^0-9]/g,'');}
-  function normalizeKind(v){return text(v).toUpperCase()==='NAR'?'NAR':'JRA';}
-  function normalizeDate(v){
-    var d=digits(v).slice(0,8);
-    return d.length===8?d.slice(0,4)+'-'+d.slice(4,6)+'-'+d.slice(6,8):'';
-  }
-  function normalizeVenue(v){
-    var d=digits(v).slice(0,2);
-    return d?d.padStart(2,'0'):'';
-  }
-  function raceIdOf(v){
-    var m=text(v).match(/(?:race_id=|\/race\/)(\d{10,14})|\b(\d{10,14})\b/);
-    return m?(m[1]||m[2]||''):'';
-  }
-  function kindOfRaceId(rid){
-    return /^(?:0[1-9]|10)$/.test(text(rid).slice(4,6))?'JRA':'NAR';
-  }
-  function selectedOption(){
-    var s=el('raceSelect');
-    return s&&s.selectedOptions?s.selectedOptions[0]:null;
-  }
-  function lexicalRaceId(){
-    try{return typeof currentRaceId!=='undefined'?text(currentRaceId):'';}catch(e){return '';}
-  }
-  function lexicalRaceName(){
-    try{return typeof currentRaceName!=='undefined'?text(currentRaceName):'';}catch(e){return '';}
-  }
-  function controlContext(){
-    return {
-      kind:normalizeKind(el('pickKind')&&el('pickKind').value),
-      date:normalizeDate(el('pickDate')&&el('pickDate').value),
-      venueCode:normalizeVenue(el('pickVenue')&&el('pickVenue').value)
-    };
-  }
-  function compatibility(rid,context){
-    rid=text(rid);context=context||controlContext();
-    if(!/^\d{10,14}$/.test(rid))return {ok:false,reason:'race_id形式不正'};
-    if(kindOfRaceId(rid)!==context.kind)return {ok:false,reason:'JRA/NAR不一致'};
-    if(context.venueCode&&rid.slice(4,6)!==context.venueCode)return {ok:false,reason:'開催場不一致'};
-    if(context.kind==='NAR'&&context.date){
-      var d=digits(context.date);
-      if(rid.slice(0,4)+rid.slice(6,10)!==d)return {ok:false,reason:'日付不一致'};
-    }
-    return {ok:true,reason:''};
-  }
-  function snapshot(){
-    return Object.freeze({
-      kind:state.kind,date:state.date,venueCode:state.venueCode,
-      raceId:state.raceId,raceName:state.raceName,raceNo:state.raceNo,
-      revision:state.revision,updatedAt:state.updatedAt,reason:state.reason
-    });
-  }
-  function same(a,b){
-    return a.kind===b.kind&&a.date===b.date&&a.venueCode===b.venueCode&&
-      a.raceId===b.raceId&&a.raceName===b.raceName&&a.raceNo===b.raceNo;
-  }
-  function syncLegacyGlobals(){
-    try{currentRaceId=state.raceId;currentRaceName=state.raceName;}catch(e){}
-    window.currentRaceId=state.raceId;
-    window.currentRaceName=state.raceName;
-    if(state.raceId){
-      var input=el('raceIdPrimaryInput');
-      if(input&&input.value!==state.raceId)input.value=state.raceId;
-      if(window.tkCurrentRaceMeta&&typeof window.tkCurrentRaceMeta==='object'){
-        window.tkCurrentRaceMeta.raceId=state.raceId;
-        window.tkCurrentRaceMeta.kind=state.kind;
-        window.tkCurrentRaceMeta.venueCode=state.venueCode;
-        window.tkCurrentRaceMeta.raceNo=state.raceNo;
-        if(state.raceName)window.tkCurrentRaceMeta.raceName=state.raceName;
-      }
-    }
-  }
-  function clearRejectedIdentity(rid){
-    if(!rid)return;
-    var input=el('raceIdPrimaryInput');
-    if(input&&raceIdOf(input.value)===rid)input.value='';
-    var url=el('raceUrl');
-    if(url&&raceIdOf(url.value)===rid)url.value='';
-  }
-  function commit(patch,reason){
-    patch=patch||{};
-    var before=snapshot();
-    var next={
-      kind:patch.kind!==undefined?normalizeKind(patch.kind):state.kind,
-      date:patch.date!==undefined?normalizeDate(patch.date):state.date,
-      venueCode:patch.venueCode!==undefined?normalizeVenue(patch.venueCode):state.venueCode,
-      raceId:patch.raceId!==undefined?raceIdOf(patch.raceId):state.raceId,
-      raceName:patch.raceName!==undefined?text(patch.raceName):state.raceName,
-      raceNo:0
-    };
-    var rejected='';
-    if(next.raceId){
-      var check=compatibility(next.raceId,next);
-      if(!check.ok){rejected=next.raceId;next.raceId='';next.raceName='';}
-    }
-    next.raceNo=next.raceId?Number(next.raceId.slice(-2))||0:0;
-    if(!next.raceId)next.raceName='';
-    if(!same(before,next))state.revision+=1;
-    state.kind=next.kind;
-    state.date=next.date;
-    state.venueCode=next.venueCode;
-    state.raceId=next.raceId;
-    state.raceName=next.raceName;
-    state.raceNo=next.raceNo;
-    state.updatedAt=new Date().toISOString();
-    state.reason=text(reason)||'update';
-    if(rejected)clearRejectedIdentity(rejected);
-    syncLegacyGlobals();
-    var after=snapshot();
-    if(!same(before,after)){
-      try{document.dispatchEvent(new CustomEvent('thekeiba:statechange',{detail:{state:after,previous:before}}));}catch(e){}
-    }
-    return after;
-  }
-  function readRaceIdentity(){
-    var opt=selectedOption();
-    var optionRid=raceIdOf(opt&&(opt.dataset.raceId||opt.value||opt.textContent));
-    var lexicalRid=lexicalRaceId();
-    var windowRid=raceIdOf(window.currentRaceId);
-    var candidates=[
-      el('raceIdPrimaryInput')&&el('raceIdPrimaryInput').value,
-      optionRid,
-      el('raceUrl')&&el('raceUrl').value,
-      lexicalRid,windowRid
-    ];
-    var rid='';
-    for(var i=0;i<candidates.length;i++){rid=raceIdOf(candidates[i]);if(rid)break;}
-    var name='';
-    if(rid&&optionRid===rid&&opt&&opt.dataset)name=text(opt.dataset.raceName);
-    if(!name&&rid&&lexicalRid===rid)name=lexicalRaceName();
-    if(!name&&rid&&windowRid===rid)name=text(window.currentRaceName);
-    return {raceId:rid,raceName:name};
-  }
-  function syncFromControls(reason){
-    var context=controlContext(),identity=readRaceIdentity();
-    return commit({
-      kind:context.kind,date:context.date,venueCode:context.venueCode,
-      raceId:identity.raceId,raceName:identity.raceName
-    },reason||'controls');
-  }
-  function clearRace(reason){
-    return commit({raceId:'',raceName:''},reason||'clear-race');
-  }
-  function queueSync(reason){
-    if(syncQueued)return;
-    syncQueued=true;
-    Promise.resolve().then(function(){syncQueued=false;syncFromControls(reason||'queued');});
-  }
-
-  function bindOnce(target,type,key,handler,options){
-    if(!target||typeof target.addEventListener!=='function')return false;
-    var bag=target.__theKeibaSafeCoreBindings;
-    if(!bag){
-      bag={};
-      try{Object.defineProperty(target,'__theKeibaSafeCoreBindings',{value:bag,configurable:true});}
-      catch(e){target.__theKeibaSafeCoreBindings=bag;}
-    }
-    var token=VERSION+'|'+type+'|'+key;
-    if(bag[token])return false;
-    bag[token]=handler;
-    target.addEventListener(type,handler,options||false);
-    bindings.push({target:target,type:type,token:token,handler:handler,options:options||false});
-    return true;
-  }
-  function bindContextControls(){
-    ['pickKind','pickDate','pickVenue','raceSelect','raceUrl','raceIdPrimaryInput'].forEach(function(id){
-      bindOnce(el(id),'change','state-'+id,function(){queueSync('change:'+id);});
-    });
-  }
-  function assignGlobalFunction(name,fn){
-    window[name]=fn;
-    try{
-      if(name==='applySelectedRaceUrl')applySelectedRaceUrl=fn;
-      else if(name==='resetRaceState')resetRaceState=fn;
-      else if(name==='onRaceDateKindChanged')onRaceDateKindChanged=fn;
-      else if(name==='loadRaceList')loadRaceList=fn;
-      else if(name==='fetchRace')fetchRace=fn;
-    }catch(e){}
-  }
-  function wrapAfter(name){
-    var original=window[name];
-    if(typeof original!=='function'||original.__theKeibaSafeCoreAfter===VERSION)return false;
-    var wrapped=function(){
-      var out;
-      try{out=original.apply(this,arguments);}catch(e){queueSync(name+':error');throw e;}
-      if(out&&typeof out.then==='function'){
-        return out.then(function(value){queueSync(name+':done');return value;},function(error){queueSync(name+':error');throw error;});
-      }
-      queueSync(name+':done');
-      return out;
-    };
-    wrapped.__theKeibaSafeCoreAfter=VERSION;
-    wrapped.__theKeibaSafeCoreOriginal=original;
-    assignGlobalFunction(name,wrapped);
-    return true;
-  }
-  function installHooks(){
-    ['applySelectedRaceUrl','resetRaceState','onRaceDateKindChanged','loadRaceList','fetchRace','tkApplyRaceIdPrimary'].forEach(wrapAfter);
-  }
-
-  function renderVersion(){
-    if(renderBusy)return VERSION;
-    renderBusy=true;
-    try{
-      try{window.APP_VERSION=VERSION;}catch(e){}
-      document.querySelectorAll('.ver').forEach(function(node){if(node.textContent!==VERSION)node.textContent=VERSION;});
-      var title='The競馬 EV分析 '+VERSION;
-      if(document.title!==title)document.title=title;
-    }finally{renderBusy=false;}
-    return VERSION;
-  }
-  function ownVersion(){
-    try{
-      Object.defineProperty(window,'APP_VERSION',{
-        configurable:true,enumerable:true,get:function(){return VERSION;},set:function(){}
-      });
-    }catch(e){window.APP_VERSION=VERSION;}
-    window.setAppVersionLabel=renderVersion;
-    renderVersion();
-    if(typeof MutationObserver==='function'){
-      versionObserver=new MutationObserver(renderVersion);
-      var ver=document.querySelector('.header .ver, .ver'),title=document.querySelector('title');
-      if(ver)versionObserver.observe(ver,{childList:true,subtree:true,characterData:true});
-      if(title)versionObserver.observe(title,{childList:true,subtree:true,characterData:true});
-    }
-  }
-  function refresh(reason){
-    bindContextControls();
-    installHooks();
-    renderVersion();
-    return syncFromControls(reason||'refresh');
-  }
-  function destroy(){
-    if(versionObserver){versionObserver.disconnect();versionObserver=null;}
-    bindings.forEach(function(b){
-      try{b.target.removeEventListener(b.type,b.handler,b.options);delete b.target.__theKeibaSafeCoreBindings[b.token];}catch(e){}
-    });
-    bindings=[];
-  }
-
-  var api={
-    version:VERSION,
-    snapshot:snapshot,
-    commit:commit,
-    syncFromControls:syncFromControls,
-    clearRace:clearRace,
-    isRaceIdCompatible:function(rid,context){return compatibility(rid,context||controlContext());},
-    bindOnce:bindOnce,
-    refresh:refresh,
-    renderVersion:renderVersion,
-    destroy:destroy,
-    diagnostics:function(){return {version:VERSION,state:snapshot(),bindings:bindings.length,versionObservers:versionObserver?1:0,storageSchema:'legacy-compatible'};}
-  };
-  Object.defineProperty(api,'state',{enumerable:true,get:snapshot});
-  window.TheKeibaCore=api;
-
-  ownVersion();
-  bindContextControls();
-  installHooks();
-  syncFromControls('boot');
-  bindOnce(window,'pageshow','lifecycle',function(){refresh('pageshow');});
-  bindOnce(document,'visibilitychange','lifecycle',function(){if(!document.hidden)refresh('visible');});
-  console.log('['+VERSION+'] enabled: single version owner / canonical race state / stable listeners');
-})();
 </script>
 </body>
 </html>

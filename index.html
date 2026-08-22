@@ -21,7 +21,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v6.8.1 NAR Probe Currency Guard</title>
+<title>The競馬 EV分析 v6.9.0 Corrected Probability Value</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -906,7 +906,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
   <div style="display:flex;gap:8px;align-items:center">
     <button id="profitSplitBtn" class="btn-sm profit-split-toggle" type="button" onclick="toggleProfitLiveSplit()" aria-pressed="false">📊 横2画面</button>
     <button id="nativeThemeBtn" class="btn-sm native-theme-btn" type="button" title="本体テーマへ自動連動。単独起動時はここで切り替え">🌙 <span class="native-theme-label">ダーク・本体連動</span></button>
-    <span class="ver">v6.8.1 NAR Probe Currency Guard</span>
+    <span class="ver">v6.9.0 Corrected Probability Value</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2259,7 +2259,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v6.8.1 NAR Probe Currency Guard';
+window.APP_VERSION = 'v6.9.0 Corrected Probability Value';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -2283,6 +2283,7 @@ const MODE_OPTIONS = [
   ['roi200','回収率200%超'],
   ['roi_max','回収率最大（開催場別）'],
   ['payout_max','期待払戻最大（確率×オッズ）'],
+  ['adjusted_payout_max','補正確率×オッズ最大'],
   ['hitroi','的中率最高&回収率100%超'],
   ['multi100','多点トータル回収率100%超（開催場別）'],
   ['hitrate100','的中率100%（開催場別）'],
@@ -2310,6 +2311,7 @@ const MODE_EV = {
   roi200:     {'単勝':2.00,'複勝':9.99,'枠連':9.99,'ワイド':2.00,'馬連':2.00,'馬単':2.00,'3連複':2.00,'3連単':2.00},
   roi_max:    {'単勝':1.50,'複勝':9.99,'枠連':9.99,'ワイド':9.99,'馬連':1.60,'馬単':1.80,'3連複':1.80,'3連単':2.20},
   payout_max: {'単勝':1.00,'複勝':1.00,'枠連':1.00,'ワイド':1.00,'馬連':1.00,'馬単':1.00,'3連複':1.00,'3連単':1.00},
+  adjusted_payout_max:{'単勝':1.00,'複勝':1.00,'枠連':1.00,'ワイド':1.00,'馬連':1.00,'馬単':1.00,'3連複':1.00,'3連単':1.00},
   hitroi:     {'単勝':9.99,'複勝':1.00,'枠連':9.99,'ワイド':1.00,'馬連':1.00,'馬単':9.99,'3連複':9.99,'3連単':9.99},
   multi100:   {'単勝':1.08,'複勝':1.05,'枠連':9.99,'ワイド':1.05,'馬連':1.10,'馬単':9.99,'3連複':1.20,'3連単':9.99},
   hitrate100: {'単勝':9.99,'複勝':0.72,'枠連':9.99,'ワイド':0.72,'馬連':9.99,'馬単':9.99,'3連複':9.99,'3連単':9.99},
@@ -4144,7 +4146,10 @@ function generateCandidates(allHorses){
     const safeP = Math.max(0.0001, Number(p||0));
     const safeOdds = Math.max(1.1, Number(odds||1.1));
     const ev = safeP * safeOdds;
-    if(ev < minEV * 0.7) return; // 早期除外
+    // 補正確率モードは既存学習の最大補正（アグレッシブ時×2.20）で
+    // 1.00を超えうる候補を、補正前の段階で落とさない。
+    const earlyRatio = settings.mode === 'adjusted_payout_max' ? 0.45 : 0.70;
+    if(ev < minEV * earlyRatio) return; // 早期除外
     const kelly = Math.max(0, ((safeOdds-1)*safeP - (1-safeP)) / Math.max(0.01, safeOdds-1));
     const ranks = nums.map(n => abilityRankByNum[Number(n)]).filter(x=>x);
     const abilityRankMin = ranks.length ? Math.min(...ranks) : 99;
@@ -4401,6 +4406,50 @@ function multi100Tuning(){
   return t;
 }
 
+// 補正確率×オッズ最大モード用。
+// r.p は、確率ソースの全頭正規化とNAR地方移動補正を反映した最終候補確率。
+// さらに十分な履歴がある場合だけ、既存の開催場×クラス×オッズ帯の較正倍率を重ねる。
+// 履歴不足時は倍率1.00のため、未学習データで確率を歪めない。
+function correctedProbabilityValue(r){
+  const baseP = Math.max(0.0001, Number(r && r.p || 0));
+  const odds = Math.max(1.1, Number(r && r.odds || 1.1));
+  let kind = 'JRA', cls = '不明', ven = '不明';
+  let mult = 1, level = 0, sampleN = 0;
+  try{ kind = (typeof isNAR === 'function' && isNAR()) ? 'NAR' : 'JRA'; }catch(e){}
+  try{
+    if(typeof window.tkParseClassKey === 'function') cls = window.tkParseClassKey(String(currentRaceName || '')) || '不明';
+  }catch(e){}
+  try{
+    const rid = String(currentRaceId || window.currentRaceId || '');
+    const code = rid.length >= 6 ? rid.slice(4, 6) : '';
+    if(code && typeof venueName === 'function') ven = String(venueName(kind, code) || code);
+  }catch(e){}
+  try{
+    if(typeof window.tkLearnMultInfo === 'function'){
+      const info = window.tkLearnMultInfo(kind, String(r && r.type || ''), odds, cls, ven) || {};
+      const learned = Number(info.m);
+      if(Number.isFinite(learned) && learned > 0){
+        mult = Math.max(0.25, Math.min(2.50, learned));
+        level = Number(info.level || 0);
+        sampleN = Number(info.n || 0);
+      }
+    }
+  }catch(e){}
+  const correctedP = Math.max(0.0001, Math.min(0.98, baseP * mult));
+  const correctedValue = correctedP * odds;
+  if(r){
+    r.correctedProbability = correctedP;
+    r.correctedValue = correctedValue;
+    r.probabilityCorrectionMultiplier = mult;
+    r.probabilityCorrectionLevel = level;
+    r.probabilityCorrectionN = sampleN;
+    r.probabilityCorrectionKind = kind;
+    r.probabilityCorrectionClass = cls;
+    r.probabilityCorrectionVenue = ven;
+  }
+  return { p:correctedP, value:correctedValue, mult, level, n:sampleN, kind, cls, ven };
+}
+
 // ─── モードスコア（結合版.jsから移植） ─────────────
 function getModeScore(r, mode){
   const p = Number(r.p||0), ev = Number(r.ev||0), odds = Number(r.odds||0), k = Number(r.kelly||0);
@@ -4528,6 +4577,14 @@ function getModeScore(r, mode){
     if(ev<1.00) return -999;
     return ev*10 + Math.min(p,1)*0.5;
   }
+  if(mode==='adjusted_payout_max'){
+    // 補正後確率 × 想定オッズを、そのまま比較する純粋ランキング。
+    // 市場確率の正規化だけでは積が同値になりやすいため、NAR地方移動補正と
+    // サンプル十分時の履歴較正まで反映した最終確率を使う。期待値1.00未満は買わない。
+    const corrected = correctedProbabilityValue(r);
+    if(corrected.value < 1.00) return -999;
+    return corrected.value;
+  }
   if(mode==='roi_max'){
     // v5.18.117: 回収率最大（開催場別自動最適化）。currentRaceId から開催場を判定し、
     // 各場の頭数規模・市場特性に応じてEV下限/オッズ帯重み/券種比重を自動チューニングする（モードは増やさない）。
@@ -4631,9 +4688,9 @@ function getModeScore(r, mode){
 }
 
 function getTypeQuota(mode, max){
-  // v5.18.174: 期待払戻最大モードは券種の割当制限を設けない。
-  // 全券種にmaxを割り当て、getModeScore（EV＝確率×オッズ）の降順どおりに上位max点をそのまま採用する。
-  if(mode==='payout_max'){
+  // 確率×オッズの最大化モードは券種の割当制限を設けない。
+  // 全券種にmaxを割り当て、計算値の降順どおりに上位max点をそのまま採用する。
+  if(mode==='payout_max' || mode==='adjusted_payout_max'){
     const out = {};
     TICKET_TYPES.forEach(t => out[t] = max);
     return out;
@@ -4696,12 +4753,19 @@ function selectByMode(recs, mode, max){
 
 function selectByModeCore(recs, mode, max){
   const minEV = MODE_EV[mode] || settings.minEVByType;
-  const scored = recs.map(r => ({...r, modeScore: getModeScore(r, mode)}))
+  const valueOf = r => mode === 'adjusted_payout_max'
+    ? Number(r.correctedValue || 0)
+    : Number(r.ev || 0);
+  const scored = recs.map(r => {
+      const c = {...r};
+      c.modeScore = getModeScore(c, mode);
+      return c;
+    })
     .filter(r => {
       const mv = minEV[r.type] || settings.minEVByType[r.type] || 1.05;
-      return r.ev >= mv * 0.85 && r.modeScore > -100;
+      return valueOf(r) >= mv * 0.85 && r.modeScore > -100;
     })
-    .sort((a,b) => b.modeScore-a.modeScore || b.ev-a.ev || b.p-a.p);
+    .sort((a,b) => b.modeScore-a.modeScore || valueOf(b)-valueOf(a) || b.ev-a.ev || b.p-a.p);
 
   const quota = getTypeQuota(mode, max);
   const picked = [], count = {};
@@ -4710,7 +4774,7 @@ function selectByModeCore(recs, mode, max){
     count[r.type] = count[r.type] || 0;
     if((quota[r.type]||0) <= count[r.type]) continue;
     const mv = minEV[r.type] || settings.minEVByType[r.type] || 1.05;
-    if(r.ev < mv) continue;
+    if(valueOf(r) < mv) continue;
     picked.push(r);
     count[r.type]++;
   }
@@ -4719,7 +4783,7 @@ function selectByModeCore(recs, mode, max){
     if(picked.length >= max) break;
     if(picked.some(x => x.type===r.type && x.nums.join()===r.nums.join())) continue;
     const mv = minEV[r.type] || settings.minEVByType[r.type] || 1.05;
-    if(r.ev < mv) continue;
+    if(valueOf(r) < mv) continue;
     picked.push(r);
   }
   return picked.slice(0, max);
@@ -4825,7 +4889,12 @@ function renderResult(valid, rated){
   const sg = document.getElementById('summaryGrid');
   document.getElementById('summaryCard').style.display = '';
   const hasOdds = valid.filter(h=>h.odds>1).length;
-  const evSum = lastTickets.reduce((a,b)=>a+b.ev*b.amount,0);
+  const evSum = lastTickets.reduce((a,b)=>{
+    const ticketValue = settings.mode === 'adjusted_payout_max'
+      ? Number(b.correctedValue || b.ev || 0)
+      : Number(b.ev || 0);
+    return a + ticketValue * Number(b.amount || 0);
+  },0);
   const expectedROI = totalBet ? evSum/totalBet : 0;
   sg.innerHTML = `
     <div class="summary-item"><div class="val" style="font-size:13px;line-height:1.3">${escapeHtml(currentRaceName || '未取得')}</div><div class="lbl">レース名</div></div>
@@ -4856,6 +4925,8 @@ function renderResult(valid, rated){
     if(lastModeSkipTypes && lastModeSkipTypes.length){
       // v5.18.193: 券種設定オフによる見送り
       tl.innerHTML = `<div class="empty">🛑 このレースは見送りです。<br>推奨買い目にOFF設定の券種（${lastModeSkipTypes.join('・')}）が含まれるため、代替購入せず見送ります。</div>`;
+    } else if(settings.mode === 'adjusted_payout_max') {
+      tl.innerHTML = '<div class="empty">補正確率×オッズが1.00以上になる候補がありません。<br>期待損になる買い目は、このモードでは推奨しません。</div>';
     } else {
       tl.innerHTML = ngNote ? `<div class="empty">🛑 ${escapeHtml(ngNote)}<br>このレースは買いません。</div>` : '<div class="empty">推奨買い目がありません。<br>モードやEV閾値を調整してみてください。</div>';
     }
@@ -4865,15 +4936,23 @@ function renderResult(valid, rated){
     if(ngNote){
       html += `<div class="url-status ok">✅ ${escapeHtml(ngNote)}</div>`;
     }
+    if(settings.mode === 'adjusted_payout_max'){
+      html += '<div class="url-status ok">🧮 全頭正規化・地方移動補正・利用可能な履歴較正を反映した補正確率 × オッズの高い順です（1.00未満は除外）。</div>';
+    }
     if(warns.length && settings.antigami){
       html += `<div class="antigami-warn">⚠️ トリガミ注意: ${warns.map(t=>t.type+t.nums.join('-')).join('、')} は的中してもトリガミになる可能性があります</div>`;
     }
     lastTickets.forEach(t => {
-      const evColor = t.ev >= 1.2 ? 'var(--green)' : t.ev >= 1.0 ? 'var(--yellow)' : 'var(--red)';
+      const shownEv = settings.mode === 'adjusted_payout_max'
+        ? Number(t.correctedValue || t.ev || 0)
+        : Number(t.ev || 0);
+      const evColor = shownEv >= 1.2 ? 'var(--green)' : shownEv >= 1.0 ? 'var(--yellow)' : 'var(--red)';
       const tg = isTrigami(t, totalBet) && settings.antigami ? '⚠️ ' : '';
       const narReasons = Array.isArray(t.narTransitionReasons) ? t.narTransitionReasons.filter(Boolean) : [];
       const narLine = narReasons.length
         ? `<div style="font-size:10px;color:#6ee7b7;margin-top:3px">地方移動補正目安 ×${Number(t.narTransitionFactor||1).toFixed(3)}　${escapeHtml(narReasons.join(' / '))}</div>` : '';
+      const correctedLine = settings.mode === 'adjusted_payout_max'
+        ? `<div style="font-size:10px;color:#93c5fd;margin-top:3px">補正確率 ${(Number(t.correctedProbability || t.p || 0)*100).toFixed(2)}% × ${Number(t.odds||0).toFixed(1)} = ${shownEv.toFixed(3)}${Number(t.probabilityCorrectionN||0)>0 ? `（較正n=${Number(t.probabilityCorrectionN)} / ×${Number(t.probabilityCorrectionMultiplier||1).toFixed(3)}）` : '（履歴較正なし）'}</div>` : '';
       html += `<div class="ticket-row">
         <span class="chip ${CHIP_CLASS[t.type]||''}">${t.type}</span>
         <div class="info">
@@ -4881,9 +4960,10 @@ function renderResult(valid, rated){
           <span style="color:var(--muted);font-size:11px;margin-left:6px">推定${t.odds.toFixed(1)}倍</span>
           ${tg}
           ${narLine}
+          ${correctedLine}
         </div>
         <div>
-          <div style="font-size:10px;color:var(--muted);text-align:right">EV <span style="color:${evColor}">${t.ev.toFixed(2)}</span></div>
+          <div style="font-size:10px;color:var(--muted);text-align:right">${settings.mode === 'adjusted_payout_max' ? '補正EV' : 'EV'} <span style="color:${evColor}">${shownEv.toFixed(2)}</span></div>
           <div class="stake">${t.amount}円</div>
         </div>
       </div>`;
@@ -30466,6 +30546,28 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   });
 
   console.log('[' + VERSION + '] enabled');
+})();
+</script>
+<script id="theKeibaCorrectedProbabilityValueV1">
+/* ============================================================
+   v6.9.0 Corrected Probability Value
+   「補正確率×オッズ最大」モードの最終バージョン表示ガード。
+   旧互換パッチが遅延実行されても、本版の表示へ戻す。
+   ============================================================ */
+(function(){
+  'use strict';
+  var VERSION = 'v6.9.0 Corrected Probability Value';
+  function applyVersion(){
+    try{
+      window.APP_VERSION = VERSION;
+      var ver = document.querySelector('.header .ver, .ver');
+      var keepBridge = !!(ver && /🌉/.test(ver.textContent || ''));
+      if(ver) ver.textContent = VERSION + (keepBridge ? ' 🌉' : '');
+      document.title = 'The競馬 EV分析 ' + VERSION;
+    }catch(e){}
+  }
+  [0,100,400,1000,2500,5000,9000,13000,17000].forEach(function(ms){ setTimeout(applyVersion, ms); });
+  applyVersion();
 })();
 </script>
 </body>

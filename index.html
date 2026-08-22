@@ -30057,5 +30057,163 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   console.log('['+VERSION+'] enabled');
 })();
 </script>
+<script id="theKeibaFreeIdPromptGuardV1">
+/* ============================================================
+   v6.8.2 FreeIdPromptRaceNameGuard
+   netkeiba がログイン無しでレース一覧を返すと、レース名欄が
+   「無料ID登録が必要です」等のログイン誘導文言になる。
+   これを正式なレース名として採用させず、nR にフォールバックする。
+   どの loadRaceList 派生が動いても効くよう、
+   (1) 名前クリーニング系関数のラップ
+   (2) #raceSelect の MutationObserver による最終スイープ
+   の二段構えで防ぐ。全体ロジックには一切触れない後付けガード。
+   ============================================================ */
+(function(){
+  "use strict";
+  var VERSION = 'v6.8.2 FreeIdPromptRaceNameGuard';
+  // ログイン/会員登録の誘導文言（レース名ではありえない）
+  var PROMPT = /(?:無料)?\s*(?:ID|会員)?\s*登録が必要|会員登録|無料会員|要ログイン|ログインが必要|ログインしてください|ID登録/;
+  // ラベルから誘導文言だけを消すための貪欲版
+  var PROMPT_STRIP = /(?:無料)?\s*(?:ID|会員)?\s*登録が必要です[。｡\.]?|(?:無料)?会員登録(?:が必要)?(?:です)?[。｡\.]?|無料会員[^\s\/]*|要ログイン[^\s\/]*|ログイン(?:が必要|してください)[^\s\/]*/g;
+
+  function raceNoFromOption(opt){
+    if(!opt) return 0;
+    var rid = (opt.dataset && opt.dataset.raceId) || '';
+    if(!rid){
+      var mv = String(opt.value || '').match(/race_id=(\d{10,14})/);
+      if(mv) rid = mv[1];
+    }
+    if(rid) return Number(String(rid).slice(-2)) || 0;
+    var mt = String(opt.textContent || '').match(/(\d{1,2})\s*R/);
+    return mt ? Number(mt[1]) : 0;
+  }
+
+  function looksLikePrompt(s){ return PROMPT.test(String(s || '')); }
+
+  // ── (1) 名前クリーニング系関数のラップ ─────────────────
+  function wrapCleaner(name){
+    try{
+      var fn = window[name] || (typeof eval('typeof ' + name) === 'function' ? eval(name) : null);
+    }catch(e){ fn = null; }
+    if(typeof fn !== 'function') return;
+    var wrapped = function(txt, raceNo){
+      var out = fn.apply(this, arguments);
+      // 入力・出力どちらかが誘導文言なら nR にフォールバック
+      if(looksLikePrompt(out) || looksLikePrompt(txt)){
+        var no = Number(raceNo || 0) ||
+                 Number(String((arguments[1] != null ? arguments[1] : '')).replace(/\D/g,'')) || 0;
+        if(!no){
+          var m = String(out || txt || '').match(/(\d{1,2})\s*R/);
+          if(m) no = Number(m[1]);
+        }
+        return no ? (no + 'R') : (looksLikePrompt(out) ? '' : out);
+      }
+      return out;
+    };
+    try{ window[name] = wrapped; }catch(e){}
+    try{ eval(name + ' = wrapped;'); }catch(e){}
+  }
+  ['cleanRaceName','cleanFallbackRaceName','cleanNarRaceName68'].forEach(wrapCleaner);
+
+  // isGenericRaceName* は「これは正式名ではない」判定なので prompt を true 扱いに
+  function wrapGeneric(name){
+    try{
+      var fn = window[name] || (typeof eval('typeof ' + name) === 'function' ? eval(name) : null);
+    }catch(e){ fn = null; }
+    if(typeof fn !== 'function') return;
+    var wrapped = function(nm, raceNo){
+      if(looksLikePrompt(nm)) return true;
+      return fn.apply(this, arguments);
+    };
+    try{ window[name] = wrapped; }catch(e){}
+    try{ eval(name + ' = wrapped;'); }catch(e){}
+  }
+  ['isGenericRaceName68','isGenericRaceName49'].forEach(wrapGeneric);
+
+  // ── (2) #raceSelect の最終スイープ ─────────────────
+  function sanitizeSelect(sel){
+    if(!sel || !sel.options) return false;
+    var changed = false;
+    for(var i = 0; i < sel.options.length; i++){
+      var opt = sel.options[i];
+      var dn = (opt.dataset && opt.dataset.raceName) || '';
+      var hit = looksLikePrompt(opt.textContent) || looksLikePrompt(dn);
+      if(!hit) continue;
+      var no = raceNoFromOption(opt);
+      // ラベルから誘導文言を除去（前後の空白・余ったスラッシュを整える）
+      var t = String(opt.textContent || '')
+        .replace(PROMPT_STRIP, '')
+        .replace(/\s{2,}/g, ' ')
+        .replace(/R\s*\/\s*/, 'R / ')
+        .replace(/\s+\/\s+/g, ' / ')
+        .replace(/\s+$/,'')
+        .trim();
+      // レース名が完全に消えた場合、最低限 nR が残るよう補完
+      if(no && !new RegExp('\\b' + no + '\\s*R\\b').test(t)) t = (no + 'R ' + t).trim();
+      if(opt.textContent !== t){ opt.textContent = t; changed = true; }
+      if(looksLikePrompt(dn) && no){ opt.dataset.raceName = no + 'R'; changed = true; }
+    }
+    return changed;
+  }
+
+  function fixCurrentContext(sel){
+    try{
+      var opt = sel && sel.selectedOptions && sel.selectedOptions[0];
+      if(opt && opt.dataset){
+        var no = raceNoFromOption(opt);
+        if(no && looksLikePrompt(window.currentRaceName)){
+          window.currentRaceName = no + 'R';
+          try{ currentRaceName = window.currentRaceName; }catch(e){}
+        }
+      }
+      var box = document.getElementById('raceTitleBox');
+      if(box && looksLikePrompt(box.textContent)){
+        var mo = String(box.textContent).match(/(\d{1,2})\s*R/);
+        box.textContent = mo ? ('選択中: ' + mo[1] + 'R') : box.textContent.replace(PROMPT_STRIP, '').trim();
+      }
+    }catch(e){}
+  }
+
+  var sweeping = false;
+  function sweep(){
+    if(sweeping) return;
+    sweeping = true;
+    try{
+      var sel = document.getElementById('raceSelect');
+      if(sel){ sanitizeSelect(sel); fixCurrentContext(sel); }
+    }finally{ sweeping = false; }
+  }
+
+  function attachObserver(){
+    var sel = document.getElementById('raceSelect');
+    if(!sel) return false;
+    sweep();
+    try{
+      var mo = new MutationObserver(function(){ sweep(); });
+      mo.observe(sel, { childList: true, subtree: true, characterData: true });
+    }catch(e){}
+    return true;
+  }
+  if(!attachObserver()){
+    document.addEventListener('DOMContentLoaded', attachObserver, { once: true });
+  }
+
+  // loadRaceList / applySelectedRaceUrl の後にも念のためスイープ
+  ['loadRaceList','applySelectedRaceUrl'].forEach(function(name){
+    var prev = window[name];
+    if(typeof prev !== 'function') return;
+    var wrapped = function(){
+      var r = prev.apply(this, arguments);
+      if(r && typeof r.then === 'function'){ r.then(function(){ setTimeout(sweep, 0); }, function(){}); }
+      else setTimeout(sweep, 0);
+      return r;
+    };
+    try{ window[name] = wrapped; }catch(e){}
+    try{ eval(name + ' = wrapped;'); }catch(e){}
+  });
+
+  console.log('[' + VERSION + '] enabled');
+})();
+</script>
 </body>
 </html>

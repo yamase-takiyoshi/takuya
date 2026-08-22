@@ -29794,5 +29794,106 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   console.log('['+VERSION+'] enabled: single version owner / canonical race state / stable listeners');
 })();
 </script>
+<script>
+/* ============================================================
+   v5.18.303 JraVenueScheduleFallback
+   ・JRA Worker がHTTP 200でも netkeiba一覧DOMから開催場を拾えない日を補助
+   ・JRA公式の年間開催日程に相当する既知開催場を、開催場プルダウンだけに反映
+   ・レース一覧/馬データ取得は従来どおり Worker + netkeiba race_id を使用
+   ============================================================ */
+(function(){
+  'use strict';
+  var VERSION = 'v5.18.303 JraVenueScheduleFallback';
+  var previousLoadVenues = window.loadActiveVenuesForDate;
+
+  var JRA_VENUE_NAMES = {
+    '01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京',
+    '06':'中山','07':'中京','08':'京都','09':'阪神','10':'小倉'
+  };
+
+  // 2026年夏開催。netkeiba一覧が空/未生成でも、開催場選択だけは止めない。
+  // 必要になった日をここへ足せば同じ方式で復旧できる。
+  var JRA_SCHEDULE_FALLBACK = {
+    '20260801':['01','04','07'],
+    '20260802':['01','04','07'],
+    '20260808':['01','04','07'],
+    '20260809':['01','04','07'],
+    '20260815':['01','04','07'],
+    '20260816':['01','04','07'],
+    '20260822':['01','04','07'],
+    '20260823':['01','04','07'],
+    '20260829':['01','04','07'],
+    '20260830':['01','04','07'],
+    '20260905':['01','04','07'],
+    '20260906':['01','04','07']
+  };
+
+  function el(id){ return document.getElementById(id); }
+  function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c];}); }
+  function ymd(v){ return String(v || '').replace(/[^0-9]/g,'').slice(0,8); }
+  function currentKind(){ return String((el('pickKind') && el('pickKind').value) || 'JRA').toUpperCase(); }
+  function scheduleVenues(date){
+    var codes = JRA_SCHEDULE_FALLBACK[ymd(date)] || [];
+    return codes.map(function(code){ return { code:code, name:JRA_VENUE_NAMES[code] || code }; });
+  }
+  function venueSelectHasRealOptions(){
+    var sel = el('pickVenue');
+    if(!sel || !sel.options || !sel.options.length) return false;
+    return Array.prototype.some.call(sel.options,function(o){
+      return /^\d{2}$/.test(String(o.value || ''));
+    });
+  }
+  function renderFallbackVenues(date, venues){
+    var sel = el('pickVenue');
+    if(!sel || !venues.length) return false;
+    sel.innerHTML = venues.map(function(v){
+      return '<option value="'+esc(v.code)+'">'+esc(v.name)+'（JRA日程）</option>';
+    }).join('');
+    var status = el('urlStatus');
+    if(status){
+      status.innerHTML =
+        '<div class="url-status ok">✅ '+esc(date)+' のJRA開催場：'+
+        venues.map(function(v){return esc(v.name);}).join('、')+
+        '<br><span style="font-size:11px;opacity:.85">'+esc(VERSION)+
+        '：netkeiba一覧が空でもJRA日程で開催場を補完しました。レース一覧ボタンで race_id を取得します。</span></div>';
+    }
+    return true;
+  }
+
+  window.loadActiveVenuesForDate = async function(kind){
+    kind = String(kind || currentKind()).toUpperCase();
+    if(kind !== 'JRA'){
+      return previousLoadVenues ? previousLoadVenues.apply(this, arguments) : undefined;
+    }
+    var date = (el('pickDate') && el('pickDate').value) || (typeof todayYmd === 'function' ? todayYmd() : '');
+    var ret;
+    try{
+      if(previousLoadVenues) ret = await previousLoadVenues.apply(this, arguments);
+    }catch(e){
+      var fallbackAfterError = scheduleVenues(date);
+      if(renderFallbackVenues(date, fallbackAfterError)) return ret;
+      throw e;
+    }
+    if(!venueSelectHasRealOptions()){
+      var fallback = scheduleVenues(date);
+      if(fallback.length) renderFallbackVenues(date, fallback);
+    }
+    return ret;
+  };
+  try{ loadActiveVenuesForDate = window.loadActiveVenuesForDate; }catch(e){}
+
+  function setVersion(){
+    try{
+      window.APP_VERSION = VERSION;
+      document.title = 'The競馬 EV分析 ' + VERSION;
+      document.querySelectorAll('.ver').forEach(function(n){ n.textContent = VERSION; });
+    }catch(e){}
+  }
+  setVersion();
+  setTimeout(setVersion, 300);
+  setTimeout(setVersion, 1200);
+  console.log('['+VERSION+'] enabled');
+})();
+</script>
 </body>
 </html>

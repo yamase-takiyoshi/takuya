@@ -29592,7 +29592,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script id="theKeibaSafeCoreV6">
 /* ============================================================
-   v6.9 MultiPoint Positive ROI
+   v6.9.1 MultiPoint Positive ROI + JRA ID Repair
    ・APP_VERSION / title / header version are rendered by one owner
    ・JRA/NAR, date, venue and race_id share one canonical state
    ・race_id mismatches are rejected before they reach later actions
@@ -29601,7 +29601,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  var VERSION='v6.9 MultiPoint Positive ROI';
+  var VERSION='v6.9.1 MultiPoint Positive ROI + JRA ID Repair';
   var oldCore=window.TheKeibaCore;
   if(oldCore&&oldCore.version===VERSION){
     try{oldCore.refresh('duplicate-load');}catch(e){}
@@ -30007,40 +30007,40 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     '20260802-01':'2026010104',
     '20260808-01':'2026010105',
     '20260809-01':'2026010106',
-    '20260815-01':'2026010201',
-    '20260816-01':'2026010202',
-    '20260822-01':'2026010203',
-    '20260823-01':'2026010204',
-    '20260829-01':'2026010205',
-    '20260830-01':'2026010206',
-    '20260905-01':'2026010207',
-    '20260906-01':'2026010208',
+    '20260815-01':'2026010107',
+    '20260816-01':'2026010108',
+    '20260822-01':'2026010201',
+    '20260823-01':'2026010202',
+    '20260829-01':'2026010203',
+    '20260830-01':'2026010204',
+    '20260905-01':'2026010205',
+    '20260906-01':'2026010206',
 
     '20260801-04':'2026040203',
     '20260802-04':'2026040204',
     '20260808-04':'2026040205',
     '20260809-04':'2026040206',
-    '20260815-04':'2026040301',
-    '20260816-04':'2026040302',
-    '20260822-04':'2026040303',
-    '20260823-04':'2026040304',
-    '20260829-04':'2026040305',
-    '20260830-04':'2026040306',
-    '20260905-04':'2026040307',
-    '20260906-04':'2026040308',
+    '20260815-04':'2026040207',
+    '20260816-04':'2026040208',
+    '20260822-04':'2026040301',
+    '20260823-04':'2026040302',
+    '20260829-04':'2026040303',
+    '20260830-04':'2026040304',
+    '20260905-04':'2026040305',
+    '20260906-04':'2026040306',
 
-    '20260801-07':'2026070303',
-    '20260802-07':'2026070304',
-    '20260808-07':'2026070305',
-    '20260809-07':'2026070306',
-    '20260815-07':'2026070401',
-    '20260816-07':'2026070402',
-    '20260822-07':'2026070403',
-    '20260823-07':'2026070404',
-    '20260829-07':'2026070405',
-    '20260830-07':'2026070406',
-    '20260905-07':'2026070407',
-    '20260906-07':'2026070408'
+    '20260801-07':'2026070203',
+    '20260802-07':'2026070204',
+    '20260808-07':'2026070205',
+    '20260809-07':'2026070206',
+    '20260815-07':'2026070207',
+    '20260816-07':'2026070208',
+    '20260822-07':'2026070301',
+    '20260823-07':'2026070302',
+    '20260829-07':'2026070303',
+    '20260830-07':'2026070304',
+    '20260905-07':'2026070305',
+    '20260906-07':'2026070306'
   };
 
   function el(id){ return document.getElementById(id); }
@@ -30467,6 +30467,415 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   });
 
   console.log('[' + VERSION + '] enabled');
+})();
+</script>
+<script id="theKeibaJraRaceIdAutoRepairV691">
+/* ============================================================
+   v6.9.1 JRA RaceId Auto Repair
+   ・2026年夏開催の誤った固定prefixを最終段でも矯正
+   ・選択肢、URL、主キー、グローバル状態を同じrace_idへ同期
+   ・空の出馬表（馬リンク1件以下）を検出した時は、一覧候補を実出馬表で
+     日付・開催場・出走馬まで検証し、正しいrace_idへ一度だけ自動再取得
+   ============================================================ */
+(function(){
+  'use strict';
+
+  var FIX_VERSION = 'v6.9.1 JRA RaceId Auto Repair';
+  window.TK_JRA_RACE_ID_FIX_VERSION = FIX_VERSION;
+
+  // key = YYYYMMDD-場コード / value = YYYY+場+開催回+開催日（末尾R番号なし）
+  // 2026/8/1～8/23はnetkeiba実レース一覧のrace_idで照合済み。
+  var STATIC_PREFIX = {
+    '20260801-01':'2026010103','20260802-01':'2026010104',
+    '20260808-01':'2026010105','20260809-01':'2026010106',
+    '20260815-01':'2026010107','20260816-01':'2026010108',
+    '20260822-01':'2026010201','20260823-01':'2026010202',
+    '20260829-01':'2026010203','20260830-01':'2026010204',
+    '20260905-01':'2026010205','20260906-01':'2026010206',
+
+    '20260801-04':'2026040203','20260802-04':'2026040204',
+    '20260808-04':'2026040205','20260809-04':'2026040206',
+    '20260815-04':'2026040207','20260816-04':'2026040208',
+    '20260822-04':'2026040301','20260823-04':'2026040302',
+    '20260829-04':'2026040303','20260830-04':'2026040304',
+    '20260905-04':'2026040305','20260906-04':'2026040306',
+
+    '20260801-07':'2026070203','20260802-07':'2026070204',
+    '20260808-07':'2026070205','20260809-07':'2026070206',
+    '20260815-07':'2026070207','20260816-07':'2026070208',
+    '20260822-07':'2026070301','20260823-07':'2026070302',
+    '20260829-07':'2026070303','20260830-07':'2026070304',
+    '20260905-07':'2026070305','20260906-07':'2026070306'
+  };
+  var runtimePrefix = Object.create(null);
+  var repairing = false;
+  var retryingFetch = false;
+  var discoverPromise = null;
+
+  var VENUE_NAMES = {
+    '01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京',
+    '06':'中山','07':'中京','08':'京都','09':'阪神','10':'小倉'
+  };
+
+  function el(id){ return document.getElementById(id); }
+  function text(v){ return String(v == null ? '' : v); }
+  function ymd(v){ return text(v).replace(/[^0-9]/g,'').slice(0,8); }
+  function pad2(v){ return String(Number(v) || 0).padStart(2,'0'); }
+  function ridOf(v){
+    var s = text(v);
+    var m = s.match(/race_id=(\d{12})/i) || s.match(/\b(20\d{10})\b/);
+    return m ? m[1] : '';
+  }
+  function currentKind(){ return text(el('pickKind') && el('pickKind').value || 'JRA').toUpperCase(); }
+  function currentDate(){ return (el('pickDate') && el('pickDate').value) || ''; }
+  function currentVenue(){ return text(el('pickVenue') && el('pickVenue').value || '').padStart(2,'0'); }
+  function contextKey(date, code){ return ymd(date || currentDate()) + '-' + text(code || currentVenue()).padStart(2,'0'); }
+  function prefixFor(date, code){
+    var key = contextKey(date, code);
+    return runtimePrefix[key] || STATIC_PREFIX[key] || '';
+  }
+  function raceNoOf(v){
+    var rid = ridOf(v);
+    if(rid) return Number(rid.slice(-2)) || 0;
+    var m = text(v).match(/(?:^|\s)([1-9]|1[0-2])\s*R(?:\s|$)/i);
+    return m ? Number(m[1]) : 0;
+  }
+  function expectedRaceId(no, date, code){
+    var prefix = prefixFor(date, code);
+    return prefix && no >= 1 && no <= 12 ? prefix + pad2(no) : '';
+  }
+  function shutubaUrl(rid){
+    return 'https://race.netkeiba.com/race/shutuba.html?race_id=' + rid + '&rf=race_submenu';
+  }
+  function venueName(code){
+    code = text(code || currentVenue()).padStart(2,'0');
+    var opt = el('pickVenue') && el('pickVenue').selectedOptions && el('pickVenue').selectedOptions[0];
+    var fromOption = opt ? text(opt.textContent).replace(/（.*$/,'').trim() : '';
+    return fromOption || VENUE_NAMES[code] || code;
+  }
+  function esc(s){
+    return text(s).replace(/[&<>"']/g,function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c];
+    });
+  }
+
+  function cleanRaceName(name, no){
+    var t = text(name).replace(/\s+/g,' ').trim();
+    t = t.replace(new RegExp('^' + no + '\\s*R\\s*','i'),'').trim();
+    var junk = /^(?:タイム|持ちタイム|調教タイム|タイム指数|スピード指数|指数|AI\s*(?:展開)?予[想測]|AI\s*指数|展開予[想測]|ラップ(?:予想|解析|タイム)?|予想印|無料ID登録が必要です|会員登録|ログインが必要|出馬表|オッズ|結果|レース情報|レース一覧)$/i;
+    if(!t || junk.test(t) || t.length > 60) return no + 'R';
+    return t;
+  }
+
+  function optionRaceNo(opt){
+    if(!opt) return 0;
+    return raceNoOf((opt.dataset && opt.dataset.raceId) || opt.value || opt.textContent);
+  }
+  function optionRaceName(opt, no){
+    var name = opt && opt.dataset ? text(opt.dataset.raceName) : '';
+    if(!name && opt){
+      name = text(opt.textContent)
+        .replace(/\s*\/\s*\d{12}.*$/,'')
+        .replace(/^\d{4}[\/-]\d{1,2}[\/-]\d{1,2}\s+/,'')
+        .replace(/^(?:札幌|函館|福島|新潟|東京|中山|中京|京都|阪神|小倉)\s+/,'')
+        .replace(new RegExp('^' + no + '\\s*R\\s*','i'),'')
+        .trim();
+    }
+    return cleanRaceName(name, no);
+  }
+
+  function repairOption(opt, prefix, date, code){
+    var no = optionRaceNo(opt);
+    if(!no || no < 1 || no > 12) return false;
+    var rid = prefix + pad2(no);
+    var name = optionRaceName(opt, no);
+    var url = shutubaUrl(rid);
+    var dateLabel = ymd(date);
+    dateLabel = dateLabel.length === 8
+      ? dateLabel.slice(0,4) + '/' + dateLabel.slice(4,6) + '/' + dateLabel.slice(6,8)
+      : text(date);
+    var label = dateLabel + ' ' + venueName(code) + ' ' + no + 'R' +
+      (name && name !== no + 'R' ? ' ' + name : '') + ' / ' + rid;
+    var changed = false;
+    if(text(opt.dataset.raceId) !== rid){ opt.dataset.raceId = rid; changed = true; }
+    if(text(opt.dataset.raceName) !== name){ opt.dataset.raceName = name; changed = true; }
+    if(text(opt.value) !== url){ opt.value = url; changed = true; }
+    if(text(opt.textContent) !== label){ opt.textContent = label; changed = true; }
+    return changed;
+  }
+
+  function syncSelectedIdentity(reason, oldRid){
+    var sel = el('raceSelect');
+    var opt = sel && sel.selectedOptions && sel.selectedOptions[0];
+    if(!opt) return '';
+    var rid = ridOf((opt.dataset && opt.dataset.raceId) || opt.value || opt.textContent);
+    if(!rid) return '';
+    var no = Number(rid.slice(-2)) || 0;
+    var name = optionRaceName(opt, no);
+    var url = shutubaUrl(rid);
+    var urlIn = el('raceUrl');
+    var pkIn = el('raceIdPrimaryInput');
+    if(urlIn && urlIn.value !== url) urlIn.value = url;
+    if(pkIn && pkIn.value !== rid) pkIn.value = rid;
+    window.currentRaceId = rid;
+    window.currentRaceName = name;
+    try{ currentRaceId = rid; currentRaceName = name; }catch(e){}
+    try{
+      if(window.TheKeibaCore && typeof window.TheKeibaCore.commit === 'function'){
+        window.TheKeibaCore.commit({
+          kind:'JRA', date:currentDate(), venueCode:currentVenue(),
+          raceId:rid, raceName:name
+        }, reason || 'jra-race-id-auto-repair');
+      }
+    }catch(e){}
+    var box = el('raceTitleBox');
+    if(box){
+      box.style.display = 'block';
+      box.textContent = '🔑 主キー: ' + rid + ' / JRA / ' + venueName(currentVenue()) + ' / ' + no + 'R' +
+        (name && name !== no + 'R' ? ' / ' + name : '');
+    }
+    var pk = el('raceIdPrimaryStatus');
+    if(pk){
+      pk.innerHTML = '<span style="color:var(--green);font-weight:700">race_id選択済み</span>：JRA ' +
+        esc(currentVenue()) + ' ' + no + 'R';
+    }
+    if(oldRid && oldRid !== rid){
+      var status = el('urlStatus');
+      if(status){
+        status.innerHTML = '<div class="url-status ok">🔧 race_idを自動補正しました：' +
+          esc(oldRid) + ' → <b>' + esc(rid) + '</b><br><span style="font-size:11px;opacity:.85">' +
+          esc(FIX_VERSION) + '</span></div>';
+      }
+    }
+    return rid;
+  }
+
+  function repairRaceOptions(reason){
+    if(repairing || currentKind() !== 'JRA') return false;
+    var date = currentDate();
+    var code = currentVenue();
+    var prefix = prefixFor(date, code);
+    if(!prefix) return false;
+    var sel = el('raceSelect');
+    if(!sel || !sel.options || !sel.options.length) return false;
+
+    repairing = true;
+    var changed = false;
+    var selectedIndex = sel.selectedIndex;
+    var oldSelected = sel.selectedOptions && sel.selectedOptions[0]
+      ? ridOf(sel.selectedOptions[0].dataset.raceId || sel.selectedOptions[0].value || '')
+      : '';
+    try{
+      Array.prototype.forEach.call(sel.options,function(opt){
+        if(repairOption(opt, prefix, date, code)) changed = true;
+      });
+      if(selectedIndex >= 0 && selectedIndex < sel.options.length) sel.selectedIndex = selectedIndex;
+      syncSelectedIdentity(reason || 'jra-race-id-options-repair', oldSelected);
+    }finally{
+      repairing = false;
+    }
+    return changed;
+  }
+
+  function strictRaceMetaText(doc){
+    var parts = [];
+    try{ parts.push(doc.title || ''); }catch(e){}
+    try{
+      ['meta[property="og:title"]','meta[name="description"]','meta[property="og:description"]'].forEach(function(sel){
+        var n = doc.querySelector(sel); if(n) parts.push(n.getAttribute('content') || '');
+      });
+      ['.RaceName','.RaceData01','.RaceData02','[class*="RaceData"]'].forEach(function(sel){
+        Array.prototype.forEach.call(doc.querySelectorAll(sel),function(n){ parts.push(n.textContent || ''); });
+      });
+    }catch(e){}
+    return parts.join(' ').replace(/\s+/g,' ').trim();
+  }
+  function dateMatchesMeta(meta, date){
+    var d = ymd(date);
+    if(d.length !== 8) return false;
+    var yy = d.slice(0,4), mm = Number(d.slice(4,6)), dd = Number(d.slice(6,8));
+    var mm2 = d.slice(4,6), dd2 = d.slice(6,8);
+    var pats = [
+      yy + '年' + mm + '月' + dd + '日', mm + '月' + dd + '日',
+      yy + '/' + mm2 + '/' + dd2, yy + '-' + mm2 + '-' + dd2,
+      mm2 + '/' + dd2
+    ];
+    return pats.some(function(p){ return meta.indexOf(p) >= 0; });
+  }
+  async function validJraCandidate(rid, date, code){
+    var fetcher = window.fetchHtmlViaProxy;
+    if(typeof fetcher !== 'function'){
+      try{ if(typeof fetchHtmlViaProxy === 'function') fetcher = fetchHtmlViaProxy; }catch(e){}
+    }
+    if(typeof fetcher !== 'function') return false;
+    try{
+      var url = shutubaUrl(rid);
+      var html = await fetcher.call(window, url);
+      if(!html || text(html).length < 1500) return false;
+      var doc = new DOMParser().parseFromString(text(html),'text/html');
+      var count = 0;
+      try{
+        var parser = window.parseHorsesFromDoc;
+        if(typeof parser !== 'function'){
+          try{ if(typeof parseHorsesFromDoc === 'function') parser = parseHorsesFromDoc; }catch(e){}
+        }
+        if(typeof parser === 'function'){
+          var hs = parser(doc, url);
+          count = Array.isArray(hs) ? hs.length : 0;
+        }
+      }catch(e){}
+      if(count < 2){
+        count = doc.querySelectorAll('a[href*="/horse/"], a[href*="horse_id="]').length;
+      }
+      if(count < 2) return false;
+      var meta = strictRaceMetaText(doc);
+      if(!dateMatchesMeta(meta, date)) return false;
+      var vn = VENUE_NAMES[text(code).padStart(2,'0')] || '';
+      if(vn && meta.indexOf(vn) < 0) return false;
+      return true;
+    }catch(e){
+      return false;
+    }
+  }
+
+  function pushCandidate(list, seen, rid, no, date, code){
+    rid = ridOf(rid);
+    if(!rid || rid.slice(0,4) !== ymd(date).slice(0,4)) return;
+    if(rid.slice(4,6) !== text(code).padStart(2,'0')) return;
+    var candidate = rid.slice(0,10) + pad2(no);
+    if(!seen[candidate]){ seen[candidate] = true; list.push(candidate); }
+  }
+
+  async function discoverValidJraRaceId(date, code, no, seedRid){
+    if(discoverPromise) return discoverPromise;
+    discoverPromise = (async function(){
+      var candidates = [], seen = Object.create(null);
+      var known = expectedRaceId(no, date, code);
+      pushCandidate(candidates, seen, known, no, date, code);
+      pushCandidate(candidates, seen, seedRid, no, date, code);
+
+      // SP一覧は土日両日を含む場合があるため、IDを候補として拾った後、
+      // 必ず実出馬表の厳密な日付と出走馬数で選別する。
+      try{
+        var fetcher = window.fetchHtmlViaProxy;
+        if(typeof fetcher !== 'function'){
+          try{ if(typeof fetchHtmlViaProxy === 'function') fetcher = fetchHtmlViaProxy; }catch(e){}
+        }
+        if(typeof fetcher === 'function'){
+          var d = ymd(date);
+          var listUrl = 'https://race.sp.netkeiba.com/?pid=race_list&kaisai_date=' + d;
+          var listHtml = await fetcher.call(window, listUrl);
+          var re = /race_id=(20\d{10})/g, m;
+          while((m = re.exec(text(listHtml)))) pushCandidate(candidates, seen, m[1], no, date, code);
+        }
+      }catch(e){}
+
+      // 一覧が取れない場合の小範囲保険。現在IDと同じ開催回を中心に確認する。
+      var seed = ridOf(seedRid);
+      if(seed){
+        var yearVenue = seed.slice(0,6);
+        var kai = Number(seed.slice(6,8)) || 0;
+        var day = Number(seed.slice(8,10)) || 0;
+        [day,day-1,day+1,day-2,day+2,day-3,day+3].forEach(function(dy){
+          if(kai >= 1 && dy >= 1 && dy <= 12){
+            pushCandidate(candidates, seen, yearVenue + pad2(kai) + pad2(dy) + pad2(no), no, date, code);
+          }
+        });
+        [kai-1,kai+1].forEach(function(ka){
+          if(ka >= 1 && ka <= 12){
+            [1,2,3,4,5,6,7,8].forEach(function(dy){
+              pushCandidate(candidates, seen, yearVenue + pad2(ka) + pad2(dy) + pad2(no), no, date, code);
+            });
+          }
+        });
+      }
+
+      for(var i=0;i<candidates.length;i++){
+        if(await validJraCandidate(candidates[i], date, code)) return candidates[i];
+      }
+      return '';
+    })();
+    try{ return await discoverPromise; }
+    finally{ discoverPromise = null; }
+  }
+
+  function installObserver(){
+    var sel = el('raceSelect');
+    if(!sel || sel.__jraRaceIdAutoRepair691) return;
+    sel.__jraRaceIdAutoRepair691 = true;
+    try{
+      var mo = new MutationObserver(function(){
+        if(repairing) return;
+        setTimeout(function(){ repairRaceOptions('race-list-mutation'); },0);
+      });
+      mo.observe(sel,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:['value','data-race-id','data-race-name']});
+    }catch(e){}
+  }
+
+  var previousLoadRaceList = window.loadRaceList;
+  if(typeof previousLoadRaceList === 'function'){
+    window.loadRaceList = async function(){
+      var ret = await previousLoadRaceList.apply(this,arguments);
+      repairRaceOptions('load-race-list');
+      return ret;
+    };
+    try{ loadRaceList = window.loadRaceList; }catch(e){}
+  }
+
+  var previousApplySelected = window.applySelectedRaceUrl;
+  if(typeof previousApplySelected === 'function'){
+    window.applySelectedRaceUrl = function(){
+      repairRaceOptions('before-apply-selection');
+      var ret = previousApplySelected.apply(this,arguments);
+      repairRaceOptions('after-apply-selection');
+      return ret;
+    };
+    try{ applySelectedRaceUrl = window.applySelectedRaceUrl; }catch(e){}
+  }
+
+  var previousFetchRace = window.fetchRace;
+  if(typeof previousFetchRace === 'function'){
+    window.fetchRace = async function(){
+      if(currentKind() !== 'JRA' || retryingFetch){
+        return await previousFetchRace.apply(this,arguments);
+      }
+      repairRaceOptions('before-race-fetch');
+      var raw = (el('raceUrl') && el('raceUrl').value) || '';
+      var seedRid = ridOf(raw) || ridOf(el('raceIdPrimaryInput') && el('raceIdPrimaryInput').value) ||
+        ridOf(el('raceSelect') && el('raceSelect').selectedOptions && el('raceSelect').selectedOptions[0] && el('raceSelect').selectedOptions[0].value);
+      var ret = await previousFetchRace.apply(this,arguments);
+      var status = el('urlStatus');
+      var statusText = status ? text(status.textContent) : '';
+      if(!/出走馬を十分に取得できませんでした|馬リンク[01](?:\D|$)/.test(statusText)) return ret;
+
+      var no = Number(seedRid.slice(-2)) || raceNoOf(el('raceSelect') && el('raceSelect').value) || 1;
+      if(status){
+        status.innerHTML = '<div class="url-status">🔎 race_id誤りの可能性を検出。正しい開催回・日次を確認中...</div>';
+      }
+      var fixedRid = await discoverValidJraRaceId(currentDate(), currentVenue(), no, seedRid);
+      if(!fixedRid || fixedRid === seedRid) return ret;
+
+      runtimePrefix[contextKey()] = fixedRid.slice(0,10);
+      repairRaceOptions('discovered-race-id');
+      if(status){
+        status.innerHTML = '<div class="url-status ok">🔧 race_idを自動修復：' + esc(seedRid) +
+          ' → <b>' + esc(fixedRid) + '</b>。レースデータを再取得します...</div>';
+      }
+      retryingFetch = true;
+      try{ return await previousFetchRace.apply(this,arguments); }
+      finally{ retryingFetch = false; }
+    };
+    try{ fetchRace = window.fetchRace; }catch(e){}
+  }
+
+  function init(){
+    installObserver();
+    repairRaceOptions('boot');
+    try{ document.documentElement.setAttribute('data-jra-race-id-fix',FIX_VERSION); }catch(e){}
+    console.log('[' + FIX_VERSION + '] enabled');
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded',init,{once:true});
+  else init();
 })();
 </script>
 </body>

@@ -11114,6 +11114,7 @@ function isGenericRaceName49(name, raceNo){
   const no = Number(raceNo || 0);
   const t = String(name || '').replace(/\s+/g,'').trim();
   if(!t) return true;
+  if(/^(この競馬場のオススメ|競馬専門紙|タイム|調教タイム)$/.test(t)) return true;
   return t === `${no}R` || t === `第${no}R` || /^\d{1,2}R$/.test(t) || /^[\u4e00-\u9fffぁ-んァ-ヶ]+\d{1,2}R$/.test(t);
 }
 function cleanRaceName49(text, raceNo, raceId){
@@ -11224,8 +11225,8 @@ async function fillJraRaceNamesFromShutuba(kind, races, status, date, venueCode,
     };
     if(r.raceName && !isGenericRaceName49(r.raceName, no) && !isJsContaminated(r.raceName)) name = r.raceName;
     if(!name) name = extractRaceNameFromScheduleHtml49(scheduleHtml || '', r.raceId, no);
-    if(!name) name = await fetchRaceNameFromPage49(kind, r.raceId, no, 'shutuba');
-    if(!name) name = await fetchRaceNameFromPage49(kind, r.raceId, no, 'result');
+    // JRA側の仕様変更で、出馬表/結果本文から「調教タイム」などの
+    // 見出しをレース名として拾うため、ここでは左側レース一覧由来だけ採用する。
     out.push({...r, raceNo:no, raceName:(name || `${no}R`)});
   }
   return out;
@@ -29973,7 +29974,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     var t = String(name || '').replace(/\s+/g,' ').trim();
     if(!t) return no + 'R';
     t = t.replace(new RegExp('^' + no + 'R\\s*', 'i'), '').trim();
-    if(!t || /^(?:netkeiba|netkeiba\.com|JRA|Race|出馬表|オッズ|結果|レース情報|レース一覧|この競馬場のオススメ|競馬専門紙|タイム)$/i.test(t)) return no + 'R';
+    if(!t || /^(?:netkeiba|netkeiba\.com|JRA|Race|出馬表|オッズ|結果|レース情報|レース一覧|この競馬場のオススメ|競馬専門紙|タイム|調教タイム)$/i.test(t)) return no + 'R';
     return t;
   }
   async function renderFallbackRaces(date, code){
@@ -30228,7 +30229,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
   // レース名ではありえない、netkeibaのAI/展開系セクション見出し。
   // 競走名に「予測/予想印/展開予測」等が入ることは実質無いので誤爆しない。
-  var JUNK = /(?:この競馬場のオススメ|競馬専門紙|^タイム$|AI\s*(?:展開)?予[想測]|AI\s*指数|AI\s*ラップ(?:指数|予想)?|展開\s*予[想測]|コース\s*展開(?:予[想測])?|ラップ\s*(?:予想|解析|タイム)|予想\s*印|印\s*予想)/i;
+  var JUNK = /(?:この競馬場のオススメ|競馬専門紙|^タイム$|^調教タイム$|AI\s*(?:展開)?予[想測]|AI\s*指数|AI\s*ラップ(?:指数|予想)?|展開\s*予[想測]|コース\s*展開(?:予[想測])?|ラップ\s*(?:予想|解析|タイム)|予想\s*印|印\s*予想)/i;
 
   function looksLikeJunk(s){ return JUNK.test(String(s || '')); }
 

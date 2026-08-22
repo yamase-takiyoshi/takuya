@@ -1101,7 +1101,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
         <div class="field" style="flex:1;min-width:120px">
           <label>区分</label>
-          <select id="rsKind" onchange="rsRenderVenueChecks()">
+          <select id="rsKind" onchange="syncRangeKindToSettings(this.value);rsRenderVenueChecks()">
             <option value="JRA">JRA（中央）</option>
             <option value="NAR">NAR（地方）</option>
           </select>
@@ -2079,13 +2079,51 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
       </div>
     </div>
 
+    <div class="card" id="narRoiGuardSettingsCard">
+      <h2>🛡️ NAR回収率改善ガード</h2>
+      <div class="settings-row">
+        <label>NARで厳格選定</label>
+        <input type="checkbox" id="setNarRoiGuard" checked onchange="saveSettings()">
+      </div>
+      <div class="settings-row">
+        <label>実オッズ券種だけ</label>
+        <input type="checkbox" id="setNarActualOddsOnly" checked onchange="saveSettings()">
+      </div>
+      <div class="settings-row">
+        <label>全頭の単勝オッズ必須</label>
+        <input type="checkbox" id="setNarRequireFullOdds" checked onchange="saveSettings()">
+      </div>
+      <div class="settings-row">
+        <label>最低EV</label>
+        <input type="number" id="setNarGuardMinEV" value="1.20" step="0.01" min="1.00" max="3.00" onchange="saveSettings()">
+      </div>
+      <div class="settings-row">
+        <label>単勝オッズ範囲</label>
+        <div style="display:flex;gap:6px;align-items:center;justify-content:flex-end">
+          <input type="number" id="setNarGuardOddsMin" value="2.5" step="0.1" min="1.0" max="1000" style="width:78px" onchange="saveSettings()">
+          <span style="color:var(--muted)">～</span>
+          <input type="number" id="setNarGuardOddsMax" value="30" step="0.5" min="1.1" max="1000" style="width:78px" onchange="saveSettings()">
+        </div>
+      </div>
+      <div class="settings-row">
+        <label>1R最大買い目</label>
+        <input type="number" id="setNarGuardMaxTickets" value="1" step="1" min="1" max="3" onchange="saveSettings()">
+      </div>
+      <div class="proxy-note" style="margin-top:6px;font-size:11px;line-height:1.65">
+        NARだけに適用します。初期値では、全頭の単勝実オッズが揃ったレースからEV1.20以上・2.5～30倍の単勝を最大1点だけ採用します。単勝から作った複勝・馬連・三連系の推定オッズは購入判定に使いません。JRAの買い目には影響しません。
+      </div>
+      <div id="narRoiGuardStatus" style="margin-top:8px;padding:8px 10px;border:1px solid rgba(96,165,250,.30);border-radius:8px;background:rgba(59,130,246,.07);font-size:11px;line-height:1.6;color:#dbeafe">
+        ガード状態を確認中…
+      </div>
+    </div>
+
     <div class="card">
       <h2>⚙️ 基本設定</h2>
       <div class="settings-row">
         <label>JRA/NAR</label>
         <select id="setNar" onchange="saveSettings()">
-          <option value="0">JRA（控除率22.5%）</option>
-          <option value="1">NAR地方（控除率30%）</option>
+          <option value="0">JRA（単勝控除率20%）</option>
+          <option value="1">NAR地方（単勝控除率20%）</option>
         </select>
       </div>
       <div class="settings-row">
@@ -2259,7 +2297,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v6.9.0 Corrected Probability Value';
+window.APP_VERSION = 'v6.10.0 NAR ROI Guard';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -2352,6 +2390,13 @@ let settings = {
   dailyRankMetric: 'ev',
   narTransitionAdj: true,
   narTransitionLearn: true,
+  narRoiGuard: true,
+  narActualOddsOnly: true,
+  narRequireFullOdds: true,
+  narGuardMinEV: 1.20,
+  narGuardOddsMin: 2.5,
+  narGuardOddsMax: 30.0,
+  narGuardMaxTickets: 1,
   minEVByType: {...DEFAULT_MIN_EV},
   proxyUrl: 'https://takuya.nitta-katsuhiko.workers.dev/'
 };
@@ -2473,6 +2518,19 @@ function normalizeDailyBudgetSettings(){
   settings.allocationMode = settings.allocationMode === 'daily_rank' ? 'daily_rank' : 'per_race';
   settings.dailyRankMetric = ['ev','adjusted_ev','learned_profit'].includes(settings.dailyRankMetric) ? settings.dailyRankMetric : 'ev';
 }
+function normalizeNarRoiGuardSettings(){
+  settings.narRoiGuard = settings.narRoiGuard !== false;
+  settings.narActualOddsOnly = settings.narActualOddsOnly !== false;
+  settings.narRequireFullOdds = settings.narRequireFullOdds !== false;
+  const minEV = Number(settings.narGuardMinEV);
+  settings.narGuardMinEV = Number.isFinite(minEV) ? Math.min(3.00, Math.max(1.00, minEV)) : 1.20;
+  const oddsMin = Number(settings.narGuardOddsMin);
+  const oddsMax = Number(settings.narGuardOddsMax);
+  settings.narGuardOddsMin = Number.isFinite(oddsMin) ? Math.min(999, Math.max(1.0, oddsMin)) : 2.5;
+  settings.narGuardOddsMax = Number.isFinite(oddsMax) ? Math.min(1000, Math.max(settings.narGuardOddsMin, oddsMax)) : 30.0;
+  const maxTickets = Math.floor(Number(settings.narGuardMaxTickets));
+  settings.narGuardMaxTickets = Number.isFinite(maxTickets) ? Math.min(3, Math.max(1, maxTickets)) : 1;
+}
 function normalizeProbabilitySource(value){
   return value === 'final_odds' || value === 'airara' ? value : 'standard';
 }
@@ -2527,8 +2585,26 @@ function updateNarTransitionSettingsUI(){
   ['rsPastAdj','predSimPastAdj'].forEach(id=>{ const el=document.getElementById(id); if(el) el.checked=settings.narTransitionAdj; });
   try{ if(typeof window.tkNarTransitionRenderStatus === 'function') window.tkNarTransitionRenderStatus(); }catch(e){}
 }
+function updateNarRoiGuardSettingsUI(){
+  normalizeNarRoiGuardSettings();
+  const guard = document.getElementById('setNarRoiGuard'); if(guard) guard.checked = settings.narRoiGuard;
+  const actual = document.getElementById('setNarActualOddsOnly'); if(actual) actual.checked = settings.narActualOddsOnly;
+  const full = document.getElementById('setNarRequireFullOdds'); if(full) full.checked = settings.narRequireFullOdds;
+  const minEV = document.getElementById('setNarGuardMinEV'); if(minEV) minEV.value = settings.narGuardMinEV.toFixed(2);
+  const oddsMin = document.getElementById('setNarGuardOddsMin'); if(oddsMin) oddsMin.value = settings.narGuardOddsMin;
+  const oddsMax = document.getElementById('setNarGuardOddsMax'); if(oddsMax) oddsMax.value = settings.narGuardOddsMax;
+  const max = document.getElementById('setNarGuardMaxTickets'); if(max) max.value = settings.narGuardMaxTickets;
+  [actual,full,minEV,oddsMin,oddsMax,max].forEach(el => { if(el) el.disabled = !settings.narRoiGuard; });
+  const status = document.getElementById('narRoiGuardStatus');
+  if(status){
+    status.innerHTML = settings.narRoiGuard
+      ? `<b>ON</b>：EV ${settings.narGuardMinEV.toFixed(2)}以上・単勝 ${settings.narGuardOddsMin}～${settings.narGuardOddsMax}倍・最大${settings.narGuardMaxTickets}点${settings.narActualOddsOnly ? '・実オッズ券種のみ' : ''}${settings.narRequireFullOdds ? '・全頭オッズ必須' : ''}`
+      : '<b>OFF</b>：従来のNAR買い目生成を使用します。';
+  }
+}
 function syncDailyBudgetGuardStorage(){
   normalizeDailyBudgetSettings();
+  normalizeNarRoiGuardSettings();
   const partial = {dailyLimit:settings.dailyLimit,pointAmount:settings.dailyPointAmount,allocationMode:settings.allocationMode,dailyRankMetric:settings.dailyRankMetric};
   try{
     if(typeof window.tkApplyDailyBudgetGuard === 'function'){
@@ -2569,6 +2645,7 @@ function loadSettings(){
     if(loaded.dailyRankMetric == null && guard.dailyRankMetric != null) settings.dailyRankMetric = guard.dailyRankMetric;
   }catch(e){}
   normalizeDailyBudgetSettings();
+  normalizeNarRoiGuardSettings();
   try {
     profitHistory = JSON.parse(localStorage.getItem('tk-profit-history') || '[]');
     if(!Array.isArray(profitHistory)) profitHistory = [];
@@ -2593,7 +2670,15 @@ function saveSettings(){
   settings.dailyRankMetric = ['ev','adjusted_ev','learned_profit'].includes(dailyMetric) ? dailyMetric : 'ev';
   settings.narTransitionAdj = document.getElementById('setNarTransitionAdj')?.checked !== false;
   settings.narTransitionLearn = document.getElementById('setNarTransitionLearn')?.checked !== false;
+  settings.narRoiGuard = document.getElementById('setNarRoiGuard')?.checked !== false;
+  settings.narActualOddsOnly = document.getElementById('setNarActualOddsOnly')?.checked !== false;
+  settings.narRequireFullOdds = document.getElementById('setNarRequireFullOdds')?.checked !== false;
+  settings.narGuardMinEV = Number(document.getElementById('setNarGuardMinEV')?.value || settings.narGuardMinEV || 1.20);
+  settings.narGuardOddsMin = Number(document.getElementById('setNarGuardOddsMin')?.value || settings.narGuardOddsMin || 2.5);
+  settings.narGuardOddsMax = Number(document.getElementById('setNarGuardOddsMax')?.value || settings.narGuardOddsMax || 30);
+  settings.narGuardMaxTickets = Number(document.getElementById('setNarGuardMaxTickets')?.value || settings.narGuardMaxTickets || 1);
   normalizeDailyBudgetSettings();
+  normalizeNarRoiGuardSettings();
   TICKET_TYPES.forEach(t => {
     const el = document.getElementById('ev-' + t);
     if(el) settings.minEVByType[t] = Number(el.value || DEFAULT_MIN_EV[t]);
@@ -2603,6 +2688,7 @@ function saveSettings(){
   updateProbabilitySourceUI();
   updateDailyBudgetSettingsUI();
   updateNarTransitionSettingsUI();
+  updateNarRoiGuardSettingsUI();
   syncDailyBudgetGuardStorage();
 }
 function saveProxy(){
@@ -3454,6 +3540,7 @@ function applyStateSnapshot(data){
 
   // 永続化＆UI反映
   normalizeDailyBudgetSettings();
+  normalizeNarRoiGuardSettings();
   localStorage.setItem('tk-html-settings', JSON.stringify(settings));
   localStorage.setItem('tk-profit-history', JSON.stringify(profitHistory || []));
   syncDailyBudgetGuardStorage();
@@ -3467,6 +3554,7 @@ function applyStateSnapshot(data){
 
 function refreshSettingsUI(){
   updateProbabilitySourceUI();
+  updateNarRoiGuardSettingsUI();
   const setNar = document.getElementById('setNar'); if(setNar) setNar.value = settings.nar ? '1' : '0';
   const setBudget = document.getElementById('setBudget'); if(setBudget) setBudget.value = settings.budget;
   const setUnit = document.getElementById('setUnit'); if(setUnit) setUnit.value = settings.unit;
@@ -3522,6 +3610,13 @@ function resetSettingsToDefault(){
     dailyRankMetric: 'ev',
     narTransitionAdj: true,
     narTransitionLearn: true,
+    narRoiGuard: true,
+    narActualOddsOnly: true,
+    narRequireFullOdds: true,
+    narGuardMinEV: 1.20,
+    narGuardOddsMin: 2.5,
+    narGuardOddsMax: 30.0,
+    narGuardMaxTickets: 1,
     minEVByType: {...DEFAULT_MIN_EV},
     proxyUrl: keepProxy || 'https://takuya.nitta-katsuhiko.workers.dev/'
   };
@@ -3577,6 +3672,7 @@ function initUI(){
   updateProbabilitySourceUI();
   updateDailyBudgetSettingsUI();
   updateNarTransitionSettingsUI();
+  updateNarRoiGuardSettingsUI();
   syncDailyBudgetGuardStorage();
   document.getElementById('proxyUrl').value = settings.proxyUrl || '';
   document.getElementById('narBadge').style.display = settings.nar ? '' : 'none';
@@ -3660,6 +3756,19 @@ function checkPopDuplicate(){
 
 // ─── EV計算モデル（結合版.jsから移植） ─────────────
 function isNAR(){ return settings.nar; }
+
+// 期間横断側のJRA/NAR選択と、EV計算側の settings.nar を常に同じ値にする。
+// 旧版は開催場取得だけ rsKind を参照し、確率・補正側は settings.nar を参照していた。
+function syncRangeKindToSettings(value){
+  const kind = String(value || document.getElementById('rsKind')?.value || 'JRA').toUpperCase();
+  settings.nar = kind === 'NAR';
+  const setNar = document.getElementById('setNar'); if(setNar) setNar.value = settings.nar ? '1' : '0';
+  const badge = document.getElementById('narBadge'); if(badge) badge.style.display = settings.nar ? '' : 'none';
+  try{ localStorage.setItem('tk-html-settings', JSON.stringify(settings)); }catch(e){}
+  try{ updateNarRoiGuardSettingsUI(); }catch(e){}
+  return settings.nar;
+}
+try{ window.syncRangeKindToSettings = syncRangeKindToSettings; }catch(e){}
 
 // ─── AIらら（前日予想データ）─────────────────────────
 // haro-blog.com の日付×開催場記事を1回だけ取得し、R番号×馬番で勝率を結合する。
@@ -4007,7 +4116,9 @@ function standardEvProbRaw(h, allHorses){
   const pop = Number(h.pop || 0);
   const n = Math.max(1, (allHorses || []).length);
   const validOdds = (allHorses || []).filter(hh => Number(hh.odds||0) >= 1).map(hh => Number(hh.odds));
-  const takeback = isNAR() ? 0.30 : 0.225;
+  // ここで扱うのは単勝オッズ由来の勝率だけなので、JRA/NARとも単勝払戻率80%（控除20%）を使う。
+  // 券種平均の控除率を単勝確率へ流用すると、とくにオッズ欠損時のフォールバックが区分別に歪む。
+  const takeback = 0.20;
   const overround = validOdds.length > 1
     ? validOdds.reduce((s, od) => s + 1/od, 0)
     : (1 / Math.max(0.01, 1 - takeback));
@@ -4135,13 +4246,17 @@ function generateCandidates(allHorses){
   const rated = normalizeRatedHorses(allHorses);
   const recs = [];
   const unit = settings.unit || 100;
+  const marketOddsTotal = (allHorses || []).filter(h => Number(h && h.num) > 0 && h && h.name).length;
+  const marketOddsValid = (allHorses || []).filter(h => Number(h && h.num) > 0 && h && h.name
+    && Number(h.odds || 0) >= 1 && h.provisionalOdds !== true).length;
+  const marketOddsFull = marketOddsTotal >= 2 && marketOddsValid === marketOddsTotal;
 
   const abilityRankByNum = {};
   rated.forEach((h, i) => { abilityRankByNum[Number(h.num)] = i + 1; });
 
   const keyOf = (type, nums) => type + ':' + [...nums].sort((a,b)=>a-b).join('-');
 
-  const add = (type, nums, p, odds) => {
+  const add = (type, nums, p, odds, oddsSource = 'proxy-win-derived') => {
     const minEV = (MODE_EV[settings.mode] || DEFAULT_MIN_EV)[type] || settings.minEVByType[type] || 1.05;
     const safeP = Math.max(0.0001, Number(p||0));
     const safeOdds = Math.max(1.1, Number(odds||1.1));
@@ -4160,6 +4275,10 @@ function generateCandidates(allHorses){
                    probabilitySourceCoverage: Number(rated[0]?.probabilitySourceCoverage || 0),
                    probabilitySourceValid: Number(rated[0]?.probabilitySourceValid || 0),
                    probabilitySourceTotal: Number(rated[0]?.probabilitySourceTotal || 0),
+                   oddsSource,
+                   marketOddsValid,
+                   marketOddsTotal,
+                   marketOddsFull,
                    amount: unit, stake: unit, expectedReturn: ev * unit, abilityRankMin };
     const idx = recs.findIndex(x => keyOf(x.type, x.nums) === k);
     if(idx >= 0){ if(item.p*item.ev > recs[idx].p*recs[idx].ev) recs[idx] = item; }
@@ -4168,8 +4287,9 @@ function generateCandidates(allHorses){
 
   // 単勝・複勝
   rated.slice(0,8).forEach(h => {
+    const actualWinOdds = Number(h.odds||0) >= 1 && h.provisionalOdds !== true;
     const wo = Number(h.odds||0) || Math.max(1.1, 1/Math.max(0.0001, h.winP));
-    add('単勝',[h.num],h.winP,wo);
+    add('単勝',[h.num],h.winP,wo,actualWinOdds ? 'actual-win' : 'model-win');
     add('複勝',[h.num],h.placeP,Math.max(1.1,wo*0.30));
   });
 
@@ -15061,6 +15181,7 @@ if(horses.length === 0){
   async function runRangeVenueSimulation(opts){
     const btn = $('rsRunBtn'), stopBtn = $('rsStopBtn'), prog = $('rsProgress');
     const kind = $('rsKind')?.value || 'JRA';
+    syncRangeKindToSettings(kind);
     const start = $('rsStart')?.value || '';
     const end = $('rsEnd')?.value || '';
     const resume = !!(opts && opts.resume === true); // v5.18.203 DirectGraphLink
@@ -15618,6 +15739,11 @@ if(horses.length === 0){
       if(kind === 'NAR' && typeof window.tkNarPrepareHorses === 'function'){
         valid = await window.tkNarPrepareHorses(task.rid, valid);
       }
+      // generateCandidates/buildTickets 内の開催場別補正はglobalのrace_id/レース名を参照する。
+      // 並列タスクでも、同期計算へ入る直前に対象レースの文脈を固定する。
+      currentRaceId = String(task.rid || '');
+      currentRaceName = row.raceName;
+      horses = localHorses;
       const made = generateCandidates(valid);
       const tickets = buildTickets(made.recs).map(t => {
         const info = (kind === 'NAR' && typeof window.tkNarTransitionTicketInfo === 'function')
@@ -15649,6 +15775,7 @@ if(horses.length === 0){
   async function runRangeVenueSimulationOneShot(opts){
     const btn = $('rsOneShotBtn'), stopBtn = $('rsStopBtn'), prog = $('rsProgress');
     const kind = $('rsKind')?.value || 'JRA';
+    syncRangeKindToSettings(kind);
     const start = $('rsStart')?.value || '';
     const end = $('rsEnd')?.value || '';
     const resume = !!(opts && opts.resume === true); // v5.18.203 DirectGraphLink
@@ -30548,15 +30675,151 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   console.log('[' + VERSION + '] enabled');
 })();
 </script>
+<script id="theKeibaNarRoiGuardV1">
+/* ============================================================
+   v6.10.0 NAR ROI Guard
+   NAR期間比較の区分同期を前提に、実オッズ由来でない高EV候補を
+   購入段階で除外する。初期値は単勝実オッズ・全頭充足・EV1.20、
+   2.5～30倍、最大1点。JRAとガードOFF時は従来処理を完全に通す。
+   ============================================================ */
+(function(){
+  'use strict';
+  var VERSION = 'v6.10.0 NAR ROI Guard';
+
+  function n(v, fallback){
+    var x = Number(v);
+    return Number.isFinite(x) ? x : Number(fallback || 0);
+  }
+  function currentSettings(){
+    try{ if(typeof normalizeNarRoiGuardSettings === 'function') normalizeNarRoiGuardSettings(); }catch(e){}
+    try{ return settings || {}; }catch(e){ return {}; }
+  }
+  function active(){
+    var s = currentSettings();
+    return s.nar === true && s.narRoiGuard !== false;
+  }
+  function valueOf(rec, s){
+    var raw = n(rec && rec.ev, 0), selected = raw;
+    if(s.mode === 'adjusted_payout_max' && typeof correctedProbabilityValue === 'function'){
+      try{ selected = n(correctedProbabilityValue(rec).value, raw); }catch(e){ selected = raw; }
+    }
+    return { raw:raw, selected:selected };
+  }
+  function inspect(rec, s){
+    if(!rec || !rec.type) return {ok:false,reason:'候補不正'};
+    var odds = n(rec.odds, 0), metric = valueOf(rec, s);
+    if(s.narActualOddsOnly !== false){
+      if(rec.type !== '単勝' || rec.oddsSource !== 'actual-win') return {ok:false,reason:'推定オッズ券種'};
+    }
+    if(s.narRequireFullOdds !== false && rec.marketOddsFull !== true) return {ok:false,reason:'全頭オッズ不足'};
+    if(odds < n(s.narGuardOddsMin, 2.5) || odds > n(s.narGuardOddsMax, 30)) return {ok:false,reason:'オッズ範囲外'};
+    // 補正値だけで通さず、補正前EVも1.00以上を必須にして過学習候補を抑える。
+    if(metric.raw < 1.00) return {ok:false,reason:'素EV1.00未満'};
+    if(metric.selected < n(s.narGuardMinEV, 1.20)) return {ok:false,reason:'EV不足'};
+    return {ok:true,raw:metric.raw,selected:metric.selected};
+  }
+  function filterCandidates(recs){
+    var s = currentSettings(), reasons = {}, out = [];
+    (Array.isArray(recs) ? recs : []).forEach(function(rec){
+      var chk = inspect(rec, s);
+      if(!chk.ok){ reasons[chk.reason] = (reasons[chk.reason] || 0) + 1; return; }
+      var c = Object.assign({}, rec, {
+        narRoiGuard:true,
+        narGuardRawEV:chk.raw,
+        narGuardValue:chk.selected,
+        narGuardOddsSource:String(rec.oddsSource || '')
+      });
+      out.push(c);
+    });
+    return {candidates:out,reasons:reasons,input:Array.isArray(recs)?recs.length:0};
+  }
+  function renderStatus(last){
+    var el = document.getElementById('narRoiGuardStatus');
+    if(!el) return;
+    var s = currentSettings();
+    if(!s.narRoiGuard){ el.innerHTML = '<b>OFF</b>：従来のNAR買い目生成を使用します。'; return; }
+    var base = '<b>ON</b>：EV '+n(s.narGuardMinEV,1.20).toFixed(2)+'以上・単勝 '+n(s.narGuardOddsMin,2.5)+'～'+n(s.narGuardOddsMax,30)+'倍・最大'+Math.max(1,Math.floor(n(s.narGuardMaxTickets,1)))+'点';
+    if(last){
+      var skipped = Math.max(0,last.input-last.qualified);
+      base += '<br>直近：候補'+last.input+'点 → 条件通過'+last.qualified+'点 → 購入'+last.output+'点（除外'+skipped+'点）';
+    }
+    el.innerHTML = base;
+  }
+  function renderRunNote(){
+    if(!active()) return;
+    var host = document.getElementById('ticketList');
+    var last = window.__narRoiGuardLast;
+    if(!host || !last || document.getElementById('narRoiGuardRunNote')) return;
+    var div = document.createElement('div');
+    div.id = 'narRoiGuardRunNote';
+    div.style.cssText = 'margin-top:10px;padding:8px 10px;border:1px solid rgba(96,165,250,.35);border-radius:10px;background:rgba(59,130,246,.08);font-size:11px;line-height:1.6;color:#dbeafe';
+    div.innerHTML = '<b>🛡️ NAR回収率改善ガード適用</b><br>実オッズ・全頭充足・EV安全幅を通過した買い目だけを残しました。候補'+last.input+'点 → 条件通過'+last.qualified+'点 → 購入'+last.output+'点';
+    host.appendChild(div);
+  }
+  function installBuildGuard(){
+    var old = window.buildTickets || (typeof buildTickets === 'function' ? buildTickets : null);
+    if(typeof old !== 'function' || old.__narRoiGuardV610) return;
+    var wrapped = function(recs){
+      if(!active()) return old.apply(this, arguments);
+      var s = currentSettings(), filtered = filterCandidates(recs), snap = null, tickets = [];
+      var max = Math.max(1, Math.min(3, Math.floor(n(s.narGuardMaxTickets,1))));
+      try{
+        snap = {maxTickets:s.maxTickets,budget:s.budget};
+        var unit = Math.max(100,n(s.unit,100));
+        s.maxTickets = Math.min(Math.max(1,Math.floor(n(s.maxTickets,max))), max);
+        s.budget = Math.min(Math.max(unit,n(s.budget,unit)), unit * max);
+        tickets = old.call(this, filtered.candidates) || [];
+      }finally{
+        if(snap){ s.maxTickets = snap.maxTickets; s.budget = snap.budget; }
+      }
+      tickets = tickets.filter(function(t){ return inspect(t, s).ok; }).slice(0,max);
+      window.__narRoiGuardLast = {
+        raceId:String((typeof currentRaceId !== 'undefined' && currentRaceId) || ''),
+        input:filtered.input, qualified:filtered.candidates.length, output:tickets.length,
+        reasons:filtered.reasons, at:Date.now()
+      };
+      renderStatus(window.__narRoiGuardLast);
+      return tickets;
+    };
+    wrapped.__narRoiGuardV610 = true;
+    // すでに地方移動補正ラップ済みなら、その印を引き継いで遅延二重ラップを防ぐ。
+    if(old.__narTransitionFinalHook) wrapped.__narTransitionFinalHook = true;
+    wrapped.__narRoiGuardOld = old;
+    window.buildTickets = wrapped;
+    try{ buildTickets = wrapped; }catch(e){}
+  }
+  function installRenderNote(){
+    var old = window.renderResult || (typeof renderResult === 'function' ? renderResult : null);
+    if(typeof old !== 'function' || old.__narRoiGuardV610) return;
+    var wrapped = function(){
+      var out = old.apply(this, arguments);
+      try{ setTimeout(renderRunNote,0); }catch(e){}
+      return out;
+    };
+    wrapped.__narRoiGuardV610 = true;
+    window.renderResult = wrapped;
+    try{ renderResult = wrapped; }catch(e){}
+  }
+  function init(){
+    installBuildGuard();
+    installRenderNote();
+    renderStatus(window.__narRoiGuardLast || null);
+    try{ window.APP_VERSION = VERSION; }catch(e){}
+  }
+  window.tkNarRoiGuardFilter = filterCandidates;
+  window.tkNarRoiGuardInspect = function(rec){ return inspect(rec,currentSettings()); };
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded',init); else init();
+})();
+</script>
 <script id="theKeibaCorrectedProbabilityValueV1">
 /* ============================================================
-   v6.9.0 Corrected Probability Value
+   v6.10.0 NAR ROI Guard
    「補正確率×オッズ最大」モードの最終バージョン表示ガード。
    旧互換パッチが遅延実行されても、本版の表示へ戻す。
    ============================================================ */
 (function(){
   'use strict';
-  var VERSION = 'v6.9.0 Corrected Probability Value';
+  var VERSION = 'v6.10.0 NAR ROI Guard';
   function applyVersion(){
     try{
       window.APP_VERSION = VERSION;

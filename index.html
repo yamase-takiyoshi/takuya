@@ -30036,6 +30036,22 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     // JRA側のHTML変更で、出馬表本文から「競馬専門紙」「タイム」などの
     // 見出しをレース名として拾う事故があるため、フォールバックは左端の
     // R番号だけを基準にする。正式名は各レース取得時のタイトルで補完する。
+    // ただしレース一覧HTMLから同一行の左→右列で取れる名前は安全なので採用する。
+    try{
+      if(typeof fetchFirstUsefulJraListHtml === 'function' && typeof extractRaceNameFromScheduleHtml49 === 'function'){
+        var gotList = await fetchFirstUsefulJraListHtml(date, String(code).padStart(2,'0'));
+        var scheduleHtml = gotList && gotList.html ? gotList.html : '';
+        if(scheduleHtml){
+          races = races.map(function(r){
+            var no = Number(r.raceNo || String(r.raceId).slice(-2));
+            var name = extractRaceNameFromScheduleHtml49(scheduleHtml, r.raceId, no);
+            return name ? Object.assign({}, r, { raceName:name }) : r;
+          });
+        }
+      }
+    }catch(e){
+      console.log('fallback race list name fill skipped', e && e.message ? e.message : e);
+    }
     var html = [];
     races.forEach(function(r){
       var no = Number(r.raceNo || String(r.raceId).slice(-2));
@@ -30056,7 +30072,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     }
     if(status){
       status.innerHTML =
-        '<div class="url-status ok">✅ '+esc(date)+' '+esc(vname)+' の1R〜12RをR番号基準で生成しました。'+
+        '<div class="url-status ok">✅ '+esc(date)+' '+esc(vname)+' の1R〜12Rをレース一覧の左列基準で生成しました。'+
         '<br><span style="font-size:11px;opacity:.85">'+esc(VERSION)+
         '：netkeiba一覧が空の時だけ使う補助です。各レースの実データ取得で存在確認します。</span></div>';
     }

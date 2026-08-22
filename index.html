@@ -29895,5 +29895,139 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   console.log('['+VERSION+'] enabled');
 })();
 </script>
+<script>
+/* ============================================================
+   v5.18.304 JraRaceIdScheduleFallback
+   ・JRA開催場は出るが netkeiba一覧からレースが拾えない場合に 1R-12R を暫定生成
+   ・2026年夏開催の race_id prefix を補助表として保持
+   ・実データ取得時に存在しないRなら従来どおり取得失敗で止まる
+   ============================================================ */
+(function(){
+  'use strict';
+  var VERSION = 'v5.18.304 JraRaceIdScheduleFallback';
+  var previousLoadRaceList = window.loadRaceList;
+
+  // key = YYYYMMDD-場コード, value = race_id の末尾R番号を除いた10桁 prefix
+  // race_id = YYYY + 場 + 回次 + 日次 + RR
+  var JRA_RACE_PREFIX = {
+    '20260801-01':'2026010103',
+    '20260802-01':'2026010104',
+    '20260808-01':'2026010105',
+    '20260809-01':'2026010106',
+    '20260815-01':'2026010201',
+    '20260816-01':'2026010202',
+    '20260822-01':'2026010203',
+    '20260823-01':'2026010204',
+    '20260829-01':'2026010205',
+    '20260830-01':'2026010206',
+    '20260905-01':'2026010207',
+    '20260906-01':'2026010208',
+
+    '20260801-04':'2026040203',
+    '20260802-04':'2026040204',
+    '20260808-04':'2026040205',
+    '20260809-04':'2026040206',
+    '20260815-04':'2026040301',
+    '20260816-04':'2026040302',
+    '20260822-04':'2026040303',
+    '20260823-04':'2026040304',
+    '20260829-04':'2026040305',
+    '20260830-04':'2026040306',
+    '20260905-04':'2026040307',
+    '20260906-04':'2026040308',
+
+    '20260801-07':'2026070303',
+    '20260802-07':'2026070304',
+    '20260808-07':'2026070305',
+    '20260809-07':'2026070306',
+    '20260815-07':'2026070401',
+    '20260816-07':'2026070402',
+    '20260822-07':'2026070403',
+    '20260823-07':'2026070404',
+    '20260829-07':'2026070405',
+    '20260830-07':'2026070406',
+    '20260905-07':'2026070407',
+    '20260906-07':'2026070408'
+  };
+
+  function el(id){ return document.getElementById(id); }
+  function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c];}); }
+  function ymd(v){ return String(v || '').replace(/[^0-9]/g,'').slice(0,8); }
+  function pad2(n){ return String(n).padStart(2,'0'); }
+  function kind(){ return String((el('pickKind') && el('pickKind').value) || 'JRA').toUpperCase(); }
+  function selectedVenueCode(){ return String((el('pickVenue') && el('pickVenue').value) || '').padStart(2,'0'); }
+  function selectedVenueName(){
+    var opt = el('pickVenue') && el('pickVenue').selectedOptions && el('pickVenue').selectedOptions[0];
+    return opt ? String(opt.textContent || '').replace(/（.*$/, '').trim() : selectedVenueCode();
+  }
+  function hasRealRaceOptions(){
+    var sel = el('raceSelect');
+    if(!sel || !sel.options || !sel.options.length) return false;
+    return Array.prototype.some.call(sel.options,function(o){
+      return /race_id=\d{12}|\b\d{12}\b/.test(String(o.value || '') + ' ' + String(o.textContent || ''));
+    });
+  }
+  function renderFallbackRaces(date, code){
+    var prefix = JRA_RACE_PREFIX[ymd(date)+'-'+String(code).padStart(2,'0')];
+    if(!prefix) return false;
+    var sel = el('raceSelect'), urlIn = el('raceUrl'), box = el('raceTitleBox'), status = el('urlStatus');
+    if(!sel) return false;
+    var vname = selectedVenueName();
+    var html = [];
+    for(var no=1; no<=12; no++){
+      var rid = prefix + pad2(no);
+      var url = 'https://race.netkeiba.com/race/shutuba.html?race_id=' + rid + '&rf=race_submenu';
+      var label = String(date).replace(/-/g,'/') + ' ' + vname + ' ' + no + 'R / ' + rid + '（JRA日程）';
+      html.push('<option value="'+esc(url)+'" data-race-id="'+esc(rid)+'" data-race-name="'+esc(no+'R')+'">'+esc(label)+'</option>');
+    }
+    sel.innerHTML = html.join('');
+    var first = sel.options[0];
+    if(first){
+      if(urlIn) urlIn.value = first.value;
+      window.currentRaceId = first.dataset.raceId || '';
+      window.currentRaceName = first.dataset.raceName || '';
+      try{ currentRaceId = window.currentRaceId; currentRaceName = window.currentRaceName; }catch(e){}
+      if(box){ box.style.display='block'; box.textContent = first.textContent || ''; }
+    }
+    if(status){
+      status.innerHTML =
+        '<div class="url-status ok">✅ '+esc(date)+' '+esc(vname)+' の1R〜12RをJRA日程から暫定生成しました。'+
+        '<br><span style="font-size:11px;opacity:.85">'+esc(VERSION)+
+        '：netkeiba一覧が空の時だけ使う補助です。各レースの実データ取得で存在確認します。</span></div>';
+    }
+    return true;
+  }
+
+  window.loadRaceList = async function(){
+    if(kind() !== 'JRA'){
+      return previousLoadRaceList ? previousLoadRaceList.apply(this, arguments) : undefined;
+    }
+    var date = (el('pickDate') && el('pickDate').value) || (typeof todayYmd === 'function' ? todayYmd() : '');
+    var code = selectedVenueCode();
+    var ret;
+    try{
+      if(previousLoadRaceList) ret = await previousLoadRaceList.apply(this, arguments);
+    }catch(e){
+      if(renderFallbackRaces(date, code)) return ret;
+      throw e;
+    }
+    if(!hasRealRaceOptions()) renderFallbackRaces(date, code);
+    return ret;
+  };
+  try{ loadRaceList = window.loadRaceList; }catch(e){}
+
+  function setVersion(){
+    try{
+      window.APP_VERSION = VERSION;
+      document.title = 'The競馬 EV分析 ' + VERSION;
+      document.querySelectorAll('.ver').forEach(function(n){ n.textContent = VERSION; });
+    }catch(e){}
+  }
+  setVersion();
+  setTimeout(setVersion, 300);
+  setTimeout(setVersion, 1200);
+  console.log('['+VERSION+'] enabled');
+})();
+</script>
 </body>
 </html>

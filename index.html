@@ -11128,7 +11128,7 @@ function cleanRaceName49(text, raceNo, raceId){
     .replace(/\s+/g,' ')
     .trim();
   if(raceId) t = t.replace(new RegExp(String(raceId),'g'),' ');
-  t = t.replace(/出馬表|オッズ|購入|予想|調教|厩舎コメント|データ分析|結果|払戻|レース映像|掲示板|お気に入り馬|netkeiba\.com|競馬データベース/g,' ');
+  t = t.replace(/出馬表|オッズ|購入|予想|調教|厩舎コメント|データ分析|結果|払戻|レース映像|掲示板|お気に入り馬|netkeiba(?:\.com)?|競馬データベース/g,' ');
   t = t.replace(/\d{4}\/\d{1,2}\/\d{1,2}/g,' ').replace(/\d{4}年\d{1,2}月\d{1,2}日/g,' ');
   t = t.replace(/東京|京都|阪神|中山|中京|札幌|函館|福島|新潟|小倉/g,' ');
   t = t.replace(/\s+/g,' ').trim();
@@ -11151,7 +11151,7 @@ function cleanRaceName49(text, raceNo, raceId){
   const m2 = t.match(/([一-龥ぁ-んァ-ヶA-Za-z][一-龥ぁ-んァ-ヶA-Za-z0-9（）()・\-ーSGLⅠⅡⅢ]{1,40})/);
   if(m2){
     const n = m2[1].trim();
-    if(n && !isGenericRaceName49(n, no) && !/^(JRA|WIN5|IPAT|UMACA|Race)$/.test(n)) return n;
+    if(n && !isGenericRaceName49(n, no) && !/^(JRA|WIN5|IPAT|UMACA|Race|netkeiba|netkeiba\.com)$/i.test(n)) return n;
   }
   return '';
 }
@@ -29969,6 +29969,13 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       return /race_id=\d{12}|\b\d{12}\b/.test(String(o.value || '') + ' ' + String(o.textContent || ''));
     });
   }
+  function cleanFallbackRaceName(name, no){
+    var t = String(name || '').replace(/\s+/g,' ').trim();
+    if(!t) return no + 'R';
+    t = t.replace(new RegExp('^' + no + 'R\\s*', 'i'), '').trim();
+    if(!t || /^(?:netkeiba|netkeiba\.com|JRA|Race|出馬表|オッズ|結果|レース情報|レース一覧)$/i.test(t)) return no + 'R';
+    return t;
+  }
   async function renderFallbackRaces(date, code){
     var prefix = JRA_RACE_PREFIX[ymd(date)+'-'+String(code).padStart(2,'0')];
     if(!prefix) return false;
@@ -29995,7 +30002,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     var html = [];
     races.forEach(function(r){
       var no = Number(r.raceNo || String(r.raceId).slice(-2));
-      var name = String(r.raceName || (no + 'R')).trim();
+      var name = cleanFallbackRaceName(r.raceName, no);
       var url = r.url || ('https://race.netkeiba.com/race/shutuba.html?race_id=' + r.raceId + '&rf=race_submenu');
       var label = (name && name !== no + 'R') ? (no + 'R ' + name) : (no + 'R');
       html.push('<option value="'+esc(url)+'" data-race-id="'+esc(r.raceId)+'" data-race-name="'+esc(name)+'">'+esc(label)+'</option>');

@@ -29967,19 +29967,37 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       return /race_id=\d{12}|\b\d{12}\b/.test(String(o.value || '') + ' ' + String(o.textContent || ''));
     });
   }
-  function renderFallbackRaces(date, code){
+  async function renderFallbackRaces(date, code){
     var prefix = JRA_RACE_PREFIX[ymd(date)+'-'+String(code).padStart(2,'0')];
     if(!prefix) return false;
     var sel = el('raceSelect'), urlIn = el('raceUrl'), box = el('raceTitleBox'), status = el('urlStatus');
     if(!sel) return false;
     var vname = selectedVenueName();
-    var html = [];
+    var races = [];
     for(var no=1; no<=12; no++){
       var rid = prefix + pad2(no);
-      var url = 'https://race.netkeiba.com/race/shutuba.html?race_id=' + rid + '&rf=race_submenu';
-      var label = no + 'R';
-      html.push('<option value="'+esc(url)+'" data-race-id="'+esc(rid)+'" data-race-name="'+esc(no+'R')+'">'+esc(label)+'</option>');
+      races.push({
+        raceId: rid,
+        raceNo: no,
+        raceName: no + 'R',
+        url: 'https://race.netkeiba.com/race/shutuba.html?race_id=' + rid + '&rf=race_submenu'
+      });
     }
+    if(typeof fillJraRaceNamesFromShutuba === 'function'){
+      try{
+        races = await fillJraRaceNamesFromShutuba('JRA', races, status, date, String(code).padStart(2,'0'));
+      }catch(e){
+        console.log('fallback race name fill skipped', e && e.message ? e.message : e);
+      }
+    }
+    var html = [];
+    races.forEach(function(r){
+      var no = Number(r.raceNo || String(r.raceId).slice(-2));
+      var name = String(r.raceName || (no + 'R')).trim();
+      var url = r.url || ('https://race.netkeiba.com/race/shutuba.html?race_id=' + r.raceId + '&rf=race_submenu');
+      var label = (name && name !== no + 'R') ? (no + 'R ' + name) : (no + 'R');
+      html.push('<option value="'+esc(url)+'" data-race-id="'+esc(r.raceId)+'" data-race-name="'+esc(name)+'">'+esc(label)+'</option>');
+    });
     sel.innerHTML = html.join('');
     sel.selectedIndex = 0;
     var selected = sel.options[sel.selectedIndex] || sel.options[0];
@@ -29992,7 +30010,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     }
     if(status){
       status.innerHTML =
-        '<div class="url-status ok">✅ '+esc(date)+' '+esc(vname)+' の1R〜12Rを生成しました。'+
+        '<div class="url-status ok">✅ '+esc(date)+' '+esc(vname)+' の1R〜12Rをレース名付きで生成しました。'+
         '<br><span style="font-size:11px;opacity:.85">'+esc(VERSION)+
         '：netkeiba一覧が空の時だけ使う補助です。各レースの実データ取得で存在確認します。</span></div>';
     }
@@ -30009,10 +30027,10 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     try{
       if(previousLoadRaceList) ret = await previousLoadRaceList.apply(this, arguments);
     }catch(e){
-      if(renderFallbackRaces(date, code)) return ret;
+      if(await renderFallbackRaces(date, code)) return ret;
       throw e;
     }
-    if(!hasRealRaceOptions()) renderFallbackRaces(date, code);
+    if(!hasRealRaceOptions()) await renderFallbackRaces(date, code);
     return ret;
   };
   try{ loadRaceList = window.loadRaceList; }catch(e){}

@@ -7960,7 +7960,7 @@ function extractJraRaceNamesFromActualListText(html, venueCode){
   const ng = /オッズ|予想|結果|払戻|映像|掲示板|俺プロ|お気に入り|ログイン|広告|PR|データ分析/;
   for(let r=1; r<=12; r++){
     if(base.has(r) && !/^\d{1,2}R$/.test(base.get(r))) continue;
-    const re = new RegExp(`${r}R\\s*([^0-9０-９]{2,40}?)(?:\\s*(?:芝|ダ|障|発走|[0-9０-９]{3,4}m|G[123]|L|OP|オープン|未勝利|新馬|勝|特別))`);
+    const re = new RegExp(`${r}R\\s*([0-9０-９一-龥ぁ-んァ-ヶA-Za-z（）()・\\-ーSGLⅠⅡⅢ]{2,40}?)(?:\\s*(?:芝|ダ|障|発走|[0-9０-９]{3,4}m|G[123]|L|OP|オープン))`);
     const m = text.match(re);
     if(m){
       let name = cleanRaceName(`${r}R ${m[1]}`, r)
@@ -11149,12 +11149,49 @@ function cleanRaceName49(text, raceNo, raceId){
     }
   }
   // 最後の保険：短い日本語レース名候補を拾う
-  const m2 = t.match(/([一-龥ぁ-んァ-ヶA-Za-z][一-龥ぁ-んァ-ヶA-Za-z0-9（）()・\-ーSGLⅠⅡⅢ]{1,40})/);
+  const m2 = t.match(/((?:[0-9０-９]+歳)?[一-龥ぁ-んァ-ヶA-Za-z][一-龥ぁ-んァ-ヶA-Za-z0-9０-９（）()・\-ーSGLⅠⅡⅢ]{1,40})/);
   if(m2){
     const n = m2[1].trim();
     if(n && !isGenericRaceName49(n, no) && !/^(JRA|WIN5|IPAT|UMACA|Race|netkeiba|netkeiba\.com)$/i.test(n)) return n;
   }
   return '';
+}
+function extractRaceNameByLeftColumns49(row, raceNo, raceId){
+  if(!row) return '';
+  const no = Number(raceNo || 0);
+  const chunks = Array.from(row.children || [])
+    .map(el => normalizeJapaneseSpaces(el.textContent || ''))
+    .filter(Boolean);
+  if(!chunks.length) return '';
+  const ng = /オッズ|予想|結果|払戻|映像|掲示板|俺プロ|お気に入り|ログイン|広告|PR|データ分析|調教タイム|競馬専門紙|この競馬場のオススメ/;
+  const cleanCandidate = (s) => {
+    let t = normalizeJapaneseSpaces(s)
+      .replace(new RegExp(String(raceId || ''), 'g'), ' ')
+      .replace(new RegExp('^' + no + '\\s*R\\s*'), '')
+      .replace(new RegExp('^' + no + '\\s*Ｒ\\s*'), '')
+      .replace(/\s*(?:芝|ダ|障)\s*[0-9０-９]{3,4}m.*$/,'')
+      .replace(/\s*[0-9０-９]{1,2}[:：][0-9０-９]{2}.*$/,'')
+      .replace(/\s+/g,' ')
+      .trim();
+    if(!t || ng.test(t) || isGenericRaceName49(t, no)) return '';
+    return /[一-龥ぁ-んァ-ヶA-Za-z]/.test(t) ? t.slice(0, 50) : '';
+  };
+  const noRe = new RegExp('^\\s*' + no + '\\s*[RＲ]\\b');
+  let rIdx = chunks.findIndex(t => noRe.test(t));
+  if(rIdx < 0) rIdx = chunks.findIndex(t => new RegExp('\\b' + no + '\\s*[RＲ]\\b').test(t));
+  if(rIdx >= 0){
+    for(let i = rIdx + 1; i < Math.min(chunks.length, rIdx + 5); i++){
+      const name = cleanCandidate(chunks[i]);
+      if(name) return name;
+    }
+    const same = cleanCandidate(chunks[rIdx]);
+    if(same) return same;
+  }
+  // SP版などで1要素に「1R 2歳未勝利 09:50 芝1200m」と入る場合の保険。
+  const rowText = normalizeJapaneseSpaces(row.textContent || '');
+  const re = new RegExp(`${no}R\\s*([0-9０-９一-龥ぁ-んァ-ヶA-Za-z（）()・\\-ーSGLⅠⅡⅢ]{2,40}?)(?:\\s*(?:芝|ダ|障|発走|[0-9０-９]{1,2}[:：][0-9０-９]{2}|[0-9０-９]{3,4}m|G[123]|L|OP|オープン))`);
+  const m = rowText.match(re);
+  return m ? cleanCandidate(m[1]) : '';
 }
 function extractRaceNameFromScheduleHtml49(html, raceId, raceNo){
   const s = String(html || '');
@@ -11163,6 +11200,9 @@ function extractRaceNameFromScheduleHtml49(html, raceId, raceNo){
     const doc = new DOMParser().parseFromString(s, 'text/html');
     const links = Array.from(doc.querySelectorAll(`a[href*="${raceId}"], a[href*="race_id=${raceId}"]`));
     for(const a of links){
+      const row = a.closest('li, tr, dd, dl, .RaceList_DataItem, .RaceList_Item, .RaceList_Box, .RaceList_Table, [class*="RaceList"]') || a.parentElement || a;
+      const columnName = extractRaceNameByLeftColumns49(row, raceNo, raceId);
+      if(columnName) return columnName;
       let node = a;
       for(let depth=0; node && depth<7; depth++, node=node.parentElement){
         // scriptタグ・styleタグ自体は除外

@@ -30215,5 +30215,168 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   console.log('[' + VERSION + '] enabled');
 })();
 </script>
+<script id="theKeibaAiSectionRaceNameGuardV1">
+/* ============================================================
+   v6.8.3 AiSectionRaceNameGuard
+   netkeiba のAI予想セクション見出し（「AI展開予測」「AI予想」
+   「AI指数」「展開予測」等）が、フォールバック生成の
+   fillJraRaceNamesFromShutuba 経由でレース名として拾われ、
+   1R〜12R が全部「AI展開予測」になってしまうのを防ぐ。
+   v6.8.2 FreeIdPromptRaceNameGuard と同じ二段構え
+   （(1)名前クリーニング系のラップ (2)#raceSelectの最終スイープ）で、
+   どの loadRaceList 派生が動いても効く後付けガード。既存ロジック不介入。
+   ============================================================ */
+(function(){
+  "use strict";
+  var VERSION = 'v6.8.3 AiSectionRaceNameGuard';
+
+  // レース名ではありえない、netkeibaのAI/展開系セクション見出し。
+  // 競走名に「予測/予想印/展開予測」等が入ることは実質無いので誤爆しない。
+  var JUNK = /(?:AI\s*(?:展開)?予[想測]|AI\s*指数|AI\s*ラップ(?:指数|予想)?|展開\s*予[想測]|コース\s*展開(?:予[想測])?|ラップ\s*(?:予想|解析|タイム)|予想\s*印|印\s*予想)/i;
+
+  function looksLikeJunk(s){ return JUNK.test(String(s || '')); }
+
+  // ラベル文字列からJUNK部分だけを除去する版
+  var JUNK_STRIP = new RegExp(JUNK.source, 'gi');
+
+  function raceNoFromOption(opt){
+    if(!opt) return 0;
+    var rid = (opt.dataset && opt.dataset.raceId) || '';
+    if(!rid){
+      var mv = String(opt.value || '').match(/race_id=(\d{10,14})/);
+      if(mv) rid = mv[1];
+    }
+    if(rid) return Number(String(rid).slice(-2)) || 0;
+    var mt = String(opt.textContent || '').match(/(\d{1,2})\s*R/);
+    return mt ? Number(mt[1]) : 0;
+  }
+
+  // ── (1) 名前クリーニング系関数のラップ ─────────────────
+  function wrapCleaner(name){
+    try{
+      var fn = window[name] || (typeof eval('typeof ' + name) === 'function' ? eval(name) : null);
+    }catch(e){ fn = null; }
+    if(typeof fn !== 'function') return;
+    var wrapped = function(txt, raceNo){
+      var out = fn.apply(this, arguments);
+      if(looksLikeJunk(out) || looksLikeJunk(txt)){
+        var no = Number(raceNo || 0) ||
+                 Number(String((arguments[1] != null ? arguments[1] : '')).replace(/\D/g,'')) || 0;
+        if(!no){
+          var m = String(out || txt || '').match(/(\d{1,2})\s*R/);
+          if(m) no = Number(m[1]);
+        }
+        return no ? (no + 'R') : (looksLikeJunk(out) ? '' : out);
+      }
+      return out;
+    };
+    try{ window[name] = wrapped; }catch(e){}
+    try{ eval(name + ' = wrapped;'); }catch(e){}
+  }
+  ['cleanRaceName','cleanFallbackRaceName','cleanRaceName49','cleanRaceNameSafe51','cleanNarRaceName68'].forEach(wrapCleaner);
+
+  // isGenericRaceName* は「正式名ではない」判定なので JUNK を true 扱いに
+  function wrapGeneric(name){
+    try{
+      var fn = window[name] || (typeof eval('typeof ' + name) === 'function' ? eval(name) : null);
+    }catch(e){ fn = null; }
+    if(typeof fn !== 'function') return;
+    var wrapped = function(nm, raceNo){
+      if(looksLikeJunk(nm)) return true;
+      return fn.apply(this, arguments);
+    };
+    try{ window[name] = wrapped; }catch(e){}
+    try{ eval(name + ' = wrapped;'); }catch(e){}
+  }
+  ['isGenericRaceName68','isGenericRaceName49'].forEach(wrapGeneric);
+
+  // ── (2) #raceSelect の最終スイープ ─────────────────
+  function sanitizeSelect(sel){
+    if(!sel || !sel.options) return false;
+    var changed = false;
+    for(var i = 0; i < sel.options.length; i++){
+      var opt = sel.options[i];
+      var dn = (opt.dataset && opt.dataset.raceName) || '';
+      var hit = looksLikeJunk(opt.textContent) || looksLikeJunk(dn);
+      if(!hit) continue;
+      var no = raceNoFromOption(opt);
+      // ラベルからJUNK部分を除去して整形（余った空白・スラッシュを整える）
+      var t = String(opt.textContent || '')
+        .replace(JUNK_STRIP, '')
+        .replace(/\s{2,}/g, ' ')
+        .replace(/\s+\/\s+/g, ' / ')
+        .replace(/\s+\/\s*$/,'')
+        .replace(/\s+$/,'')
+        .trim();
+      // R番号すら残らなかった場合の最低限補完
+      if(no && !new RegExp('\\b' + no + '\\s*R\\b').test(t)) t = (no + 'R ' + t).trim();
+      if(opt.textContent !== t){ opt.textContent = t; changed = true; }
+      if(looksLikeJunk(dn) && no){ opt.dataset.raceName = no + 'R'; changed = true; }
+    }
+    return changed;
+  }
+
+  function fixCurrentContext(sel){
+    try{
+      var opt = sel && sel.selectedOptions && sel.selectedOptions[0];
+      if(opt && opt.dataset){
+        var no = raceNoFromOption(opt);
+        if(no && looksLikeJunk(window.currentRaceName)){
+          window.currentRaceName = no + 'R';
+          try{ currentRaceName = window.currentRaceName; }catch(e){}
+        }
+      }
+      var box = document.getElementById('raceTitleBox');
+      if(box && looksLikeJunk(box.textContent)){
+        box.textContent = String(box.textContent)
+          .replace(JUNK_STRIP, '')
+          .replace(/\s{2,}/g, ' ')
+          .replace(/\s+\/\s*$/,'')
+          .trim();
+      }
+    }catch(e){}
+  }
+
+  var sweeping = false;
+  function sweep(){
+    if(sweeping) return;
+    sweeping = true;
+    try{
+      var sel = document.getElementById('raceSelect');
+      if(sel){ sanitizeSelect(sel); fixCurrentContext(sel); }
+    }finally{ sweeping = false; }
+  }
+
+  function attachObserver(){
+    var sel = document.getElementById('raceSelect');
+    if(!sel) return false;
+    sweep();
+    try{
+      var mo = new MutationObserver(function(){ sweep(); });
+      mo.observe(sel, { childList: true, subtree: true, characterData: true });
+    }catch(e){}
+    return true;
+  }
+  if(!attachObserver()){
+    document.addEventListener('DOMContentLoaded', attachObserver, { once: true });
+  }
+
+  // loadRaceList / applySelectedRaceUrl の後にも念のためスイープ
+  ['loadRaceList','applySelectedRaceUrl'].forEach(function(name){
+    var prev = window[name];
+    if(typeof prev !== 'function') return;
+    var wrapped = function(){
+      var r = prev.apply(this, arguments);
+      if(r && typeof r.then === 'function'){ r.then(function(){ setTimeout(sweep, 0); }, function(){}); }
+      else setTimeout(sweep, 0);
+      return r;
+    };
+    try{ window[name] = wrapped; }catch(e){}
+    try{ eval(name + ' = wrapped;'); }catch(e){}
+  });
+
+  console.log('[' + VERSION + '] enabled');
+})();
+</script>
 </body>
 </html>

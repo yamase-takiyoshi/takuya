@@ -7972,10 +7972,30 @@ function extractJraRaceNamesFromActualListText(html, venueCode){
   return base;
 }
 
+function extractJraRaceNamesByTextSearch49(html){
+  const text = normalizeJapaneseSpaces(String(html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi,' ')
+    .replace(/<style[\s\S]*?<\/style>/gi,' ')
+    .replace(/<[^>]+>/g,' ')
+    .replace(/&nbsp;|&#160;/g,' ')
+    .replace(/&amp;/g,'&'));
+  const map = new Map();
+  const ng = /オッズ|予想|結果|払戻|映像|掲示板|俺プロ|お気に入り|ログイン|広告|PR|データ分析|調教タイム|競馬専門紙|この競馬場のオススメ/;
+  for(let r=1; r<=12; r++){
+    const re = new RegExp(`${r}R\\s*(?:映像|出馬表|オッズ|予想|結果|払戻|\\s){0,20}([0-9０-９一-龥ぁ-んァ-ヶA-Za-z（）()・\\-ーSGLⅠⅡⅢ\\s]{2,60}?)(?:\\s*(?:芝|ダ|障|発走|[0-9０-９]{1,2}[:：][0-9０-９]{2}|[0-9０-９]{3,4}m|G[123]|L|OP|オープン))`);
+    const m = text.match(re);
+    if(!m) continue;
+    const name = normalizeJapaneseSpaces(m[1]).replace(/\s+/g,'').trim();
+    if(name && !ng.test(name) && !/^\d{1,2}R$/.test(name)) map.set(r, name.slice(0, 50));
+  }
+  return map;
+}
+
 function buildJraRacesFromExactKaisai(html, date, venueCode, kd){
   if(!kd) return [];
   const p = ymdParts(date);
   const names = extractJraRaceNamesFromActualListText(html, venueCode);
+  const searchedNames = extractJraRaceNamesByTextSearch49(html);
   const races = [];
   for(let r=1; r<=12; r++){
     const raceId = `${p.yyyy}${venueCode}${String(kd.kai).padStart(2,'0')}${String(kd.day).padStart(2,'0')}${String(r).padStart(2,'0')}`;
@@ -7983,7 +8003,7 @@ function buildJraRacesFromExactKaisai(html, date, venueCode, kd){
       raceId,
       raceNo:r,
       venueCode,
-      raceName:names.get(r) || `${r}R`,
+      raceName:names.get(r) || searchedNames.get(r) || `${r}R`,
       shutuba:shutubaUrl('JRA', raceId),
       builtFromVerifiedKaisai:true
     });
@@ -11253,6 +11273,9 @@ async function fetchRaceNameFromPage49(kind, raceId, raceNo, page){
 async function fillJraRaceNamesFromShutuba(kind, races, status, date, venueCode, scheduleHtml){
   if(kind !== 'JRA') return races;
   const out = [];
+  const searchedNames = (typeof extractJraRaceNamesByTextSearch49 === 'function')
+    ? extractJraRaceNamesByTextSearch49(scheduleHtml || '')
+    : new Map();
   for(let i=0;i<races.length;i++){
     const r = races[i];
     const no = Number(r.raceNo || String(r.raceId).slice(-2));
@@ -11265,6 +11288,7 @@ async function fillJraRaceNamesFromShutuba(kind, races, status, date, venueCode,
     };
     if(r.raceName && !isGenericRaceName49(r.raceName, no) && !isJsContaminated(r.raceName)) name = r.raceName;
     if(!name) name = extractRaceNameFromScheduleHtml49(scheduleHtml || '', r.raceId, no);
+    if(!name && searchedNames.has(no)) name = searchedNames.get(no);
     // JRA側の仕様変更で、出馬表/結果本文から「調教タイム」などの
     // 見出しをレース名として拾うため、ここでは左側レース一覧由来だけ採用する。
     out.push({...r, raceNo:no, raceName:(name || `${no}R`)});
@@ -30042,9 +30066,12 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         var gotList = await fetchFirstUsefulJraListHtml(date, String(code).padStart(2,'0'));
         var scheduleHtml = gotList && gotList.html ? gotList.html : '';
         if(scheduleHtml){
+          var searchedNames = (typeof extractJraRaceNamesByTextSearch49 === 'function')
+            ? extractJraRaceNamesByTextSearch49(scheduleHtml)
+            : new Map();
           races = races.map(function(r){
             var no = Number(r.raceNo || String(r.raceId).slice(-2));
-            var name = extractRaceNameFromScheduleHtml49(scheduleHtml, r.raceId, no);
+            var name = extractRaceNameFromScheduleHtml49(scheduleHtml, r.raceId, no) || (searchedNames.has(no) ? searchedNames.get(no) : '');
             return name ? Object.assign({}, r, { raceName:name }) : r;
           });
         }

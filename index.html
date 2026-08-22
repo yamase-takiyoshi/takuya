@@ -21,7 +21,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v6.8 All Modes Restored</title>
+<title>The競馬 EV分析 v6.8.1 NAR Probe Currency Guard</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -906,7 +906,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
   <div style="display:flex;gap:8px;align-items:center">
     <button id="profitSplitBtn" class="btn-sm profit-split-toggle" type="button" onclick="toggleProfitLiveSplit()" aria-pressed="false">📊 横2画面</button>
     <button id="nativeThemeBtn" class="btn-sm native-theme-btn" type="button" title="本体テーマへ自動連動。単独起動時はここで切り替え">🌙 <span class="native-theme-label">ダーク・本体連動</span></button>
-    <span class="ver">v6.8 All Modes Restored</span>
+    <span class="ver">v6.8.1 NAR Probe Currency Guard</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2259,7 +2259,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v6.8 All Modes Restored';
+window.APP_VERSION = 'v6.8.1 NAR Probe Currency Guard';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -17461,12 +17461,22 @@ if(horses.length === 0){
     const races = arr.filter(Boolean).sort((a,b)=>a.raceNo-b.raceNo);
     return races;
   }
+  // v6.8.1: 走査中に「区分」または「日付」が変わったら、この NAR 走査はもう無効。
+  // 従来は currency ガードが無く、NAR→JRA へ切替えても古い走査が
+  // 「🔎 NAR ○/○ 〇〇：ページ存在判定中...」を status に書き続け、
+  // JRA 側の「開催確認中...」が固まったように見えていた（実機スクショの症状）。
+  function live152For(startDate){
+    const k = document.getElementById('pickKind')?.value || 'JRA';
+    const d = document.getElementById('pickDate')?.value || startDate;
+    return k === 'NAR' && ymd152(d) === ymd152(startDate);
+  }
   async function detectVenues152(date, statusEl){
     const venues = venueList152();
     const found = [];
     for(let i=0;i<venues.length;i++){
+      if(!live152For(date)) return found; // 区分/日付が変わった＝この走査は破棄して即離脱
       const [code, name] = venues[i];
-      if(statusEl) statusEl.innerHTML = `<div class="url-status">🔎 NAR ${i+1}/${venues.length} ${esc152(name)}：ページ存在判定中...</div>`;
+      if(statusEl && live152For(date)) statusEl.innerHTML = `<div class="url-status">🔎 NAR ${i+1}/${venues.length} ${esc152(name)}：ページ存在判定中...</div>`;
       const races = await racesForVenue152(date, code, statusEl);
       if(races.length) found.push([code, name, races.length, races]);
       await sleep152(80);
@@ -17504,6 +17514,7 @@ if(horses.length === 0){
     if(sel) sel.innerHTML = '<option value="">開催場を選んでレース一覧を取得</option>';
     try{
       const found = await detectVenues152(date, status);
+      if(!live152For(date)) return; // v6.8.1: 走査完了までに区分/日付が変わっていたら結果を反映しない
       if(found.length){
         if(typeof renderVenueOptions === 'function') renderVenueOptions(found.map(v=>[v[0], v[1], v[2]]));
         window.__nar152RaceCache = window.__nar152RaceCache || {};
@@ -17516,7 +17527,7 @@ if(horses.length === 0){
       }
     }catch(e){
       console.error('[nar152 venues]', e);
-      if(status) status.innerHTML = `<div class="url-status err">❌ NAR開催場取得失敗: ${esc152(e.message || e)}</div>`;
+      if(live152For(date) && status) status.innerHTML = `<div class="url-status err">❌ NAR開催場取得失敗: ${esc152(e.message || e)}</div>`;
     }
   };
   const prevRaceList152 = window.loadRaceList;

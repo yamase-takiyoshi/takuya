@@ -1130,8 +1130,17 @@ function pgjRecordFromHistory(x, source, i){
 }
 function pgjRecordsFromRangeRows(){
   try{
-    if(typeof rsLastRows === 'undefined' || !Array.isArray(rsLastRows)) return [];
-    return rsLastRows
+    // v5.18.191: 期間横断本体は後段IIFE内の let rsLastRows を使うため、
+    // このグローバル関数から直接参照すると別スコープになり常に0件だった。
+    // 各レース完了時に公開している window.__rsLastRows を正として右側へ渡す。
+    let rangeRows = [];
+    if(typeof window !== 'undefined' && Array.isArray(window.__rsLastRows)){
+      rangeRows = window.__rsLastRows;
+    }else if(typeof rsLastRows !== 'undefined' && Array.isArray(rsLastRows)){
+      rangeRows = rsLastRows;
+    }
+    if(!rangeRows.length) return [];
+    return rangeRows
       .filter(r => r && r.status === 'ok' && Number(r.bet || 0) > 0)
       .map((r,i) => {
         const bet = pgjNum(r.bet), ret = pgjNum(r.ret), profit = (r.profit != null) ? pgjNum(r.profit) : ret - bet;
@@ -15344,7 +15353,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  var VERSION = 'v5.18.190 RealtimeRightSync';
+  var VERSION = 'v5.18.191 GlobalRangeBridgeFix';
   var PANEL_STATE_KEY = 'tk-right-analysis-panel-v1';
   var BRIDGE_KEY = 'keibaProfitGraphBridge_v1';
   var LIVE_FILE_NAME = 'The競馬_EV分析_右側リアルタイム.json';
@@ -15395,7 +15404,35 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     try{
       if(typeof buildProfitGraphJSONSnapshot === 'function'){
         var snap = buildProfitGraphJSONSnapshot();
-        if(snap && Array.isArray(snap.収支明細)) return snap;
+        if(snap && Array.isArray(snap.収支明細)){
+          // 旧キャッシュ等で本体関数が空を返しても、公開配列から右側用明細を即時復元する。
+          if(!snap.収支明細.length && Array.isArray(window.__rsLastRows) && window.__rsLastRows.length){
+            var liveRows = window.__rsLastRows.filter(function(r){
+              return r && r.status === 'ok' && Number(r.bet || 0) > 0;
+            }).map(function(r, i){
+              var bet = Number(r.bet || 0), ret = Number(r.ret || 0);
+              var profit = (r.profit != null) ? Number(r.profit || 0) : ret - bet;
+              return {
+                日付:String(r.date || ''), 場:String(r.venueName || r.venueCode || '未分類'),
+                R:r.no ? String(r.no) + 'R' : '', レース名:String(r.raceName || ''),
+                race_id:String(r.rid || ''), 券種:String(r.ticketType || r.betType || '期間横断'),
+                投資:bet, 払戻:ret, 収支:profit, ROI:bet ? Math.round(ret / bet * 1000) / 10 : 0,
+                source:'期間横断シミュレーション', sourceIndex:i
+              };
+            });
+            if(liveRows.length){
+              var totalBet = liveRows.reduce(function(a,r){ return a + Number(r.投資 || 0); }, 0);
+              var totalRet = liveRows.reduce(function(a,r){ return a + Number(r.払戻 || 0); }, 0);
+              var totalProfit = liveRows.reduce(function(a,r){ return a + Number(r.収支 || 0); }, 0);
+              snap.収支明細 = liveRows;
+              snap.集計 = {
+                件数:liveRows.length, 投資合計:totalBet, 払戻合計:totalRet,
+                収支合計:totalProfit, ROI:totalBet ? Math.round(totalRet / totalBet * 1000) / 10 : 0
+              };
+            }
+          }
+          return snap;
+        }
       }
     }catch(e){ setStatus('収支データ作成エラー: ' + ((e && e.message) || e)); }
     return {

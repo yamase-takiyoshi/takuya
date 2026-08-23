@@ -10565,6 +10565,10 @@ if(horses.length === 0){
     rsAbort = false;
     rsLastRows = [];
     try{ window.__rsLastRows = []; }catch(e){}
+    try{
+      window.__rightAnalysisLiveLabel = '期間横断シミュレーション開始';
+      if(typeof window.scheduleRightAnalysisSync === 'function') window.scheduleRightAnalysisSync(0);
+    }catch(e){}
     rsLastOpenVenuesError = null;
     rsOpenVenuesFailCount = 0;
     rsOpenVenuesOkCount = 0;
@@ -10737,6 +10741,12 @@ if(horses.length === 0){
             rsRenderSummary(rows);
             rsRenderTable(rows);
             rsRenderChart(rows);
+            // v5.18.190: 1レースの精算が終わるたび、左側の最新配列を右側分析へ即時送信。
+            // 期間全体の完了や1.2秒ポーリングを待たず、表・KPI・グラフを同じタイミングで更新する。
+            try{
+              window.__rightAnalysisLiveLabel = `${date} ${vn} ${r.no}R`;
+              if(typeof window.scheduleRightAnalysisSync === 'function') window.scheduleRightAnalysisSync(0);
+            }catch(e){}
           }
         }
       }
@@ -10766,6 +10776,10 @@ if(horses.length === 0){
 
       if(btn){ btn.disabled = false; btn.textContent = '📆 期間横断シミュレーション実行'; }
       if(stopBtn) stopBtn.style.display = 'none';
+      try{
+        window.__rightAnalysisLiveLabel = rsAbort ? '期間横断シミュレーション中断' : '期間横断シミュレーション完了';
+        if(typeof window.scheduleRightAnalysisSync === 'function') window.scheduleRightAnalysisSync(0);
+      }catch(e){}
     }
   }
 
@@ -15330,7 +15344,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  var VERSION = 'v5.18.189 RightSideAnalysisPanel';
+  var VERSION = 'v5.18.190 RealtimeRightSync';
   var PANEL_STATE_KEY = 'tk-right-analysis-panel-v1';
   var BRIDGE_KEY = 'keibaProfitGraphBridge_v1';
   var LIVE_FILE_NAME = 'The競馬_EV分析_右側リアルタイム.json';
@@ -15465,7 +15479,9 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     }catch(e){}
 
     if(pack.count){
-      setStatus((direct ? '⚡ 直接同期 ' : '↔ 同期 ') + pack.count.toLocaleString()
+      var liveLabel = String(window.__rightAnalysisLiveLabel || '').trim();
+      setStatus((direct ? '⚡ 直接同期 ' : '↔ 同期 ')
+        + (liveLabel ? liveLabel + ' / ' : '') + pack.count.toLocaleString()
         + '件 / ' + new Date().toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit'}));
     }else{
       setStatus('左側の収支データを待機中');
@@ -15477,9 +15493,10 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     clearTimeout(syncTimer);
     return deliver(false);
   };
-  window.scheduleRightAnalysisSync = function(){
+  window.scheduleRightAnalysisSync = function(delayMs){
     clearTimeout(syncTimer);
-    syncTimer = setTimeout(function(){ deliver(false); }, 450);
+    var wait = (typeof delayMs === 'number' && delayMs >= 0) ? delayMs : 120;
+    syncTimer = setTimeout(function(){ deliver(false); }, wait);
   };
   window.reloadRightAnalysisPanel = function(){
     var frame = byId('rightAnalysisFrame');

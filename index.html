@@ -21,7 +21,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v6.10.2 JRA Result Odds Priority Restore</title>
+<title>The競馬 EV分析 v6.10.3 Purchase Guard Toggle</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -906,7 +906,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
   <div style="display:flex;gap:8px;align-items:center">
     <button id="profitSplitBtn" class="btn-sm profit-split-toggle" type="button" onclick="toggleProfitLiveSplit()" aria-pressed="false">📊 横2画面</button>
     <button id="nativeThemeBtn" class="btn-sm native-theme-btn" type="button" title="本体テーマへ自動連動。単独起動時はここで切り替え">🌙 <span class="native-theme-label">ダーク・本体連動</span></button>
-    <span class="ver">v6.10.2 JRA Result Odds Priority Restore</span>
+    <span class="ver">v6.10.3 Purchase Guard Toggle</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1158,9 +1158,18 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
       </div>
       <div id="pgBacktestPanel" style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(251,191,36,.32)">
         <div class="section-header" style="margin-bottom:8px">
-          <h2 style="margin-bottom:0;color:#fde68a">購入ガード・バックテスト</h2>
-          <span style="font-size:10px;color:var(--muted)">レース数上限なし / 1R必ず3点セット / 日次予算を日付ごとに再現</span>
+          <h2 style="margin-bottom:0;color:#fde68a">期間バックテスト（購入ガード切替）</h2>
+          <span id="pgBtGuardHeaderNote" style="font-size:10px;color:var(--muted)">購入ガード無効・旧方式</span>
         </div>
+        <div class="field" style="margin-bottom:9px;padding:10px;border:1px solid rgba(0,255,136,.34);background:rgba(0,255,136,.07);border-radius:10px">
+          <label for="pgBtGuardEnabled" style="color:#d9ffe8;font-weight:900">購入ガード設定</label>
+          <select id="pgBtGuardEnabled" style="margin-top:5px;border-color:rgba(0,255,136,.45)">
+            <option value="0" selected>無効（旧方式・通常の期間横断）</option>
+            <option value="1">有効（3点セット・1日予算・メイン確保）</option>
+          </select>
+          <div id="pgBtGuardModeNote" style="font-size:11px;color:#a7f3d0;line-height:1.6;margin-top:5px">無効時は通常の期間横断シミュレーションをそのまま実行します。本体標準・選択中の予想モード・最大買い目数を使い、購入ガードによる3点固定や日次予算配分は行いません。</div>
+        </div>
+        <div id="pgBtGuardSettings">
         <div class="reserve-grid" style="margin-bottom:8px">
           <div class="field" style="margin-bottom:0">
             <label>1日の購入上限</label>
@@ -1233,12 +1242,13 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
             <input type="number" id="pgBtMainReserve" min="100" step="100" value="300" inputmode="numeric">
           </div>
         </div>
+        </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-primary" id="pgBtRunBtn" type="button" style="width:auto;flex:1;min-width:210px;background:#f59e0b;border-color:#fbbf24;color:#111827" onclick="runPurchaseGuardBacktest(event)">期間を取得してバックテスト</button>
+          <button class="btn btn-primary" id="pgBtRunBtn" type="button" style="width:auto;flex:1;min-width:210px;background:#00d978;border-color:#00ff88;color:#062515" onclick="runPurchaseGuardBacktest(event)">購入ガード無効で期間実行</button>
           <button class="btn-sm" id="pgBtRecalcBtn" type="button" onclick="recalculatePurchaseGuardBacktest(event)">現在結果で再計算</button>
           <button class="btn-sm" id="pgBtCopyBtn" type="button" onclick="copyPurchaseGuardBacktest(event)" disabled>結果コピー</button>
         </div>
-        <div style="font-size:11px;color:var(--muted);line-height:1.6;margin-top:7px">
+        <div id="pgBtGuardDescription" style="font-size:11px;color:var(--muted);line-height:1.6;margin-top:7px">
           期間横断と同じ予想条件で過去レースを取得し、EV順の3点を一組として指定額へ統一します。3点揃わないレースは見送ります。前半では後続のメインR数×確保額を差し引き、メイン通過後に未使用分を解放します。3点セット分の日次残額が足りないレースは全点見送り、払戻を100円単位で再計算します。
         </div>
         <div id="pgBtStatus" style="margin-top:8px"></div>
@@ -2259,7 +2269,7 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v6.10.2 JRA Result Odds Priority Restore';
+window.APP_VERSION = 'v6.10.3 Purchase Guard Toggle';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -24513,6 +24523,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     var storedMinRoi=Number(raw.dailyRankMinRoi);
     if(Number(raw.dailyRankGateVersion||0)<2 && (!(storedMinRoi>0) || storedMinRoi<=110)) storedMinRoi=120;
     return {
+      backtestEnabled: raw.backtestEnabled === true,
       dailyLimit: Math.max(100, Number(raw.dailyLimit || 2000)),
       pointAmount: Math.max(100, Number(raw.pointAmount || 100)),
       skipDebut: raw.skipDebut !== false,
@@ -24546,7 +24557,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     if([9,10,11,12].indexOf(mainRaceNo) < 0) mainRaceNo = 11;
     mainReserve = Math.max(100, Math.floor((isFinite(mainReserve) ? mainReserve : point*MAX_POINTS) / 100) * 100);
     mainReserve = Math.min(mainReserve, point*MAX_POINTS, daily);
-    return { dailyLimit:daily, pointAmount:point, maxPoints:MAX_POINTS, skipDebut:skipDebut, reserveMain:reserveMain, mainRaceNo:mainRaceNo, mainReserve:mainReserve, ticketPriority:ticketPriority, allocationMode:allocationMode, dailyRankMetric:dailyRankMetric, dailyRankMinRoi:dailyRankMinRoi, dailyRankGateVersion:2 };
+    return { backtestEnabled:stored.backtestEnabled===true, dailyLimit:daily, pointAmount:point, maxPoints:MAX_POINTS, skipDebut:skipDebut, reserveMain:reserveMain, mainRaceNo:mainRaceNo, mainReserve:mainReserve, ticketPriority:ticketPriority, allocationMode:allocationMode, dailyRankMetric:dailyRankMetric, dailyRankMinRoi:dailyRankMinRoi, dailyRankGateVersion:2 };
   }
   function persistGuard(){
     var cfg = guardConfig();
@@ -27556,10 +27567,26 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   function narBacktestLabel(cfg){return cfg&&cfg.narTransitionBacktestMode==='current_frozen'?'現在の学習値を固定適用':'固定補正のみ（未来情報なし）'}
   function toggleAllocationUi(cfg){var on=cfg&&cfg.allocationMode==='daily_rank',w=$('pgBtDailyRankMetricWrap'),sw=$('swDailyRankMetricWrap'),mw=$('pgBtDailyRankMinRoiWrap'),smw=$('swDailyRankMinRoiWrap'),note=$('swDailyRankNote'),btNote=$('pgBtDailyRankNote');if(w)w.style.display=on?'':'none';if(sw)sw.style.display=on?'':'none';if(mw)mw.style.display=on?'':'none';if(smw)smw.style.display=on?'':'none';if(note)note.style.display=on?'':'none';if(btNote)btNote.style.display=on?'':'none';['pgBtReserveMain','pgBtMainRaceNo','pgBtMainReserve','swReserveMain','swMainRaceNo','swMainReserve'].forEach(function(id){var el=$(id);if(el)el.disabled=on});['pgBtTicketPriority','swTicketPriority'].forEach(function(id){var el=$(id);if(el)el.disabled=false})}
   window.tkTogglePurchaseGuardAllocationUi=toggleAllocationUi;
+  function toggleGuardModeUi(cfg){
+    var enabled=!!(cfg&&cfg.backtestEnabled),box=$('pgBtGuardSettings'),sel=$('pgBtGuardEnabled'),run=$('pgBtRunBtn'),recalc=$('pgBtRecalcBtn'),copy=$('pgBtCopyBtn'),head=$('pgBtGuardHeaderNote'),note=$('pgBtGuardModeNote'),desc=$('pgBtGuardDescription');
+    if(sel)sel.value=enabled?'1':'0';
+    if(box){box.style.opacity=enabled?'1':'.42';box.style.filter=enabled?'none':'grayscale(.35)';[].slice.call(box.querySelectorAll('input,select')).forEach(function(el){el.disabled=!enabled})}
+    if(enabled)toggleAllocationUi(cfg);
+    if(run){run.textContent=enabled?'購入ガード有効でバックテスト':'購入ガード無効で期間実行';run.style.background=enabled?'#f59e0b':'#00d978';run.style.borderColor=enabled?'#fbbf24':'#00ff88';run.style.color=enabled?'#111827':'#062515'}
+    if(recalc)recalc.disabled=!enabled;
+    if(head)head.textContent=enabled?'購入ガード有効・3点セット／日次予算':'購入ガード無効・旧方式';
+    if(note){note.style.color=enabled?'#fde68a':'#a7f3d0';note.innerHTML=enabled?'有効時は3点セット・1日予算・メインR確保を適用して再配分します。':'無効時は通常の期間横断シミュレーションをそのまま実行します。本体標準・選択中の予想モード・最大買い目数を使い、購入ガードによる3点固定や日次予算配分は行いません。'}
+    if(desc)desc.textContent=enabled?'期間横断と同じ予想条件で過去レースを取得し、EV順の3点を一組として指定額へ統一します。3点揃わないレースは見送り、日次予算とメインR確保を適用して払戻を再計算します。':'購入ガードは無効です。上の「期間横断シミュレーション実行」と同じ旧方式で集計し、3点固定・1日上限・メインR確保による再配分は行いません。旧成績との比較は予想モードを roi_max、最大買い目数を3点にしてください。';
+    if(!enabled){
+      try{if(typeof window.tkDeactivatePurchaseGuardLive==='function')window.tkDeactivatePurchaseGuardLive()}catch(e){}
+      state.result=null;if(copy)copy.disabled=true;
+      var sum=$('pgBtSummary'),table=$('pgBtTable');if(sum)sum.innerHTML='';if(table)table.innerHTML='';
+    }
+  }
   function readGuard(){
     var x={};try{x=JSON.parse(localStorage.getItem(GUARD_KEY)||'{}')||{}}catch(e){}
     var minRoi=cleanRoi(x.dailyRankMinRoi,120);if(n(x.dailyRankGateVersion)<2&&minRoi<=110)minRoi=120;
-    return {dailyLimit:cleanMoney(x.dailyLimit,2000),pointAmount:cleanMoney(x.pointAmount,100),maxPoints:MAX_POINTS,skipDebut:x.skipDebut!==false,reserveMain:x.reserveMain!==false,mainRaceNo:[9,10,11,12].indexOf(n(x.mainRaceNo))>=0?n(x.mainRaceNo):11,mainReserve:cleanMoney(x.mainReserve,300),ticketPriority:cleanPriority(x.ticketPriority),allocationMode:x.allocationMode==='daily_rank'?'daily_rank':'per_race',dailyRankMetric:['ev','adjusted_ev','learned_profit'].indexOf(x.dailyRankMetric)>=0?x.dailyRankMetric:'ev',dailyRankMinRoi:minRoi,dailyRankGateVersion:2,narTransitionBacktestMode:x.narTransitionBacktestMode==='current_frozen'?'current_frozen':'prior_only'};
+    return {backtestEnabled:x.backtestEnabled===true,dailyLimit:cleanMoney(x.dailyLimit,2000),pointAmount:cleanMoney(x.pointAmount,100),maxPoints:MAX_POINTS,skipDebut:x.skipDebut!==false,reserveMain:x.reserveMain!==false,mainRaceNo:[9,10,11,12].indexOf(n(x.mainRaceNo))>=0?n(x.mainRaceNo):11,mainReserve:cleanMoney(x.mainReserve,300),ticketPriority:cleanPriority(x.ticketPriority),allocationMode:x.allocationMode==='daily_rank'?'daily_rank':'per_race',dailyRankMetric:['ev','adjusted_ev','learned_profit'].indexOf(x.dailyRankMetric)>=0?x.dailyRankMetric:'ev',dailyRankMinRoi:minRoi,dailyRankGateVersion:2,narTransitionBacktestMode:x.narTransitionBacktestMode==='current_frozen'?'current_frozen':'prior_only'};
   }
   function configFromFields(){
     var old=readGuard();
@@ -27569,6 +27596,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     if([9,10,11,12].indexOf(mainNo)<0)mainNo=11;
     var mainReserve=Math.min(cleanMoney($('pgBtMainReserve')&&$('pgBtMainReserve').value,old.mainReserve),point*MAX_POINTS,daily);
     return {
+      backtestEnabled:$('pgBtGuardEnabled')?$('pgBtGuardEnabled').value==='1':old.backtestEnabled,
       dailyLimit:daily,
       pointAmount:point,
       maxPoints:MAX_POINTS,
@@ -27586,6 +27614,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   }
   function applyConfig(cfg){
     try{localStorage.setItem(GUARD_KEY,JSON.stringify(cfg))}catch(e){}
+    var ge=$('pgBtGuardEnabled');if(ge)ge.value=cfg.backtestEnabled?'1':'0';
     [['pgBtDailyLimit',cfg.dailyLimit],['pgBtPointAmount',cfg.pointAmount],['swDailyLimit',cfg.dailyLimit],['swPointAmount',cfg.pointAmount]].forEach(function(x){var el=$(x[0]);if(el)el.value=x[1]});
     [['pgBtSkipDebut',cfg.skipDebut],['swSkipDebut',cfg.skipDebut]].forEach(function(x){var el=$(x[0]);if(el)el.checked=x[1]});
     [['pgBtReserveMain',cfg.reserveMain],['swReserveMain',cfg.reserveMain]].forEach(function(x){var el=$(x[0]);if(el)el.checked=x[1]});
@@ -27595,6 +27624,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     [['pgBtDailyRankMinRoi',cfg.dailyRankMinRoi],['swDailyRankMinRoi',cfg.dailyRankMinRoi]].forEach(function(x){var el=$(x[0]);if(el)el.value=x[1]});
     var nb=$('pgBtNarLearningMode');if(nb)nb.value=cfg.narTransitionBacktestMode==='current_frozen'?'current_frozen':'prior_only';
     toggleAllocationUi(cfg);
+    toggleGuardModeUi(cfg);
     try{if(typeof window.swRefreshGuardUsage==='function')window.swRefreshGuardUsage()}catch(e){}
     try{if(typeof window.tkSyncDailyBudgetSettingsFromGuard==='function')window.tkSyncDailyBudgetSettingsFromGuard(cfg)}catch(e){}
     try{if(cfg.ticketPriority==='all_agree'&&typeof window.tkActivateAllAgreePriority==='function')window.tkActivateAllAgreePriority()}catch(e){}
@@ -27606,7 +27636,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     var daily=cleanMoney(sd&&sd.value,old.dailyLimit),point=cleanMoney(sp&&sp.value,old.pointAmount);
     var mr=Math.min(cleanMoney($('swMainReserve')&&$('swMainReserve').value,old.mainReserve),point*MAX_POINTS,daily);
     var metric=(sr&&sr.value)||old.dailyRankMetric;if(['ev','adjusted_ev','learned_profit'].indexOf(metric)<0)metric='ev';
-    var cfg={dailyLimit:daily,pointAmount:point,maxPoints:MAX_POINTS,skipDebut:ss?!!ss.checked:old.skipDebut,reserveMain:sm?!!sm.checked:old.reserveMain,mainRaceNo:[9,10,11,12].indexOf(mn)>=0?mn:11,mainReserve:mr,ticketPriority:cleanPriority((st&&st.value)||old.ticketPriority),allocationMode:((sa&&sa.value)||old.allocationMode)==='daily_rank'?'daily_rank':'per_race',dailyRankMetric:metric,dailyRankMinRoi:cleanRoi(smin&&smin.value,old.dailyRankMinRoi),dailyRankGateVersion:2};
+    var cfg={backtestEnabled:old.backtestEnabled===true,dailyLimit:daily,pointAmount:point,maxPoints:MAX_POINTS,skipDebut:ss?!!ss.checked:old.skipDebut,reserveMain:sm?!!sm.checked:old.reserveMain,mainRaceNo:[9,10,11,12].indexOf(mn)>=0?mn:11,mainReserve:mr,ticketPriority:cleanPriority((st&&st.value)||old.ticketPriority),allocationMode:((sa&&sa.value)||old.allocationMode)==='daily_rank'?'daily_rank':'per_race',dailyRankMetric:metric,dailyRankMinRoi:cleanRoi(smin&&smin.value,old.dailyRankMinRoi),dailyRankGateVersion:2,narTransitionBacktestMode:old.narTransitionBacktestMode};
+    if($('pgBtGuardEnabled'))$('pgBtGuardEnabled').value=cfg.backtestEnabled?'1':'0';
     if($('pgBtDailyLimit'))$('pgBtDailyLimit').value=cfg.dailyLimit;
     if($('pgBtPointAmount'))$('pgBtPointAmount').value=cfg.pointAmount;
     if($('pgBtSkipDebut'))$('pgBtSkipDebut').checked=cfg.skipDebut;
@@ -27619,6 +27650,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     if($('pgBtDailyRankMinRoi'))$('pgBtDailyRankMinRoi').value=cfg.dailyRankMinRoi;
     if($('pgBtNarLearningMode'))$('pgBtNarLearningMode').value=old.narTransitionBacktestMode==='current_frozen'?'current_frozen':'prior_only';
     toggleAllocationUi(cfg);
+    toggleGuardModeUi(cfg);
   }
   window.tkApplyDailyBudgetGuard=function(partial){
     partial=partial||{};var cfg=readGuard();
@@ -28012,6 +28044,13 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   window.recalculatePurchaseGuardBacktest=function(){
     var rows=currentRows(),cfg=applyConfig(configFromFields());
     if(!rows.length){setStatus('期間横断結果がありません。期間を指定して「期間を取得してバックテスト」を実行してください。',false);return null}
+    if(!cfg.backtestEnabled){
+      try{if(typeof window.tkDeactivatePurchaseGuardLive==='function')window.tkDeactivatePurchaseGuardLive()}catch(e){}
+      state.result=null;var cp0=$('pgBtCopyBtn');if(cp0)cp0.disabled=true;
+      try{if(typeof window.rsRenderSummary==='function')window.rsRenderSummary(rows);if(typeof window.rsRenderTable==='function')window.rsRenderTable(rows);if(typeof window.rsRenderChart==='function')window.rsRenderChart(rows)}catch(e){}
+      setStatus('購入ガードは無効です。表示済みの期間横断結果を旧方式のまま表示しています。3点固定・日次予算・メインR確保による再計算は行いません。',true);
+      return null;
+    }
     var result=calculate(rows,cfg),validation=validateDailyCap(result);result.capValidation=validation;attachCandidateAudit(result,rows,false);state.result=result;window.__pgBacktestResult=result;window.__pgBacktestLiveActive=true;window.__pgBacktestRunning=false;renderSummary(result);renderTable(result);
     var cp=$('pgBtCopyBtn');if(cp)cp.disabled=false;
     if(!validation.ok){
@@ -28037,7 +28076,23 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     if(start>end){alert('開始日は終了日以前にしてください。');return}
     if(typeof window.runRangeVenueSimulation!=='function'){setStatus('期間横断シミュレーションを利用できません。',false);return}
     try{if(typeof settings!=='undefined'&&settings&&!settings.proxyUrl){alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。');return}}catch(e){}
+    if(!cfg.backtestEnabled){
+      state.running=true;window.__pgDailyRankCapture=false;window.__pgBacktestRunning=false;window.__pgBacktestLiveActive=false;window.__pgBacktestResult=null;window.__pgBacktestPreviewResult=null;window.__pgBacktestCapError='';state.result=null;
+      try{if(typeof window.tkDeactivatePurchaseGuardLive==='function')window.tkDeactivatePurchaseGuardLive()}catch(e){}
+      var guardSelect=$('pgBtGuardEnabled');if(guardSelect)guardSelect.disabled=true;
+      var cp0=$('pgBtCopyBtn');if(cp0)cp0.disabled=true;
+      if(btn){btn.disabled=true;btn.textContent='旧方式で期間データ取得中...'}
+      setStatus('購入ガード無効：通常の期間横断シミュレーションを実行中です。3点固定・1日予算・メインR確保は適用しません。旧成績との比較は予想モード roi_max・最大3点を使用してください。',true);
+      try{
+        await window.runRangeVenueSimulation();
+        if(window.__rsPrecheckError){setStatus('開催日の事前確認で停止しました：'+esc(window.__rsPrecheckError)+'。接続を確認して再実行してください。',false);return}
+        setStatus('期間実行完了（購入ガード無効・旧方式）。上の期間横断集計と累計収支グラフが結果です。3点固定・日次予算・メインR確保による再配分はしていません。',true);
+      }catch(e){console.error('[PurchaseGuardDisabledRange]',e);setStatus('旧方式の期間実行に失敗しました：'+esc(e&&e.message||e),false)}
+      finally{state.running=false;if(guardSelect)guardSelect.disabled=false;if(btn){btn.disabled=false;btn.textContent='購入ガード無効で期間実行'}}
+      return;
+    }
     state.running=true;window.__pgBacktestRunning=true;window.__pgBacktestCapError='';if(btn){btn.disabled=true;btn.textContent='バックテスト用データ取得中...'}
+    var guardSelectOn=$('pgBtGuardEnabled');if(guardSelectOn)guardSelectOn.disabled=true;
     var snap=null,narSnap=null,narFrozen=false,record=$('rsRecord'),recordOn=record&&record.checked;
     try{
       try{if(typeof settings!=='undefined'&&settings){snap={unit:settings.unit,budget:settings.budget,maxTickets:settings.maxTickets};settings.unit=cfg.pointAmount;settings.budget=cfg.pointAmount*MAX_POINTS;settings.maxTickets=MAX_POINTS}}catch(e){}
@@ -28063,7 +28118,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       window.__pgDailyRankCapture=false;window.__pgBacktestRunning=false;
       try{if(narFrozen){window.__narTransitionLearningFrozen=false;if(narSnap&&typeof window.tkNarTransitionImportData==='function')window.tkNarTransitionImportData(narSnap)}}catch(e){window.__narTransitionLearningFrozen=false}
       try{if(snap&&typeof settings!=='undefined'&&settings){settings.unit=snap.unit;settings.budget=snap.budget;settings.maxTickets=snap.maxTickets}}catch(e){}
-      if(record)record.checked=!!recordOn;state.running=false;if(btn){btn.disabled=false;btn.textContent=old||'期間を取得してバックテスト'}
+      if(record)record.checked=!!recordOn;state.running=false;if(guardSelectOn)guardSelectOn.disabled=false;if(btn){btn.disabled=false;btn.textContent=old||'購入ガード有効でバックテスト'}
     }
   };
   window.copyPurchaseGuardBacktest=async function(ev){
@@ -28073,10 +28128,10 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   };
   function init(){
     syncFromPurchaseGuard();
-    ['pgBtDailyLimit','pgBtPointAmount','pgBtTicketPriority','pgBtAllocationMode','pgBtDailyRankMetric','pgBtDailyRankMinRoi','pgBtNarLearningMode','pgBtSkipDebut','pgBtReserveMain','pgBtMainRaceNo','pgBtMainReserve'].forEach(function(id){var el=$(id);if(el)el.addEventListener('change',function(){applyConfig(configFromFields())})});
+    ['pgBtGuardEnabled','pgBtDailyLimit','pgBtPointAmount','pgBtTicketPriority','pgBtAllocationMode','pgBtDailyRankMetric','pgBtDailyRankMinRoi','pgBtNarLearningMode','pgBtSkipDebut','pgBtReserveMain','pgBtMainRaceNo','pgBtMainReserve'].forEach(function(id){var el=$(id);if(el)el.addEventListener('change',function(){var cfg=applyConfig(configFromFields());if(id==='pgBtGuardEnabled')setStatus(cfg.backtestEnabled?'購入ガードを有効にしました。3点セット・日次予算・メインR確保を適用して検証します。':'購入ガードを無効にしました。次回は旧方式の期間横断シミュレーションをそのまま実行します。',true)})});
     ['swDailyLimit','swPointAmount','swTicketPriority','swAllocationMode','swDailyRankMetric','swDailyRankMinRoi','swSkipDebut','swReserveMain','swMainRaceNo','swMainReserve'].forEach(function(id){var el=$(id);if(el)el.addEventListener('change',function(){setTimeout(syncFromPurchaseGuard,0)})});
     document.addEventListener('click',function(ev){if(ev.target&&ev.target.closest&&ev.target.closest('[data-tab="sim"]'))setTimeout(syncFromPurchaseGuard,30)});
-    setStatus('期間を指定して取得するか、表示済みの期間横断結果を再計算できます。',true);
+    var cfg=readGuard();setStatus(cfg.backtestEnabled?'購入ガード有効：期間を指定して3点セット・日次予算で検証できます。':'購入ガード無効（旧方式）：期間を指定すると通常の期間横断シミュレーションを実行します。',true);
   }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
 })();
@@ -29801,7 +29856,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  var VERSION='v6.10.2 JRA Result Odds Priority Restore';
+  var VERSION='v6.10.3 Purchase Guard Toggle';
   var oldCore=window.TheKeibaCore;
   if(oldCore&&oldCore.version===VERSION){
     try{oldCore.refresh('duplicate-load');}catch(e){}
@@ -31090,7 +31145,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  var VERSION='v6.10.2 JRA Result Odds Priority Restore';
+  var VERSION='v6.10.3 Purchase Guard Toggle';
   var WORKER_FILE='worker_v6.0.3_JRA_Range_Fix.js';
   var previousProxy=window.fetchHtmlViaProxy;
   var JRA_VENUES={

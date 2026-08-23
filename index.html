@@ -2220,8 +2220,8 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
       <div style="margin-top:10px">
         <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">worker.js（Cloudflare Workersに貼り付けるコード）</label>
         <div style="background:#0f172a;border:1px solid var(--border);border-radius:8px;padding:12px;font-family:monospace;font-size:11px;color:#7dd3fc;line-height:1.6;overflow-x:auto">
-// ⚠️ Worker v6.0.2へ更新してください（worker_v6.0.2_JRA_Official.js）。<br>
-// JRA公式の開催選択→レース選択POST、type/race_id API、文字コード自動変換に対応。<br>
+// ⚠️ Worker v6.0.3へ更新してください（worker_v6.0.3_JRA_Range_Fix.js）。<br>
+// JRA公式・race.sp.netkeiba.com・type/race_id API・文字コード自動変換に対応。<br>
 
         </div>
         <button class="btn-sm" style="margin-top:6px" onclick="copyWorkerCode()">📋 コードをコピー</button>
@@ -14176,6 +14176,133 @@ if(horses.length === 0){
     return plan;
   }
 
+  // v6.9.4 JRA Range Official-First
+  // 期間横断の開催日判定は、race_idを含まないnetkeibaのJSシェルを
+  // 「取得成功＝開催なし」と誤認しないよう、JRA公式の各日番組表を第一資料にする。
+  const RS_JRA_VENUE_CODE_BY_NAME = Object.freeze({
+    '札幌':'01','函館':'02','福島':'03','新潟':'04','東京':'05',
+    '中山':'06','中京':'07','京都':'08','阪神':'09','小倉':'10'
+  });
+
+  function rsJraOfficialProgramUrl(date){
+    const p = ymdParts(date);
+    const month = String(Number(p.mmdd.slice(0, 2)));
+    return `https://www.jra.go.jp/keiba/calendar${p.yyyy}/${p.yyyy}/${month}/${p.mmdd}.html`;
+  }
+
+  function rsNormalizeOfficialText(value){
+    return String(value || '')
+      .replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+      .replace(/\u00a0/g, ' ')
+      .replace(/[\r\t]+/g, ' ')
+      .replace(/\n+/g, ' ')
+      .replace(/[\s　]+/g, ' ')
+      .trim();
+  }
+
+  function rsParseJraOfficialProgram(html, date){
+    const raw = String(html || '');
+    if(raw.length < 1000) throw new Error(`JRA公式番組表の本文が短すぎます（${raw.length}字）`);
+    if(/<title>\s*(?:Access Denied|Request blocked|Just a moment|Pardon Our Interruption)/i.test(raw) ||
+       /errors\.edgesuite\.net[\s\S]{0,500}Reference\s*#/i.test(raw)){
+      throw new Error('JRA公式番組表が拒否ページを返しました');
+    }
+    if(/^\s*\{/.test(raw) && /"ok"\s*:\s*false/i.test(raw)){
+      throw new Error('JRA公式番組表の取得APIがエラーを返しました');
+    }
+
+    const doc = new DOMParser().parseFromString(raw, 'text/html');
+    doc.querySelectorAll('script,style,noscript,nav,header,footer').forEach(el => el.remove());
+    const title = rsNormalizeOfficialText(doc.querySelector('h1')?.textContent || doc.title || '');
+    const bodyText = rsNormalizeOfficialText(doc.body?.textContent || raw);
+    const p = ymdParts(date);
+    const expectedDate = `${p.yyyy}年${Number(p.mmdd.slice(0,2))}月${Number(p.mmdd.slice(2,4))}日`;
+    if(!(title.includes(expectedDate) || bodyText.includes(expectedDate)) || !/競馬番組/.test(title + ' ' + bodyText)){
+      throw new Error(`JRA公式番組表の日付が一致しません（要求 ${date}）`);
+    }
+
+    const headerRe = /(\d{1,2})回\s*(札幌|函館|福島|新潟|東京|中山|中京|京都|阪神|小倉)\s*(\d{1,2})日(?:目)?/g;
+    const headers = [];
+    let m;
+    while((m = headerRe.exec(bodyText))){
+      headers.push({
+        index:m.index,
+        kai:Number(m[1]),
+        venueName:m[2],
+        venueCode:RS_JRA_VENUE_CODE_BY_NAME[m[2]] || '',
+        day:Number(m[3])
+      });
+    }
+    if(!headers.length) throw new Error(`JRA公式番組表の開催見出しを解析できません（${date}）`);
+
+    const meetings = [];
+    for(let i = 0; i < headers.length; i++){
+      const h = headers[i];
+      if(!h.venueCode || !(h.kai >= 1 && h.kai <= 12) || !(h.day >= 1 && h.day <= 12)) continue;
+      const end = i + 1 < headers.length ? headers[i + 1].index : bodyText.length;
+      const block = bodyText.slice(h.index, end);
+      const names = {};
+      let maxRace = 0;
+      const raceRe = /(\d{1,2})\s*レース\s+(.{1,260}?)(?=(?:\d{1,2}\s*レース)|表示モード|JRAからのお知らせ|$)/g;
+      let rm;
+      while((rm = raceRe.exec(block))){
+        const no = Number(rm[1]);
+        if(!(no >= 1 && no <= 12)) continue;
+        maxRace = Math.max(maxRace, no);
+        let name = rsNormalizeOfficialText(rm[2])
+          .replace(/\s+\d{1,2}時\d{2}分[\s\S]*$/, '')
+          .replace(/\s+\d{3,4}\s*[（(](?:芝|芝・外|ダ|障)[\s\S]*$/, '')
+          .trim();
+        if(name) names[no] = name;
+      }
+      meetings.push({
+        venueCode:h.venueCode,
+        venueName:h.venueName,
+        kai:h.kai,
+        day:h.day,
+        count:maxRace || 12,
+        names
+      });
+    }
+    if(!meetings.length) throw new Error(`JRA公式番組表に有効な開催場がありません（${date}）`);
+    return { date, meetings, source:'jra.go.jp-daily-program' };
+  }
+
+  async function rsFetchJraOfficialProgram(date){
+    const html = await fetchHtmlViaProxy(rsJraOfficialProgramUrl(date));
+    return rsParseJraOfficialProgram(html, date);
+  }
+
+  function rsAddOfficialMeetingsToPlan(plan, parsed, wanted){
+    const yyyy = String(parsed.date || '').slice(0, 4);
+    const arr = plan.get(parsed.date) || [];
+    parsed.meetings.forEach(meeting => {
+      const vc = String(meeting.venueCode || '');
+      if(!wanted.has(vc)) return;
+      const count = Math.max(1, Math.min(12, Number(meeting.count || 12)));
+      const races = [];
+      for(let no = 1; no <= count; no++){
+        races.push({
+          rid:`${yyyy}${vc}${String(meeting.kai).padStart(2,'0')}${String(meeting.day).padStart(2,'0')}${String(no).padStart(2,'0')}`,
+          no,
+          name:meeting.names?.[no] || `${no}R`
+        });
+      }
+      const idx = arr.findIndex(v => v.venueCode === vc);
+      const entry = {
+        venueCode:vc,
+        venueName:meeting.venueName || venueName('JRA', vc),
+        kai:meeting.kai,
+        day:meeting.day,
+        races,
+        source:parsed.source
+      };
+      if(idx >= 0) arr[idx] = entry;
+      else arr.push(entry);
+    });
+    if(arr.length) plan.set(parsed.date, arr);
+  }
+
   // v5.18.258 PeriodRaceUnitFix
   // 指定期間を「開催回の逆探索」だけで組み立てると、過去ページ内のナビ日付を
   // レース日と誤認した際に、複数開催が同じ1日に集約されることがあった。
@@ -14185,6 +14312,11 @@ if(horses.length === 0){
     const wanted = new Set((venueCodes && venueCodes.length) ? venueCodes.map(String) : JRA_VENUES.map(v => String(v[0])));
     const plan = new Map();
     plan.reachable = false;
+    plan.complete = true;
+    plan.source = 'jra-official-daily-program-first';
+    plan.officialDays = 0;
+    plan.netkeibaDays = 0;
+    plan.unresolvedDates = [];
     const dates = [];
     let d = start;
     while(d <= end){
@@ -14198,14 +14330,36 @@ if(horses.length === 0){
       if(rsAbort) break;
       const date = dates[i];
       if(prog && (i === 0 || (i + 1) % 5 === 0 || i === dates.length - 1)){
-        prog.innerHTML = `<div class="url-status">📅 指定期間のJRA開催日を確認中... ${i + 1}/${dates.length}日候補（${date}）</div>`;
+        prog.innerHTML = `<div class="url-status">🗓 JRA公式番組表で開催日を確認中... ${i + 1}/${dates.length}日候補（${date}）</div>`;
       }
+
+      // 1) JRA公式「各日番組表」。開催回・開催日・開催場を同時に確定できるため最優先。
+      let officialError = '';
+      try{
+        const official = await rsFetchJraOfficialProgram(date);
+        plan.reachable = true;
+        plan.officialDays++;
+        rsAddOfficialMeetingsToPlan(plan, official, wanted);
+        continue;
+      }catch(e){
+        officialError = (e && e.message) || String(e);
+      }
+
+      // 2) 公式番組表が一時取得できない日だけnetkeiba一覧へフォールバック。
       let got;
       try{ got = await fetchFirstUsefulJraListHtml(date, ''); }
       catch(e){ got = null; }
       const raw = got && Array.isArray(got.races) ? got.races : [];
-      if(got && (got.html || raw.length)) plan.reachable = true;
-      if(!raw.length) continue;
+      // HTMLが200でもrace_idが0件なら、JSシェル／解析失敗の可能性がある。
+      // rawが1件以上のときだけ「一覧へ到達済み」と判定する。
+      if(raw.length){
+        plan.reachable = true;
+        plan.netkeibaDays++;
+      }else{
+        plan.complete = false;
+        plan.unresolvedDates.push({date, error:officialError || 'JRA開催一覧を解析できません'});
+        continue;
+      }
 
       const byVenue = new Map();
       raw.forEach(r => {
@@ -14236,6 +14390,36 @@ if(horses.length === 0){
     }
     return plan;
   }
+
+  // 0件を即「開催なし」にしない。日付プランが0件なら回ベース探索で必ずクロスチェックする。
+  async function rsBuildTrustedJraRangePlan(venueCodes, start, end, prog){
+    const primary = await buildJraRangePlanByDates(venueCodes, start, end, prog);
+    if(primary && primary.size > 0) return primary;
+
+    if(prog){
+      prog.innerHTML = `<div class="url-status">🔎 JRA公式・日別一覧が0件のため、race_id回ベースで再確認中...</div>`;
+    }
+    let secondary = null;
+    try{ secondary = await buildJraRangePlanByKaisai(venueCodes, start, end, prog); }
+    catch(e){ secondary = null; }
+    if(secondary && secondary.size > 0){
+      secondary.source = 'race-id-kaisai-cross-check';
+      secondary.crossChecked = true;
+      return secondary;
+    }
+
+    // 日付経路が全候補日を確認済み、または独立した2経路とも到達して0件のときだけ
+    // 本当の「開催なし」として扱う。それ以外はnullを返し、従来の日別検出へ退避する。
+    if(primary && primary.reachable && (primary.complete || (secondary && secondary.reachable))){
+      primary.crossChecked = true;
+      return primary;
+    }
+    return null;
+  }
+  try{
+    window.__rsParseJraOfficialProgramV694 = rsParseJraOfficialProgram;
+    window.__rsJraOfficialProgramUrlV694 = rsJraOfficialProgramUrl;
+  }catch(e){}
 
   // v6.6 Fair Backtest Guard
   // NAR公式「月別開催日程」を月ごとに取得し、開催リンクに含まれる
@@ -15039,13 +15223,9 @@ if(horses.length === 0){
       let rsJraPlan = null;
       let rsNarPlan = null;
       if(kind === 'JRA'){
-        if(prog) prog.innerHTML = `<div class="url-status">🧭 JRA開催回をrace_idで探索中（回ベース）...${fastMode ? ' ⚡高速モード' : ''}</div>`;
+        if(prog) prog.innerHTML = `<div class="url-status">🗓 JRA公式番組表から開催日を確定中...${fastMode ? ' ⚡高速モード' : ''}</div>`;
         try{
-          rsJraPlan = await buildJraRangePlanByDates(selVenues, runStart, end, prog);
-          // 日付一覧が通信遮断で全く取得できない場合だけ旧回ベース探索へ退避する。
-          if(rsJraPlan && rsJraPlan.size === 0 && !rsJraPlan.reachable){
-            rsJraPlan = await buildJraRangePlanByKaisai(selVenues, runStart, end, prog);
-          }
+          rsJraPlan = await rsBuildTrustedJraRangePlan(selVenues, runStart, end, prog);
         }
         catch(e){ rsJraPlan = null; console.warn('[rsJraPlan] failed', e); }
         // v5.18.146: 回ベースplanが空(0件)のときの分岐を「到達できたか」で切り分ける。
@@ -15063,7 +15243,7 @@ if(horses.length === 0){
             if(prog) prog.innerHTML = `<div class="url-status err">⚠️ 回ベース探索が通信不良で0件。従来の日別検出へ切替えます（出馬表スケルトン/ブロックの可能性）。</div>`;
           }
         }else if(rsJraPlan){
-          if(prog) prog.innerHTML = `<div class="url-status ok">🧭 回ベース探索：${rsJraPlan.size}開催日を検出。精算を開始します。</div>`;
+          if(prog) prog.innerHTML = `<div class="url-status ok">🗓 JRA開催日確認：${rsJraPlan.size}開催日を検出。精算を開始します。</div>`;
         }
       }
 
@@ -15450,15 +15630,11 @@ if(horses.length === 0){
     let rsJraPlan = null;
     let rsNarPlan = null;
     if(kind === 'JRA'){
-      if(prog) prog.innerHTML = `<div class="url-status">🚄 一発モード：JRA開催回を先に探索中...</div>`;
+      if(prog) prog.innerHTML = `<div class="url-status">🚄 一発モード：JRA公式番組表から開催日を確認中...</div>`;
       try{
-        rsJraPlan = await buildJraRangePlanByDates(selVenues, dates[0], dates[dates.length - 1], prog);
-        if(rsJraPlan && rsJraPlan.size === 0 && !rsJraPlan.reachable){
-          rsJraPlan = await buildJraRangePlanByKaisai(selVenues, dates[0], dates[dates.length - 1], prog);
-        }
+        rsJraPlan = await rsBuildTrustedJraRangePlan(selVenues, dates[0], dates[dates.length - 1], prog);
       }
       catch(e){ rsJraPlan = null; }
-      if(rsJraPlan && rsJraPlan.size === 0 && !rsJraPlan.reachable) rsJraPlan = null;
     }
     if(kind === 'NAR'){
       if(prog) prog.innerHTML = `<div class="url-status">🚄 一発モード：指定期間のNAR開催日を先に確認中...</div>`;
@@ -29592,7 +29768,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script id="theKeibaSafeCoreV6">
 /* ============================================================
-   v6.9.3 MultiPoint Positive ROI + Official Diagnostic Fix
+   v6.9.4 JRA Official Range Plan + False-Zero Fix
    ・APP_VERSION / title / header version are rendered by one owner
    ・JRA/NAR, date, venue and race_id share one canonical state
    ・race_id mismatches are rejected before they reach later actions
@@ -29601,7 +29777,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  var VERSION='v6.9.3 MultiPoint Positive ROI + Official Diagnostic Fix';
+  var VERSION='v6.9.4 JRA Official Range Plan + False-Zero Fix';
   var oldCore=window.TheKeibaCore;
   if(oldCore&&oldCore.version===VERSION){
     try{oldCore.refresh('duplicate-load');}catch(e){}
@@ -30883,15 +31059,15 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
    v6.9.2 JRA Official Fallback
    ・JRA netkeiba本文が正常なら従来経路を維持
    ・空本文／遮断／馬データ不足時はJRA公式へ自動切替
-   ・Worker v6.0.2が開催選択→レース選択POSTを解決
+   ・Worker v6.0.3が開催選択→レース選択POSTとJRA SP一覧を解決
    ・JRA公式の出馬表、単勝オッズ・人気、確定結果・払戻を
      既存netkeibaパーサ互換HTMLへ正規化
    ============================================================ */
 (function(){
   'use strict';
 
-  var VERSION='v6.9.3 MultiPoint Positive ROI + Official Diagnostic Fix';
-  var WORKER_FILE='worker_v6.0.2_JRA_Official.js';
+  var VERSION='v6.9.4 JRA Official Range Plan + False-Zero Fix';
+  var WORKER_FILE='worker_v6.0.3_JRA_Range_Fix.js';
   var previousProxy=window.fetchHtmlViaProxy;
   var JRA_VENUES={
     '01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京',
@@ -31287,7 +31463,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     var cls=jOfficial.ok?'ok':'err';
     var verdict=jOfficial.ok
       ?'🟢 JRA公式の実用経路は正常です。netkeiba失敗時にjra.go.jpへ自動切替します。'
-      :'🔴 JRA公式経路を取得できません。Worker v6.0.2のDeployを確認してください。';
+      :'🔴 JRA公式経路を取得できません。Worker v6.0.3のDeployを確認してください。';
     var extra=narPractical?'NAR公式主経路も正常です。':'NAR公式は現在取得できません。';
     var html='<div style="margin-top:7px;font-weight:800">主経路</div>'+
       probeLine('JRA公式 出馬表',jOfficial)+probeLine('JRA公式 競馬番組',jCalendar)+
@@ -31303,13 +31479,13 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   async function copyLatestWorker(){
     var btn=document.activeElement,orig=btn&&btn.textContent;
     try{
-      var res=await fetch('./'+WORKER_FILE+'?v=602',{cache:'no-store'});
+      var res=await fetch('./'+WORKER_FILE+'?v=603',{cache:'no-store'});
       var code=await res.text();
-      if(!res.ok||!/6\.0\.2-jra-official/.test(code)||!/export\s+default/.test(code)){
+      if(!res.ok||!/6\.0\.3-jra-range-list/.test(code)||!/export\s+default/.test(code)){
         throw new Error(WORKER_FILE+'をHTMLと同じフォルダに置いてください');
       }
       await navigator.clipboard.writeText(code);
-      if(btn){btn.textContent='✅ v6.0.2をコピーしました';setTimeout(function(){btn.textContent=orig;},2200);}
+      if(btn){btn.textContent='✅ v6.0.3をコピーしました';setTimeout(function(){btn.textContent=orig;},2200);}
     }catch(e){
       alert('Workerコードをコピーできませんでした。\n'+WORKER_FILE+'をHTMLと同じフォルダへ配置してください。\n'+((e&&e.message)||String(e)));
     }

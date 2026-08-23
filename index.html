@@ -2690,7 +2690,7 @@ function parseFinishFromResultDoc(doc){
   const finish = [];
   rows.forEach(tr => {
     // 結果表の馬行だけを対象にする。払戻表などの数字を着順・馬番と誤認しない。
-    const horseLink = tr.querySelector('a[href*="/horse/"]');
+    const horseLink = tr.querySelector('a[href*="/horse/"], a[href*="HorseMarkInfo"]');
     if(!horseLink) return;
     const tds = [...tr.querySelectorAll('td')];
     if(tds.length < 2) return;
@@ -2809,6 +2809,59 @@ function parsePayoutsFromResultDoc(doc){
       if(!payouts[k] && amounts[i]) payouts[k] = amounts[i];
     });
   });
+
+  // v5.18.188: 地方競馬公式 RaceMarkTable の払戻表を構造で読む。
+  // netkeiba SP結果は着順を返しても払戻欄を含まない版があるため、
+  // .newRefundTable の title / 組番 / refundMoney を確定値として上書きする。
+  const officialType = label => {
+    const s = normSimDigits(label || '').replace(/\s+/g, '');
+    if(/^単勝$/.test(s)) return '単勝';
+    if(/^複勝$/.test(s)) return '複勝';
+    if(/^枠連(?:複)?$/.test(s)) return '枠連';
+    if(/^(?:馬連単|馬単)$/.test(s)) return '馬単';
+    if(/^馬連(?:複)?$/.test(s)) return '馬連';
+    if(/^ワイド$/.test(s)) return 'ワイド';
+    if(/^(?:三|3)連複$/.test(s)) return '3連複';
+    if(/^(?:三|3)連単$/.test(s)) return '3連単';
+    return '';
+  };
+  const officialKeys = new Set();
+  doc.querySelectorAll('.newRefundTable table, [class*="RefundTable"] table').forEach(table => {
+    let currentType = '';
+    table.querySelectorAll('tr').forEach(tr => {
+      const title = tr.querySelector('td.title, th.title, [class~="title"]');
+      if(title){
+        const t = officialType(title.textContent || '');
+        if(t) currentType = t;
+      }
+      if(!currentType) return;
+      const amountCell = tr.querySelector('.refundMoney, [class*="refundMoney"], [class*="RefundMoney"]');
+      if(!amountCell) return;
+      const amountText = normSimDigits(amountCell.textContent || '').replace(/,/g, '');
+      const amount = Number((amountText.match(/(\d+)/) || [])[1] || 0);
+      if(!(amount > 0)) return;
+
+      // 公式表は組番が td.a（単複・枠連・馬連）または td.d（馬単等）。
+      const comboCell = tr.querySelector('td.a, td.d, [class~="combination"], [class*="Combination"]');
+      const comboText = normSimDigits(comboCell?.textContent || '');
+      let nums = [];
+      if(currentType === '単勝' || currentType === '複勝'){
+        const n = Number((comboText.match(/([1-9]|1[0-8])/) || [])[1] || 0);
+        if(n) nums = [n];
+      }else{
+        const m = comboText.match(/([1-9]|1[0-8])\s*-\s*([1-9]|1[0-8])(?:\s*-\s*([1-9]|1[0-8]))?/);
+        if(m){ nums = [Number(m[1]), Number(m[2])]; if(m[3]) nums.push(Number(m[3])); }
+      }
+      if(!nums.length) return;
+      const key = `${currentType}:${comboKey(currentType, nums)}`;
+      payouts[key] = amount;
+      officialKeys.add(key);
+    });
+  });
+  // 公式表が取れた場合は、本文フォールバックが人気数字等から作った余分なキーを除去する。
+  if(officialKeys.size){
+    Object.keys(payouts).forEach(key => { if(!officialKeys.has(key)) delete payouts[key]; });
+  }
   return payouts;
 }
 
@@ -9604,13 +9657,28 @@ if(horses.length === 0){
     };
 
     inspect(resultDoc);
-    if(best.finish.length >= 2 && Object.keys(best.payouts).length) return best;
+    // JRAは既取得結果を再利用。NARはSP側が一部払戻だけ返す版もあるため、
+    // 公式RaceMarkTableを必ず一度確認して全券種を揃える。
+    if(kind !== 'NAR' && best.finish.length >= 2 && Object.keys(best.payouts).length) return best;
 
     const urls = kind === 'NAR'
-      ? [
-          `https://nar.netkeiba.com/race/result.html?race_id=${rid}&rf=race_submenu`,
-          `https://nar.sp.netkeiba.com/race/race_result.html?race_id=${rid}`
-        ]
+      ? (() => {
+          // 地方競馬公式はWorkerから安定取得でき、着順と全券種の払戻金を同じHTMLで返す。
+          // race_id = YYYY + NAR場コード + MMDD + RR を公式パラメータへ変換する。
+          const baba = {
+            '30':'36','35':'10','36':'11','42':'18','43':'19','44':'20','45':'21','46':'22',
+            '47':'23','48':'24','50':'27','51':'28','54':'31','55':'32','65':'3'
+          }[String(rid).slice(4, 6)] || '';
+          const id = String(rid || '');
+          const official = (/^\d{12}$/.test(id) && baba)
+            ? `https://www.keiba.go.jp/KeibaWeb/TodayRaceInfo/RaceMarkTable?k_raceDate=${id.slice(0,4)}%2F${id.slice(6,8)}%2F${id.slice(8,10)}&k_raceNo=${Number(id.slice(10,12))}&k_babaCode=${baba}`
+            : '';
+          return [
+            official,
+            `https://nar.netkeiba.com/race/result.html?race_id=${rid}&rf=race_submenu`,
+            `https://nar.sp.netkeiba.com/race/race_result.html?race_id=${rid}`
+          ].filter(Boolean);
+        })()
       : [`${asw_host(kind)}/race/result.html?race_id=${rid}&rf=race_submenu`];
 
     for(const url of [...new Set(urls)]){
@@ -15174,11 +15242,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 })();
 </script>
 
-<!-- v5.18.187 NAR result/shutuba exact-page-type fix -->
+<!-- v5.18.188 NAR official payout fallback fix -->
 <script>
 (function(){
   'use strict';
-  const V = 'v5.18.187 NarResultExactFix';
+  const V = 'v5.18.188 NarOfficialPayoutFix';
   const applyVersion = () => {
     try{
       window.APP_VERSION = V;
@@ -15194,6 +15262,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   // 旧パッチの遅延ラベル更新（最大7秒）より後にも最終版を適用する。
   [0, 250, 1000, 3000, 6000, 8000].forEach(ms => setTimeout(applyVersion, ms));
   window.__NAR_RESULT_EXACT_FIX__ = true;
+  window.__NAR_OFFICIAL_PAYOUT_FIX__ = true;
 })();
 </script>
 

@@ -2220,8 +2220,8 @@ body.profit-split-active #profitLivePane{display:flex;position:fixed;right:0;top
       <div style="margin-top:10px">
         <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">worker.js（Cloudflare Workersに貼り付けるコード）</label>
         <div style="background:#0f172a;border:1px solid var(--border);border-radius:8px;padding:12px;font-family:monospace;font-size:11px;color:#7dd3fc;line-height:1.6;overflow-x:auto">
-// ⚠️ 旧版（url=のみ対応）は非推奨。下のコピーボタンから最新版を取得してください。<br>
-// 最新版は type/race_id API対応 + EUC-JP/Shift-JIS自動変換でレース名文字化けを修正済み。<br>
+// ⚠️ Worker v6.0.2へ更新してください（worker_v6.0.2_JRA_Official.js）。<br>
+// JRA公式の開催選択→レース選択POST、type/race_id API、文字コード自動変換に対応。<br>
 
         </div>
         <button class="btn-sm" style="margin-top:6px" onclick="copyWorkerCode()">📋 コードをコピー</button>
@@ -29592,7 +29592,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script id="theKeibaSafeCoreV6">
 /* ============================================================
-   v6.9.1 MultiPoint Positive ROI + JRA ID Repair
+   v6.9.2 MultiPoint Positive ROI + JRA Official
    ・APP_VERSION / title / header version are rendered by one owner
    ・JRA/NAR, date, venue and race_id share one canonical state
    ・race_id mismatches are rejected before they reach later actions
@@ -29601,7 +29601,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  var VERSION='v6.9.1 MultiPoint Positive ROI + JRA ID Repair';
+  var VERSION='v6.9.2 MultiPoint Positive ROI + JRA Official';
   var oldCore=window.TheKeibaCore;
   if(oldCore&&oldCore.version===VERSION){
     try{oldCore.refresh('duplicate-load');}catch(e){}
@@ -30876,6 +30876,460 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   }
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded',init,{once:true});
   else init();
+})();
+</script>
+<script id="theKeibaJraOfficialFallbackV692">
+/* ============================================================
+   v6.9.2 JRA Official Fallback
+   ・JRA netkeiba本文が正常なら従来経路を維持
+   ・空本文／遮断／馬データ不足時はJRA公式へ自動切替
+   ・Worker v6.0.2が開催選択→レース選択POSTを解決
+   ・JRA公式の出馬表、単勝オッズ・人気、確定結果・払戻を
+     既存netkeibaパーサ互換HTMLへ正規化
+   ============================================================ */
+(function(){
+  'use strict';
+
+  var VERSION='v6.9.2 MultiPoint Positive ROI + JRA Official';
+  var WORKER_FILE='worker_v6.0.2_JRA_Official.js';
+  var previousProxy=window.fetchHtmlViaProxy;
+  var JRA_VENUES={
+    '01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京',
+    '06':'中山','07':'中京','08':'京都','09':'阪神','10':'小倉'
+  };
+  var PREFIX_DATE={
+    '2026010103':'20260801','2026010104':'20260802',
+    '2026010105':'20260808','2026010106':'20260809',
+    '2026010107':'20260815','2026010108':'20260816',
+    '2026010201':'20260822','2026010202':'20260823',
+    '2026010203':'20260829','2026010204':'20260830',
+    '2026010205':'20260905','2026010206':'20260906',
+    '2026040203':'20260801','2026040204':'20260802',
+    '2026040205':'20260808','2026040206':'20260809',
+    '2026040207':'20260815','2026040208':'20260816',
+    '2026040301':'20260822','2026040302':'20260823',
+    '2026040303':'20260829','2026040304':'20260830',
+    '2026040305':'20260905','2026040306':'20260906',
+    '2026070203':'20260801','2026070204':'20260802',
+    '2026070205':'20260808','2026070206':'20260809',
+    '2026070207':'20260815','2026070208':'20260816',
+    '2026070301':'20260822','2026070302':'20260823',
+    '2026070303':'20260829','2026070304':'20260830',
+    '2026070305':'20260905','2026070306':'20260906'
+  };
+
+  function el(id){return document.getElementById(id);}
+  function text(v){return String(v==null?'':v);}
+  function compact(v){return text(v).replace(/[\r\n\t]+/g,' ').replace(/[\s　]+/g,' ').trim();}
+  function ymd(v){return text(v).replace(/[^0-9]/g,'').slice(0,8);}
+  function half(v){
+    return text(v).replace(/[０-９．]/g,function(c){
+      return c==='．'?'.':String.fromCharCode(c.charCodeAt(0)-0xFEE0);
+    });
+  }
+  function esc(v){
+    return text(v).replace(/[&<>"']/g,function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+  function ridOf(v){
+    var m=text(v).match(/race_id=(20\d{10})/i)||text(v).match(/\b(20\d{10})\b/);
+    return m?m[1]:'';
+  }
+  function num(v,min,max){
+    var m=half(compact(v)).replace(/,/g,'').match(/-?\d+(?:\.\d+)?/);
+    if(!m)return 0;
+    var n=Number(m[0]);
+    return Number.isFinite(n)&&n>=min&&n<=max?n:0;
+  }
+  function blocked(v){
+    return !v||/Access Denied|Just a moment|Reference\s*#|Pardon Our Interruption|akamai|Incapsula|cf-browser|errors\.edgesuite\.net|パラメータエラー|ページが見つかりません|404\s*Not\s*Found/i.test(text(v));
+  }
+  function workerBase(){
+    try{
+      return text((typeof settings!=='undefined'&&settings&&settings.proxyUrl)||
+        (el('proxyUrl')&&el('proxyUrl').value)||'').trim().replace(/\/$/,'');
+    }catch(e){return '';}
+  }
+  function selectedDateForRid(rid){
+    var sel=el('raceSelect');
+    if(sel&&sel.options){
+      for(var i=0;i<sel.options.length;i++){
+        var opt=sel.options[i];
+        if(ridOf((opt.dataset&&opt.dataset.raceId)||opt.value||opt.textContent)!==rid)continue;
+        var m=text(opt.textContent).match(/(20\d{2})[\/-](\d{1,2})[\/-](\d{1,2})/);
+        if(m)return m[1]+String(Number(m[2])).padStart(2,'0')+String(Number(m[3])).padStart(2,'0');
+        var d=ymd(el('pickDate')&&el('pickDate').value);
+        if(d)return d;
+      }
+    }
+    var current=[
+      el('raceIdPrimaryInput')&&el('raceIdPrimaryInput').value,
+      el('raceIdInput')&&el('raceIdInput').value,
+      el('raceUrl')&&el('raceUrl').value,
+      window.currentRaceId
+    ].some(function(v){return ridOf(v)===rid;});
+    if(current){
+      var chosen=ymd(el('pickDate')&&el('pickDate').value);
+      if(chosen)return chosen;
+    }
+    return PREFIX_DATE[rid.slice(0,10)]||'';
+  }
+  function jraInfo(targetUrl){
+    var s=text(targetUrl);
+    if(!/^https:\/\/race\.netkeiba\.com\//i.test(s))return null;
+    var rid=ridOf(s);
+    if(!/^\d{12}$/.test(rid)||Number(rid.slice(4,6))<1||Number(rid.slice(4,6))>10)return null;
+    var type=/\/odds(?:\/|\?|$)/i.test(s)?'odds':(/\/race\/(?:result|race_result)\.html/i.test(s)?'result':'shutuba');
+    return {
+      url:s,type:type,raceId:rid,date:selectedDateForRid(rid),
+      venue:rid.slice(4,6),raceNo:Number(rid.slice(10,12))
+    };
+  }
+  function dateLabel(date){
+    var d=ymd(date);
+    return d.length===8?d.slice(0,4)+'年'+Number(d.slice(4,6))+'月'+Number(d.slice(6,8))+'日':'';
+  }
+  function officialEndpoint(type){
+    return type==='result'?'https://www.jra.go.jp/JRADB/accessS.html':'https://www.jra.go.jp/JRADB/accessD.html';
+  }
+
+  async function fetchOfficialRaw(info){
+    var base=workerBase();
+    if(!base)throw new Error('Workers URLが未設定です');
+    if(!info.date)throw new Error('JRA公式取得用の日付をrace_idから特定できません');
+    var req=base+'?source=jra&jra=official&kind=JRA&type='+encodeURIComponent(info.type)+
+      '&race_id='+encodeURIComponent(info.raceId)+'&date='+encodeURIComponent(info.date)+
+      '&timeout=25000&_='+Date.now();
+    var res=await fetch(req,{cache:'no-store',credentials:'omit',mode:'cors'});
+    var raw=await res.text().catch(function(){return '';});
+    if(!res.ok){
+      var reason='';
+      try{reason=JSON.parse(raw).error||'';}catch(e){}
+      throw new Error('JRA公式 Worker HTTP '+res.status+(reason?'：'+reason:''));
+    }
+    if(blocked(raw))throw new Error('JRA公式が空本文または遮断ページです');
+    var cname=res.headers.get('X-TheKeiba-JRA-CNAME')||'';
+    var sourceUrl=officialEndpoint(info.type)+(cname?'?CNAME='+encodeURIComponent(cname):'');
+    return {raw:raw,cname:cname,sourceUrl:sourceUrl};
+  }
+
+  function mainJraTable(doc,isResult){
+    var tables=Array.from(doc.querySelectorAll('table'));
+    for(var i=0;i<tables.length;i++){
+      var t=tables[i];
+      var hasNum=!!t.querySelector('thead th.num');
+      var hasHorse=!!t.querySelector('thead th.horse');
+      var hasKind=isResult?!!t.querySelector('thead th.place'):!!t.querySelector('thead th.waku');
+      if(hasNum&&hasHorse&&hasKind&&t.querySelectorAll('tbody tr').length>=2)return t;
+    }
+    return null;
+  }
+  function frameOf(tr,no){
+    var w=tr.querySelector('td.waku');
+    var img=w&&w.querySelector('img[alt]');
+    var m=img&&text(img.getAttribute('alt')).match(/枠([1-8])/);
+    var f=m?Number(m[1]):num(w&&w.textContent,1,8);
+    return f||Math.min(8,Math.max(1,Math.ceil(no/2)));
+  }
+  function canonicalPayout(v){
+    var s=compact(v).replace(/[\s　]+/g,'').replace(/^三連/,'3連');
+    return /^(?:単勝|複勝|枠連|馬連|ワイド|馬単|3連複|3連単)$/.test(s)?s:'';
+  }
+  function parseJraPayouts(doc){
+    var out=[];
+    var area=doc.querySelector('.refund_area');
+    if(!area)return out;
+    Array.from(area.querySelectorAll('dl')).forEach(function(dl){
+      var type=canonicalPayout(dl.querySelector('dt')&&dl.querySelector('dt').textContent);
+      if(!type)return;
+      Array.from(dl.querySelectorAll('dd .line')).forEach(function(line){
+        var combo=compact(line.querySelector('.num')&&line.querySelector('.num').textContent)
+          .replace(/[－ー―→＞>]/g,'-').replace(/\s+/g,'');
+        var amount=num(line.querySelector('.yen')&&line.querySelector('.yen').textContent,1,999999999);
+        if(combo&&amount)out.push({type:type,combo:combo,amount:amount});
+      });
+    });
+    return out;
+  }
+  function parseJraOfficial(raw,info){
+    if(blocked(raw))throw new Error('JRA公式ページが空または遮断されています');
+    var doc=new DOMParser().parseFromString(text(raw),'text/html');
+    var isResult=info.type==='result';
+    var table=mainJraTable(doc,isResult);
+    if(!table)throw new Error('JRA公式の主レース表が見つかりません');
+    var rows=[],seen={};
+    Array.from(table.querySelectorAll('tbody tr')).forEach(function(tr){
+      var no=num(tr.querySelector('td.num')&&tr.querySelector('td.num').textContent,1,18);
+      var horseCell=tr.querySelector('td.horse');
+      var horseLink=horseCell&&(
+        horseCell.querySelector('.name a[href*="/JRADB/accessU.html"]')||
+        horseCell.querySelector('a[href*="/JRADB/accessU.html"]')
+      );
+      var name=compact(horseLink&&horseLink.textContent).replace(/[\s　]+/g,'');
+      if(!no||!name||seen[no])return;
+      if(/取消|除外|競走除外/.test(compact(tr.textContent)))return;
+      var odds=0,pop=0,rank=0;
+      if(isResult){
+        rank=num(tr.querySelector('td.place')&&tr.querySelector('td.place').textContent,1,99);
+        pop=num(tr.querySelector('td.pop')&&tr.querySelector('td.pop').textContent,1,18);
+      }else{
+        odds=num(horseCell.querySelector('.odds .num strong')&&horseCell.querySelector('.odds .num strong').textContent,1,9999);
+        pop=num(horseCell.querySelector('.pop_rank')&&horseCell.querySelector('.pop_rank').textContent,1,18);
+      }
+      var jockeyCell=tr.querySelector('td.jockey');
+      var trainerCell=isResult?tr.querySelector('td.trainer'):horseCell.querySelector('p.trainer');
+      seen[no]=1;
+      rows.push({
+        num:no,frame:frameOf(tr,no),name:name,
+        odds:odds?Math.round(odds*10)/10:0,pop:pop,rank:rank,
+        jockey:compact(jockeyCell&&jockeyCell.querySelector('p.jockey,a')&&jockeyCell.querySelector('p.jockey,a').textContent),
+        trainer:compact(trainerCell&&trainerCell.textContent)
+      });
+    });
+    if(rows.length<2)throw new Error('JRA公式の出走馬を2頭以上解析できませんでした（'+rows.length+'頭）');
+    var title=compact(doc.querySelector('.race_title .race_name')&&doc.querySelector('.race_title .race_name').textContent)||
+      compact(doc.querySelector('.RaceName')&&doc.querySelector('.RaceName').textContent)||
+      info.raceNo+'R';
+    var meta=compact(doc.querySelector('h1 .opt')&&doc.querySelector('h1 .opt').textContent);
+    return {
+      rows:rows.sort(function(a,b){return a.num-b.num;}),
+      title:title,meta:meta,payouts:isResult?parseJraPayouts(doc):[]
+    };
+  }
+  function syntheticJraHtml(parsed,info,sourceUrl){
+    var isResult=info.type==='result';
+    var body=parsed.rows.map(function(x){
+      return '<tr class="HorseList">'+
+        (isResult?'<td class="Rank">'+esc(x.rank||'')+'</td>':'')+
+        '<td class="Waku">'+esc(x.frame)+'</td>'+
+        '<td class="Umaban">'+esc(x.num)+'</td>'+
+        '<td class="HorseInfo"><a href="/horse/jra-official-'+esc(info.raceId)+'-'+esc(x.num)+'/">'+esc(x.name)+'</a></td>'+
+        '<td class="Jockey">'+esc(x.jockey||'')+'</td>'+
+        '<td class="Trainer">'+esc(x.trainer||'')+'</td>'+
+        '<td class="Odds"><span class="OddsVal">'+esc(x.odds||'')+'</span></td>'+
+        '<td class="Popular">'+esc(x.pop||'')+'</td>'+
+        '</tr>';
+    }).join('');
+    var payoutBody=parsed.payouts.map(function(p){
+      return '<tr><th>'+esc(p.type)+'</th><td>'+esc(p.combo)+'</td><td>'+esc(Number(p.amount).toLocaleString('ja-JP'))+'円</td></tr>';
+    }).join('');
+    var payout=payoutBody?'<h2>払戻金</h2><table class="Payout_Detail_Table" data-payout-source="jra-official"><tbody>'+payoutBody+'</tbody></table>':'';
+    var context=dateLabel(info.date)+' '+(JRA_VENUES[info.venue]||info.venue)+' '+info.raceNo+'R';
+    return '<!doctype html><html lang="ja"><head><meta charset="UTF-8">'+
+      '<title>'+esc(parsed.title+' '+context)+'</title>'+
+      '<meta property="og:title" content="'+esc(parsed.title+' '+context)+'">'+
+      '<meta name="description" content="'+esc(parsed.meta||context)+'">'+
+      '<meta name="the-keiba-source" content="jra-official">'+
+      '<meta name="the-keiba-source-url" content="'+esc(sourceUrl)+'"></head><body>'+
+      '<div class="RaceName"><h1>'+esc(parsed.title)+'</h1></div>'+
+      '<div class="RaceData01">'+esc(parsed.meta||context)+'</div>'+
+      '<div data-race-id="'+esc(info.raceId)+'">race_id='+esc(info.raceId)+'</div>'+
+      '<table class="RaceTable01"><thead><tr>'+
+      (isResult?'<th>着順</th>':'')+
+      '<th>枠</th><th>馬番</th><th>馬名</th><th>騎手</th><th>調教師</th><th>単勝オッズ</th><th>人気</th>'+
+      '</tr></thead><tbody>'+body+'</tbody></table>'+payout+'</body></html>';
+  }
+  function usableNetkeiba(html,url){
+    if(blocked(html)||text(html).length<1500)return false;
+    try{
+      var doc=new DOMParser().parseFromString(text(html),'text/html');
+      var parser=window.parseHorsesFromDoc;
+      if(typeof parser!=='function'){
+        try{if(typeof parseHorsesFromDoc==='function')parser=parseHorsesFromDoc;}catch(e){}
+      }
+      if(typeof parser==='function'){
+        var hs=parser(doc,url);
+        if(Array.isArray(hs)&&hs.length>=2)return true;
+      }
+      return doc.querySelectorAll('tr.HorseList a[href*="/horse/"],tr a[href*="/horse/"]').length>=2;
+    }catch(e){return false;}
+  }
+  async function officialSynthetic(info){
+    var fetched=await fetchOfficialRaw(info);
+    var parsed=parseJraOfficial(fetched.raw,info);
+    window.__jraOfficialLastUrl=fetched.sourceUrl;
+    window.__jraOfficialLastCount=parsed.rows.length;
+    window.__jraOfficialLastPayoutCount=parsed.payouts.length;
+    window.__jraOfficialLastError='';
+    window.__fetchPath='jra-official-'+info.type;
+    return syntheticJraHtml(parsed,info,fetched.sourceUrl);
+  }
+  function installProxy(){
+    var current=window.fetchHtmlViaProxy;
+    if(typeof current!=='function'||current.__jraOfficialFallbackV692)return;
+    previousProxy=current;
+    var wrapped=async function(targetUrl){
+      var info=jraInfo(targetUrl);
+      if(!info)return await current.apply(this,arguments);
+      var primaryError='';
+      try{
+        var primary=await current.apply(this,arguments);
+        if(usableNetkeiba(primary,info.url))return primary;
+        primaryError='netkeiba本文の馬データが2頭未満';
+      }catch(e){
+        primaryError=(e&&e.message)||String(e);
+      }
+      try{
+        return await officialSynthetic(info);
+      }catch(e2){
+        var officialError=(e2&&e2.message)||String(e2);
+        window.__jraOfficialLastError=officialError;
+        console.warn('[JraOfficialFallback]',officialError);
+        throw new Error('JRA取得失敗（netkeiba: '+primaryError+' / JRA公式: '+officialError+'）');
+      }
+    };
+    wrapped.__jraOfficialFallbackV692=true;
+    wrapped.__previous=current;
+    window.fetchHtmlViaProxy=wrapped;
+    try{fetchHtmlViaProxy=wrapped;}catch(e){}
+  }
+
+  function narInfoForProbe(rid,type){
+    var baba={'30':'36','35':'10','36':'11','42':'18','43':'19','44':'20','45':'21','46':'22','47':'23','48':'24','50':'27','51':'28','54':'31','55':'32','65':'3'};
+    return {
+      raceId:rid,type:type,baba:baba[rid.slice(4,6)]||'',
+      date:rid.slice(0,4)+'/'+rid.slice(6,8)+'/'+rid.slice(8,10),
+      raceNo:Number(rid.slice(10,12))
+    };
+  }
+  function narOfficialUrl(info){
+    var page=info.type==='result'?'RaceMarkTable':(info.type==='odds'?'OddsTanFuku':'DebaTable');
+    return 'https://www.keiba.go.jp/KeibaWeb/TodayRaceInfo/'+page+
+      '?k_babaCode='+encodeURIComponent(info.baba)+'&k_raceDate='+encodeURIComponent(info.date)+
+      '&k_raceNo='+encodeURIComponent(info.raceNo);
+  }
+  function officialTableOk(raw){
+    try{
+      var doc=new DOMParser().parseFromString(text(raw),'text/html');
+      var tables=Array.from(doc.querySelectorAll('table'));
+      return tables.some(function(t){
+        var h=compact(t.querySelector('thead, tr')&&t.querySelector('thead, tr').textContent);
+        return /馬番/.test(h)&&/馬名/.test(h)&&t.querySelectorAll('tbody tr, tr').length>=3;
+      });
+    }catch(e){return false;}
+  }
+  async function rawProbe(req,validator){
+    try{
+      var r=await fetch(req,{cache:'no-store',credentials:'omit',mode:'cors'});
+      var t=await r.text().catch(function(){return '';});
+      var valid=!!(r.ok&&!blocked(t)&&(typeof validator!=='function'||validator(t)));
+      var detail='';
+      if(!valid){
+        try{detail=JSON.parse(t).error||'';}catch(e){}
+        if(!detail)detail='HTTP '+r.status+(r.ok?' / 内容判定NG':'');
+      }
+      return {status:r.status,ok:valid,len:t.length,detail:detail};
+    }catch(e){return {status:'ERR',ok:false,len:0,detail:(e&&e.message)||String(e)};}
+  }
+  function selectedJraProbe(){
+    var vals=[el('raceIdPrimaryInput')&&el('raceIdPrimaryInput').value,el('raceUrl')&&el('raceUrl').value,window.currentRaceId];
+    for(var i=0;i<vals.length;i++){
+      var rid=ridOf(vals[i]);
+      if(rid&&Number(rid.slice(4,6))>=1&&Number(rid.slice(4,6))<=10){
+        var d=selectedDateForRid(rid);
+        if(d)return {rid:rid,date:d};
+      }
+    }
+    return {rid:'202601020201',date:'20260823'};
+  }
+  function selectedNarProbeRid(){
+    var vals=[el('raceIdPrimaryInput')&&el('raceIdPrimaryInput').value,el('raceUrl')&&el('raceUrl').value,window.currentRaceId];
+    for(var i=0;i<vals.length;i++){
+      var rid=ridOf(vals[i]);
+      if(rid&&Number(rid.slice(4,6))>10)return rid;
+    }
+    return '202636060701';
+  }
+  function calendarUrl(date){
+    var d=ymd(date),year=d.slice(0,4),month=String(Number(d.slice(4,6)));
+    return 'https://www.jra.go.jp/keiba/calendar'+year+'/'+year+'/'+month+'/'+d.slice(4,8)+'.html';
+  }
+  function probeLine(name,r){
+    return '<div style="font-family:monospace;font-size:11px;margin-top:5px">'+
+      (r.ok?'✅ ':'❌ ')+esc(name)+': HTTP '+esc(r.status)+' len='+esc(r.len)+
+      (r.ok?'':'<br><span style="opacity:.72">'+esc(r.detail)+'</span>')+'</div>';
+  }
+  window.testProxy=async function(){
+    var status=el('proxyStatus'),base=workerBase();
+    if(!base){alert('Workers URLを入力してください。');return;}
+    try{if(typeof saveProxy==='function')saveProxy();}catch(e){}
+    if(status)status.innerHTML='<div class="url-status">🔄 JRA公式・NAR公式・補助経路を並列診断中...</div>';
+    var jp=selectedJraProbe(),nrid=selectedNarProbeRid();
+    var nEntry=narInfoForProbe(nrid,'shutuba');
+    var nOdds=narInfoForProbe(nrid,'odds');
+    var nResult=narInfoForProbe('202636060701','result');
+    var cacheBust='&_='+Date.now();
+    var results=await Promise.all([
+      rawProbe(base+'?source=jra&jra=official&type=shutuba&kind=JRA&race_id='+encodeURIComponent(jp.rid)+'&date='+encodeURIComponent(jp.date)+cacheBust,function(t){
+        try{return parseJraOfficial(t,{type:'shutuba',raceId:jp.rid,date:jp.date,venue:jp.rid.slice(4,6),raceNo:Number(jp.rid.slice(10,12))}).rows.length>=2;}catch(e){return false;}
+      }),
+      rawProbe(base+'?url='+encodeURIComponent(calendarUrl(jp.date))+cacheBust,function(t){return /競馬番組|レース/.test(t);}),
+      rawProbe(base+'?type=shutuba&kind=JRA&race_id='+encodeURIComponent(jp.rid)+cacheBust,function(t){return /\/horse\/|HorseList|馬名/.test(t);}),
+      rawProbe(base+'?url='+encodeURIComponent(narOfficialUrl(nEntry))+cacheBust,officialTableOk),
+      rawProbe(base+'?url='+encodeURIComponent(narOfficialUrl(nOdds))+cacheBust,officialTableOk),
+      rawProbe(base+'?url='+encodeURIComponent(narOfficialUrl(nResult))+cacheBust,officialTableOk),
+      rawProbe(base+'?type=result&kind=NAR&race_id='+encodeURIComponent(nResult.raceId)+cacheBust,function(t){return /\/horse\/|HorseList/.test(t);})
+    ]);
+    var jOfficial=results[0],jCalendar=results[1],jNetkeiba=results[2];
+    var nOfficialEntry=results[3],nOfficialOdds=results[4],nOfficialResult=results[5],nNetkeiba=results[6];
+    var bridge={status:'未検出',ok:false,len:0,detail:'Userscript未検出'};
+    if(typeof window.__narBridgeFetch==='function'&&window.__bridgeAbsent!==true){
+      try{
+        var br=await window.__narBridgeFetch('https://nar.netkeiba.com/race/result.html?race_id='+nResult.raceId+'&rf=race_submenu');
+        var bt=text(br&&br.text);
+        bridge={status:br&&br.status||0,ok:!!(br&&Number(br.status)>=200&&Number(br.status)<300&&!blocked(bt)&&/\/horse\/|HorseList/.test(bt)),len:bt.length,detail:text(br&&br.error)||'netkeiba本文判定NG'};
+      }catch(e){bridge={status:'ERR',ok:false,len:0,detail:(e&&e.message)||String(e)};}
+    }
+    var narPractical=nOfficialEntry.ok||nOfficialResult.ok;
+    var cls=jOfficial.ok?'ok':'err';
+    var verdict=jOfficial.ok
+      ?'🟢 JRA公式の実用経路は正常です。netkeiba失敗時にjra.go.jpへ自動切替します。'
+      :'🔴 JRA公式経路を取得できません。Worker v6.0.2のDeployを確認してください。';
+    var extra=narPractical?'NAR公式主経路も正常です。':'NAR公式は現在取得できません。';
+    var html='<div style="margin-top:7px;font-weight:800">主経路</div>'+
+      probeLine('JRA公式 出馬表',jOfficial)+probeLine('JRA公式 競馬番組',jCalendar)+
+      probeLine('NAR公式 出馬表',nOfficialEntry)+probeLine('NAR公式 単複オッズ',nOfficialOdds)+probeLine('NAR公式 確定結果',nOfficialResult)+
+      '<div style="margin-top:9px;font-weight:800">補助経路</div>'+
+      probeLine('JRA netkeiba Worker',jNetkeiba)+probeLine('NAR netkeiba Worker',nNetkeiba)+probeLine('NAR Bridge（住宅IP）',bridge);
+    if(status)status.innerHTML='<div class="url-status '+cls+'">'+verdict+
+      '<br><span style="font-size:11px;opacity:.88">'+esc(extra)+'</span>'+html+
+      '<div style="margin-top:8px;font-size:11px;opacity:.82">'+esc(VERSION)+' / JRA '+esc(jp.date)+' / '+esc(jp.rid)+'</div></div>';
+  };
+  try{testProxy=window.testProxy;}catch(e){}
+
+  async function copyLatestWorker(){
+    var btn=document.activeElement,orig=btn&&btn.textContent;
+    try{
+      var res=await fetch('./'+WORKER_FILE+'?v=602',{cache:'no-store'});
+      var code=await res.text();
+      if(!res.ok||!/6\.0\.2-jra-official/.test(code)||!/export\s+default/.test(code)){
+        throw new Error(WORKER_FILE+'をHTMLと同じフォルダに置いてください');
+      }
+      await navigator.clipboard.writeText(code);
+      if(btn){btn.textContent='✅ v6.0.2をコピーしました';setTimeout(function(){btn.textContent=orig;},2200);}
+    }catch(e){
+      alert('Workerコードをコピーできませんでした。\n'+WORKER_FILE+'をHTMLと同じフォルダへ配置してください。\n'+((e&&e.message)||String(e)));
+    }
+  }
+  window.copyWorkerCode=copyLatestWorker;
+  try{copyWorkerCode=copyLatestWorker;}catch(e){}
+
+  function applyVersion(){
+    window.APP_VERSION=VERSION;
+    document.title='The競馬 EV分析 '+VERSION;
+    document.querySelectorAll('.ver').forEach(function(x){x.textContent=VERSION;});
+    try{document.documentElement.setAttribute('data-jra-official-fallback',VERSION);}catch(e){}
+    return VERSION;
+  }
+  window.setAppVersionLabel=applyVersion;
+  window.__tkParseJraOfficialV692=parseJraOfficial;
+  window.__tkSyntheticJraHtmlV692=syntheticJraHtml;
+  function refresh(){installProxy();applyVersion();}
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',refresh,{once:true});else refresh();
+  window.addEventListener('pageshow',refresh);
+  document.addEventListener('visibilitychange',function(){if(!document.hidden)refresh();});
+  console.log('['+VERSION+'] enabled: JRA official fallback + official diagnostics');
 })();
 </script>
 </body>

@@ -2689,14 +2689,53 @@ function parseFinishFromResultDoc(doc){
   const rows = [...doc.querySelectorAll('table tr')];
   const finish = [];
   rows.forEach(tr => {
+    // 結果表の馬行だけを対象にする。払戻表などの数字を着順・馬番と誤認しない。
+    const horseLink = tr.querySelector('a[href*="/horse/"]');
+    if(!horseLink) return;
     const tds = [...tr.querySelectorAll('td')];
-    if(tds.length < 4) return;
-    const rankText = normSimDigits(tds[0].textContent || '');
-    const rank = Number((rankText.match(/^(\d{1,2})/) || [])[1]);
+    if(tds.length < 2) return;
+
+    const exactInt = (el, min, max) => {
+      const tx = normSimDigits(el?.textContent || '').replace(/\s+/g, '');
+      const m = tx.match(/^(\d{1,2})(?:着)?$/);
+      const n = Number(m && m[1]);
+      return (n >= min && n <= max) ? n : 0;
+    };
+    const byHeader = re => {
+      const table = tr.closest('table');
+      if(!table) return null;
+      const hr = [...table.querySelectorAll('tr')].find(x => x.querySelector('th'));
+      if(!hr) return null;
+      const hs = [...hr.children];
+      const i = hs.findIndex(x => re.test(normSimDigits(x.textContent || '').replace(/\s+/g, '')));
+      return i >= 0 ? tr.children[i] : null;
+    };
+
+    // desktop/SPどちらでも、ヘッダー・classを最優先に読む。
+    let rank = exactInt(byHeader(/^着順$/), 1, 18)
+      || exactInt(tr.querySelector('[class*="Chaku"], [class*="ResultRank"], td.Rank'), 1, 18)
+      || exactInt(tds[0], 1, 18);
     if(!(rank >= 1 && rank <= 18)) return;
-    let frame = Number((normSimDigits(tds[1]?.textContent || '').match(/\d{1,2}/) || [])[0]);
-    let horseNo = Number((normSimDigits(tds[2]?.textContent || '').match(/\d{1,2}/) || [])[0]);
+
+    let horseNo = exactInt(byHeader(/^馬番$/), 1, 18)
+      || exactInt(tr.querySelector('.Umaban, [class*="Umaban"], [class*="HorseNum"]'), 1, 18);
+
+    // classが無い版は、馬名セルの直前にある独立数字を馬番として読む。
+    if(!horseNo){
+      const cells = [...tr.querySelectorAll('td,th')];
+      const hi = cells.findIndex(c => c.contains(horseLink));
+      for(let i = hi - 1; i >= 0; i--){
+        const n = exactInt(cells[i], 1, 18);
+        if(n){ horseNo = n; break; }
+      }
+    }
     if(!(horseNo >= 1 && horseNo <= 18)) return;
+
+    const tableHasHeader = !!tr.closest('table')?.querySelector('th');
+    let frame = exactInt(byHeader(/^枠(?:番)?$/), 1, 8)
+      || exactInt(tr.querySelector('.Waku, [class*="Waku"], [class*="Frame"]'), 1, 8)
+      // ヘッダー付きSP結果表に枠列が無い場合、td[1]は馬番なので枠に流用しない。
+      || (!tableHasHeader ? exactInt(tds[1], 1, 8) : 0);
     if(!(frame >= 1 && frame <= 8)){
       const h = horses.find(x => Number(x.num) === horseNo);
       frame = Number(h?.frame || 0);
@@ -9551,15 +9590,37 @@ if(horses.length === 0){
 
   // ── 着順・払戻の取得（結果docを使い回せれば再フェッチしない）──
   async function asw_getResult(kind, rid, resultDoc){
-    let doc = resultDoc;
-    if(!doc){
-      const url = `${asw_host(kind)}/race/result.html?race_id=${rid}&rf=race_submenu`;
-      const html = await fetchHtmlViaProxy(url);
-      doc = new DOMParser().parseFromString(html, 'text/html');
+    // resultDoc が実は出馬表（旧SPフォールバックの種別混同）でも、
+    // 空着順のまま「未確定」で成功扱いせず、正しい結果URLを再取得する。
+    const parser = new DOMParser();
+    let best = { finish: [], payouts: {}, score: -1 };
+    const inspect = doc => {
+      if(!doc) return;
+      let finish = [], payouts = {};
+      try{ finish = parseFinishFromResultDoc(doc) || []; }catch(e){}
+      try{ payouts = parsePayoutsFromResultDoc(doc) || {}; }catch(e){}
+      const score = (finish.length >= 2 ? 1000 : 0) + Object.keys(payouts).length;
+      if(score > best.score) best = { finish, payouts, score };
+    };
+
+    inspect(resultDoc);
+    if(best.finish.length >= 2 && Object.keys(best.payouts).length) return best;
+
+    const urls = kind === 'NAR'
+      ? [
+          `https://nar.netkeiba.com/race/result.html?race_id=${rid}&rf=race_submenu`,
+          `https://nar.sp.netkeiba.com/race/race_result.html?race_id=${rid}`
+        ]
+      : [`${asw_host(kind)}/race/result.html?race_id=${rid}&rf=race_submenu`];
+
+    for(const url of [...new Set(urls)]){
+      try{
+        const html = await fetchHtmlViaProxy(url);
+        inspect(parser.parseFromString(html, 'text/html'));
+        if(best.finish.length >= 2 && Object.keys(best.payouts).length) break;
+      }catch(e){ /* 次の正規結果URLを試す */ }
     }
-    const finish  = parseFinishFromResultDoc(doc);   // 内部で global horses を参照するので先にセット必須
-    const payouts = parsePayoutsFromResultDoc(doc);
-    return { finish, payouts };
+    return { finish: best.finish, payouts: best.payouts };
   }
 
   // ── 現在の global horses 前提で買い目を精算（renderSimulation の計算部分を流用）──
@@ -10023,19 +10084,19 @@ if(horses.length === 0){
     if(!agg.length) return '';
     const lines = [];
     lines.push('📊 開催場・日別集計');
-    lines.push(['日付','場','R','確定','的中','投資','払戻','収支','ROI'].join('\t'));
-    let gBet = 0, gRet = 0, gSettledBet = 0;
+    lines.push(['日付','場','R','確定','的中','投資(確定)','払戻','収支','ROI'].join('\t'));
+    let gRet = 0, gSettledBet = 0;
     agg.forEach(g => {
       const profit = g.ret - g.settledBet;
       const roi = g.settledBet ? g.ret / g.settledBet * 100 : 0;
-      gBet += g.bet; gRet += g.ret; gSettledBet += g.settledBet;
+      gRet += g.ret; gSettledBet += g.settledBet;
       lines.push([
         g.date,
         g.venueName || g.venueCode,
         g.races,
         g.settled,
         g.hitRaces,
-        rsFmtNum(g.bet),
+        rsFmtNum(g.settledBet),
         rsFmtNum(g.ret),
         (profit >= 0 ? '+' : '') + rsFmtNum(profit),
         g.settledBet ? roi.toFixed(0) + '%' : '-'
@@ -10045,7 +10106,7 @@ if(horses.length === 0){
     const gRoi = gSettledBet ? gRet / gSettledBet * 100 : 0;
     lines.push([
       '全期間トータル', '', '', '', '',
-      rsFmtNum(gBet),
+      rsFmtNum(gSettledBet),
       rsFmtNum(gRet),
       (gProfit >= 0 ? '+' : '') + rsFmtNum(gProfit),
       gSettledBet ? gRoi.toFixed(0) + '%' : '-'
@@ -10058,7 +10119,7 @@ if(horses.length === 0){
     if(!raceRows.length) return '';
     const lines = [];
     lines.push('🔎 レース別明細');
-    lines.push(['日付','場','R','レース名','着順','点','投資','払戻','収支','ROI'].join('\t'));
+    lines.push(['日付','場','R','レース名','着順','点','投資(予定含む)','払戻','収支','ROI'].join('\t'));
     raceRows.forEach(r => {
       if(r.status === 'error'){
         lines.push([
@@ -10161,16 +10222,16 @@ if(horses.length === 0){
         <th style="padding:6px 4px;text-align:right">R</th>
         <th style="padding:6px 4px;text-align:right">確定</th>
         <th style="padding:6px 4px;text-align:right">的中</th>
-        <th style="padding:6px 4px;text-align:right">投資</th>
+        <th style="padding:6px 4px;text-align:right">投資(確定)</th>
         <th style="padding:6px 4px;text-align:right">払戻</th>
         <th style="padding:6px 4px;text-align:right">収支</th>
         <th style="padding:6px 4px;text-align:right">ROI</th>
       </tr></thead><tbody>`;
-    let gBet = 0, gRet = 0, gSettledBet = 0;
+    let gRet = 0, gSettledBet = 0;
     agg.forEach(g => {
       const profit = g.ret - g.settledBet;
       const roi = g.settledBet ? g.ret / g.settledBet * 100 : 0;
-      gBet += g.bet; gRet += g.ret; gSettledBet += g.settledBet;
+      gRet += g.ret; gSettledBet += g.settledBet;
       const pc = profit >= 0 ? 'var(--green)' : 'var(--red)';
       const rc = roi >= 100 ? 'var(--green)' : (g.settledBet ? 'var(--yellow)' : 'var(--muted)');
       h += `<tr style="border-top:1px solid var(--border)">
@@ -10179,7 +10240,7 @@ if(horses.length === 0){
         <td style="padding:6px 4px;text-align:right">${g.races}</td>
         <td style="padding:6px 4px;text-align:right">${g.settled}</td>
         <td style="padding:6px 4px;text-align:right">${g.hitRaces}</td>
-        <td style="padding:6px 4px;text-align:right">${g.bet.toLocaleString()}</td>
+        <td style="padding:6px 4px;text-align:right">${g.settledBet.toLocaleString()}</td>
         <td style="padding:6px 4px;text-align:right">${g.ret.toLocaleString()}</td>
         <td style="padding:6px 4px;text-align:right;color:${pc}">${profit>=0?'+':''}${profit.toLocaleString()}</td>
         <td style="padding:6px 4px;text-align:right;color:${rc}">${g.settledBet ? roi.toFixed(0)+'%' : '-'}</td>
@@ -10189,7 +10250,7 @@ if(horses.length === 0){
     const gRoi = gSettledBet ? gRet / gSettledBet * 100 : 0;
     h += `<tr style="border-top:2px solid var(--border);font-weight:700">
       <td style="padding:6px 4px" colspan="5">全期間トータル</td>
-      <td style="padding:6px 4px;text-align:right">${gBet.toLocaleString()}</td>
+      <td style="padding:6px 4px;text-align:right">${gSettledBet.toLocaleString()}</td>
       <td style="padding:6px 4px;text-align:right">${gRet.toLocaleString()}</td>
       <td style="padding:6px 4px;text-align:right;color:${gProfit>=0?'var(--green)':'var(--red)'}">${gProfit>=0?'+':''}${gProfit.toLocaleString()}</td>
       <td style="padding:6px 4px;text-align:right;color:${gRoi>=100?'var(--green)':'var(--yellow)'}">${gSettledBet ? gRoi.toFixed(0)+'%' : '-'}</td>
@@ -10205,7 +10266,7 @@ if(horses.length === 0){
         <thead><tr style="color:var(--muted);text-align:left">
           <th style="padding:4px">日付</th><th style="padding:4px">場</th><th style="padding:4px">R</th><th style="padding:4px">レース名</th>
           <th style="padding:4px;text-align:center">着順</th><th style="padding:4px;text-align:right">点</th>
-          <th style="padding:4px;text-align:right">投資</th><th style="padding:4px;text-align:right">払戻</th>
+          <th style="padding:4px;text-align:right">投資(予定含む)</th><th style="padding:4px;text-align:right">払戻</th>
           <th style="padding:4px;text-align:right">収支</th><th style="padding:4px;text-align:right">ROI</th>
         </tr></thead><tbody>`;
       raceRows.forEach(r => {
@@ -10521,6 +10582,16 @@ if(horses.length === 0){
               const { finish, payouts } = await asw_getResult(kind, r.rid, loaded.resultDoc);
               row.hasFinish = finish && finish.length >= 2;
               row.finishTop = row.hasFinish ? finish.slice(0, 3).map(x => x.horseNo) : [];
+
+              // 過去日が「未確定」のまま正常行になると、予定投資だけ増えて収支+0に見える。
+              // 取得失敗を明示し、確定結果と混ぜない。
+              const isPastRace = date < todayYmd();
+              if(isPastRace && !row.hasFinish){
+                throw new Error('過去レースの確定着順を取得できません（結果ページ取得・解析失敗）');
+              }
+              if(isPastRace && simTickets.length && !Object.keys(payouts || {}).length){
+                throw new Error('過去レースの払戻を取得できません（結果ページ構造を確認してください）');
+              }
 
               const s = asw_settle(simTickets, finish, payouts);
               row.bet = s.bet; row.ret = s.ret; row.profit = s.profit; row.roi = s.roi; row.hit = s.hit;
@@ -12116,9 +12187,15 @@ if(horses.length === 0){
     const rid = (u.match(/race_id=(\d{10,14})/) || [])[1] || '';
     if(!rid) return [];
     const arr = [];
-    if(/\/race\/shutuba\.html/i.test(u) || /nar\.netkeiba\.com/.test(u)) arr.push(`https://nar.sp.netkeiba.com/race/shutuba.html?race_id=${rid}`);
-    if(/result\.html|race_result\.html|nar\.netkeiba\.com/.test(u)) arr.push(`https://nar.sp.netkeiba.com/race/race_result.html?race_id=${rid}`);
-    if(/odds|nar\.netkeiba\.com/.test(u)){
+    // URLのホストだけで全種類を候補化しない。
+    // result要求にshutubaを先返しして確定R=0になる種別混同を防ぐ。
+    if(/\/race\/shutuba_past\.html/i.test(u)){
+      arr.push(`https://nar.sp.netkeiba.com/race/shutuba_past.html?race_id=${rid}`);
+    }else if(/\/race\/shutuba\.html/i.test(u)){
+      arr.push(`https://nar.sp.netkeiba.com/race/shutuba.html?race_id=${rid}`);
+    }else if(/\/race\/(?:result|race_result)\.html/i.test(u)){
+      arr.push(`https://nar.sp.netkeiba.com/race/race_result.html?race_id=${rid}`);
+    }else if(/\/odds(?:\/|\/index\.html)?/i.test(u)){
       arr.push(`https://nar.sp.netkeiba.com/odds/?race_id=${rid}&type=b1`);
       arr.push(`https://nar.sp.netkeiba.com/odds/?housiki=c99&race_id=${rid}&type=b1`);
     }
@@ -12148,12 +12225,8 @@ if(horses.length === 0){
   const prevFetch153 = window.fetchHtmlViaProxy;
   window.fetchHtmlViaProxy = async function(url){
     const u = String(url || '');
-    const candidates = [];
-    // NARはSPを先に試す。desktopが400でもSPが200で返る環境がある。
-    if(/\/\/nar\.netkeiba\.com\//.test(u)) candidates.push(...spUrls153(u));
-    candidates.push(u);
-    if(/\/\/nar\.sp\.netkeiba\.com\//.test(u)) candidates.push(...spUrls153(u));
-    else if(/\/\/nar\.netkeiba\.com\//.test(u)) candidates.push(...spUrls153(u));
+    // 要求URLを先に試し、同じページ種別のSP版だけをフォールバックにする。
+    const candidates = [u, ...spUrls153(u)];
     const unique = Array.from(new Set(candidates));
     let lastErr = null;
     for(const x of unique){
@@ -13817,15 +13890,18 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     const rid = (u.match(/race_id=(\d{10,14})/) || [])[1] || '';
     const out = [u, normalizeNarDesktop166(u), normalizeNarSp166(u)];
     if(rid){
-      if(/\/race\/shutuba\.html|nar\.netkeiba\.com|nar\.sp\.netkeiba\.com/i.test(u)){
+      // 元URLと同じページ種別だけを候補にする。
+      // NARホストという理由だけで shutuba/result/odds を混在させない。
+      if(/\/race\/shutuba_past\.html/i.test(u)){
+        out.push('https://nar.netkeiba.com/race/shutuba_past.html?race_id=' + rid + '&rf=shutuba_submenu');
+        out.push('https://nar.sp.netkeiba.com/race/shutuba_past.html?race_id=' + rid);
+      }else if(/\/race\/shutuba\.html/i.test(u)){
         out.push('https://nar.netkeiba.com/race/shutuba.html?race_id=' + rid + '&rf=race_submenu');
         out.push('https://nar.sp.netkeiba.com/race/shutuba.html?race_id=' + rid);
-      }
-      if(/result|race_result|nar\.netkeiba\.com|nar\.sp\.netkeiba\.com/i.test(u)){
+      }else if(/\/race\/(?:result|race_result)\.html/i.test(u)){
         out.push('https://nar.netkeiba.com/race/result.html?race_id=' + rid + '&rf=race_submenu');
         out.push('https://nar.sp.netkeiba.com/race/race_result.html?race_id=' + rid);
-      }
-      if(/odds|nar\.netkeiba\.com|nar\.sp\.netkeiba\.com/i.test(u)){
+      }else if(/\/odds(?:\/|\/index\.html)?/i.test(u)){
         out.push('https://nar.netkeiba.com/odds/index.html?race_id=' + rid + '&type=b1');
         out.push('https://nar.sp.netkeiba.com/odds/?race_id=' + rid + '&type=b1');
         out.push('https://nar.sp.netkeiba.com/odds/?housiki=c99&race_id=' + rid + '&type=b1');
@@ -15095,6 +15171,29 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       setTimeout(function(){ b.textContent = old || '📊 期間横断JSON出力'; }, 1800);
     }
   };
+})();
+</script>
+
+<!-- v5.18.187 NAR result/shutuba exact-page-type fix -->
+<script>
+(function(){
+  'use strict';
+  const V = 'v5.18.187 NarResultExactFix';
+  const applyVersion = () => {
+    try{
+      window.APP_VERSION = V;
+      if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
+      const ver = document.querySelector('.ver');
+      if(ver){
+        const bridge = /🌉/.test(ver.textContent || '');
+        ver.textContent = V + (bridge ? ' 🌉' : '');
+      }
+      document.title = 'The競馬 EV分析 ' + V;
+    }catch(e){}
+  };
+  // 旧パッチの遅延ラベル更新（最大7秒）より後にも最終版を適用する。
+  [0, 250, 1000, 3000, 6000, 8000].forEach(ms => setTimeout(applyVersion, ms));
+  window.__NAR_RESULT_EXACT_FIX__ = true;
 })();
 </script>
 

@@ -13530,9 +13530,21 @@ if(horses.length === 0){
   function asw_host(kind){ return kind === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com'; }
   function asw_chip(type){ return (typeof CHIP_CLASS !== 'undefined' && CHIP_CLASS[type]) || ''; }
 
+  // v6.9.5: JRAのrace_idは日付を内包しないため、期間横断で処理する実日付を
+  // race_id単位で記憶する。馬データタブの日付（現在日）を過去レースへ誤流用しない。
+  function asw_bindRaceDateContext(kind, rid, date){
+    if(String(kind || '').toUpperCase() !== 'JRA') return;
+    const id = String(rid || '').replace(/[^0-9]/g, '');
+    const d = String(date || '').replace(/[^0-9]/g, '').slice(0, 8);
+    if(!/^\d{12}$/.test(id) || !/^\d{8}$/.test(d)) return;
+    const map = window.__tkJraRaceDateByRid || (window.__tkJraRaceDateByRid = Object.create(null));
+    map[id] = d;
+  }
+
   // ── 1レース分の出走馬＋オッズ取得（fetchRace のコア部分を副作用なしで再現）──
   // 戻り値: { horses, raceName, isResultPage, resultDoc(あれば結果docを使い回す) }
-  async function asw_loadHorses(kind, rid){
+  async function asw_loadHorses(kind, rid, raceDate){
+    asw_bindRaceDateContext(kind, rid, raceDate);
     const host = asw_host(kind);
     const parser = new DOMParser();
 
@@ -13590,7 +13602,8 @@ if(horses.length === 0){
   // 通常経路は shutuba → result → odds の順で堅牢だが、過去確定レースでは
   // result.html だけで出走馬・最終単勝オッズ・払戻を同時に使えるケースが多い。
   // 失敗・不足時は必ず通常の asw_loadHorses にフォールバックする。
-  async function asw_loadHorsesFast(kind, rid){
+  async function asw_loadHorsesFast(kind, rid, raceDate){
+    asw_bindRaceDateContext(kind, rid, raceDate);
     try{
       const host = asw_host(kind);
       const url = `${host}/race/result.html?race_id=${rid}&rf=race_submenu`;
@@ -13607,7 +13620,7 @@ if(horses.length === 0){
       }
       return { horses: hs, raceName, isResultPage: true, resultDoc: doc, fast: true, raceMeta: (typeof pgjRaceMetaOf === 'function' ? pgjRaceMetaOf(rid) : null) };
     }catch(e){
-      return await asw_loadHorses(kind, rid);
+      return await asw_loadHorses(kind, rid, raceDate);
     }
   }
 
@@ -14671,11 +14684,12 @@ if(horses.length === 0){
       if(!map.has(key)) map.set(key, { date: r.date, venueCode: r.venueCode, venueName: r.venueName,
         races: 0, settled: 0, hitRaces: 0, candidateHitRaces: 0, allocationPending: 0, guarded: false, bet: 0, ret: 0, settledBet: 0, errors: 0 });
       const g = map.get(key);
+      // R列は「計画して処理を試みたレース数」。取得失敗を0Rとして隠さない。
+      if(r.status === 'ok' || r.status === 'error') g.races++;
       if(r.status === 'ok'){
         if(r.guardStatus){ g.guarded = true; }
         if(r.candidateHasFinish && Number(r.candidateHit || 0) > 0){ g.candidateHitRaces++; }
         if(r.guardStatus === 'allocating'){ g.allocationPending++; }
-        g.races++;
         g.bet += r.bet || 0;
         // 配分待ちでも公式結果は取得済みの場合がある。結果確定数と購入収支の確定を分離する。
         if(r.hasFinish || r.candidateHasFinish){ g.settled++; }
@@ -14855,12 +14869,14 @@ if(horses.length === 0){
     const viewMode = String(rows.__pgProfitViewMode || ((typeof window.tkPurchaseGuardProfitViewMode === 'function') ? window.tkPurchaseGuardProfitViewMode() : 'purchase')) === 'candidate' ? 'candidate' : 'purchase';
     const viewLabel = viewMode === 'candidate' ? '比較用・全候補の仮想購入（実購入ではない）' : '購入確定';
     const guardCandidateBet = Number(guardResult&&guardResult.stats&&guardResult.stats.candidateBet)||0;
-    const ok = rows.filter(r => r && r.status === 'ok');
+    const attempted = rows.filter(r => r && (r.status === 'ok' || r.status === 'error'));
+    const ok = attempted.filter(r => r.status === 'ok');
+    const errors = attempted.filter(r => r.status === 'error');
     const settled = ok.filter(r => r.hasFinish);
     const resultSettled = ok.filter(r => r.hasFinish || r.candidateHasFinish);
     const purchasedSettled = settled.filter(r => Number(r.bet || 0) > 0);
-    const days = new Set(ok.map(r => r.date)).size;
-    const venues = new Set(ok.map(r => r.date + '|' + r.venueCode)).size;
+    const days = new Set(attempted.map(r => r.date).filter(Boolean)).size;
+    const venues = new Set(attempted.map(r => r.date + '|' + r.venueCode).filter(Boolean)).size;
     const settledBet = settled.reduce((s, r) => s + (r.bet || 0), 0);
     const ret = settled.reduce((s, r) => s + (r.ret || 0), 0);
     const profit = ret - settledBet;
@@ -14893,12 +14909,15 @@ if(horses.length === 0){
     </div>` : '';
     const guardBanner = guardResult ? `<div class="url-status ok" style="margin-bottom:8px">🛡️ 購入ガード${guardResult.preview?'暫定':'確定'}・表示中：<b>${viewLabel}</b> / 候補的中 <b>${heldCandidateHitRaces}R</b>を保持（比較確定 ${candidateHitRaces}R・候補総額 ${guardCandidateBet.toLocaleString()}円・1日上限 ${(Number(guardResult.config&&guardResult.config.dailyLimit)||0).toLocaleString()}円）${provisionalDate?`<br><span style="color:#fde68a">⏳ ${provisionalDate} は候補収集中のため、購入・払戻・ROIへの計上を保留しています。</span>`:''}</div>` : '';
     const fairBanner = fairGuardSeen ? `<div class="url-status ok" style="margin-bottom:8px">⚖️ <b>公平バックテスト ON</b>：JRA・NAR共通で「専用オッズ表の全頭値＋着順＋実払戻照合」を必須化し、結果ページの走破タイム等はオッズに使用しません。公平検証 <b>${fairSettledRows.length}R</b> / データ不足除外 <b>${qualityExcludedRows.length}R</b> / 全エラー <b>${allErrorRows.length}R</b></div>` : '';
-    box.innerHTML = fairBanner + guardBanner + compareHtml + `
+    const firstError = errors.length ? String(errors[0].error || '取得失敗') : '';
+    const errorBanner = errors.length ? `<div class="url-status err" style="margin-bottom:8px">⚠️ <b>取得失敗 ${errors.length}R</b>（R列には処理対象として計上）${firstError ? `<br><span style="font-size:11px;opacity:.88">先頭エラー：${asw_esc(firstError)}</span>` : ''}</div>` : '';
+    box.innerHTML = errorBanner + fairBanner + guardBanner + compareHtml + `
       <div class="sim-kpi-grid" style="margin-top:0">
         <div class="sim-kpi"><div class="v">${days}</div><div class="l">日数</div></div>
         <div class="sim-kpi"><div class="v">${venues}</div><div class="l">延べ開催場</div></div>
-        <div class="sim-kpi"><div class="v">${ok.length}</div><div class="l">処理R</div></div>
+        <div class="sim-kpi"><div class="v">${attempted.length}</div><div class="l">処理R</div></div>
         <div class="sim-kpi"><div class="v">${resultSettled.length}</div><div class="l">結果確定R</div></div>
+        ${errors.length?`<div class="sim-kpi"><div class="v" style="color:var(--red)">${errors.length}</div><div class="l">取得失敗R</div></div>`:''}
         ${fairGuardSeen?`<div class="sim-kpi"><div class="v">${fairSettledRows.length}</div><div class="l">公平検証R</div></div><div class="sim-kpi"><div class="v">${qualityExcludedRows.length}</div><div class="l">データ不足除外R</div></div>`:''}
         ${guardResult?`<div class="sim-kpi"><div class="v" style="color:var(--green)">${viewMode==='candidate'?purchaseHitRaces:candidateHitRaces}</div><div class="l">${viewMode==='candidate'?'購入的中R（比較確定）':'候補的中R（比較確定）'}</div></div>`:''}
         <div class="sim-kpi"><div class="v">${hitRaces}</div><div class="l">${guardResult?(viewMode==='candidate'?'候補的中R':'購入的中R'):'的中R'}</div></div>
@@ -15377,8 +15396,8 @@ if(horses.length === 0){
                           count: 0, bet: 0, ret: 0, profit: 0, roi: 0, hit: 0, hasFinish: false, finishTop: [] };
             try{
               const loaded = (fastMode && String(date) < todayForFast)
-                ? await asw_loadHorsesFast(kind, r.rid)
-                : await asw_loadHorses(kind, r.rid);
+                ? await asw_loadHorsesFast(kind, r.rid, date)
+                : await asw_loadHorses(kind, r.rid, date);
               horses = loaded.horses;
               currentRaceId = r.rid;
               currentRaceName = loaded.raceName || r.name || (r.no + 'R');
@@ -15450,6 +15469,7 @@ if(horses.length === 0){
       rsRenderTable(rows);
       rsRenderChart(rows);
       const okCount = rows.filter(x => x.status === 'ok').length;
+      const errorRows = rows.filter(x => x.status === 'error');
       // v5.18.146: JRAで到達OK・plan空(選択場が期間内に開催なし)＝全日スキップ。0レースの理由を明示する。
       if(kind === 'JRA' && rsJraPlan && rsJraPlan.size === 0 && okCount === 0 && !rsAbort){
         const venLabel = selVenues.length ? selVenues.map(c => venueName('JRA', c)).join('・') : 'JRA';
@@ -15461,6 +15481,8 @@ if(horses.length === 0){
         // v5.18.165: NARで全日程が通信失敗（ブリッジ未検出/403等）だった場合、
         // 「開催なし」と誤認させず実際のエラー内容を表示する。
         if(prog) prog.innerHTML = `<div class="url-status err">❌ 完了：0レース（${rsOpenVenuesFailCount}日すべてで開催場一覧の取得に失敗）。原因: ${asw_esc(rsLastOpenVenuesError || '不明')}<br><span style="font-size:11px;opacity:.85">🌉Userscriptブリッジが未接続の可能性があります。バッジに🌉マークが出ているか確認してください。</span></div>`;
+      }else if(okCount === 0 && errorRows.length > 0 && !rsAbort){
+        if(prog) prog.innerHTML = `<div class="url-status err">❌ 完了：${errorRows.length}レースすべて取得失敗。先頭エラー：${asw_esc(errorRows[0].error || '取得失敗')}<br><span style="font-size:11px;opacity:.85">「レース別明細」を開くと各Rの原因を確認できます。</span></div>`;
       }else if(prog){
         prog.innerHTML = `<div class="url-status ok">✅ 完了：指定期間 ${start}〜${end} の ${okCount}レースをシミュレーションしました${resume ? `（▶️リジューム：精算済み${rsSkipped}Rを再取得せずスキップ）` : ''}${rsAbort ? '（中断）' : ''}。</div>`;
       }
@@ -15688,7 +15710,7 @@ if(horses.length === 0){
       raceName: task.raceName || (task.no + 'R'), status: 'pending', count: 0, bet: 0, ret: 0, profit: 0, roi: 0,
       hit: 0, hasFinish: false, finishTop: [] };
     try{
-      const loaded = String(task.date) < todayForFast ? await asw_loadHorsesFast(kind, task.rid) : await asw_loadHorses(kind, task.rid);
+      const loaded = String(task.date) < todayForFast ? await asw_loadHorsesFast(kind, task.rid, task.date) : await asw_loadHorses(kind, task.rid, task.date);
       let localHorses = loaded.horses || [];
       row.raceName = loaded.raceName || task.raceName || (task.no + 'R');
       try{ if(typeof pgjApplyRaceMetaToRow === 'function') pgjApplyRaceMetaToRow(row, task.rid, row.raceName); }catch(e){}
@@ -29768,7 +29790,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
 <script id="theKeibaSafeCoreV6">
 /* ============================================================
-   v6.9.4 JRA Official Range Plan + False-Zero Fix
+   v6.9.5 JRA Range Date Context + Honest Count
    ・APP_VERSION / title / header version are rendered by one owner
    ・JRA/NAR, date, venue and race_id share one canonical state
    ・race_id mismatches are rejected before they reach later actions
@@ -29777,7 +29799,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  var VERSION='v6.9.4 JRA Official Range Plan + False-Zero Fix';
+  var VERSION='v6.9.5 JRA Range Date Context + Honest Count';
   var oldCore=window.TheKeibaCore;
   if(oldCore&&oldCore.version===VERSION){
     try{oldCore.refresh('duplicate-load');}catch(e){}
@@ -31066,7 +31088,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  var VERSION='v6.9.4 JRA Official Range Plan + False-Zero Fix';
+  var VERSION='v6.9.5 JRA Range Date Context + Honest Count';
   var WORKER_FILE='worker_v6.0.3_JRA_Range_Fix.js';
   var previousProxy=window.fetchHtmlViaProxy;
   var JRA_VENUES={
@@ -31128,6 +31150,10 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     }catch(e){return '';}
   }
   function selectedDateForRid(rid){
+    // v6.9.5: 期間横断処理がrace_idと同時に渡した実開催日を最優先する。
+    // JRA race_id自体にはMMDDが無く、画面側のpickDateは別日を指し得るため。
+    var remembered=ymd(window.__tkJraRaceDateByRid&&window.__tkJraRaceDateByRid[rid]);
+    if(remembered)return remembered;
     var sel=el('raceSelect');
     if(sel&&sel.options){
       for(var i=0;i<sel.options.length;i++){

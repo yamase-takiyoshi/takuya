@@ -209,6 +209,45 @@ body{
 .sim-payout-ok{color:var(--green);font-weight:800}.sim-payout-est{color:var(--yellow);font-weight:800}
 @media(max-width:560px){.sim-toolbar,.sim-finish-picker{grid-template-columns:1fr}}
 
+/* ============================================================
+   v5.18.189 RightSideAnalysisPanel / 右側・多角収支分析
+   ============================================================ */
+.right-analysis-toggle{
+  height:30px;padding:5px 9px;font-size:11px;white-space:nowrap
+}
+.right-analysis-toggle.active{
+  color:#03130b;border-color:rgba(0,230,118,.75);
+  background:linear-gradient(135deg,#00c853,#00e676);box-shadow:var(--glow)
+}
+#rightAnalysisPane{display:none;background:#07111d}
+.right-analysis-bar{
+  height:44px;flex:none;display:flex;align-items:center;justify-content:space-between;
+  gap:8px;padding:6px 9px;border-bottom:1px solid rgba(0,230,118,.28);background:#101e31
+}
+.right-analysis-title{min-width:0;display:flex;flex-direction:column}
+.right-analysis-title b{font-size:12px;color:#d9ffe8;white-space:nowrap}
+.right-analysis-title span{font-size:9px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.right-analysis-actions{display:flex;align-items:center;gap:5px;flex:none}
+.right-analysis-actions .btn-sm{padding:5px 7px;font-size:10px;text-decoration:none}
+#rightAnalysisFrame{display:block;width:100%;height:100%;border:0;background:#07111d;flex:1;min-height:0}
+body.right-analysis-active{overflow:hidden}
+body.right-analysis-active .header{position:fixed;left:0;right:0;top:0;z-index:40}
+body.right-analysis-active .main{
+  position:fixed;left:0;top:var(--right-analysis-top,53px);bottom:0;width:50%;max-width:none;
+  margin:0;padding:10px;overflow:auto;overscroll-behavior:contain
+}
+body.right-analysis-active #rightAnalysisPane{
+  display:flex;position:fixed;right:0;top:var(--right-analysis-top,53px);bottom:0;width:50%;z-index:30;
+  flex-direction:column;border-left:2px solid rgba(0,230,118,.35);box-shadow:-10px 0 28px rgba(0,0,0,.25)
+}
+@media(max-width:700px){
+  .right-analysis-toggle{display:none!important}
+  body.right-analysis-active{overflow:auto}
+  body.right-analysis-active .header{position:sticky}
+  body.right-analysis-active .main{position:static;width:auto;max-width:600px;margin:0 auto;padding:12px;overflow:visible}
+  body.right-analysis-active #rightAnalysisPane{display:none!important}
+}
+
 </style>
 </head>
 <body>
@@ -218,6 +257,8 @@ body{
     <h1><span class="brand-icon">♞</span> The競馬 EV分析</h1>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
+    <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
+      onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
     <span class="ver">v5.18.186 RangeSimJsonExportSameAsJsonSave</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
@@ -702,6 +743,24 @@ body{
   </div>
 
 </div>
+
+<aside id="rightAnalysisPane" aria-hidden="true">
+  <div class="right-analysis-bar">
+    <div class="right-analysis-title">
+      <b>📊 多角収支分析</b>
+      <span id="rightAnalysisStatus">左側の収支データを待機中</span>
+    </div>
+    <div class="right-analysis-actions">
+      <button class="btn-sm" type="button" onclick="syncRightAnalysisPanel()" title="左側の最新結果を同期">↔ 同期</button>
+      <button class="btn-sm" type="button" onclick="reloadRightAnalysisPanel()" title="分析画面を再読み込み">↻</button>
+      <a class="btn-sm" href="https://yamase-takiyoshi.github.io/takuya/keiba_profit_spec_chart_switcher_candle_v22.html?src=bridge2"
+        target="_blank" rel="noopener" title="分析画面を新しいタブで開く">↗</a>
+      <button class="btn-sm" type="button" onclick="setRightAnalysisPanel(false)" title="右側分析を閉じる">×</button>
+    </div>
+  </div>
+  <iframe id="rightAnalysisFrame" src="about:blank" title="多角収支分析"
+    loading="eager" allow="clipboard-read; clipboard-write"></iframe>
+</aside>
 
 <script>
 // ============================================================
@@ -15263,6 +15322,271 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   [0, 250, 1000, 3000, 6000, 8000].forEach(ms => setTimeout(applyVersion, ms));
   window.__NAR_RESULT_EXACT_FIX__ = true;
   window.__NAR_OFFICIAL_PAYOUT_FIX__ = true;
+})();
+</script>
+
+<!-- v5.18.189 Right-side multi-angle profit analysis panel -->
+<script>
+(function(){
+  'use strict';
+
+  var VERSION = 'v5.18.189 RightSideAnalysisPanel';
+  var PANEL_STATE_KEY = 'tk-right-analysis-panel-v1';
+  var BRIDGE_KEY = 'keibaProfitGraphBridge_v1';
+  var LIVE_FILE_NAME = 'The競馬_EV分析_右側リアルタイム.json';
+  var LIVE_URL = 'https://yamase-takiyoshi.github.io/takuya/keiba_profit_spec_chart_switcher_candle_v22.html?src=bridge2&embed=1';
+  var syncTimer = 0;
+  var resizeTimer = 0;
+  var lastSignature = '';
+  var liveChannel = null;
+  try{ liveChannel = new BroadcastChannel('keibaProfitGraphLive_v1'); }catch(e){}
+
+  function byId(id){ return document.getElementById(id); }
+  function panelActive(){ return document.body.classList.contains('right-analysis-active'); }
+  function unavailableWidth(){
+    try{ return window.matchMedia('(max-width:700px)').matches; }
+    catch(e){ return Number(window.innerWidth || 0) <= 700; }
+  }
+  function setStatus(text){
+    var el = byId('rightAnalysisStatus');
+    if(el) el.textContent = text || '';
+  }
+  function applyVersion(){
+    try{
+      window.APP_VERSION = VERSION;
+      if(typeof window.setAppVersionLabel === 'function') window.setAppVersionLabel();
+      var ver = document.querySelector('.ver');
+      if(ver){
+        var bridge = /🌉/.test(ver.textContent || '');
+        ver.textContent = VERSION + (bridge ? ' 🌉' : '');
+      }
+      document.title = 'The競馬 EV分析 ' + VERSION;
+    }catch(e){}
+  }
+  [0,250,1000,3000,6000,8500,10000].forEach(function(ms){ setTimeout(applyVersion, ms); });
+
+  function updateTop(){
+    var header = document.querySelector('.header');
+    var px = header ? Math.ceil(header.getBoundingClientRect().height) : 53;
+    document.documentElement.style.setProperty('--right-analysis-top', px + 'px');
+  }
+  function updateButton(on){
+    var btn = byId('rightAnalysisBtn');
+    if(!btn) return;
+    btn.classList.toggle('active', !!on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    btn.textContent = on ? '📊 右側ON' : '📊 右側分析';
+  }
+  function snapshot(){
+    try{
+      if(typeof buildProfitGraphJSONSnapshot === 'function'){
+        var snap = buildProfitGraphJSONSnapshot();
+        if(snap && Array.isArray(snap.収支明細)) return snap;
+      }
+    }catch(e){ setStatus('収支データ作成エラー: ' + ((e && e.message) || e)); }
+    return {
+      product:'The競馬 EV分析', schema:'keiba-profit-graph-v1', version:VERSION,
+      exportedAt:new Date().toISOString(),
+      集計:{件数:0,投資合計:0,払戻合計:0,収支合計:0,ROI:0},
+      収支明細:[]
+    };
+  }
+  function snapshotSignature(snap){
+    var a = (snap && snap.集計) || {};
+    var rows = (snap && snap.収支明細) || [];
+    var tail = rows.length ? rows[rows.length - 1] : {};
+    return [
+      rows.length,
+      Number(a.投資合計 || 0), Number(a.払戻合計 || 0), Number(a.収支合計 || 0),
+      tail && (tail.race_id || tail.日付 || ''), tail && Number(tail.収支 || 0)
+    ].join('|');
+  }
+  function bridgeBox(){
+    var snap = snapshot();
+    var savedAt = new Date().toISOString();
+    var box = {fileName:LIVE_FILE_NAME, data:snap, savedAt:savedAt, replace:true};
+    var payload = {savedAt:savedAt, fileName:LIVE_FILE_NAME, data:snap, live:true, replace:true};
+    try{ localStorage.setItem(BRIDGE_KEY, JSON.stringify(payload)); }
+    catch(e){ setStatus('同期保存エラー: ' + ((e && e.message) || e)); }
+    return {box:box, count:snap.収支明細.length, snap:snap};
+  }
+  function applyEmbeddedStyle(){
+    var frame = byId('rightAnalysisFrame');
+    try{
+      var doc = frame && frame.contentDocument;
+      if(!doc || !doc.head) return false;
+      var style = doc.getElementById('tkRightAnalysisEmbedStyle');
+      if(!style){
+        style = doc.createElement('style');
+        style.id = 'tkRightAnalysisEmbedStyle';
+        doc.head.appendChild(style);
+      }
+      style.textContent = '.hero{display:none!important}.app{max-width:none!important;padding:6px!important}'
+        + '.grid{display:block!important}.grid>aside.panel{display:none!important}'
+        + '.grid>main.panel{padding:8px!important;border:0!important;border-radius:0!important;box-shadow:none!important}'
+        + '.chart-wrap{height:340px!important}@media(max-width:920px){.layout{grid-template-columns:1fr!important}'
+        + '.kpis{grid-template-columns:repeat(3,1fr)!important}}';
+      return true;
+    }catch(e){ return false; }
+  }
+  function broadcast(box){
+    if(!liveChannel || !box) return;
+    try{ liveChannel.postMessage({type:'data', box:box}); }catch(e){}
+  }
+  function deliver(forceLoad){
+    var pack = bridgeBox();
+    broadcast(pack.box);
+    var frame = byId('rightAnalysisFrame');
+    if(!frame || !panelActive()) return pack;
+    var src = frame.getAttribute('src') || '';
+    if(forceLoad || !src || src === 'about:blank'){
+      frame.src = LIVE_URL;
+      setStatus(pack.count ? '分析画面へ接続中… ' + pack.count.toLocaleString() + '件' : '分析画面へ接続中… 収支データ待機中');
+      return pack;
+    }
+
+    var direct = false;
+    try{
+      applyEmbeddedStyle();
+      var child = frame.contentWindow;
+      if(child && typeof child.__keibaGraphApplyLive === 'function'){
+        child.__keibaGraphApplyLive(pack.box);
+        direct = true;
+      }else if(child && typeof child.loadBridgeData === 'function'){
+        child.loadBridgeData(true);
+      }
+    }catch(e){}
+    try{
+      var origin = new URL(LIVE_URL, location.href).origin;
+      if(frame.contentWindow){
+        frame.contentWindow.postMessage({type:'keibaProfitGraphLive', box:pack.box}, origin);
+        frame.contentWindow.postMessage({type:'keibaProfitGraphBridgeUpdate', key:BRIDGE_KEY}, origin);
+      }
+    }catch(e){}
+
+    if(pack.count){
+      setStatus((direct ? '⚡ 直接同期 ' : '↔ 同期 ') + pack.count.toLocaleString()
+        + '件 / ' + new Date().toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit'}));
+    }else{
+      setStatus('左側の収支データを待機中');
+    }
+    return pack;
+  }
+
+  window.syncRightAnalysisPanel = function(){
+    clearTimeout(syncTimer);
+    return deliver(false);
+  };
+  window.scheduleRightAnalysisSync = function(){
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(function(){ deliver(false); }, 450);
+  };
+  window.reloadRightAnalysisPanel = function(){
+    var frame = byId('rightAnalysisFrame');
+    if(!frame || !panelActive()) return;
+    setStatus('分析画面を再読み込み中…');
+    frame.src = 'about:blank';
+    setTimeout(function(){ deliver(true); }, 80);
+  };
+  window.setRightAnalysisPanel = function(on, options){
+    options = options || {};
+    on = !!on && !unavailableWidth();
+    document.body.classList.toggle('right-analysis-active', on);
+    var pane = byId('rightAnalysisPane');
+    if(pane) pane.setAttribute('aria-hidden', on ? 'false' : 'true');
+    updateTop();
+    updateButton(on);
+    if(options.persist !== false){
+      try{ localStorage.setItem(PANEL_STATE_KEY, on ? '1' : '0'); }catch(e){}
+    }
+    var frame = byId('rightAnalysisFrame');
+    if(on){
+      deliver(true);
+    }else{
+      clearTimeout(syncTimer);
+      if(frame) frame.src = 'about:blank';
+      setStatus(unavailableWidth() ? 'スマートフォンでは1画面表示' : '右側分析はOFF');
+    }
+    return on;
+  };
+  window.toggleRightAnalysisPanel = function(){
+    return window.setRightAnalysisPanel(!panelActive());
+  };
+
+  function wrapSyncHook(name){
+    var original = window[name];
+    if(typeof original !== 'function' || original.__rightAnalysisWrapped) return;
+    var wrapped = function(){
+      var result = original.apply(this, arguments);
+      window.scheduleRightAnalysisSync();
+      return result;
+    };
+    wrapped.__rightAnalysisWrapped = true;
+    window[name] = wrapped;
+    try{
+      if(name === 'saveSimHistory') saveSimHistory = wrapped;
+      else if(name === 'renderSimProfitChart') renderSimProfitChart = wrapped;
+      else if(name === 'recordProfit') recordProfit = wrapped;
+    }catch(e){}
+  }
+  function enforceLayout(){
+    var narrow = unavailableWidth();
+    var btn = byId('rightAnalysisBtn');
+    if(btn) btn.style.display = narrow ? 'none' : '';
+    if(narrow && panelActive()) window.setRightAnalysisPanel(false, {persist:false});
+    updateTop();
+  }
+  function init(){
+    applyVersion();
+    wrapSyncHook('saveSimHistory');
+    wrapSyncHook('renderSimProfitChart');
+    wrapSyncHook('recordProfit');
+    var frame = byId('rightAnalysisFrame');
+    if(frame){
+      frame.addEventListener('load', function(){
+        if(!panelActive() || frame.getAttribute('src') === 'about:blank') return;
+        applyEmbeddedStyle();
+        setTimeout(function(){ deliver(false); }, 120);
+      });
+    }
+    window.addEventListener('message', function(ev){
+      var d = ev && ev.data;
+      if(d && d.type === 'keibaProfitGraphLiveHello') deliver(false);
+    });
+    if(liveChannel){
+      liveChannel.onmessage = function(ev){
+        var d = ev && ev.data;
+        if(d && d.type === 'hello') broadcast(bridgeBox().box);
+      };
+    }
+    enforceLayout();
+    var saved = null;
+    try{ saved = localStorage.getItem(PANEL_STATE_KEY); }catch(e){}
+    // 初回は右側を表示。閉じた場合は次回もOFFを維持する。
+    var openAtStart = saved !== '0' && !unavailableWidth();
+    if(openAtStart) window.setRightAnalysisPanel(true, {persist:false});
+    else updateButton(false);
+
+    window.addEventListener('resize', function(){
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(enforceLayout, 160);
+    });
+    window.addEventListener('orientationchange', function(){ setTimeout(enforceLayout, 250); });
+    document.addEventListener('visibilitychange', function(){
+      if(!document.hidden && panelActive()) window.scheduleRightAnalysisSync();
+    });
+    setInterval(function(){
+      var snap = snapshot();
+      var sig = snapshotSignature(snap);
+      if(sig !== lastSignature){
+        lastSignature = sig;
+        if(panelActive()) window.scheduleRightAnalysisSync();
+        else broadcast(bridgeBox().box);
+      }
+    }, 1200);
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, {once:true});
+  else init();
 })();
 </script>
 

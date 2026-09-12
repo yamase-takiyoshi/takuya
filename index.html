@@ -16797,5 +16797,232 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   apply();
 })();
 </script>
+
+<!-- v5.18.194 EdgeProfit29 -->
+<script>
+(function(){
+  'use strict';
+  if(window.__EDGE29_INSTALLED__) return;
+  window.__EDGE29_INSTALLED__ = true;
+
+  const VERSION = 'v5.18.194 EdgeProfit29';
+  const MODE = 'edge29';
+  const LABEL = '厳格エッジ v2.9（単勝・実オッズ）';
+  const MIN_ROBUST_EV = 1.08;
+  const MIN_EDGE_PP = 0.015;       // break-even確率を最低1.5pt上回る
+  const MIN_ODDS = 2.0;
+  const MAX_ODDS = 15.0;
+  const MAX_TICKETS = 1;           // 1レース1点に絞り、同一Rの相関リスクを抑える
+
+  function setVer(){
+    try{
+      window.APP_VERSION = VERSION;
+      const ver = document.querySelector('.ver');
+      const bridge = !!(ver && /🌉/.test(ver.textContent || ''));
+      if(ver) ver.textContent = VERSION + (bridge ? ' 🌉' : '');
+      document.title = 'The競馬 EV分析 ' + VERSION;
+    }catch(e){}
+  }
+
+  function safeNum(v, d=0){ const n=Number(v); return Number.isFinite(n)?n:d; }
+  function currentMode(){ try{return String(settings.mode||'');}catch(e){return '';} }
+  function raceIdNow(){ try{return String(currentRaceId||window.currentRaceId||'');}catch(e){return '';} }
+  function isNarRace(){
+    try{
+      if(typeof isNAR === 'function' && isNAR()) return true;
+      const rid=raceIdNow();
+      return /^\d{12}$/.test(rid) && !['01','02','03','04','05','06','07','08','09','10'].includes(rid.slice(4,6));
+    }catch(e){ return false; }
+  }
+
+  function addModeDefinitions(){
+    try{
+      if(Array.isArray(MODE_OPTIONS) && !MODE_OPTIONS.some(x=>x && x[0]===MODE)) MODE_OPTIONS.push([MODE,LABEL]);
+    }catch(e){}
+    try{
+      if(typeof MODE_EV === 'object' && MODE_EV) MODE_EV[MODE] = {
+        '単勝':MIN_ROBUST_EV,'複勝':9.99,'枠連':9.99,'ワイド':9.99,
+        '馬連':9.99,'馬単':9.99,'3連複':9.99,'3連単':9.99
+      };
+    }catch(e){}
+  }
+
+  function selectMode(){
+    try{
+      settings.mode=MODE;
+      localStorage.setItem('tk-html-settings', JSON.stringify(settings));
+      document.querySelectorAll('#modeGrid .mode-btn').forEach(x=>x.classList.remove('active'));
+      const b=document.getElementById('edge29ModeBtn'); if(b) b.classList.add('active');
+      updatePanel();
+    }catch(e){}
+  }
+
+  function installModeButton(){
+    const mg=document.getElementById('modeGrid');
+    if(!mg || document.getElementById('edge29ModeBtn')) return;
+    const b=document.createElement('button');
+    b.id='edge29ModeBtn';
+    b.className='mode-btn'+(currentMode()===MODE?' active':'');
+    b.textContent=LABEL;
+    b.onclick=selectMode;
+    mg.appendChild(b);
+  }
+
+  function installPanel(){
+    if(document.getElementById('edge29Panel')) return;
+    const mg=document.getElementById('modeGrid');
+    if(!mg || !mg.parentElement) return;
+    const d=document.createElement('div');
+    d.id='edge29Panel';
+    d.style.cssText='margin-top:10px;padding:10px 12px;border:1px solid rgba(52,211,153,.28);border-radius:10px;background:rgba(52,211,153,.055);font-size:11px;line-height:1.55;display:none';
+    d.innerHTML='<b>🧪 厳格エッジ v2.9</b> <span id="edge29State"></span><br>'+
+      '単勝の実市場オッズのみ。市場確率へ強く縮小した保守確率で <b>EV≥1.08</b>、損益分岐確率を<b>1.5pt以上</b>上回る候補だけを採用。'+
+      '1レース最大1点・2.0〜15.0倍。FINAL研究は探索用、利益検証はPRE-RACE監査のみ有効。'+
+      '<div id="edge29Diag" style="margin-top:5px;color:var(--muted)">候補診断: 未計算</div>';
+    mg.parentElement.insertBefore(d, mg.nextSibling);
+  }
+
+  function updatePanel(){
+    const p=document.getElementById('edge29Panel'); if(!p) return;
+    const on=currentMode()===MODE; p.style.display=on?'block':'none';
+    const s=document.getElementById('edge29State');
+    if(s){
+      const vm=document.getElementById('rsValidationMode')?.value||'FINAL_RESEARCH';
+      s.textContent = vm==='PRE_RACE_STRICT' ? '｜PRE-RACE監査' : '｜FINAL研究（参考値）';
+      s.style.color = vm==='PRE_RACE_STRICT' ? '#34d399' : '#fbbf24';
+    }
+  }
+
+  function marketPack(hs){
+    const rows=(hs||[]).map(h=>({num:Number(h.num),odds:safeNum(h.odds),pop:safeNum(h.pop)})).filter(x=>x.num>0&&x.odds>1.01);
+    const over=rows.reduce((s,x)=>s+1/x.odds,0);
+    const n=Math.max(1,(hs||[]).length);
+    const rankRaw=Array.from({length:n},(_,i)=>1/Math.pow(i+1,1.08));
+    const rankSum=rankRaw.reduce((a,b)=>a+b,0)||1;
+    const m=new Map();
+    rows.forEach(x=>{
+      const fair=over>0?(1/x.odds)/over:0;
+      const rank=(x.pop>=1&&x.pop<=n)?(1/Math.pow(x.pop,1.08))/rankSum:fair;
+      m.set(x.num,{odds:x.odds,fairP:fair,rankP:rank,overround:over});
+    });
+    return {m,over};
+  }
+
+  // 既存モデルのpは市場オッズ依存が強い。そのためv2.9では「市場から離れた分」をそのまま信じず、
+  // 人気順位の粗いシグナルと混ぜた後、再び市場公正確率へ65%縮小し、さらに1ptの不確実性控除を置く。
+  function robustify(rawP, info){
+    const fair=safeNum(info?.fairP);
+    const rank=safeNum(info?.rankP,fair);
+    const p=safeNum(rawP,fair);
+    const signal=Math.max(0.0001,Math.min(0.9999,p*0.55+rank*0.45));
+    const shrunk=fair + 0.35*(signal-fair);
+    const disagreement=Math.abs(signal-fair);
+    const penalty=0.010 + 0.10*disagreement;
+    return Math.max(0.0001,Math.min(0.9999,shrunk-penalty));
+  }
+
+  addModeDefinitions();
+
+  const prevGen=window.generateCandidates || (typeof generateCandidates==='function'?generateCandidates:null);
+  if(prevGen){
+    const wrapped=function(allHorses){
+      const made=prevGen.apply(this,arguments);
+      if(!made || !Array.isArray(made.recs) || currentMode()!==MODE) return made;
+      const mp=marketPack(allHorses);
+      let considered=0, passed=0;
+      made.recs=made.recs.map(r=>{
+        if(r.type!=='単勝') return {...r, edge29Eligible:false};
+        considered++;
+        const n=Number(r.nums?.[0]||0);
+        const info=mp.m.get(n);
+        const offered=safeNum(r.odds || info?.odds);
+        const rawP=safeNum(r.p);
+        const robustP=robustify(rawP, info);
+        const robustEV=robustP*offered;
+        const breakEven=offered>0?1/offered:1;
+        const edge=robustP-breakEven;
+        const source=String(r.oddsSource||'');
+        const oddsVerified = isNarRace() ? (source==='real'||source==='real-win') : (offered>1.01);
+        const eligible=!!(oddsVerified && info && mp.over>=1.00 && mp.over<=1.65 && offered>=MIN_ODDS && offered<=MAX_ODDS && robustEV>=MIN_ROBUST_EV && edge>=MIN_EDGE_PP);
+        if(eligible) passed++;
+        return {...r,
+          p:robustP, ev:robustEV, expectedReturn:robustEV*safeNum(r.unit,100),
+          edge29Eligible:eligible, edge29RawP:rawP, edge29FairMarketP:safeNum(info?.fairP),
+          edge29RankP:safeNum(info?.rankP), edge29RobustP:robustP, edge29RobustEV:robustEV,
+          edge29BreakEvenP:breakEven, edge29Edge:edge, edge29Overround:mp.over,
+          edge29OddsVerified:oddsVerified, edge29Version:'EDGE-PROFIT-v2.9'
+        };
+      });
+      // 診断用に全候補を残す
+      try{
+        window.__edge29LastCandidates=made.recs.filter(r=>r.type==='単勝').map(r=>({
+          horse:r.nums?.[0], odds:r.odds, rawP:r.edge29RawP, marketFairP:r.edge29FairMarketP,
+          robustP:r.edge29RobustP, robustEV:r.edge29RobustEV, edge:r.edge29Edge,
+          eligible:r.edge29Eligible, oddsVerified:r.edge29OddsVerified
+        }));
+        window.__edge29LastSummary={considered,passed,overround:mp.over,raceId:raceIdNow(),ts:new Date().toISOString()};
+        setTimeout(()=>{
+          const d=document.getElementById('edge29Diag');
+          if(d) d.textContent=`候補診断: 単勝${considered}頭 → 採用条件通過${passed}頭 / overround=${mp.over?mp.over.toFixed(3):'-'}`;
+        },0);
+      }catch(e){}
+      return made;
+    };
+    try{generateCandidates=wrapped;}catch(e){}
+    window.generateCandidates=wrapped;
+  }
+
+  const prevScore=window.getModeScore || (typeof getModeScore==='function'?getModeScore:null);
+  if(prevScore){
+    const wrapped=function(r,mode){
+      if(mode===MODE){
+        if(r?.type!=='単勝' || r?.edge29Eligible!==true) return -99999;
+        // robust EVを支配項にし、余剰edgeと確率を小さく加点。
+        return safeNum(r.edge29RobustEV)*100 + Math.max(0,safeNum(r.edge29Edge))*1000 + Math.sqrt(Math.max(0,safeNum(r.edge29RobustP)))*2;
+      }
+      return prevScore.apply(this,arguments);
+    };
+    try{getModeScore=wrapped;}catch(e){}
+    window.getModeScore=wrapped;
+  }
+
+  const prevBuild=window.buildTickets || (typeof buildTickets==='function'?buildTickets:null);
+  if(prevBuild){
+    const wrapped=function(recs){
+      if(currentMode()!==MODE) return prevBuild.apply(this,arguments);
+      const unit=Math.max(100,safeNum(settings?.unit,100));
+      const budget=Math.max(unit,safeNum(settings?.budget,500));
+      const eligible=(recs||[]).filter(r=>r?.edge29Eligible===true && r.type==='単勝')
+        .sort((a,b)=>safeNum(b.edge29RobustEV)-safeNum(a.edge29RobustEV) || safeNum(b.edge29Edge)-safeNum(a.edge29Edge));
+      // 1レース1点。金額は従来設定のunitを尊重し、予算を超えない。
+      return eligible.slice(0,MAX_TICKETS).map(r=>({...r,amount:Math.min(unit,budget),stake:Math.min(unit,budget)}));
+    };
+    try{buildTickets=wrapped;}catch(e){}
+    window.buildTickets=wrapped;
+  }
+
+  // refreshSettingsUI後も追加ボタンのactiveを同期。
+  try{
+    const prevRefresh=window.refreshSettingsUI || (typeof refreshSettingsUI==='function'?refreshSettingsUI:null);
+    if(prevRefresh){
+      const w=function(){ const x=prevRefresh.apply(this,arguments); installModeButton(); updatePanel(); const b=document.getElementById('edge29ModeBtn'); if(b)b.classList.toggle('active',currentMode()===MODE); return x; };
+      refreshSettingsUI=w; window.refreshSettingsUI=w;
+    }
+  }catch(e){}
+
+  document.addEventListener('change',ev=>{
+    if(ev.target && ev.target.id==='rsValidationMode') setTimeout(updatePanel,0);
+  });
+
+  // 監査状態を外部分析・コンソールから確認可能にする。
+  window.__EDGE29_CONFIG__={version:'EDGE-PROFIT-v2.9',minRobustEV:MIN_ROBUST_EV,minEdgeProbabilityPoint:MIN_EDGE_PP,minOdds:MIN_ODDS,maxOdds:MAX_ODDS,maxTicketsPerRace:MAX_TICKETS,
+    note:'市場依存モデルのため市場公正確率へ強く縮小。PRE-RACE監査でのみ実運用評価する。'};
+
+  function boot(){ addModeDefinitions(); installModeButton(); installPanel(); updatePanel(); setVer(); }
+  [0,200,800,1800,4000].forEach(ms=>setTimeout(boot,ms));
+  boot();
+})();
+</script>
+
 </body>
 </html>

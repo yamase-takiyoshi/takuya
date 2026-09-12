@@ -458,6 +458,13 @@ body.right-analysis-active #rightAnalysisPane{
             <option value="NAR">NAR（地方）</option>
           </select>
         </div>
+        <div class="field" style="flex:1;min-width:190px">
+          <label>検証モード</label>
+          <select id="rsValidationMode" onchange="window.__rsValidationMode=this.value">
+            <option value="FINAL_RESEARCH">FINAL研究（参考ROI）</option>
+            <option value="PRE_RACE_STRICT">PRE-RACE監査（発走前時点を証明できるオッズのみ）</option>
+          </select>
+        </div>
         <div class="field" style="flex:1;min-width:120px">
           <label>開始日</label>
           <input type="date" id="rsStart">
@@ -466,6 +473,10 @@ body.right-analysis-active #rightAnalysisPane{
           <label>終了日</label>
           <input type="date" id="rsEnd">
         </div>
+      </div>
+      <div id="rsValidationNote" style="font-size:11px;color:var(--muted);line-height:1.55;margin:-2px 0 10px 0;padding:7px 9px;border:1px solid var(--border);border-radius:7px;background:rgba(15,23,42,.35)">
+        <b>FINAL研究</b>は確定後の最終オッズを使う参考バックテストです。<b>PRE-RACE監査</b>は、発走前時点が時刻で証明できるオッズだけを監査済み成績に採用します。
+        過去レースに保存済みPRE-RACEスナップショットが無い場合、監査済み件数が0件になるのが正常です。
       </div>
       <div class="field" style="margin-bottom:10px">
         <label>開催場（未チェック＝その日の全開催場を自動対象）</label>
@@ -3275,8 +3286,10 @@ function judgeTicketHit(ticket, finish){
 
 function payoutForTicket(ticket, payouts){
   const key = `${ticket.type}:${comboKey(ticket.type, ticket.nums)}`;
-  if(payouts && payouts[key]) return {amount:payouts[key], source:'real'};
-  return {amount:Math.max(0, Math.round((Number(ticket.odds || 0) * 100) / 10) * 10), source:'estimate'};
+  if(payouts && payouts[key]) return {amount:payouts[key], source:'official'};
+  // v5.18.193: 確定済みレースで公式払戻が取れない場合、予想オッズ×100円で埋めない。
+  // ここを推定補完すると、買い目選択用の想定オッズと精算結果が混ざり監査不能になる。
+  return {amount:0, source:'missing_official'};
 }
 
 function renderSimulation(finish, payouts, sourceLabel){
@@ -3325,7 +3338,7 @@ function renderSimulation(finish, payouts, sourceLabel){
       <span class="chip ${CHIP_CLASS[t.type]||''}">${t.type}</span>
       <div class="sim-ticket-main">
         <b>${t.nums.join('-')}</b>
-        <div class="sim-ticket-meta">購入 ${Number(t.amount||0).toLocaleString()}円 / 100円払戻 ${per100 ? per100.toLocaleString() + '円' : '-'} <span class="${payInfo.source==='real'?'sim-payout-ok':'sim-payout-est'}">${hit ? (payInfo.source==='real'?'実払戻':'推定') : ''}</span> / EV ${Number(t.ev||0).toFixed(2)}</div>
+        <div class="sim-ticket-meta">購入 ${Number(t.amount||0).toLocaleString()}円 / 100円払戻 ${per100 ? per100.toLocaleString() + '円' : '-'} <span class="${payInfo.source==='official'?'sim-payout-ok':'sim-payout-est'}">${hit ? (payInfo.source==='official'?'公式払戻':'公式払戻なし') : ''}</span> / EV ${Number(t.ev||0).toFixed(2)}</div>
       </div>
       <div class="sim-return ${hit?'hit':''}">${hit ? '＋' : ''}${ret.toLocaleString()}円<div class="sim-ticket-meta">${hit ? '的中' : '不的中'} / ROI ${roiOne.toFixed(0)}%</div></div>
     </div>`;
@@ -10240,7 +10253,29 @@ if(horses.length === 0){
       throw new Error('単勝オッズが馬番=人気=オッズ昇順と一致（誤キーの疑い）のため除外。時間をおいて再取得してください。');
     }
     try{ if(typeof pgjCacheRaceMeta === 'function') pgjCacheRaceMeta(rid, resultDoc || doc, raceName); }catch(e){}
-    return { horses: hs, raceName, isResultPage, resultDoc };
+
+    // v5.18.193: オッズ時点の監査情報。
+    // 「結果ページから取れた最終オッズ」と「発走前に取得したことを時刻で証明できるオッズ」を分離する。
+    let postTimeText = '';
+    let preRaceVerified = false;
+    try{
+      const raceDate = String(window.__rsValidationRaceDate || '');
+      let info = '';
+      ['.RaceData01','.RaceData02','[class*="RaceData"]','.RaceList_Item02','h1'].forEach(sel => {
+        try{ doc.querySelectorAll(sel).forEach(el => { info += ' ' + String(el.textContent || ''); }); }catch(e){}
+      });
+      const mt = info.match(/(?:^|\s)(\d{1,2}):(\d{2})(?:発走)?/);
+      if(mt){
+        postTimeText = String(mt[1]).padStart(2,'0') + ':' + String(mt[2]).padStart(2,'0');
+        if(/^\d{4}-\d{2}-\d{2}$/.test(raceDate)){
+          const scheduled = new Date(`${raceDate}T${postTimeText}:00+09:00`).getTime();
+          if(Number.isFinite(scheduled) && Date.now() < scheduled && !isResultPage) preRaceVerified = true;
+        }
+      }
+    }catch(e){}
+    const oddsSnapshotType = isResultPage ? 'FINAL' : (preRaceVerified ? 'PRE_RACE_VERIFIED' : 'CURRENT_UNVERIFIED');
+    return { horses: hs, raceName, isResultPage, resultDoc, oddsSnapshotType, preRaceVerified,
+             oddsFetchedAt:new Date().toISOString(), oddsSourceUrl:activeUrl, postTimeText };
   }
 
   // ── 着順・払戻の取得（結果docを使い回せれば再フェッチしない）──
@@ -10523,6 +10558,12 @@ if(horses.length === 0){
   let rsAbort = false;
   let rsLastRows = [];   // 直近の実行結果（収支グラフ転記用）
 
+  function rsValidationMode(){
+    const v = $('rsValidationMode')?.value || 'FINAL_RESEARCH';
+    window.__rsValidationMode = v;
+    return v;
+  }
+
   function rsVenuesForKind(kind){ return (kind === 'NAR') ? NAR_VENUES : JRA_VENUES; }
 
   function rsRenderVenueChecks(){
@@ -10753,12 +10794,18 @@ if(horses.length === 0){
       if(!r.date || !r.venueCode) return;
       const key = r.date + '|' + r.venueCode;
       if(!map.has(key)) map.set(key, { date: r.date, venueCode: r.venueCode, venueName: r.venueName,
-        races: 0, settled: 0, hitRaces: 0, bet: 0, ret: 0, settledBet: 0, errors: 0 });
+        races: 0, settled: 0, hitRaces: 0, bet: 0, ret: 0, settledBet: 0, errors: 0,
+        audited:0, auditedBet:0, auditedRet:0, auditedHitRaces:0 });
       const g = map.get(key);
       if(r.status === 'ok'){
         g.races++;
         g.bet += r.bet || 0;
-        if(r.hasFinish){ g.settled++; g.settledBet += r.bet || 0; g.ret += r.ret || 0; if(r.hit > 0) g.hitRaces++; }
+        if(r.hasFinish){
+          g.settled++; g.settledBet += r.bet || 0; g.ret += r.ret || 0; if(r.hit > 0) g.hitRaces++;
+          if(r.auditEligible === true){
+            g.audited++; g.auditedBet += r.bet || 0; g.auditedRet += r.ret || 0; if(r.hit > 0) g.auditedHitRaces++;
+          }
+        }
       }else if(r.status === 'error'){ g.errors++; }
     });
     return [...map.values()].sort((a, b) =>
@@ -10809,13 +10856,13 @@ if(horses.length === 0){
     if(!raceRows.length) return '';
     const lines = [];
     lines.push('🔎 レース別明細');
-    lines.push(['日付','場','R','レース名','着順','点','投資(予定含む)','払戻','収支','ROI'].join('\t'));
+    lines.push(['日付','場','R','レース名','着順','点','投資(予定含む)','払戻','収支','研究ROI','検証モード','odds_snapshot_type','pre_race_timestamp_verified','監査対象','監査除外理由'].join('\t'));
     raceRows.forEach(r => {
       if(r.status === 'error'){
         lines.push([
           r.date, r.venueName || '', r.no + 'R',
           '⚠️ ' + (r.error || '取得失敗'),
-          '', '', '', '', '', ''
+          '', '', '', '', '', '', '', '', '', '', ''
         ].join('\t'));
         return;
       }
@@ -10831,7 +10878,12 @@ if(horses.length === 0){
         rsFmtNum(r.bet || 0),
         r.hasFinish ? rsFmtNum(r.ret || 0) : '-',
         r.hasFinish ? ((r.profit || 0) >= 0 ? '+' : '') + rsFmtNum(r.profit || 0) : '-',
-        (r.hasFinish && (r.bet || 0)) ? r.roi.toFixed(0) + '%' : '-'
+        (r.hasFinish && (r.bet || 0)) ? r.roi.toFixed(0) + '%' : '-',
+        r.validationMode || 'FINAL_RESEARCH',
+        r.oddsSnapshotType || '',
+        r.preRaceTimestampVerified === true ? 'true' : 'false',
+        r.auditEligible === true ? 'true' : 'false',
+        r.auditReason || ''
       ].join('\t'));
     });
     return lines.join('\n');
@@ -10872,26 +10924,49 @@ if(horses.length === 0){
     if(!box) return;
     const ok = rows.filter(r => r && r.status === 'ok');
     const settled = ok.filter(r => r.hasFinish);
+    const audited = settled.filter(r => r.auditEligible === true);
     const days = new Set(ok.map(r => r.date)).size;
     const venues = new Set(ok.map(r => r.date + '|' + r.venueCode)).size;
-    const settledBet = settled.reduce((s, r) => s + (r.bet || 0), 0);
-    const ret = settled.reduce((s, r) => s + (r.ret || 0), 0);
-    const profit = ret - settledBet;
-    const roi = settledBet ? ret / settledBet * 100 : 0;
+
+    const researchBet = settled.reduce((s, r) => s + (r.bet || 0), 0);
+    const researchRet = settled.reduce((s, r) => s + (r.ret || 0), 0);
+    const researchProfit = researchRet - researchBet;
+    const researchRoi = researchBet ? researchRet / researchBet * 100 : 0;
     const hitRaces = settled.filter(r => r.hit > 0).length;
     const hitRate  = settled.length ? (hitRaces / settled.length * 100) : 0;
+
+    const auditBet = audited.reduce((s, r) => s + (r.bet || 0), 0);
+    const auditRet = audited.reduce((s, r) => s + (r.ret || 0), 0);
+    const auditProfit = auditRet - auditBet;
+    const auditRoi = auditBet ? auditRet / auditBet * 100 : 0;
+    const auditHit = audited.filter(r => r.hit > 0).length;
+    const auditHitRate = audited.length ? auditHit / audited.length * 100 : 0;
+    const excluded = settled.length - audited.length;
+    const mode = rsValidationMode();
+    const modeText = mode === 'PRE_RACE_STRICT' ? 'PRE-RACE監査' : 'FINAL研究';
+
     box.innerHTML = `
+      <div class="url-status ${mode === 'PRE_RACE_STRICT' ? '' : 'err'}" style="margin-bottom:8px">
+        検証モード: <b>${modeText}</b> ｜ FINAL研究ROIは最終オッズを使う参考値。監査済みROIは <b>pre_race_timestamp_verified=true</b> のレースだけで計算します。
+      </div>
       <div class="sim-kpi-grid" style="margin-top:0">
         <div class="sim-kpi"><div class="v">${days}</div><div class="l">日数</div></div>
         <div class="sim-kpi"><div class="v">${venues}</div><div class="l">延べ開催場</div></div>
         <div class="sim-kpi"><div class="v">${ok.length}</div><div class="l">処理R</div></div>
-        <div class="sim-kpi"><div class="v">${settled.length}</div><div class="l">確定R</div></div>
-        <div class="sim-kpi"><div class="v">${hitRaces}</div><div class="l">的中R</div></div>
-        <div class="sim-kpi"><div class="v">${hitRate.toFixed(1)}%</div><div class="l">的中率</div></div>
-        <div class="sim-kpi"><div class="v">${settledBet.toLocaleString()}</div><div class="l">投資円(確定)</div></div>
-        <div class="sim-kpi"><div class="v">${ret.toLocaleString()}</div><div class="l">払戻円</div></div>
-        <div class="sim-kpi"><div class="v" style="color:${profit>=0?'var(--green)':'var(--red)'}">${profit>=0?'+':''}${profit.toLocaleString()}</div><div class="l">収支円</div></div>
-        <div class="sim-kpi"><div class="v" style="color:${roi>=100?'var(--green)':'var(--yellow)'}">${roi.toFixed(1)}%</div><div class="l">回収率</div></div>
+        <div class="sim-kpi"><div class="v">${settled.length}</div><div class="l">研究確定R</div></div>
+        <div class="sim-kpi"><div class="v">${hitRaces}</div><div class="l">研究的中R</div></div>
+        <div class="sim-kpi"><div class="v">${hitRate.toFixed(1)}%</div><div class="l">研究的中率</div></div>
+        <div class="sim-kpi"><div class="v">${researchBet.toLocaleString()}</div><div class="l">研究投資円</div></div>
+        <div class="sim-kpi"><div class="v">${researchRet.toLocaleString()}</div><div class="l">研究払戻円</div></div>
+        <div class="sim-kpi"><div class="v" style="color:${researchProfit>=0?'var(--green)':'var(--red)'}">${researchProfit>=0?'+':''}${researchProfit.toLocaleString()}</div><div class="l">研究収支</div></div>
+        <div class="sim-kpi"><div class="v" style="color:${researchRoi>=100?'var(--green)':'var(--yellow)'}">${researchBet ? researchRoi.toFixed(1)+'%' : '-'}</div><div class="l">研究参考ROI</div></div>
+        <div class="sim-kpi"><div class="v">${audited.length}</div><div class="l">監査済みR</div></div>
+        <div class="sim-kpi"><div class="v">${excluded}</div><div class="l">監査除外R</div></div>
+        <div class="sim-kpi"><div class="v">${auditHitRate.toFixed(1)}%</div><div class="l">監査的中率</div></div>
+        <div class="sim-kpi"><div class="v">${auditBet.toLocaleString()}</div><div class="l">監査投資円</div></div>
+        <div class="sim-kpi"><div class="v">${auditRet.toLocaleString()}</div><div class="l">監査払戻円</div></div>
+        <div class="sim-kpi"><div class="v" style="color:${auditProfit>=0?'var(--green)':'var(--red)'}">${auditProfit>=0?'+':''}${auditProfit.toLocaleString()}</div><div class="l">監査収支</div></div>
+        <div class="sim-kpi"><div class="v" style="color:${auditRoi>=100?'var(--green)':'var(--yellow)'}">${auditBet ? auditRoi.toFixed(1)+'%' : '-'}</div><div class="l">監査済みROI</div></div>
       </div>`;
   }
 
@@ -10957,7 +11032,8 @@ if(horses.length === 0){
           <th style="padding:4px">日付</th><th style="padding:4px">場</th><th style="padding:4px">R</th><th style="padding:4px">レース名</th>
           <th style="padding:4px;text-align:center">着順</th><th style="padding:4px;text-align:right">点</th>
           <th style="padding:4px;text-align:right">投資(予定含む)</th><th style="padding:4px;text-align:right">払戻</th>
-          <th style="padding:4px;text-align:right">収支</th><th style="padding:4px;text-align:right">ROI</th>
+          <th style="padding:4px;text-align:right">収支</th><th style="padding:4px;text-align:right">研究ROI</th>
+          <th style="padding:4px;text-align:center">監査</th><th style="padding:4px">オッズ時点</th>
         </tr></thead><tbody>`;
       raceRows.forEach(r => {
         if(r.status === 'error'){
@@ -10965,7 +11041,7 @@ if(horses.length === 0){
             <td style="padding:4px">${asw_esc(r.date)}</td>
             <td style="padding:4px">${asw_esc(r.venueName || '')}</td>
             <td style="padding:4px;font-weight:700">${r.no}R</td>
-            <td style="padding:4px" colspan="7"><span style="color:var(--red)">⚠️ ${asw_esc(r.error || '取得失敗')}</span></td>
+            <td style="padding:4px" colspan="9"><span style="color:var(--red)">⚠️ ${asw_esc(r.error || '取得失敗')}</span></td>
           </tr>`;
           return;
         }
@@ -10984,6 +11060,8 @@ if(horses.length === 0){
           <td style="padding:4px;text-align:right">${r.hasFinish ? (r.ret||0).toLocaleString() : '-'}</td>
           <td style="padding:4px;text-align:right;color:${pc}">${r.hasFinish ? ((r.profit||0)>=0?'+':'')+(r.profit||0).toLocaleString() : '-'}</td>
           <td style="padding:4px;text-align:right;color:${rc}">${r.hasFinish && (r.bet||0) ? r.roi.toFixed(0)+'%' : '-'}</td>
+          <td style="padding:4px;text-align:center;color:${r.auditEligible===true?'var(--green)':'var(--yellow)'}">${r.auditEligible===true?'✅':'除外'}</td>
+          <td style="padding:4px">${asw_esc(r.oddsSnapshotType || '')}${r.auditEligible===true?'':`<div style="font-size:9px;color:var(--muted)">${asw_esc(r.auditReason || '')}</div>`}</td>
         </tr>`;
       });
       h += `</tbody></table></div></details>`;
@@ -11107,6 +11185,8 @@ if(horses.length === 0){
     const kind = $('rsKind')?.value || 'JRA';
     const start = $('rsStart')?.value || '';
     const end = $('rsEnd')?.value || '';
+    const validationMode = rsValidationMode();
+    window.__rsValidationMode = validationMode;
 
     if(!settings.proxyUrl){ alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。'); return; }
     if(!start || !end){ alert('開始日と終了日を選択してください。'); return; }
@@ -11258,8 +11338,17 @@ if(horses.length === 0){
                           raceName: r.name || (r.no + 'R'), status: 'pending',
                           count: 0, bet: 0, ret: 0, profit: 0, roi: 0, hit: 0, hasFinish: false, finishTop: [] };
             try{
+              window.__rsValidationRaceDate = date;
               const loaded = await asw_loadHorses(kind, r.rid);
               horses = loaded.horses;
+              row.validationMode = validationMode;
+              row.oddsSnapshotType = loaded.oddsSnapshotType || (loaded.isResultPage ? 'FINAL' : 'CURRENT_UNVERIFIED');
+              row.preRaceTimestampVerified = loaded.preRaceVerified === true;
+              row.oddsFetchedAt = loaded.oddsFetchedAt || new Date().toISOString();
+              row.oddsSourceUrl = loaded.oddsSourceUrl || '';
+              row.postTimeText = loaded.postTimeText || '';
+              row.auditEligible = row.preRaceTimestampVerified === true;
+              row.auditReason = row.auditEligible ? '' : (row.oddsSnapshotType === 'FINAL' ? 'FINAL_ODDS（確定後の最終オッズ）' : '発走前市場時点を時刻で証明できない');
               currentRaceId = r.rid;
               currentRaceName = loaded.raceName || r.name || (r.no + 'R');
               row.raceName = currentRaceName;
@@ -11291,6 +11380,11 @@ if(horses.length === 0){
               }
 
               const s = asw_settle(simTickets, finish, payouts);
+              const missingOfficialHits = (s.ticketDetails || []).filter(d => Number(d.的中 || 0) > 0 && Number(d.払戻額 || 0) <= 0);
+              row.officialPayoutComplete = missingOfficialHits.length === 0;
+              if(missingOfficialHits.length){
+                throw new Error('的中買い目の公式払戻を取得できないため精算除外: ' + missingOfficialHits.map(d => `${d.券種名}:${d.買い目}`).join(', '));
+              }
               row.bet = s.bet; row.ret = s.ret; row.profit = s.profit; row.roi = s.roi; row.hit = s.hit;
               row.ticketDetails = s.ticketDetails;
               row.status = 'ok';
@@ -15726,6 +15820,14 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         roi: hasFinish && bet ? Math.round(ret / bet * 1000) / 10 : toNumber(r.roi),
         hitCount: toNumber(r.hit || r.hitCount),
         settled: !!hasFinish,
+        validationMode: String(r.validationMode || 'FINAL_RESEARCH'),
+        oddsSnapshotType: String(r.oddsSnapshotType || ''),
+        preRaceTimestampVerified: r.preRaceTimestampVerified === true,
+        auditEligible: r.auditEligible === true,
+        auditReason: String(r.auditReason || ''),
+        oddsFetchedAt: String(r.oddsFetchedAt || ''),
+        oddsSourceUrl: String(r.oddsSourceUrl || ''),
+        officialPayoutComplete: r.officialPayoutComplete !== false,
         error: String(r.error || '')
       };
     });
@@ -15781,16 +15883,20 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         startDate: $('rsStart') ? $('rsStart').value : '',
         endDate: $('rsEnd') ? $('rsEnd').value : '',
         pastPerformanceAdjustment: !!($('rsPastAdj') && $('rsPastAdj').checked),
-        recordToProfitGraph: !!($('rsRecord') && $('rsRecord').checked)
+        recordToProfitGraph: !!($('rsRecord') && $('rsRecord').checked),
+        validationMode: $('rsValidationMode') ? $('rsValidationMode').value : 'FINAL_RESEARCH'
       },
-      summary: {
-        records: all.length,
-        settledRaces: profitRecords.length,
-        bet: totalBet,
-        return: totalReturn,
-        profit: totalProfit,
-        roi: totalBet ? Math.round(totalReturn / totalBet * 1000) / 10 : 0
-      },
+      summary: (() => {
+        var audited = profitRecords.filter(function(r){ return r.auditEligible === true; });
+        var aBet = audited.reduce(function(a,r){ return a + toNumber(r.bet); },0);
+        var aRet = audited.reduce(function(a,r){ return a + toNumber(r.return); },0);
+        return {
+          records: all.length,
+          settledRaces: profitRecords.length,
+          research: { bet:totalBet, return:totalReturn, profit:totalProfit, roi:totalBet ? Math.round(totalReturn / totalBet * 1000) / 10 : 0 },
+          audited: { races:audited.length, bet:aBet, return:aRet, profit:aRet-aBet, roi:aBet ? Math.round(aRet / aBet * 1000) / 10 : 0 }
+        };
+      })(),
       venueSummary: group(profitRecords, 'venue'),
       dailySummary: group(profitRecords, 'date'),
       ticketSummary: group(profitRecords, 'ticketType'),
@@ -15967,8 +16073,9 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         if(snap && Array.isArray(snap.収支明細)){
           // 旧キャッシュ等で本体関数が空を返しても、公開配列から右側用明細を即時復元する。
           if(!snap.収支明細.length && Array.isArray(window.__rsLastRows) && window.__rsLastRows.length){
+            var strictAudit = (document.getElementById('rsValidationMode')?.value || 'FINAL_RESEARCH') === 'PRE_RACE_STRICT';
             var liveRows = window.__rsLastRows.filter(function(r){
-              return r && r.status === 'ok' && Number(r.bet || 0) > 0;
+              return r && r.status === 'ok' && Number(r.bet || 0) > 0 && (!strictAudit || r.auditEligible === true);
             }).map(function(r, i){
               var bet = Number(r.bet || 0), ret = Number(r.ret || 0);
               var profit = (r.profit != null) ? Number(r.profit || 0) : ret - bet;
@@ -15978,6 +16085,11 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
                 race_id:String(r.rid || ''), 券種:String(r.ticketType || r.betType || '期間横断'),
                 投資:bet, 払戻:ret, 収支:profit, ROI:bet ? Math.round(ret / bet * 1000) / 10 : 0,
                 source:'期間横断シミュレーション', sourceIndex:i,
+                検証モード:String(r.validationMode || 'FINAL_RESEARCH'),
+                オッズ時点:String(r.oddsSnapshotType || ''),
+                発走前時点検証:r.preRaceTimestampVerified === true,
+                監査対象:r.auditEligible === true,
+                監査除外理由:String(r.auditReason || ''),
                 距離:Number(r.距離 || r.distance || 0), 馬場:String(r.馬場 || r.surface || ''),
                 馬場状態:String(r.馬場状態 || r.trackCond || r.trackCondition || ''), クラス:String(r.クラス || r.class || '')
               };
@@ -16652,6 +16764,38 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   setVer();
 })();
 
+</script>
+
+<!-- v5.18.193 AuditValidationDualROI -->
+<script>
+(function(){
+  'use strict';
+  const VERSION = 'v5.18.193 AuditValidationDualROI';
+  function apply(){
+    try{
+      window.APP_VERSION = VERSION;
+      const ver = document.querySelector('.ver');
+      const bridge = !!(ver && /🌉/.test(ver.textContent || ''));
+      if(ver) ver.textContent = VERSION + (bridge ? ' 🌉' : '');
+      document.title = 'The競馬 EV分析 ' + VERSION;
+      const sel = document.getElementById('rsValidationMode');
+      if(sel && !sel.dataset.auditBound){
+        sel.dataset.auditBound='1';
+        const saved = localStorage.getItem('keibaValidationMode_v1');
+        if(saved && [...sel.options].some(o => o.value === saved)) sel.value = saved;
+        window.__rsValidationMode = sel.value;
+        sel.addEventListener('change', function(){
+          window.__rsValidationMode = this.value;
+          try{ localStorage.setItem('keibaValidationMode_v1', this.value); }catch(e){}
+          try{ if(typeof window.scheduleRightAnalysisSync === 'function') window.scheduleRightAnalysisSync(0); }catch(e){}
+        });
+      }
+      window.__AUDIT_VALIDATION_V193__ = true;
+    }catch(e){}
+  }
+  [0,250,1000,3000,6500,9000,11000,14000].forEach(ms => setTimeout(apply, ms));
+  apply();
+})();
 </script>
 </body>
 </html>

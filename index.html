@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.197 JRA+NAR AllMarkets PreClose3m</title>
+<title>The競馬 EV分析 v5.18.198 JRA NoMeet FastGuard + NAR AllMarkets PreClose3m</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.197 JRA+NAR AllMarkets PreClose3m</span>
+    <span class="ver">v5.18.198 JRA NoMeet FastGuard + NAR AllMarkets PreClose3m</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -789,7 +789,7 @@ body.right-analysis-active #rightAnalysisPane{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.197 JRA+NAR AllMarkets PreClose3m';
+window.APP_VERSION = 'v5.18.198 JRA NoMeet FastGuard + NAR AllMarkets PreClose3m';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -17876,6 +17876,180 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   // 旧パッチの遅延バージョン上書きより後まで同期する。
   [0,200,800,1800,3500,7000,12000,16000,22000].forEach(ms=>setTimeout(()=>{setVersion();patchPrecloseUi();},ms));
   setVersion();
+})();
+
+</script>
+
+
+
+<!-- v5.18.198 JRA NoMeet FastGuard -->
+<script>
+/* ============================================================
+   v5.18.198 JRA NoMeet FastGuard
+   - JRA公式カレンダーを最初に軽量確認
+   - 公式が upstream 404/410 を返した日は「開催なし」と即確定
+   - 開催なし日に race_id 総当たりへ落ちて長時間「開催確認中…」になるのを防止
+   - 「レース一覧」押下時の「開催場を選択してください」アラートを抑止
+   - 開催なし時は開催場/レース選択/取得ボタンを明確に無効化
+   ============================================================ */
+(function(){
+  'use strict';
+  if(window.__JRA198_NOMEET_FAST_GUARD__) return;
+  window.__JRA198_NOMEET_FAST_GUARD__ = true;
+
+  const VERSION = 'v5.18.198 JRA NoMeet FastGuard + NAR AllMarkets PreClose3m';
+
+  function $(id){ return document.getElementById(id); }
+  function esc198(s){
+    return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+  }
+  function compact198(date){ return String(date || '').replace(/[^0-9]/g,'').slice(0,8); }
+  function calendarUrl198(date){
+    const d = compact198(date);
+    if(!/^\d{8}$/.test(d)) return '';
+    const y=d.slice(0,4), m=String(Number(d.slice(4,6))), md=d.slice(4,8);
+    return `https://www.jra.go.jp/keiba/calendar${y}/${y}/${m}/${md}.html`;
+  }
+  function currentDate198(){
+    return $('pickDate')?.value || (typeof todayYmd==='function' ? todayYmd() : '');
+  }
+  function currentKind198(){ return $('pickKind')?.value || 'JRA'; }
+  function setVersion198(){
+    try{
+      window.APP_VERSION = VERSION;
+      const v=document.querySelector('.ver');
+      const bridge=!!(v && /🌉/.test(v.textContent || ''));
+      if(v) v.textContent=VERSION+(bridge?' 🌉':'');
+      document.title='The競馬 EV分析 '+VERSION;
+    }catch(e){}
+  }
+  function actionButtons198(){
+    const listBtn=document.querySelector('button[onclick="loadRaceList()"]');
+    const fetchBtn=$('fetchBtn');
+    return {listBtn, fetchBtn};
+  }
+  function enableActions198(){
+    const {listBtn,fetchBtn}=actionButtons198();
+    if(listBtn){ listBtn.disabled=false; listBtn.style.opacity=''; listBtn.title=''; }
+    if(fetchBtn){ fetchBtn.disabled=false; fetchBtn.style.opacity=''; fetchBtn.title=''; }
+  }
+  function finalizeNoMeetUi198(date, source='JRA公式カレンダー'){
+    // 日付/区分が変わっていたら古い非同期結果を画面へ反映しない。
+    if(currentKind198()!=='JRA' || currentDate198()!==date) return;
+    window.__JRA198_NO_MEET__={date,source,confirmed:true,at:Date.now()};
+    window.__jraVenueFetchDone=true;
+
+    const venue=$('pickVenue');
+    if(venue) venue.innerHTML='<option value="">JRA開催なし（確認済み）</option>';
+    const race=$('raceSelect');
+    if(race) race.innerHTML='<option value="">この日のJRAレースはありません</option>';
+    const url=$('raceUrl'); if(url) url.value='';
+    const box=$('raceTitleBox'); if(box){box.style.display='none';box.textContent='';}
+    try{ currentRaceId=''; currentRaceName=''; }catch(e){}
+    window.currentRaceId=''; window.currentRaceName='';
+
+    const {listBtn,fetchBtn}=actionButtons198();
+    if(listBtn){ listBtn.disabled=true; listBtn.style.opacity='.55'; listBtn.title='JRA開催なし'; }
+    if(fetchBtn){ fetchBtn.disabled=true; fetchBtn.style.opacity='.55'; fetchBtn.title='JRA開催なし'; }
+
+    const status=$('urlStatus');
+    if(status) status.innerHTML=`<div class="url-status ok">📭 ${esc198(date)} はJRA開催なし（確認済み）<br><span style="font-size:11px;opacity:.85">${esc198(source)}。race_id総当たり確認は実行しません。</span></div>`;
+  }
+  function clearNoMeet198(){
+    window.__JRA198_NO_MEET__=null;
+    enableActions198();
+  }
+
+  async function probeOfficialCalendar198(date){
+    const target=calendarUrl198(date);
+    if(!target) return {state:'unknown',reason:'invalid_date'};
+    if(typeof settings==='undefined' || !String(settings.proxyUrl||'').trim()) return {state:'unknown',reason:'proxy_unset'};
+
+    let req='';
+    try{
+      req = (typeof buildWorkerRequestUrl==='function')
+        ? buildWorkerRequestUrl(target)
+        : String(settings.proxyUrl||'').replace(/\/$/,'')+'?url='+encodeURIComponent(target);
+    }catch(e){ return {state:'unknown',reason:'request_build_failed'}; }
+
+    const ctl=(typeof AbortController!=='undefined') ? new AbortController() : null;
+    const timer=ctl ? setTimeout(()=>{ try{ctl.abort();}catch(e){} },8000) : null;
+    try{
+      const res=await fetch(req,{cache:'no-store',signal:ctl?.signal});
+      const text=await res.text();
+      if(res.ok){
+        // 公式開催ページが実在し、「○回○○○日」が含まれるなら開催日。
+        if(/\d{1,2}回\s*(?:札幌|函館|福島|新潟|東京|中山|中京|京都|阪神|小倉)\s*\d{1,2}日/.test(text)){
+          return {state:'meet',source:'JRA公式カレンダー'};
+        }
+        // ページ構造変更時に誤って開催なしにしない。
+        return {state:'unknown',reason:'calendar_parse_unknown',sample:text.slice(0,160)};
+      }
+
+      let j=null;
+      try{ j=JSON.parse(text); }catch(e){}
+      const upstream=Number(j && (j.upstreamStatus ?? j.upstream_status ?? j.status));
+      const msg=String((j&&(j.error||j.message)) || text || '');
+      // 現行Workerは上流404をHTTP502+upstreamStatus:404で返す。
+      if(upstream===404 || upstream===410 || (res.status===404 && !/worker|route|endpoint/i.test(msg)) || /upstream[^\n]{0,40}(?:404|410)/i.test(msg)){
+        return {state:'none',source:'JRA公式カレンダー',upstreamStatus:upstream||res.status};
+      }
+      return {state:'unknown',reason:`worker_http_${res.status}`,message:msg.slice(0,180)};
+    }catch(e){
+      return {state:'unknown',reason:(e&&e.name==='AbortError')?'timeout':String(e&&e.message||e)};
+    }finally{
+      if(timer) clearTimeout(timer);
+    }
+  }
+
+  // 開催場検出の最深部を包み、公式404なら重いrace_id総当たりへ進ませない。
+  const prevJraVenueLoader = (typeof loadActiveJraVenuesByRaceId==='function') ? loadActiveJraVenuesByRaceId : window.loadActiveJraVenuesByRaceId;
+  if(typeof prevJraVenueLoader==='function'){
+    const wrappedJraVenueLoader=async function(date){
+      clearNoMeet198();
+      const status=$('urlStatus');
+      if(status && currentKind198()==='JRA' && currentDate198()===date){
+        status.innerHTML=`<div class="url-status">🗓 ${esc198(date)} のJRA公式開催日を確認中...</div>`;
+      }
+      const official=await probeOfficialCalendar198(date);
+      window.__JRA198_LAST_PROBE__={date,...official,at:Date.now()};
+      if(official.state==='none'){
+        // 親のloadActiveVenuesForDateが[]を処理し終えた後に最終UIを上書きする。
+        setTimeout(()=>finalizeNoMeetUi198(date,official.source||'JRA公式カレンダー'),0);
+        return [];
+      }
+      return await prevJraVenueLoader.apply(this,arguments);
+    };
+    window.loadActiveJraVenuesByRaceId=wrappedJraVenueLoader;
+    try{ loadActiveJraVenuesByRaceId=wrappedJraVenueLoader; }catch(e){}
+  }
+
+  // 開催なし日に「開催場を選択してください」アラートを出さない。
+  const prevLoadRaceList198=window.loadRaceList || (typeof loadRaceList==='function'?loadRaceList:null);
+  if(typeof prevLoadRaceList198==='function'){
+    const wrappedLoadRaceList198=async function(){
+      const date=currentDate198();
+      const nm=window.__JRA198_NO_MEET__;
+      if(currentKind198()==='JRA' && nm && nm.confirmed && nm.date===date && !$('pickVenue')?.value){
+        finalizeNoMeetUi198(date,nm.source||'JRA公式カレンダー');
+        return [];
+      }
+      return await prevLoadRaceList198.apply(this,arguments);
+    };
+    window.loadRaceList=wrappedLoadRaceList198;
+    try{ loadRaceList=wrappedLoadRaceList198; }catch(e){}
+  }
+
+  // 日付・区分を変えた時はボタンを復帰。新しい開催確認に任せる。
+  document.addEventListener('change',ev=>{
+    if(ev && ev.target && (ev.target.id==='pickDate' || ev.target.id==='pickKind')){
+      clearNoMeet198();
+    }
+  },true);
+
+  // 旧パッチの遅延version上書きより後まで固定。
+  [0,200,800,1800,3500,7000,12000,16000,22000,26000].forEach(ms=>setTimeout(setVersion198,ms));
+  setVersion198();
 })();
 
 </script>

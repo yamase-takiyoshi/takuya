@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.190 SmartClientCache</title>
+<title>The競馬 EV分析 v5.18.196 NAROfficialCronRouteGuard</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.190 SmartClientCache</span>
+    <span class="ver">v5.18.196 NAROfficialCronRouteGuard</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -789,7 +789,7 @@ body.right-analysis-active #rightAnalysisPane{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.190 SmartClientCache';
+window.APP_VERSION = 'v5.18.196 NAROfficialCronRouteGuard';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -17605,6 +17605,277 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   [0,250,800,1800,3500,7000].forEach(ms=>setTimeout(install,ms));
   window.__hydratePrecloseAllMarkets = hydrate;
 })();
+</script>
+
+
+<!-- v5.18.196 NAROfficialCronRouteGuard -->
+<script>
+/* ============================================================
+   v5.18.196 NAROfficialCronRouteGuard
+   - NAR選択時にJRA race_list_subへ流れる経路を最終段で遮断
+   - Cloudflare Cron Worker(v6.1.2+)のmanifestをNAR開催場/レース一覧の第一ソースにする
+   - 地方競馬公式場コード <-> netkeiba race_id場コードを固定マッピング
+   - PRE_CLOSE_3MIN保存Worker既定値をabc Cron Workerへ統一
+   - 既存JRA経路/EV/シミュレーションは変更しない
+   ============================================================ */
+(function(){
+  'use strict';
+  if(window.__NAR196_ROUTE_GUARD__) return;
+  window.__NAR196_ROUTE_GUARD__ = true;
+
+  const VERSION = 'v5.18.196 NAROfficialCronRouteGuard';
+  const DEFAULT_CRON = 'https://abc.nitta-katsuhiko.workers.dev';
+  const CFG_KEY = 'thekeiba_preclose3m_cfg_v1';
+  const VENUES = [
+    ['30','門別','36'],['35','盛岡','10'],['36','水沢','11'],['42','浦和','18'],['43','船橋','19'],['44','大井','20'],
+    ['45','川崎','21'],['46','金沢','22'],['47','笠松','23'],['48','名古屋','24'],['50','園田','27'],['51','姫路','28'],
+    ['54','高知','31'],['55','佐賀','32'],['65','帯広','03']
+  ];
+  const nameByNet = new Map(VENUES.map(v=>[v[0],v[1]]));
+  const babaByNet = new Map(VENUES.map(v=>[v[0],v[2]]));
+  const netByBaba = new Map(VENUES.map(v=>[v[2],v[0]]));
+  const cache = window.__nar196RaceCache = window.__nar196RaceCache || Object.create(null);
+
+  function $(id){ return document.getElementById(id); }
+  function esc(s){ return String(s ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c])); }
+  function compact(date){ return String(date||'').replace(/[^0-9]/g,'').slice(0,8); }
+  function dashed(date){ const d=compact(date); return d.length===8?`${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`:''; }
+  function jstToday(){
+    const p = new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
+    const o={}; p.forEach(x=>o[x.type]=x.value); return `${o.year}-${o.month}-${o.day}`;
+  }
+  function venueName(code){ return nameByNet.get(String(code).padStart(2,'0')) || String(code||''); }
+  function cronBase(){
+    try{
+      const c=JSON.parse(localStorage.getItem(CFG_KEY)||'{}')||{};
+      return String(c.workerUrl || window.__THEKEIBA_CRON_WORKER_URL__ || DEFAULT_CRON).replace(/\/$/,'');
+    }catch(e){ return DEFAULT_CRON; }
+  }
+  function snapshotHeaders(){
+    const h={};
+    try{
+      const c=JSON.parse(localStorage.getItem(CFG_KEY)||'{}')||{};
+      if(c.token) h['X-Snapshot-Token']=String(c.token);
+    }catch(e){}
+    return h;
+  }
+  function ensureCronDefault(){
+    try{
+      const c=JSON.parse(localStorage.getItem(CFG_KEY)||'{}')||{};
+      if(!String(c.workerUrl||'').trim()){
+        c.workerUrl=DEFAULT_CRON;
+        localStorage.setItem(CFG_KEY,JSON.stringify(c));
+      }
+      window.__THEKEIBA_CRON_WORKER_URL__=String(c.workerUrl||DEFAULT_CRON).replace(/\/$/,'');
+    }catch(e){ window.__THEKEIBA_CRON_WORKER_URL__=DEFAULT_CRON; }
+  }
+  ensureCronDefault();
+
+  function setVersion(){
+    try{
+      window.APP_VERSION=VERSION;
+      const v=document.querySelector('.ver');
+      const bridge=!!(v&&/🌉/.test(v.textContent||''));
+      if(v) v.textContent=VERSION+(bridge?' 🌉':'');
+      document.title='The競馬 EV分析 '+VERSION;
+    }catch(e){}
+  }
+
+  async function fetchJson(url){
+    const r=await fetch(url,{cache:'no-store',headers:snapshotHeaders()});
+    let j=null; try{ j=await r.json(); }catch(e){}
+    if(!r.ok || !j || j.ok===false){
+      const msg=(j&&(j.error||j.message))||`HTTP ${r.status}`;
+      throw new Error(msg);
+    }
+    return j;
+  }
+
+  async function workerHealth(){
+    try{ return await fetchJson(cronBase()+'/health'); }catch(e){ return null; }
+  }
+
+  async function readManifest(date, forceToday){
+    const base=cronBase();
+    if(forceToday && dashed(date)===jstToday()){
+      try{ await fetchJson(base+'/cron-run?discover=1'); }catch(e){ console.warn('[NAR196] cron-run',e); }
+    }
+    const j=await fetchJson(base+'/cron-status?date='+encodeURIComponent(dashed(date)));
+    return (j&&j.manifest&&Array.isArray(j.manifest.races)) ? j.manifest.races : [];
+  }
+
+  function normalizeManifestRace(r){
+    const rid=String(r&&r.race_id||'').replace(/[^0-9]/g,'');
+    if(!/^\d{12}$/.test(rid)) return null;
+    let code=String(r.venue_code||rid.slice(4,6)).padStart(2,'0');
+    const baba=String(r.nar_baba_code||'').padStart(2,'0');
+    if(!nameByNet.has(code) && netByBaba.has(baba)) code=netByBaba.get(baba);
+    if(!nameByNet.has(code)) return null;
+    const no=Number(r.race_no||rid.slice(-2));
+    if(!(no>=1&&no<=12)) return null;
+    return {
+      raceId:rid,
+      raceNo:no,
+      raceName:String(r.race_name||`${no}R`).trim()||`${no}R`,
+      venueCode:code,
+      venueName:String(r.venue_name||venueName(code)),
+      babaCode:babaByNet.get(code)||baba,
+      postTime:String(r.discovered_post_time||r.post_time||''),
+      cutoffTime:String(r.cutoff_time||''),
+      targetAt:String(r.target_at||''),
+      source:String(r.source_provider||r.source||'Cloudflare Cron')
+    };
+  }
+
+  async function narRacesFromCron(date, forceToday=false){
+    const rows=await readManifest(date,forceToday);
+    const out=[];
+    const seen=new Set();
+    for(const raw of rows){
+      if(String(raw&&raw.kind||'').toUpperCase()!=='NAR') continue;
+      const r=normalizeManifestRace(raw); if(!r||seen.has(r.raceId)) continue;
+      seen.add(r.raceId); out.push(r);
+    }
+    out.sort((a,b)=>a.venueCode.localeCompare(b.venueCode)||a.raceNo-b.raceNo);
+    return out;
+  }
+
+  function groupByVenue(rows,date){
+    const map=new Map();
+    for(const r of rows){
+      if(!map.has(r.venueCode)) map.set(r.venueCode,[]);
+      map.get(r.venueCode).push(r);
+    }
+    const d=compact(date);
+    for(const [code,rs] of map){
+      rs.sort((a,b)=>a.raceNo-b.raceNo);
+      cache[d+'-'+code]=rs;
+    }
+    return VENUES.filter(v=>map.has(v[0])).map(v=>({code:v[0],name:v[1],races:map.get(v[0])}));
+  }
+
+  function renderVenues(found){
+    const el=$('pickVenue'); if(!el) return;
+    el.innerHTML=found.length?found.map(v=>`<option value="${esc(v.code)}">${esc(v.name)}（${v.races.length}R）</option>`).join(''):'<option value="">開催なし</option>';
+    const setNar=$('setNar');
+    if(setNar){ try{ setNar.value='1'; if(typeof saveSettings==='function') saveSettings(); }catch(e){} }
+  }
+
+  function renderRaces(rows,date,code){
+    const sel=$('raceSelect'), urlIn=$('raceUrl'), box=$('raceTitleBox'), status=$('urlStatus');
+    if(!sel) return;
+    const vn=venueName(code);
+    sel.innerHTML=rows.map(r=>{
+      const url=`https://nar.sp.netkeiba.com/race/shutuba.html?race_id=${r.raceId}`;
+      const tm=r.postTime?` ${r.postTime}発走`:'';
+      const label=`${dashed(date)} ${vn} ${r.raceNo}R${tm} ${r.raceName} / ${r.raceId}`;
+      return `<option value="${esc(url)}" data-race-id="${esc(r.raceId)}" data-race-no="${r.raceNo}" data-race-name="${esc(r.raceName)}" data-post-time="${esc(r.postTime)}" data-cutoff-time="${esc(r.cutoffTime)}" data-target-at="${esc(r.targetAt)}">${esc(label)}</option>`;
+    }).join('');
+    const o=sel.options[0];
+    if(o){
+      if(urlIn) urlIn.value=o.value;
+      window.currentRaceId=o.dataset.raceId||'';
+      window.currentRaceName=o.dataset.raceName||'';
+      try{ currentRaceId=window.currentRaceId; currentRaceName=window.currentRaceName; }catch(e){}
+      if(box){box.style.display='block';box.textContent=o.textContent||'';}
+    }
+    if(status) status.innerHTML=`<div class="url-status ok">✅ ${esc(dashed(date))} ${esc(vn)} ${rows.length}R：Cloudflare Cron → 地方競馬公式から取得<br><span style="font-size:11px;opacity:.85">NARはJRA race_list_subを使用しません / ${esc(VERSION)}</span></div>`;
+  }
+
+  const prevActive=window.loadActiveVenuesForDate;
+  const prevList=window.loadRaceList;
+
+  async function loadActive196(){
+    const kind=$('pickKind')?.value||'JRA';
+    if(kind!=='NAR') return typeof prevActive==='function'?prevActive.apply(this,arguments):undefined;
+    const date=$('pickDate')?.value||(typeof todayYmd==='function'?todayYmd():jstToday());
+    const status=$('urlStatus');
+    const raceSel=$('raceSelect'); if(raceSel) raceSel.innerHTML='<option value="">NAR開催場を確認中...</option>';
+    if(status) status.innerHTML=`<div class="url-status">☁️ ${esc(date)} NAR：Cloudflare Cronの開催情報を確認中...</div>`;
+    try{
+      let rows=await narRacesFromCron(date,false);
+      if(!rows.length && dashed(date)===jstToday()) rows=await narRacesFromCron(date,true);
+      if(rows.length){
+        const found=groupByVenue(rows,date); renderVenues(found);
+        if(status) status.innerHTML=`<div class="url-status ok">✅ ${esc(date)} のNAR開催場：${found.map(v=>esc(v.name+'（'+v.races.length+'R）')).join('、')}<br><span style="font-size:11px;opacity:.85">Cloudflare Cron / 地方競馬公式。JRA一覧への誤ルーティングを遮断。</span></div>`;
+        setTimeout(()=>{ try{ loadList196(); }catch(e){} },40);
+        return found;
+      }
+      const h=await workerHealth();
+      const hv=String(h&&h.version||'');
+      if(status) status.innerHTML=`<div class="url-status err">⚠️ Cron WorkerにNARレースがありません。${hv&&!/6\.1\.[2-9]|6\.[2-9]/.test(hv)?'abc Workerをv6.1.2 NAR全券種版へ更新してください。':'既存の地方競馬公式ルートへフォールバックします。'}<br><span style="font-size:11px;opacity:.85">Worker: ${esc(hv||'確認不能')}</span></div>`;
+    }catch(e){
+      if(status) status.innerHTML=`<div class="url-status err">⚠️ Cron Worker取得失敗：${esc(e.message||e)}。既存NAR公式ルートを試します。</div>`;
+    }
+    if(typeof prevActive==='function') return prevActive.apply(this,arguments);
+  }
+
+  async function loadList196(){
+    const kind=$('pickKind')?.value||'JRA';
+    if(kind!=='NAR') return typeof prevList==='function'?prevList.apply(this,arguments):undefined;
+    const date=$('pickDate')?.value||(typeof todayYmd==='function'?todayYmd():jstToday());
+    const code=String($('pickVenue')?.value||'').padStart(2,'0');
+    const status=$('urlStatus');
+    if(!code || !nameByNet.has(code)){ if(status) status.innerHTML='<div class="url-status">開催場を選択してください</div>'; return; }
+    const ck=compact(date)+'-'+code;
+    let rows=cache[ck]||[];
+    try{
+      if(!rows.length){
+        let all=await narRacesFromCron(date,false);
+        if(!all.length && dashed(date)===jstToday()) all=await narRacesFromCron(date,true);
+        groupByVenue(all,date);
+        rows=cache[ck]||[];
+      }
+      if(rows.length){ renderRaces(rows,date,code); return rows; }
+    }catch(e){ console.warn('[NAR196] race list from cron',e); }
+    if(status) status.innerHTML=`<div class="url-status err">⚠️ ${esc(date)} ${esc(venueName(code))}：Cron manifestにレースがありません。既存NAR公式ルートを再試行します。</div>`;
+    if(typeof prevList==='function') return prevList.apply(this,arguments);
+  }
+
+  window.loadActiveVenuesForDate=loadActive196;
+  window.loadRaceList=loadList196;
+  try{ loadActiveVenuesForDate=loadActive196; }catch(e){}
+  try{ loadRaceList=loadList196; }catch(e){}
+
+  // NAR画面でJRA専用race_list_subへ誤って流れた場合は通信前に止める。
+  try{
+    const prevFetch=window.fetchHtmlViaProxy || (typeof fetchHtmlViaProxy==='function'?fetchHtmlViaProxy:null);
+    if(prevFetch && !prevFetch.__nar196Guard){
+      const guarded=async function(url){
+        const u=String(url||'');
+        if(($('pickKind')?.value||'')==='NAR' && /https:\/\/race\.netkeiba\.com\/top\/race_list_sub\.html/i.test(u)){
+          throw new Error('NAR_ROUTE_GUARD: JRA race_list_sub blocked');
+        }
+        return prevFetch.apply(this,arguments);
+      };
+      guarded.__nar196Guard=true;
+      window.fetchHtmlViaProxy=guarded;
+      try{ fetchHtmlViaProxy=guarded; }catch(e){}
+    }
+  }catch(e){}
+
+  function patchPrecloseUi(){
+    try{
+      const w=$('preclose3mWorker'); if(w && !String(w.value||'').trim()) w.value=cronBase();
+      const card=$('preclose3mCard');
+      if(card){
+        const notes=card.querySelectorAll('div');
+        for(const n of notes){
+          const t=String(n.textContent||'');
+          if(/iPad\/iPhoneで画面を閉じたりスリープ/.test(t)){
+            n.innerHTML='※ 端末内タイマーはスリープ中に停止しますが、<b>Cloudflare Cron Worker</b> が毎分監視している場合は、本体OFF/オフラインでも締切3分前スナップショットをKVへ保存できます。';
+            break;
+          }
+        }
+      }
+    }catch(e){}
+  }
+
+  // 旧パッチの遅延バージョン上書きより後まで同期する。
+  [0,200,800,1800,3500,7000,12000,16000,22000].forEach(ms=>setTimeout(()=>{setVersion();patchPrecloseUi();},ms));
+  setVersion();
+})();
+
 </script>
 
 </body>

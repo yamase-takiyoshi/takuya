@@ -10221,7 +10221,33 @@ if(horses.length === 0){
 
     const raceName = parseRaceTitleFromDoc(doc) || '';
 
+    // v5.18.195: 保存済み「締切3分前」スナップショットがあれば、
+    // PRE-RACE監査では確定後ページの最終オッズよりこちらを優先する。
+    let savedPreclose = null;
+    try{
+      if(typeof window.__precloseGetSnapshot === 'function'){
+        savedPreclose = await window.__precloseGetSnapshot(rid);
+      }
+    }catch(e){ savedPreclose = null; }
+
     // ── オッズ・人気（fetchRace と同じ手順）──
+    if(savedPreclose && Array.isArray(savedPreclose.odds) && savedPreclose.odds.length >= 2){
+      const savedMap = new Map();
+      savedPreclose.odds.forEach(o => {
+        const no = Number(o && (o.horse_no ?? o.num));
+        const od = Number(o && o.odds);
+        const pop = Number(o && (o.popularity ?? o.pop) || 0);
+        if(no >= 1 && od >= 1) savedMap.set(no, {odds:od, pop});
+      });
+      if(savedMap.size >= 2){
+        hs = mergeOddsPopularityIntoHorses(hs, savedMap);
+        hs = fillNarPopularityFromOdds(hs);
+      }else{
+        savedPreclose = null;
+      }
+    }
+
+    if(!savedPreclose){
     if(kind === 'JRA'){
       let oddsMap = isResultPage ? parseFinalOddsPopularityFromResultDoc(doc, hs) : new Map();
       const resultPageFull = isResultPage && oddsMap && oddsMap.size >= 2;
@@ -10246,6 +10272,7 @@ if(horses.length === 0){
       }
       hs = fillNarPopularityFromOdds(hs);
     }
+    }
     // v5.18.128: 単レース取得(fetchRace)と同じ誤キーガードをバッチ経路にも適用。
     // 「馬番=人気=オッズ昇順」=人気順テーブルを馬番に直貼りした誤キーの疑い。
     // この汚染オッズだと毎レース上位＝馬番1,2,3,4になり買い目が全レース同じになる。除外する。
@@ -10254,28 +10281,42 @@ if(horses.length === 0){
     }
     try{ if(typeof pgjCacheRaceMeta === 'function') pgjCacheRaceMeta(rid, resultDoc || doc, raceName); }catch(e){}
 
-    // v5.18.193: オッズ時点の監査情報。
-    // 「結果ページから取れた最終オッズ」と「発走前に取得したことを時刻で証明できるオッズ」を分離する。
-    let postTimeText = '';
-    let preRaceVerified = false;
-    try{
-      const raceDate = String(window.__rsValidationRaceDate || '');
-      let info = '';
-      ['.RaceData01','.RaceData02','[class*="RaceData"]','.RaceList_Item02','h1'].forEach(sel => {
-        try{ doc.querySelectorAll(sel).forEach(el => { info += ' ' + String(el.textContent || ''); }); }catch(e){}
-      });
-      const mt = info.match(/(?:^|\s)(\d{1,2}):(\d{2})(?:発走)?/);
-      if(mt){
-        postTimeText = String(mt[1]).padStart(2,'0') + ':' + String(mt[2]).padStart(2,'0');
-        if(/^\d{4}-\d{2}-\d{2}$/.test(raceDate)){
-          const scheduled = new Date(`${raceDate}T${postTimeText}:00+09:00`).getTime();
-          if(Number.isFinite(scheduled) && Date.now() < scheduled && !isResultPage) preRaceVerified = true;
+    // v5.18.193 + v5.18.195: オッズ時点の監査情報。
+    // 保存済みPRE_CLOSE_3MINがある場合は、その取得時刻と検証フラグを監査の真実の出所にする。
+    let postTimeText = savedPreclose ? String(savedPreclose.post_time || '') : '';
+    let preRaceVerified = savedPreclose ? (savedPreclose.preclose3m_verified === true || savedPreclose.timing_verified === true) : false;
+    if(!savedPreclose){
+      try{
+        const raceDate = String(window.__rsValidationRaceDate || '');
+        let info = '';
+        ['.RaceData01','.RaceData02','[class*="RaceData"]','.RaceList_Item02','h1'].forEach(sel => {
+          try{ doc.querySelectorAll(sel).forEach(el => { info += ' ' + String(el.textContent || ''); }); }catch(e){}
+        });
+        const mt = info.match(/(?:^|\s)(\d{1,2}):(\d{2})(?:発走)?/);
+        if(mt){
+          postTimeText = String(mt[1]).padStart(2,'0') + ':' + String(mt[2]).padStart(2,'0');
+          if(/^\d{4}-\d{2}-\d{2}$/.test(raceDate)){
+            const scheduled = new Date(`${raceDate}T${postTimeText}:00+09:00`).getTime();
+            if(Number.isFinite(scheduled) && Date.now() < scheduled && !isResultPage) preRaceVerified = true;
+          }
         }
-      }
-    }catch(e){}
-    const oddsSnapshotType = isResultPage ? 'FINAL' : (preRaceVerified ? 'PRE_RACE_VERIFIED' : 'CURRENT_UNVERIFIED');
-    return { horses: hs, raceName, isResultPage, resultDoc, oddsSnapshotType, preRaceVerified,
-             oddsFetchedAt:new Date().toISOString(), oddsSourceUrl:activeUrl, postTimeText };
+      }catch(e){}
+    }
+    const oddsSnapshotType = savedPreclose
+      ? 'PRE_CLOSE_3MIN'
+      : (isResultPage ? 'FINAL' : (preRaceVerified ? 'PRE_RACE_VERIFIED' : 'CURRENT_UNVERIFIED'));
+    return {
+      horses: hs,
+      raceName,
+      isResultPage,
+      resultDoc,
+      oddsSnapshotType,
+      preRaceVerified,
+      oddsFetchedAt: savedPreclose ? String(savedPreclose.captured_at || '') : new Date().toISOString(),
+      oddsSourceUrl: savedPreclose ? String(savedPreclose.source_url || 'saved_preclose_snapshot') : activeUrl,
+      postTimeText,
+      precloseSnapshot: savedPreclose || null
+    };
   }
 
   // ── 着順・払戻の取得（結果docを使い回せれば再フェッチしない）──
@@ -17024,5 +17065,483 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 })();
 </script>
 
+
+<!-- v5.18.195 PreClose3mSnapshot -->
+<script>
+/* ============================================================
+   v5.18.195 PreClose3mSnapshot
+   - 締切3分前の単勝オッズを時刻付きで自動保存
+   - IndexedDBへ永続保存 + 任意のCloudflare WorkerへPOST
+   - PRE_RACE_STRICTは保存済みスナップショットを優先利用
+   - iOS/Safariのバックグラウンド停止対策のため、捕捉誤差を記録
+   ============================================================ */
+(function(){
+  'use strict';
+
+  const VERSION = 'v5.18.195 PreClose3mSnapshot';
+  const DB_NAME = 'thekeiba-preclose-v1';
+  const DB_VERSION = 1;
+  const STORE = 'snapshots';
+  const CFG_KEY = 'thekeiba_preclose3m_cfg_v1';
+  const CAPTURE_BEFORE_CLOSE_SEC = 180;
+  const CAPTURE_TOLERANCE_SEC = 45;
+  const TICK_MS = 5000;
+  const snapshotCache = new Map();
+  let dbPromise = null;
+  let schedule = [];
+  let timer = null;
+  let building = false;
+  let lastBuildSignature = '';
+
+  function $(id){ return document.getElementById(id); }
+  function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
+  function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c])); }
+  function todayYmdLocal(){
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  }
+  function isoLocalLabel(ms){
+    if(!Number.isFinite(ms)) return '';
+    return new Date(ms).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  }
+  function config(){
+    let x = {};
+    try{ x = JSON.parse(localStorage.getItem(CFG_KEY) || '{}') || {}; }catch(e){}
+    return {
+      enabled: x.enabled !== false,
+      closeLeadSec: Math.max(0, Math.min(600, Number(x.closeLeadSec ?? 60) || 60)),
+      workerUrl: String(x.workerUrl || '').trim(),
+      token: String(x.token || ''),
+      autoBuild: x.autoBuild !== false
+    };
+  }
+  function saveConfig(patch){
+    const n = {...config(), ...patch};
+    try{ localStorage.setItem(CFG_KEY, JSON.stringify(n)); }catch(e){}
+    return n;
+  }
+
+  function setVersion(){
+    try{
+      window.APP_VERSION = VERSION;
+      const v = document.querySelector('.ver');
+      if(v) v.textContent = VERSION + (/🌉/.test(v.textContent||'') ? ' 🌉' : '');
+      document.title = 'The競馬 EV分析 ' + VERSION;
+    }catch(e){}
+  }
+
+  function setStatus(msg, kind=''){
+    const el = $('preclose3mStatus');
+    if(!el) return;
+    const cls = kind === 'ok' ? 'ok' : kind === 'err' ? 'err' : '';
+    el.innerHTML = `<div class="url-status ${cls}" style="line-height:1.65">${esc(msg)}</div>`;
+  }
+
+  function openDb(){
+    if(dbPromise) return dbPromise;
+    dbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, DB_VERSION);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if(!db.objectStoreNames.contains(STORE)){
+          const st = db.createObjectStore(STORE, {keyPath:'key'});
+          st.createIndex('race_id','race_id',{unique:false});
+          st.createIndex('date','date',{unique:false});
+          st.createIndex('captured_at','captured_at',{unique:false});
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error || new Error('IndexedDB open failed'));
+    });
+    return dbPromise;
+  }
+
+  async function dbPut(snap){
+    snapshotCache.set(snap.key, snap);
+    const db = await openDb();
+    await new Promise((resolve,reject) => {
+      const tx = db.transaction(STORE,'readwrite');
+      tx.objectStore(STORE).put(snap);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error('IndexedDB write failed'));
+    });
+  }
+  async function dbGetByRace(rid){
+    for(const s of snapshotCache.values()) if(String(s.race_id) === String(rid)) return s;
+    const db = await openDb();
+    return await new Promise((resolve,reject) => {
+      const tx = db.transaction(STORE,'readonly');
+      const req = tx.objectStore(STORE).index('race_id').get(String(rid));
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error || new Error('IndexedDB read failed'));
+    });
+  }
+  async function dbAll(){
+    const db = await openDb();
+    const rows = await new Promise((resolve,reject) => {
+      const tx = db.transaction(STORE,'readonly');
+      const req = tx.objectStore(STORE).getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error || new Error('IndexedDB read failed'));
+    });
+    rows.forEach(x => x && x.key && snapshotCache.set(x.key,x));
+    return rows;
+  }
+  async function dbClear(){
+    const db = await openDb();
+    await new Promise((resolve,reject) => {
+      const tx = db.transaction(STORE,'readwrite');
+      tx.objectStore(STORE).clear();
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error('IndexedDB clear failed'));
+    });
+    snapshotCache.clear();
+  }
+
+  function workerBase(){
+    const c = config();
+    let base = c.workerUrl;
+    if(!base){
+      try{ base = String((typeof settings !== 'undefined' && settings.proxyUrl) || '').trim(); }catch(e){}
+    }
+    return base.replace(/\/$/,'');
+  }
+  function workerHeaders(){
+    const h = {'Content-Type':'application/json'};
+    const t = config().token;
+    if(t) h['X-Snapshot-Token'] = t;
+    return h;
+  }
+
+  async function postRemote(snap){
+    const base = workerBase();
+    if(!base) return {ok:false, skipped:true, error:'snapshot worker URL未設定'};
+    try{
+      const r = await fetch(base + '/preclose-snapshot', {
+        method:'POST', headers:workerHeaders(), body:JSON.stringify(snap), cache:'no-store'
+      });
+      let j = null; try{ j = await r.json(); }catch(e){}
+      return {ok:r.ok && (!j || j.ok !== false), status:r.status, body:j};
+    }catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  }
+  async function getRemote(rid){
+    const base = workerBase();
+    if(!base) return null;
+    try{
+      const r = await fetch(base + '/preclose-snapshot?race_id=' + encodeURIComponent(rid), {
+        method:'GET', headers:workerHeaders(), cache:'no-store'
+      });
+      if(!r.ok) return null;
+      const j = await r.json();
+      const snap = j && (j.snapshot || j.data || (j.race_id ? j : null));
+      if(snap && String(snap.race_id) === String(rid)){
+        if(!snap.key) snap.key = `preclose3m:${snap.race_id}:WIN`;
+        try{ await dbPut(snap); }catch(e){}
+        return snap;
+      }
+    }catch(e){}
+    return null;
+  }
+
+  window.__precloseGetSnapshot = async function(rid){
+    rid = String(rid || '').replace(/[^0-9]/g,'');
+    if(!rid) return null;
+    let s = null;
+    try{ s = await dbGetByRace(rid); }catch(e){}
+    if(s) return s;
+    return await getRemote(rid);
+  };
+
+  function docText(doc){
+    try{ return String(doc && doc.body && doc.body.textContent || '').replace(/[\t\r\n]+/g,' ').replace(/[　 ]+/g,' ').trim(); }
+    catch(e){ return ''; }
+  }
+  function extractExplicitCutoff(doc){
+    const t = docText(doc);
+    let m = t.match(/(?:発売)?締切(?:時刻)?\s*[:：]?\s*(\d{1,2}):(\d{2})/);
+    if(!m) m = t.match(/(\d{1,2}):(\d{2})\s*(?:発売)?締切/);
+    if(!m) return '';
+    return `${String(m[1]).padStart(2,'0')}:${String(m[2]).padStart(2,'0')}`;
+  }
+  function extractPostTime(doc){
+    let t = '';
+    try{
+      ['.RaceData01','.RaceData02','[class*="RaceData"]','.RaceList_Item02','.RaceList_Itemtime','h1'].forEach(sel => {
+        doc.querySelectorAll(sel).forEach(el => { t += ' ' + String(el.textContent || ''); });
+      });
+    }catch(e){}
+    t += ' ' + docText(doc).slice(0,7000);
+    let m = t.match(/(?:^|\s)(\d{1,2}):(\d{2})\s*発走/);
+    if(!m) m = t.match(/発走(?:時刻)?\s*[:：]?\s*(\d{1,2}):(\d{2})/);
+    if(!m) return '';
+    return `${String(m[1]).padStart(2,'0')}:${String(m[2]).padStart(2,'0')}`;
+  }
+  function timeOnDate(date, hhmm){
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(hhmm)) return NaN;
+    return new Date(`${date}T${hhmm}:00+09:00`).getTime();
+  }
+
+  function currentRaceOptions(){
+    const sel = $('raceSelect');
+    if(!sel) return [];
+    const out = [];
+    Array.from(sel.options || []).forEach((o,idx) => {
+      const rid = String(o.dataset.raceId || ((String(o.value||'').match(/race_id=(\d{10,14})/)||[])[1]) || '').replace(/[^0-9]/g,'');
+      if(!rid) return;
+      const no = Number(o.dataset.raceNo || rid.slice(-2) || idx+1);
+      out.push({rid, no, name:String(o.dataset.raceName || '').trim(), url:String(o.value||'')});
+    });
+    const seen = new Set();
+    return out.filter(x => !seen.has(x.rid) && seen.add(x.rid));
+  }
+
+  async function buildSchedule(force=false){
+    if(building) return schedule;
+    const c = config();
+    if(!c.enabled) return schedule;
+    const date = String($('pickDate')?.value || '');
+    const kind = String($('pickKind')?.value || 'JRA');
+    const venueCode = String($('pickVenue')?.value || '');
+    const sig = `${date}|${kind}|${venueCode}`;
+    if(!force && sig === lastBuildSignature && schedule.length) return schedule;
+    building = true;
+    try{
+      let races = currentRaceOptions();
+      if(!races.length && typeof loadRaceList === 'function'){
+        setStatus(`${date} ${kind} のレース一覧を取得して監視準備中…`);
+        try{ await loadRaceList(); }catch(e){}
+        races = currentRaceOptions();
+      }
+      if(!races.length){ setStatus('監視対象レースがありません。先に開催場とレース一覧を取得してください。','err'); return []; }
+
+      const next = [];
+      for(let i=0;i<races.length;i++){
+        const r = races[i];
+        let url = r.url;
+        if(!/^https?:/.test(url)){
+          try{ url = shutubaUrl(kind, r.rid); }catch(e){ url=''; }
+        }
+        try{
+          setStatus(`監視準備 ${i+1}/${races.length}：${r.no}R の時刻を確認中…`);
+          const html = await fetchHtmlViaProxy(url);
+          const doc = new DOMParser().parseFromString(html,'text/html');
+          const post = extractPostTime(doc);
+          if(!post) throw new Error('発走時刻を取得できません');
+          const explicitCutoff = extractExplicitCutoff(doc);
+          const postMs = timeOnDate(date, post);
+          let cutoffMs = explicitCutoff ? timeOnDate(date, explicitCutoff) : (postMs - c.closeLeadSec*1000);
+          if(!Number.isFinite(cutoffMs)) throw new Error('締切基準時刻を計算できません');
+          const targetMs = cutoffMs - CAPTURE_BEFORE_CLOSE_SEC*1000;
+          let hs = [];
+          try{ hs = parseHorsesFromDoc(doc, url) || []; }catch(e){}
+          next.push({
+            date, kind, venueCode, venueName:(typeof venueName==='function'?venueName(kind,venueCode):''),
+            rid:r.rid, no:r.no, name:r.name || '', url, horses:hs,
+            postTime:post, postMs, cutoffTime:explicitCutoff || isoLocalLabel(cutoffMs).slice(0,5), cutoffMs,
+            cutoffBasis:explicitCutoff ? 'EXPLICIT_CUTOFF' : 'POST_TIME_MINUS_CONFIGURED_LEAD',
+            closeLeadSec:explicitCutoff ? null : c.closeLeadSec,
+            targetMs, captured:false, missed:false
+          });
+        }catch(e){
+          console.warn('[PreClose3m] schedule build failed', r.rid, e);
+        }
+        await sleep(120);
+      }
+      schedule = next.sort((a,b)=>a.targetMs-b.targetMs);
+      window.__precloseSchedule = schedule;
+      lastBuildSignature = sig;
+      const future = schedule.filter(x => !snapshotCache.has(`preclose3m:${x.rid}:WIN`) && x.targetMs > Date.now()-CAPTURE_TOLERANCE_SEC*1000);
+      const first = future[0];
+      setStatus(`監視準備完了：${schedule.length}R。${first ? `次回 ${first.no}R ${isoLocalLabel(first.targetMs)} に締切3分前オッズを保存` : '本日の新規保存対象はありません'}`,'ok');
+      return schedule;
+    }finally{ building = false; }
+  }
+
+  function mapToOddsArray(map, horses){
+    const names = new Map((horses||[]).map(h => [Number(h.num), String(h.name||'')]));
+    const arr = [];
+    if(map && typeof map.forEach === 'function'){
+      map.forEach((v,k) => {
+        const no = Number(k); const od = Number(v && v.odds != null ? v.odds : v); const pop = Number(v && v.pop || 0);
+        if(no >= 1 && od >= 1) arr.push({horse_no:no, horse_name:names.get(no)||'', odds:Math.round(od*10)/10, popularity:pop>=1?pop:0});
+      });
+    }
+    return arr.sort((a,b)=>a.horse_no-b.horse_no);
+  }
+  function serializeNarMarkets(rid){
+    try{
+      const pack = window.__narRealOddsCache && window.__narRealOddsCache.get(String(rid));
+      if(!pack || !pack.markets) return null;
+      const out = {};
+      Object.entries(pack.markets).forEach(([type,m]) => {
+        if(!m || typeof m.forEach !== 'function') return;
+        const rows = [];
+        m.forEach((v,k) => { const od = Number(v && v.odds != null ? v.odds : v); if(od>0) rows.push({combination:String(k),odds:od}); });
+        if(rows.length) out[type] = rows;
+      });
+      return Object.keys(out).length ? out : null;
+    }catch(e){ return null; }
+  }
+
+  async function capture(item){
+    if(!item || item.captured) return null;
+    const now = Date.now();
+    const key = `preclose3m:${item.rid}:WIN`;
+    if(snapshotCache.has(key)){ item.captured = true; return snapshotCache.get(key); }
+    let hs = item.horses || [];
+    if(hs.length < 2){
+      try{
+        const html = await fetchHtmlViaProxy(item.url);
+        const doc = new DOMParser().parseFromString(html,'text/html');
+        hs = parseHorsesFromDoc(doc,item.url) || [];
+      }catch(e){}
+    }
+    let map = new Map();
+    try{ map = await fetchWinOddsPopularity(item.kind,item.rid,hs); }catch(e){}
+    const odds = mapToOddsArray(map,hs);
+    if(odds.length < 2) throw new Error('締切3分前の単勝オッズを2頭以上取得できませんでした');
+
+    const deltaSec = Math.round((Date.now()-item.targetMs)/1000);
+    const timingVerified = Math.abs(deltaSec) <= CAPTURE_TOLERANCE_SEC;
+    const snap = {
+      schema:'thekeiba-preclose-snapshot-v1', key,
+      race_id:String(item.rid), date:item.date, kind:item.kind,
+      venue_code:item.venueCode, venue_name:item.venueName, race_no:item.no, race_name:item.name,
+      market:'WIN', odds_type:'PRE_CLOSE_3MIN',
+      post_time:item.postTime, cutoff_time:item.cutoffTime,
+      cutoff_basis:item.cutoffBasis, configured_close_lead_sec:item.closeLeadSec,
+      target_seconds_before_cutoff:CAPTURE_BEFORE_CLOSE_SEC,
+      target_at:new Date(item.targetMs).toISOString(),
+      captured_at:new Date().toISOString(), capture_delta_sec:deltaSec,
+      timing_verified:timingVerified,
+      preclose3m_verified:timingVerified,
+      source:'live_market_snapshot', source_url:item.url,
+      odds,
+      additional_markets:item.kind==='NAR' ? serializeNarMarkets(item.rid) : null
+    };
+    await dbPut(snap);
+    item.captured = true;
+    const remote = await postRemote(snap);
+    const suffix = remote.ok ? ' / Worker保存済み' : (remote.skipped ? ' / 端末内保存' : ' / 端末内保存（Worker送信失敗）');
+    setStatus(`✅ ${item.no}R 締切3分前オッズを保存：${odds.length}頭 / 誤差 ${deltaSec>=0?'+':''}${deltaSec}秒${suffix}`,'ok');
+    try{ window.dispatchEvent(new CustomEvent('thekeiba-preclose-snapshot',{detail:snap})); }catch(e){}
+    return snap;
+  }
+
+  async function tick(){
+    const c = config();
+    if(!c.enabled || document.hidden) return;
+    if(!schedule.length && c.autoBuild) await buildSchedule(false);
+    const now = Date.now();
+    for(const item of schedule){
+      if(item.captured || item.missed) continue;
+      const key = `preclose3m:${item.rid}:WIN`;
+      if(snapshotCache.has(key)){ item.captured=true; continue; }
+      if(now < item.targetMs - 6000) continue;
+      if(now > item.targetMs + CAPTURE_TOLERANCE_SEC*1000){
+        item.missed = true;
+        console.warn('[PreClose3m] capture window missed', item.rid, item.targetMs);
+        continue;
+      }
+      try{ await capture(item); }catch(e){ setStatus(`⚠️ ${item.no}R 保存失敗：${e.message || e}`,'err'); }
+    }
+  }
+
+  async function exportAll(){
+    const rows = (await dbAll()).sort((a,b)=>String(a.captured_at||'').localeCompare(String(b.captured_at||'')));
+    const data = {
+      schema:'thekeiba-preclose-export-v1', exported_at:new Date().toISOString(), count:rows.length,
+      note:'締切3分前スナップショット。timing_verified と cutoff_basis を監査してください。', snapshots:rows
+    };
+    const blob = new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `preclose3m_odds_${todayYmdLocal().replace(/-/g,'')}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  }
+
+  function injectUi(){
+    if($('preclose3mCard')) return;
+    const tab = $('tab-settings');
+    if(!tab) return;
+    const c = config();
+    const card = document.createElement('div');
+    card.className = 'card'; card.id = 'preclose3mCard';
+    card.innerHTML = `
+      <h2>⏱️ 締切3分前オッズ 自動保存</h2>
+      <div style="font-size:11px;color:var(--muted);line-height:1.65;margin-bottom:10px">
+        レース一覧を読み込み、締切3分前になった瞬間の単勝オッズを時刻付きJSONとして保存します。端末内はIndexedDBへ自動保存し、保存Worker URLを指定するとCloudflare側にも同時保存します。
+      </div>
+      <div class="settings-row"><label>自動保存</label><input type="checkbox" id="preclose3mEnabled" ${c.enabled?'checked':''}></div>
+      <div class="settings-row"><label>締切は発走の何秒前か（明示締切が無い場合）</label><input type="number" id="preclose3mLead" min="0" max="600" step="10" value="${c.closeLeadSec}"></div>
+      <div class="field" style="margin-top:8px"><label>スナップショット保存Worker URL（空欄なら既存Workers URLを使用）</label><input type="url" id="preclose3mWorker" value="${esc(c.workerUrl)}" placeholder="https://your-worker.workers.dev"></div>
+      <div class="field"><label>保存トークン（任意・Cloudflare secretと同じ値）</label><input type="password" id="preclose3mToken" value="${esc(c.token)}" autocomplete="off"></div>
+      <div style="font-size:11px;color:var(--muted);line-height:1.55;margin-bottom:8px">※ iPad/iPhoneで画面を閉じたりスリープするとSafariがタイマーを停止するため、その時間帯は自動取得できません。保存データには実際の取得誤差（秒）を必ず記録します。</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn-sm" type="button" id="preclose3mBuildBtn">🕒 今日の監視を準備</button>
+        <button class="btn-sm" type="button" id="preclose3mExportBtn">💾 スナップショットJSON出力</button>
+        <button class="btn-sm" type="button" id="preclose3mClearBtn">🧹 保存履歴クリア</button>
+      </div>
+      <div id="preclose3mStatus" style="margin-top:8px"></div>`;
+    tab.appendChild(card);
+
+    $('preclose3mEnabled').addEventListener('change', e => { saveConfig({enabled:!!e.target.checked}); if(e.target.checked) buildSchedule(true); });
+    $('preclose3mLead').addEventListener('change', e => { saveConfig({closeLeadSec:Number(e.target.value)||60}); buildSchedule(true); });
+    $('preclose3mWorker').addEventListener('change', e => saveConfig({workerUrl:String(e.target.value||'').trim()}));
+    $('preclose3mToken').addEventListener('change', e => saveConfig({token:String(e.target.value||'')}));
+    $('preclose3mBuildBtn').addEventListener('click', ()=>buildSchedule(true));
+    $('preclose3mExportBtn').addEventListener('click', ()=>exportAll().catch(e=>setStatus('JSON出力失敗: '+(e.message||e),'err')));
+    $('preclose3mClearBtn').addEventListener('click', async ()=>{
+      if(!confirm('締切3分前オッズの保存履歴をすべて削除しますか？')) return;
+      await dbClear(); schedule.forEach(x=>{x.captured=false;x.missed=false;}); setStatus('保存履歴をクリアしました。');
+    });
+  }
+
+  function wrapStateExports(){
+    try{
+      const prev = window.buildStateSnapshot || (typeof buildStateSnapshot === 'function' ? buildStateSnapshot : null);
+      if(prev && !prev.__precloseWrapped){
+        const w = function(){ const s = prev.apply(this,arguments) || {}; s.precloseOddsSnapshots = Array.from(snapshotCache.values()); return s; };
+        w.__precloseWrapped = true; window.buildStateSnapshot = w; try{ buildStateSnapshot = w; }catch(e){}
+      }
+    }catch(e){}
+    try{
+      const prev2 = window.buildProfitGraphJSONSnapshot || (typeof buildProfitGraphJSONSnapshot === 'function' ? buildProfitGraphJSONSnapshot : null);
+      if(prev2 && !prev2.__precloseWrapped){
+        const w2 = function(){ const s = prev2.apply(this,arguments) || {}; s.preclose_odds_snapshots = Array.from(snapshotCache.values()); return s; };
+        w2.__precloseWrapped = true; window.buildProfitGraphJSONSnapshot = w2; try{ buildProfitGraphJSONSnapshot = w2; }catch(e){}
+      }
+    }catch(e){}
+  }
+
+  function wrapRaceList(){
+    try{
+      const prev = window.loadRaceList || (typeof loadRaceList === 'function' ? loadRaceList : null);
+      if(prev && !prev.__precloseWrapped){
+        const w = async function(){ const r = await prev.apply(this,arguments); setTimeout(()=>buildSchedule(true).catch(()=>{}),100); return r; };
+        w.__precloseWrapped = true; window.loadRaceList = w; try{ loadRaceList = w; }catch(e){}
+      }
+    }catch(e){}
+  }
+
+  async function boot(){
+    setVersion(); injectUi(); wrapStateExports(); wrapRaceList();
+    try{ await dbAll(); }catch(e){ console.warn('[PreClose3m] DB load failed',e); }
+    if(!timer) timer = setInterval(()=>tick().catch(e=>console.warn('[PreClose3m] tick',e)),TICK_MS);
+    document.addEventListener('visibilitychange',()=>{ if(!document.hidden) tick().catch(()=>{}); });
+    if(config().enabled && config().autoBuild){ setTimeout(()=>buildSchedule(false).catch(()=>{}),1200); }
+  }
+
+  window.__precloseBuildSchedule = buildSchedule;
+  window.__precloseCaptureNow = async function(rid){ const x = schedule.find(s=>String(s.rid)===String(rid)); if(!x) throw new Error('監視スケジュールにrace_idがありません'); return capture(x); };
+  window.__precloseExportAll = exportAll;
+  window.__precloseSnapshotCache = snapshotCache;
+
+  [0,300,1200,3000,7000].forEach(ms=>setTimeout(setVersion,ms));
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded',boot,{once:true}); else boot();
+})();
+
+</script>
 </body>
 </html>

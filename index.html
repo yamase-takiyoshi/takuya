@@ -17471,7 +17471,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     card.innerHTML = `
       <h2>⏱️ 締切3分前オッズ 自動保存</h2>
       <div style="font-size:11px;color:var(--muted);line-height:1.65;margin-bottom:10px">
-        レース一覧を読み込み、締切3分前になった瞬間の単勝オッズを時刻付きJSONとして保存します。端末内はIndexedDBへ自動保存し、保存Worker URLを指定するとCloudflare側にも同時保存します。
+        レース一覧を読み込み、締切3分前になった瞬間のオッズを時刻付きJSONとして保存します。NARは単勝・複勝・枠連・馬連・ワイド・馬単・3連複・3連単の全8券種を保存し、端末内はIndexedDB、保存Worker URL指定時はCloudflare側にも同時保存します。
       </div>
       <div class="settings-row"><label>自動保存</label><input type="checkbox" id="preclose3mEnabled" ${c.enabled?'checked':''}></div>
       <div class="settings-row"><label>締切は発走の何秒前か（明示締切が無い場合）</label><input type="number" id="preclose3mLead" min="0" max="600" step="10" value="${c.closeLeadSec}"></div>
@@ -17543,5 +17543,69 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 })();
 
 </script>
+
+<script>
+/* ============================================================
+   v6.1.2 NAR PRE_CLOSE_3MIN All-Market Snapshot Hydrator
+   - Cron Workerが保存した additional_markets をNAR実オッズキャッシュへ復元
+   - PRE-RACE監査で確定後の市場オッズを取り直さず、締切3分前の全券種を利用
+   ============================================================ */
+(function(){
+  'use strict';
+  if(window.__PRECLOSE_ALLMARKETS_HYDRATOR__) return;
+  window.__PRECLOSE_ALLMARKETS_HYDRATOR__ = true;
+
+  const TYPES = ['単勝','複勝','枠連','馬連','ワイド','馬単','3連複','3連単'];
+
+  function emptyMarkets(){
+    const x={}; TYPES.forEach(t=>x[t]=new Map()); return x;
+  }
+  function hydrate(snap){
+    try{
+      if(!snap || String(snap.kind||'').toUpperCase()!=='NAR' || !snap.additional_markets) return snap;
+      const cache = window.__narRealOddsCache;
+      if(!cache || typeof cache.set!=='function') return snap;
+      const markets = emptyMarkets();
+      const counts = {};
+      TYPES.forEach(type=>{
+        const rows = Array.isArray(snap.additional_markets[type]) ? snap.additional_markets[type] : [];
+        rows.forEach(row=>{
+          const key = String(row && row.combination || '').trim();
+          const od = Number(row && (row.odds != null ? row.odds : row.odds_min));
+          if(key && Number.isFinite(od) && od>=1) markets[type].set(key, od);
+        });
+        counts[type]=markets[type].size;
+      });
+      cache.set(String(snap.race_id), {
+        // 未来時刻にして15秒TTLの自動再取得で確定オッズへ上書きされないよう固定
+        ts: Date.now() + 365*24*60*60*1000,
+        markets,
+        counts,
+        total:Object.values(counts).reduce((a,b)=>a+Number(b||0),0),
+        source:'PRE_CLOSE_3MIN_SNAPSHOT',
+        captured_at:String(snap.captured_at||''),
+        preclose:true
+      });
+      window.__narRealOddsLast = { rid:String(snap.race_id), counts, source:'PRE_CLOSE_3MIN_SNAPSHOT', ts:Date.now(), captured_at:String(snap.captured_at||'') };
+    }catch(e){ console.warn('[PreCloseAllMarkets] hydrate failed',e); }
+    return snap;
+  }
+
+  function install(){
+    const prev = window.__precloseGetSnapshot;
+    if(typeof prev!=='function' || prev.__allMarketsHydrated) return false;
+    const wrapped = async function(){
+      const snap = await prev.apply(this, arguments);
+      return hydrate(snap);
+    };
+    wrapped.__allMarketsHydrated=true;
+    window.__precloseGetSnapshot=wrapped;
+    return true;
+  }
+  [0,250,800,1800,3500,7000].forEach(ms=>setTimeout(install,ms));
+  window.__hydratePrecloseAllMarkets = hydrate;
+})();
+</script>
+
 </body>
 </html>

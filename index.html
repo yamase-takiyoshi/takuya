@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.209 EV Calibration + JRA No-Race Fix</title>
+<title>The競馬 EV分析 v5.18.210 NAR Fast Odds + Timeline Fix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.209 EV Calibration + JRA No-Race Fix</span>
+    <span class="ver">v5.18.210 NAR Fast Odds + Timeline Fix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -13101,13 +13101,16 @@ if(horses.length === 0){
   window.buildNetkeibaOddsUrls = function(kind, raceId){
     if(kind === 'NAR'){
       return [
-        `https://nar.sp.netkeiba.com/race/race_result.html?race_id=${raceId}`,
+        // v5.18.210: 実機で成功している desktop odds を最優先。
+        // SP版は応答しない環境で12〜15秒待ちが連鎖するため最後の保険に回す。
+        `https://nar.netkeiba.com/odds/index.html?race_id=${raceId}`,
+        `https://nar.netkeiba.com/odds/index.html?race_id=${raceId}&type=b1`,
+        `https://nar.netkeiba.com/race/shutuba.html?race_id=${raceId}&rf=race_submenu`,
+        `https://nar.netkeiba.com/race/result.html?race_id=${raceId}&rf=race_submenu`,
         `https://nar.sp.netkeiba.com/odds/?race_id=${raceId}&type=b1`,
         `https://nar.sp.netkeiba.com/odds/?housiki=c99&race_id=${raceId}&type=b1`,
         `https://nar.sp.netkeiba.com/race/shutuba.html?race_id=${raceId}`,
-        `https://nar.netkeiba.com/race/result.html?race_id=${raceId}&rf=race_submenu`,
-        `https://nar.netkeiba.com/odds/index.html?race_id=${raceId}`,
-        `https://nar.netkeiba.com/race/shutuba.html?race_id=${raceId}&rf=race_submenu`
+        `https://nar.sp.netkeiba.com/race/race_result.html?race_id=${raceId}`
       ];
     }
     return prevOddsUrls153 ? prevOddsUrls153.apply(this, arguments) : [];
@@ -18586,7 +18589,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.18.209 EV Calibration + JRA No-Race Fix';
+  const VERSION202 = 'v5.18.210 NAR Fast Odds + Timeline Fix';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
@@ -18901,11 +18904,17 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   async function fetchMarkets202(kind,rid,expected){
     const markets=newMarkets202();
     const host=kind==='NAR'?'https://nar.netkeiba.com':'https://race.netkeiba.com';
-    const urls=[
+    const urls = kind==='NAR' ? [
+      // v5.18.210: NARでは実機で成功率の高いdesktop/no-typeを先にする。
+      // b0は全券種取得用の第2候補、SPは最後の保険。
+      `${host}/odds/index.html?race_id=${rid}`,
+      `${host}/odds/index.html?race_id=${rid}&type=b0`,
+      `${host}/odds/index.html?race_id=${rid}&type=b1`,
+      `https://nar.sp.netkeiba.com/odds/?race_id=${rid}&type=b1`
+    ] : [
       `${host}/odds/index.html?race_id=${rid}&type=b0`,
       `${host}/odds/index.html?race_id=${rid}`
     ];
-    if(kind==='NAR') urls.push(`https://nar.sp.netkeiba.com/odds/?race_id=${rid}`);
     let source='';
     for(const url of urls){
       try{
@@ -19530,7 +19539,10 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     if(typeof baseFetchHtml204 === 'function' && !baseFetchHtml204.__freezeGuard204){
       const wrappedFetchHtml204 = async function(url){
         const u = String(url || '');
-        const ms = /race_list|calendar|schedule|kaisai/i.test(u) ? 9000 : (/\/odds\//i.test(u) ? 12000 : 15000);
+        // v5.18.210: nar.sp はiPad環境で無応答になりやすい。
+        // 旧12〜15秒待ちを4秒に短縮し、desktop/Workerへすぐフォールバックする。
+        const isNarSp210 = /nar\.sp\.netkeiba\.com/i.test(u);
+        const ms = isNarSp210 ? 4000 : (/race_list|calendar|schedule|kaisai/i.test(u) ? 9000 : (/\/odds\//i.test(u) ? 12000 : 15000));
         return await timeout204(baseFetchHtml204.call(this, url), ms, '通信');
       };
       wrappedFetchHtml204.__freezeGuard204 = true;
@@ -19731,7 +19743,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   'use strict';
   if(window.__V518206_RIGHT_ODDS_WORKSPACE__) return;
   window.__V518206_RIGHT_ODDS_WORKSPACE__=true;
-  const VERSION='v5.18.209 EV Calibration + JRA No-Race Fix';
+  const VERSION='v5.18.210 NAR Fast Odds + Timeline Fix';
   const TYPES=['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
   const $=id=>document.getElementById(id);
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -19873,7 +19885,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 
 
 <!-- ============================================================
-     v5.18.209 EV Calibration + JRA No-Race Fix
+     v5.18.210 NAR Fast Odds + Timeline Fix
      - 期間横断の精算済み買い目をEV帯別に校正
      - PRE-RACE監査済みのみ / FINAL研究を切替
      - JRA非開催日の「エラー/開催場選択」表示を通常の非開催表示へ
@@ -19884,7 +19896,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   const $ = id => document.getElementById(id);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const fmtYen = n => Math.round(Number(n||0)).toLocaleString('ja-JP') + '円';
-  const VERSION209 = 'v5.18.209 EV Calibration + JRA No-Race Fix';
+  const VERSION209 = 'v5.18.210 NAR Fast Odds + Timeline Fix';
 
   function mark209(){
     try{
@@ -20195,5 +20207,23 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 })();
 </script>
 
+
+<script>
+/* v5.18.210 NAR Fast Odds + Timeline Fix: final label keeper */
+(function(){
+  'use strict';
+  const V='v5.18.210 NAR Fast Odds + Timeline Fix';
+  function mark(){
+    try{
+      window.APP_VERSION=V;
+      const v=document.querySelector('.ver');
+      if(v){ const bridge=/🌉/.test(v.textContent||''); v.textContent=V+(bridge?' 🌉':''); }
+      document.title='The競馬 EV分析 '+V;
+    }catch(e){}
+  }
+  mark();
+  [900,2700,6200,9000].forEach(ms=>setTimeout(mark,ms));
+})();
+</script>
 </body>
 </html>

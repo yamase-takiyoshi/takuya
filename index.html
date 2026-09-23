@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.214 DISPLAY FILTERS</title>
+<title>The競馬 EV分析 v5.18.216 DATA NAME SYNC</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.214 DISPLAY FILTERS</span>
+    <span class="ver">v5.18.216 DATA NAME SYNC</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -997,8 +997,7 @@ function saveSettings(){
   document.getElementById('narBadge').style.display = settings.nar ? '' : 'none';
   localStorage.setItem('tk-html-settings', JSON.stringify(settings));
 }
-function saveProxy(){
-  settings.proxyUrl = document.getElementById('proxyUrl')?.value?.trim() || '';
+function saveProxy(){  settings.proxyUrl = document.getElementById('proxyUrl')?.value?.trim() || '';
   localStorage.setItem('tk-html-settings', JSON.stringify(settings));
 }
 
@@ -1611,6 +1610,8 @@ function applyStateSnapshot(data){
   }
   if(typeof data.currentRaceName === 'string') currentRaceName = data.currentRaceName;
   if(data.currentRaceId != null) currentRaceId = String(data.currentRaceId);
+  // v5.18.216: 左側の馬データがどのrace_idのものかを明示し、右側時系列との誤JOINを防ぐ。
+  try{ window.__horseDataRaceId = String(currentRaceId || ''); window.__horseDataUpdatedAt = Date.now(); }catch(e){}
   if(Array.isArray(data.profitHistory)) profitHistory = data.profitHistory;
 
   // 永続化＆UI反映
@@ -1765,7 +1766,7 @@ function addHorseRow(){
   renderManualFinishPicker();
 }
 function removeHorse(i){ horses.splice(i, 1); renderHorseRows(); }
-function clearHorses(){ horses = []; renderHorseRows(); }
+function clearHorses(){ horses = []; try{window.__horseDataRaceId='';}catch(e){} renderHorseRows(); }
 function checkPopDuplicate(){
   const warn = document.getElementById("popDupWarn");
   if(!warn) return;
@@ -1995,8 +1996,7 @@ const HITMAX_VENUE_TUNING = (() => {
   return { map, fallback: { tier:'jra_major', ...P.jra_major } };
 })();
 
-function hitMaxTuning(){
-  const code = currentVenueCodeForScore();
+function hitMaxTuning(){  const code = currentVenueCodeForScore();
   const t = (code && HITMAX_VENUE_TUNING.map[code]) || HITMAX_VENUE_TUNING.fallback;
   try { window.__hitMaxTuning = { code: code || '(未判定)', tier: t.tier }; } catch(_){}
   return t;
@@ -2995,8 +2995,7 @@ function renderSimProfitChart(){
   const areaColor2 = 'rgba(0,0,0,0)';
   const grad = ctx.createLinearGradient(0,16,0,h-22);
   grad.addColorStop(0, areaColor1);
-  grad.addColorStop(1, areaColor2);
-  ctx.fillStyle = grad;
+  grad.addColorStop(1, areaColor2);  ctx.fillStyle = grad;
   ctx.beginPath();
   ctx.moveTo(xOf(0), yOf(0));
   pts.forEach((v,i)=>ctx.lineTo(xOf(i),yOf(v)));
@@ -3911,6 +3910,8 @@ async function loadActiveNarVenuesByRaceId(date){
 function resetRaceState(message){
   currentRaceId = '';
   currentRaceName = '';
+  // v5.18.216: レース変更中に前レースの馬名を右側へ流用しない。
+  try{ window.__horseDataRaceId = ''; }catch(e){}
 
   const raceSelect = document.getElementById('raceSelect');
   if(raceSelect) raceSelect.innerHTML = '<option value="">開催場を選んでレース一覧を取得</option>';
@@ -3993,8 +3994,7 @@ async function probeNarRaceById(date, venueCode, raceNo){
   let html = '';
   try{
     html = await fetchHtmlViaProxy(url);
-  }catch(e){
-    return null;
+  }catch(e){    return null;
   }
 
   const parser = new DOMParser();
@@ -4993,8 +4993,7 @@ async function getReliableJraRacesFromList(html, date, venueCode){
   // プローブが全滅した場合だけ、直接リンクを日付検証して採用する。
   if(direct.length){
     const verified = await filterJraDirectRacesBySelectedDate(direct, date);
-    if(verified.length) return verified;
-  }
+    if(verified.length) return verified;  }
 
   const kdRaw = parseJraKaisaiFromListText(html, venueCode);
   let kdFixed = await fixJraKaisaiByProbe(date, venueCode, kdRaw);
@@ -5274,6 +5273,8 @@ function applySelectedRaceUrl(){
 
   if(raceId){
     // ここで必ずJRA/NAR別にURLを再生成し、前回のURL残留を完全に防ぐ。
+    // v5.18.216: 新しいrace_idを選んだ時点では、左側に残る旧レース馬名を未同期扱いにする。
+    try{ if(String(window.__horseDataRaceId || '') !== String(raceId)) window.__horseDataRaceId = ''; }catch(e){}
     raceUrl.value = shutubaUrl(kind, raceId);
     currentRaceName = opt?.dataset?.raceName || opt?.textContent || '';
     currentRaceId = raceId;
@@ -5991,8 +5992,7 @@ function extractFinalWinOddsPopStrictFromResultCells(cells, horseAnchor){
     const m = String(t||'').match(/^(\d{1,4}\.\d+)$/) || String(t||'').match(/^(\d{1,4}\.\d+)\s*(?:倍)?$/);
     if(!m) return 0;
     const v = sanitizeWinOddsValue(Number(m[1]), String(t||''));
-    return (v >= 1 && v <= 999.9) ? Math.round(v * 10) / 10 : 0;
-  }
+    return (v >= 1 && v <= 999.9) ? Math.round(v * 10) / 10 : 0;  }
   function isAfter3fText(t){
     const m = String(t||'').match(/^(\d{2}\.\d)$/);
     if(!m) return false;
@@ -6520,6 +6520,47 @@ function fillProvisionalOddsPopularityForPrediction(baseHorses){
 
 
 // ─── netkeibaプロキシ取得 ────────────────────────
+// v5.18.217 NarResultRescue: Worker の url= 直指定で NAR の desktop/db/SP ページを並列取得し、
+// 出走馬が2頭以上取れた最初の候補（優先順）を返す。ブリッジ・type API・キャッシュは経由しない。
+async function narRescueFetch217(raceId, isResult){
+  const base = String(settings.proxyUrl || '').replace(/\/$/, '');
+  const rid = String(raceId);
+  const cands = isResult ? [
+    { tag:'PC',  url:`https://nar.netkeiba.com/race/result.html?race_id=${rid}&rf=race_submenu`, db:false },
+    { tag:'PC2', url:`https://nar.netkeiba.com/race/result.html?race_id=${rid}`, db:false },
+    { tag:'db',  url:`https://db.netkeiba.com/race/${rid}/`, db:true },
+    { tag:'SP',  url:`https://nar.sp.netkeiba.com/race/race_result.html?race_id=${rid}`, db:false }
+  ] : [
+    { tag:'PC',  url:`https://nar.netkeiba.com/race/shutuba.html?race_id=${rid}&rf=race_submenu`, db:false },
+    { tag:'PC2', url:`https://nar.netkeiba.com/race/shutuba.html?race_id=${rid}`, db:false },
+    { tag:'SP',  url:`https://nar.sp.netkeiba.com/race/shutuba.html?race_id=${rid}`, db:false }
+  ];
+  const parser = new DOMParser();
+  const one = async (c) => {
+    const ctl = (typeof AbortController === 'function') ? new AbortController() : null;
+    const timer = setTimeout(() => { try{ ctl && ctl.abort(); }catch(e){} }, 10000);
+    try{
+      const res = await fetch(`${base}?url=${encodeURIComponent(c.url)}&_=${Date.now()}`, { cache:'no-store', signal: ctl ? ctl.signal : undefined });
+      const text = await res.text();
+      if(!res.ok) return { c, horses:[], note:`${c.tag}:HTTP${res.status}` };
+      if(typeof looksBlockedHtml === 'function' && looksBlockedHtml(text)) return { c, horses:[], note:`${c.tag}:ブロック` };
+      const doc = parser.parseFromString(text, 'text/html');
+      let horses = [];
+      try{ horses = c.db ? parseHorsesFromDbDoc(doc) : parseHorsesFromDoc(doc, c.url); }catch(e){}
+      return { c, horses, html:text, doc, note:`${c.tag}:${text.length}字/馬${horses.length}` };
+    }catch(e){
+      return { c, horses:[], note:`${c.tag}:${(e && e.name === 'AbortError') ? '10秒超過' : 'ERR'}` };
+    }finally{ clearTimeout(timer); }
+  };
+  const results = await Promise.all(cands.map(one));
+  const log = results.map(r => r.note).join(' | ');
+  const hit = results.find(r => r.horses.length >= 2);
+  if(!hit) return { horses:[], log };
+  try{ await putRaceHtmlCache(hit.c.url, hit.html); }catch(e){}
+  window.__fetchPath = 'worker-url(' + hit.c.tag + ')';
+  return { horses: hit.horses, url: hit.c.url, html: hit.html, doc: hit.doc, log };
+}
+
 async function fetchRace(){
   const rawUrl = document.getElementById('raceUrl').value.trim();
   if(!rawUrl){ alert('URLを入力してください。'); return; }
@@ -6605,6 +6646,33 @@ async function fetchRace(){
 
     horses = parseHorsesFromDoc(doc, activeUrl);
 
+    // v5.18.217 NarResultRescue:
+    // Worker の type=result API は Worker版によって nar.sp（JS描画・馬リンク0〜1）を返すことがある。
+    // ブリッジ/キャッシュを通さず、Worker の url= 直指定で desktop/SP/db を「並列」に取り直す。
+    // （ブリッジが無応答だと1回22秒×連鎖で15秒ガードに全部潰されるため、ここでは使わない）
+    window.__narRescueLog = '';
+    if(horses.length < 2){
+      const ridR = (activeUrl.match(/race_id=(\d{10,14})/) || [])[1] || validation.raceId || '';
+      const isNarR = /nar(?:\.sp)?\.netkeiba\.com/.test(activeUrl) || (ridR && !/^(0[1-9]|10)$/.test(ridR.slice(4,6)));
+      if(ridR && isNarR && settings.proxyUrl){
+        try{
+          status.innerHTML = `<div class="url-status">🔄 結果ページが空のため Worker直指定で再取得中...</div>`;
+          const isResultR = /(result|race_result)\.html/i.test(activeUrl) || /db\.netkeiba/.test(activeUrl);
+          const res = await narRescueFetch217(ridR, isResultR);
+          window.__narRescueLog = res.log;
+          if(res.horses.length >= 2){
+            horses = res.horses;
+            activeUrl = res.url;
+            html = res.html;
+            doc = res.doc;
+            const t2 = parseRaceTitleFromDoc(res.doc);
+            if(t2) currentRaceName = t2;
+            status.innerHTML = `<div class="url-status">🏁 Worker直指定で取得しました（${res.horses.length}頭）</div>`;
+          }
+        }catch(e){ window.__narRescueLog = 'rescue例外:' + (e && e.message || e); }
+      }
+    }
+
     // v5.18.135 DbBridge: result.html が SP/JS描画版で出走馬テーブルを含まない
     // （馬リンク0）場合、db.netkeiba.com/race/{race_id}/ の静的結果ページに切替える。
     // db版は UA 非依存で確定の着順/枠/馬番/単勝/人気を静的HTMLで返す。
@@ -6642,7 +6710,10 @@ async function fetchRace(){
       const be = window.__bridgeLastError || '';
       const dbe = window.__dbFallbackError || '';
       const blocked = (typeof looksBlockedHtml === 'function') ? looksBlockedHtml(html) : false;
-      throw new Error(`出走馬を十分に取得できませんでした（経路:${path} / HTML${String(html).length}字 / 馬リンク${hl} / ブロック判定:${blocked?'有':'無'}${be?' / ブリッジ:'+be:''}${dbe?' / db:'+dbe:''}）`);
+      // v5.18.217: 何のページが返ったか分かるよう <title> と Worker直指定の結果も出す。
+      const ttl = ((String(html).match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || '').replace(/\s+/g,' ').trim().slice(0,40);
+      const rl = window.__narRescueLog || '';
+      throw new Error(`出走馬を十分に取得できませんでした（経路:${path} / HTML${String(html).length}字 / 馬リンク${hl} / ブロック判定:${blocked?'有':'無'}${ttl?' / title:'+ttl:''}${be?' / ブリッジ:'+be:''}${dbe?' / db:'+dbe:''}${rl?' / 直指定:'+rl:''}）`);
     }
 
     // ── 単勝オッズ・人気取得（v5.18.9 RaceIdCheckFix） ──────────────────────────
@@ -6714,7 +6785,14 @@ async function fetchRace(){
       horses = horses.map(h => ({ ...h, odds: 0, pop: 0, provisionalOdds: false }));
     }
 
+    // v5.18.216: 左側表示中の馬データをこのrace_idの正規メタデータとして登録。
+    // 右側の時系列/実況はこの紐付けが一致する時だけ馬名を採用する。
+    try{
+      window.__horseDataRaceId = String(rid || currentRaceId || '');
+      window.__horseDataUpdatedAt = Date.now();
+    }catch(e){}
     renderHorseRows();
+    try{ window.syncOddsTimelineHorseNames202?.(); }catch(e){}
 
     const oddsCount = horses.filter(h => Number(h.odds) >= 1).length;
     const popCount = horses.filter(h => Number(h.pop) >= 1).length;
@@ -6913,8 +6991,7 @@ function findOddsNearPopularityByRightScan(tr, horseNo){
   // 人気セルの左側から一番近い小数/数値を単勝オッズとして採用。
   // 斤量55.0は通常かなり左側なので、右端優先にして誤読を抑える。
   for(let i=start; i>=0 && i>=start-5; i--){
-    const tx = cells[i].replace(/,/g,'');
-    if(!tx || /kg|㎏|歳|牡|牝|セ|斤量|馬体重|増減|--/.test(tx)) continue;
+    const tx = cells[i].replace(/,/g,'');    if(!tx || /kg|㎏|歳|牡|牝|セ|斤量|馬体重|増減|--/.test(tx)) continue;
     // ここでは小数だけ採用。54/55/56 の整数は斤量誤検出の典型なので採用しない。
     const m = tx.match(/^(\d{1,4}\.\d+)$/) || tx.match(/(\d{1,4}\.\d+)/);
     if(!m) continue;
@@ -7913,8 +7990,7 @@ function extractRaceNameFromScheduleHtml49(html, raceId, raceNo){
     }
   }catch(e){}
   // フォールバック: script/styleブロックを除去した安全なHTML文字列でチャンク検索
-  const safeHtml = s
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+  const safeHtml = s    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ');
   let idx = -1;
   while((idx = safeHtml.indexOf(String(raceId), idx + 1)) >= 0){
@@ -8913,7 +8989,6 @@ loadRaceList = async function(){
      2. nar77_fetchActiveVenues が途中で status にエラーを書いた後、
         activeVenueLoadSeq ミスマッチで最終「開催なし日」上書きがスキップされた
         → 途中エラー書き込みを削除。seq≠の場合も status だけは更新する。
-
    v5.18.79 DateTouchFix
    ・sessionStorage の tk-date-manual-touched にタッチ日付を持たせる。
      iPad Safari はバックグラウンド復元でセッションを引き継ぐため、
@@ -8951,18 +9026,10 @@ loadRaceList = async function(){
 initUI();
 initCalendarPicker();
 
-// デモデータ
+// v5.18.216: 本番画面への自動デモデータ投入を廃止。
+// race_id選択直後に5秒時系列取得が先行すると「サンプルA〜H」がIndexedDBへ保存され、
+// 左側の実馬名と右側の系列名が食い違う原因になるため、空のまま待機する。
 if(horses.length === 0){
-  horses = [
-    {num:1,name:'サンプルA',odds:3.2,pop:1,frame:1},
-    {num:2,name:'サンプルB',odds:5.8,pop:2,frame:1},
-    {num:3,name:'サンプルC',odds:8.4,pop:3,frame:2},
-    {num:4,name:'サンプルD',odds:12.0,pop:4,frame:2},
-    {num:5,name:'サンプルE',odds:15.5,pop:5,frame:3},
-    {num:6,name:'サンプルF',odds:22.0,pop:6,frame:3},
-    {num:7,name:'サンプルG',odds:35.0,pop:7,frame:4},
-    {num:8,name:'サンプルH',odds:48.0,pop:8,frame:4},
-  ];
   renderHorseRows();
 }
 </script>
@@ -9609,7 +9676,9 @@ if(horses.length === 0){
       if(d.__narBridge === 'error'){ console.warn('[narBridge]', d.error); return; }
       if(d.__narBridge === 'response' && d.id && pending[d.id]){ pending[d.id](d); delete pending[d.id]; }
     });
-    window.__narBridgeFetch = function(url){
+    // v5.18.217: ブリッジがタイムアウトしたら3分間は即失敗→Workerへ直行させる。
+    // （無応答ブリッジに1回17〜22秒ずつ待たされ、15秒ガードで後続の取得が全滅するのを防ぐ）
+    const rawBridgeFetch217 = function(url){
       return new Promise(function(resolve, reject){
         const id = 'nb' + (++seq) + '_' + Date.now();
         const to = setTimeout(function(){ if(pending[id]){ delete pending[id]; reject(new Error('bridge timeout')); } }, 17000);
@@ -9617,6 +9686,19 @@ if(horses.length === 0){
         try{ window.postMessage({ __narBridge:'request', id:id, url:url }, '*'); }
         catch(e){ clearTimeout(to); delete pending[id]; reject(e); }
       });
+    };
+    window.__narBridgeFetch = async function(url){
+      const until = Number(window.__bridgeCooldownUntil || 0);
+      if(until > Date.now()){
+        throw new Error('ブリッジ休止中（直前にタイムアウト・残り' + Math.ceil((until - Date.now())/1000) + '秒）');
+      }
+      try{
+        return await rawBridgeFetch217(url);
+      }catch(e){
+        const msg = String((e && e.message) || e || '');
+        if(/timeout|タイムアウト/i.test(msg)) window.__bridgeCooldownUntil = Date.now() + 3*60*1000;
+        throw e;
+      }
     };
   })();
 
@@ -9906,8 +9988,7 @@ if(horses.length === 0){
   }
 
   // 1場の開催確認：1R〜maxRを確認。v5.18.95: Akamaiのレート制限を避けるため
-  // 全並列ではなく3本ずつのバッチ＋小休止で投げる。
-  async function probeVenue87(date, venueCode, maxR){
+  // 全並列ではなく3本ずつのバッチ＋小休止で投げる。  async function probeVenue87(date, venueCode, maxR){
     const px = (settings && settings.proxyUrl) ? settings.proxyUrl.replace(/\/$/,'') : '';
     if(!px) return [];
     const past = isPast87(date);
@@ -10906,8 +10987,7 @@ if(horses.length === 0){
           r.date, r.venueName || '', r.no + 'R',
           '⚠️ ' + (r.error || '取得失敗'),
           '', '', '', '', '', '', '', '', '', '', ''
-        ].join('\t'));
-        return;
+        ].join('\t'));        return;
       }
       const fin = r.hasFinish ? (r.finishTop || []).join('-') : '未確定';
       const name = (r.raceName || (r.no + 'R')) + (r.count === 0 ? '（見送り）' : '');
@@ -11906,8 +11986,7 @@ if(horses.length === 0){
         const parts = [];
         if(confPred) parts.push(`うち確定済み ${confPred}レース`);
         if(skipCount) parts.push(`確定済み ${skipCount}レースはスキップ`);
-        if(parts.length) msg += `（${parts.join('、')}）`;
-        msg += '。';
+        if(parts.length) msg += `（${parts.join('、')}）`;        msg += '。';
         prog.innerHTML = `<div class="url-status ok">${msg}</div>`;
       }
       if(copyBtn && predCount > 0) copyBtn.style.display = '';
@@ -12906,8 +12985,7 @@ if(horses.length === 0){
     if(races.length) return renderRaceOptions152(races, date, code, status);
     if(status) status.innerHTML = `<div class="url-status err">⚠️ ${esc152(date)} ${esc152(venueName152(code))} のレースページを確認できませんでした。</div>`;
   };
-  const prevTest152 = window.testProxy;
-  window.testProxy = async function(){
+  const prevTest152 = window.testProxy;  window.testProxy = async function(){
     if(prevTest152) await prevTest152.apply(this, arguments);
     const status = document.getElementById('proxyStatus');
     const date = document.getElementById('pickDate')?.value || (typeof todayYmd === 'function' ? todayYmd() : '');
@@ -13906,8 +13984,7 @@ function json(obj, status = 200) {
       .replace(/<script[\s\S]*?<\/script>/gi,' ')
       .replace(/<style[\s\S]*?<\/style>/gi,' ')
       .replace(/<[^>]+>/g,' '))
-      .replace(/[\t\r\n]+/g,' ').replace(/[\s　]+/g,' ').trim();
-  }
+      .replace(/[\t\r\n]+/g,' ').replace(/[\s　]+/g,' ').trim();  }
   function blocked159(text){
     return !text || /Access Denied|Reference\s*#|don't have permission|Just a moment|Incapsula|cf-browser|akamai|Pardon Our Interruption|errors\.edgesuite\.net/i.test(String(text));
   }
@@ -14906,8 +14983,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       cls: m[1] + (m[2] || ''),
       group: kanNum171(m[3] || ''),
       raw: m[0].replace(/^[^A-Za-z0-9]/, ''),
-      grade
-    };
+      grade    };
   }
 
   function parseDist171(text){
@@ -15906,8 +15982,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   }
   function buildExportObject(){
     var all = getRows();
-    var profitRecords = all.filter(function(r){ return r.status === 'ok' && r.settled && (r.bet || r.return || r.profit); });
-    var cumBet=0, cumReturn=0, cumProfit=0;
+    var profitRecords = all.filter(function(r){ return r.status === 'ok' && r.settled && (r.bet || r.return || r.profit); });    var cumBet=0, cumReturn=0, cumProfit=0;
     var trend = profitRecords.slice().sort(function(a,b){
       var d = String(a.date).localeCompare(String(b.date)); if(d) return d;
       d = String(a.venue).localeCompare(String(b.venue),'ja'); if(d) return d;
@@ -16906,8 +16981,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   }
 
   function installModeButton(){
-    const mg=document.getElementById('modeGrid');
-    if(!mg || document.getElementById('edge29ModeBtn')) return;
+    const mg=document.getElementById('modeGrid');    if(!mg || document.getElementById('edge29ModeBtn')) return;
     const b=document.createElement('button');
     b.id='edge29ModeBtn';
     b.className='mode-btn'+(currentMode()===MODE?' active':'');
@@ -17906,8 +17980,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 
   const VERSION = 'v5.18.198 JRA NoMeet FastGuard + NAR AllMarkets PreClose3m';
 
-  function $(id){ return document.getElementById(id); }
-  function esc198(s){
+  function $(id){ return document.getElementById(id); }  function esc198(s){
     return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
   }
   function compact198(date){ return String(date || '').replace(/[^0-9]/g,'').slice(0,8); }
@@ -18589,7 +18662,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.18.215 LIVE COMMENTARY';
+  const VERSION202 = 'v5.18.217 NAR RESULT RESCUE';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
@@ -18654,19 +18727,60 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     return currentRaceId202();
   }
 
-  function expectedHorses202(){
-    try{ if(typeof horses !== 'undefined' && Array.isArray(horses)) return horses.map(h => ({num:Number(h.num),name:String(h.name||''),odds:Number(h.odds||0),pop:Number(h.pop||0),frame:Number(h.frame||0)})); }catch(e){}
-    try{ if(Array.isArray(window.horses)) return window.horses.map(h => ({num:Number(h.num),name:String(h.name||''),odds:Number(h.odds||0),pop:Number(h.pop||0),frame:Number(h.frame||0)})); }catch(e){}
-    const out = [];
-    document.querySelectorAll('#horseRows .horse-row').forEach(row => {
-      const nums = row.querySelectorAll('input');
-      if(nums.length >= 5){
-        const no = Number(nums[1].value || 0);
-        const name = String(nums[2].value || '');
-        if(no > 0) out.push({num:no,name,odds:Number(nums[3].value||0),pop:Number(nums[4].value||0),frame:Number(nums[0].value||0)});
+  function isPlaceholderHorseName202(name){
+    const s=norm(name).replace(/[　\s]+/g,'');
+    return !s || /^サンプル[A-ZＡ-Ｚ0-9]*$/i.test(s) || /^sample[A-Z0-9]*$/i.test(s);
+  }
+  function normalizeHorseRows202(rows){
+    return (Array.isArray(rows)?rows:[]).map(h=>({
+      num:Number(h?.num||0),
+      name:String(h?.name||''),
+      odds:Number(h?.odds||0),
+      pop:Number(h?.pop||0),
+      frame:Number(h?.frame||0)
+    })).filter(h=>h.num>0);
+  }
+  function horseRowsFromDom202(){
+    const out=[];
+    document.querySelectorAll('#horseRows .horse-row').forEach(row=>{
+      const inputs=row.querySelectorAll('input');
+      if(inputs.length>=5){
+        const no=Number(inputs[1].value||0);
+        if(no>0) out.push({
+          num:no,
+          name:String(inputs[2].value||''),
+          odds:Number(inputs[3].value||0),
+          pop:Number(inputs[4].value||0),
+          frame:Number(inputs[0].value||0)
+        });
       }
     });
     return out;
+  }
+  function expectedHorses202(){
+    const rid=currentRaceId202();
+    let bound='';
+    try{ bound=String(window.__horseDataRaceId||''); }catch(e){}
+    // race_idが一致している時だけ左側を正規メタデータとして使う。
+    // DOMを先に読むことで、画面で見えている馬名と右側の表示名を同一ソースにする。
+    if(rid && bound===rid){
+      const dom=normalizeHorseRows202(horseRowsFromDom202());
+      if(dom.some(h=>!isPlaceholderHorseName202(h.name))) return dom.map(h=>({...h,name:isPlaceholderHorseName202(h.name)?'':h.name}));
+      try{
+        if(typeof horses!=='undefined' && Array.isArray(horses)){
+          const hs=normalizeHorseRows202(horses);
+          if(hs.some(h=>!isPlaceholderHorseName202(h.name))) return hs.map(h=>({...h,name:isPlaceholderHorseName202(h.name)?'':h.name}));
+        }
+      }catch(e){}
+      try{
+        if(Array.isArray(window.horses)){
+          const hs=normalizeHorseRows202(window.horses);
+          if(hs.some(h=>!isPlaceholderHorseName202(h.name))) return hs.map(h=>({...h,name:isPlaceholderHorseName202(h.name)?'':h.name}));
+        }
+      }catch(e){}
+    }
+    // レース選択直後など、左側がまだ旧レースのままなら馬名を流用しない。
+    return [];
   }
 
   function dbOpen202(){
@@ -18865,8 +18979,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       if(!kind) return;
       const arity=(kind==='3連複'||kind==='3連単')?3:2;
       Array.from(table.querySelectorAll('tr')).forEach(tr => {
-        if(!tr.querySelector('td')) return;
-        const text=norm(tr.textContent), vals=decimals202(text); if(!vals.length) return;
+        if(!tr.querySelector('td')) return;        const text=norm(tr.textContent), vals=decimals202(text); if(!vals.length) return;
         let ints=intsNoOdds202(text); if(ints.length>=arity+1) ints=ints.slice(1);
         const maxN=kind==='枠連'?8:maxHorse;
         ints=ints.filter(n=>n>=1&&n<=maxN&&(kind==='枠連'||!valid.size||valid.has(n)));
@@ -19067,8 +19180,22 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   }
   function horseNameMap202(){
     const map=new Map();
-    const hs=(history.length?history[history.length-1].horses:expectedHorses202())||[];
-    hs.forEach(h=>map.set(String(Number(h.num)),String(h.name||'')));
+    const currentRid=currentRaceId202();
+    // 現在のレースを表示中なら、左側の実表示を最優先。
+    if(activeRid && activeRid===currentRid){
+      expectedHorses202().forEach(h=>{
+        const nm=String(h.name||'').trim();
+        if(h.num>0 && nm && !isPlaceholderHorseName202(nm)) map.set(String(Number(h.num)),nm);
+      });
+    }
+    // 保存履歴は新しい順に参照し、左側で未解決の馬番だけ補完する。
+    for(let i=history.length-1;i>=0;i--){
+      (history[i]?.horses||[]).forEach(h=>{
+        const k=String(Number(h.num));
+        const nm=String(h.name||'').trim();
+        if(!map.has(k) && Number(h.num)>0 && nm && !isPlaceholderHorseName202(nm)) map.set(k,nm);
+      });
+    }
     return map;
   }
   function comboLabel202(market,key){
@@ -19077,6 +19204,56 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       return `${key}${nm?' '+nm:''}`;
     }
     return key;
+  }
+
+  let lastHorseSyncSig202='';
+  async function syncHorseNames202(){
+    const rid=currentRaceId202();
+    if(!rid) return 0;
+    let bound='';
+    try{ bound=String(window.__horseDataRaceId||''); }catch(e){}
+    if(bound!==rid) return 0;
+    const live=expectedHorses202().filter(h=>h.num>0 && h.name && !isPlaceholderHorseName202(h.name));
+    if(!live.length) return 0;
+    const byNo=new Map(live.map(h=>[Number(h.num),h]));
+    const sig=rid+'|'+live.map(h=>`${h.num}:${h.name}:${h.frame||0}`).join('|');
+    const rows=(activeRid===rid)?history:await dbRace202(rid);
+    let changed=0;
+    rows.forEach(rec=>{
+      const old=Array.isArray(rec.horses)?rec.horses:[];
+      const oldMap=new Map(old.map(h=>[Number(h.num),h]));
+      const nums=new Set([...oldMap.keys(),...byNo.keys()]);
+      const merged=[];
+      [...nums].filter(n=>n>0).sort((a,b)=>a-b).forEach(n=>{
+        const prev=oldMap.get(n)||{num:n,name:'',pop:0,frame:0,odds:0};
+        const now=byNo.get(n);
+        const next={...prev,num:n};
+        if(now){
+          if(now.name && !isPlaceholderHorseName202(now.name)) next.name=String(now.name);
+          if(Number(now.frame)>0) next.frame=Number(now.frame);
+        }
+        merged.push(next);
+      });
+      const before=JSON.stringify(old.map(h=>[Number(h.num),String(h.name||''),Number(h.frame||0)]));
+      const after=JSON.stringify(merged.map(h=>[Number(h.num),String(h.name||''),Number(h.frame||0)]));
+      if(before!==after){ rec.horses=merged; changed++; }
+    });
+    // Safari負荷を抑えるため永続更新は直近60件だけ。表示中historyは全件メモリ上で同期済み。
+    if(changed && sig!==lastHorseSyncSig202){
+      const saveRows=rows.slice(-60).filter(r=>Array.isArray(r.horses));
+      if(saveRows.length){
+        const db=await dbOpen202();
+        await new Promise((resolve,reject)=>{
+          const tx=db.transaction(STORE,'readwrite'), st=tx.objectStore(STORE);
+          saveRows.forEach(r=>st.put(r));
+          tx.oncomplete=resolve;
+          tx.onerror=()=>reject(tx.error||new Error('horse name sync failed'));
+        });
+      }
+      lastHorseSyncSig202=sig;
+    }
+    if(activeRid===rid){ refreshControls202(); draw202(); }
+    return changed;
   }
 
   function refreshControls202(){
@@ -19556,6 +19733,18 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
         },250);
       });
     });
+    // v5.18.216: 左側の馬名が更新されたら右側の系列名/実況メタデータを再JOIN。
+    const horseBox202=$('horseRows');
+    if(horseBox202 && !horseBox202.__oddsNameSync202){
+      horseBox202.__oddsNameSync202=true;
+      const kick=()=>{
+        clearTimeout(window.__oddsTsHorseSyncTimer202);
+        window.__oddsTsHorseSyncTimer202=setTimeout(()=>{ syncHorseNames202().catch(()=>{}); },120);
+      };
+      new MutationObserver(kick).observe(horseBox202,{childList:true,subtree:true});
+      horseBox202.addEventListener('input',kick,true);
+      horseBox202.addEventListener('change',kick,true);
+    }
     window.addEventListener('resize',()=>{ if(oddsMode) draw202(); });
     document.addEventListener('visibilitychange',()=>{ if(!document.hidden && oddsMode){ draw202(); if($('oddsTsAuto')?.checked) capture202(false); } });
     refreshRaceArchive202(currentRaceId202()).catch(()=>{});
@@ -19589,6 +19778,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   window.showOddsTimeline = ()=>showMode202('odds');
   window.captureOddsTimelineNow = ()=>capture202(true);
   window.refreshOddsRaceArchive = ()=>refreshRaceArchive202(activeRid||currentRaceId202());
+  window.syncOddsTimelineHorseNames202 = ()=>syncHorseNames202();
 })();
 
 </script>
@@ -19788,8 +19978,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
         }
       };
       wrappedFetchRace204.__freezeGuard204 = true;
-      window.fetchRace = wrappedFetchRace204;
-      try{ fetchRace = wrappedFetchRace204; }catch(e){}
+      window.fetchRace = wrappedFetchRace204;      try{ fetchRace = wrappedFetchRace204; }catch(e){}
     }
   }catch(e){ console.warn('[204] fetchRace guard install failed', e); }
 
@@ -20590,13 +20779,13 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 </script>
 
 <script>
-/* v5.18.215 LIVE COMMENTARY / 予想印・推奨馬券・結果成績 */
+/* v5.18.216 DATA NAME SYNC / LIVE COMMENTARY / 予想印・推奨馬券・結果成績 */
 (function(){
   'use strict';
-  if(window.__V518215_LIVE_COMMENTARY__) return;
-  window.__V518215_LIVE_COMMENTARY__ = true;
+  if(window.__V518216_LIVE_COMMENTARY__) return;
+  window.__V518216_LIVE_COMMENTARY__ = true;
 
-  const VERSION215 = 'v5.18.215 LIVE COMMENTARY';
+  const VERSION215 = 'v5.18.217 NAR RESULT RESCUE';
   const DB_NAME215 = 'thekeiba-odds-timeline-v1';
   const STORE215 = 'captures';
   const TYPES215 = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
@@ -20676,6 +20865,20 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     const wins=(rec?.markets?.['単勝']||[]).map(x=>({num:Number(x.combination),odds:Number(x.odds)})).filter(x=>x.num>0&&x.odds>1);
     if(!wins.length) return new Map();
     const meta=new Map(); (rec.horses||[]).forEach(h=>meta.set(Number(h.num),h));
+    // v5.18.216: 現在レースは左側の実馬名/枠を最優先で上書き。
+    // 時系列DBに過去のサンプル名が残っていても実況へ露出させない。pop/oddsは当時値を維持する。
+    try{
+      if(String(window.__horseDataRaceId||'')===String(rec?.race_id||'')){
+        const live=(typeof horses!=='undefined'&&Array.isArray(horses))?horses:[];
+        live.forEach(h=>{
+          const n=Number(h?.num||0); if(!(n>0)) return;
+          const nm=String(h?.name||'').trim();
+          if(!nm || /^サンプル[A-ZＡ-Ｚ0-9]*$/i.test(nm) || /^sample[A-Z0-9]*$/i.test(nm)) return;
+          const prev=meta.get(n)||{num:n};
+          meta.set(n,{...prev,name:nm,frame:Number(h?.frame||prev.frame||0)});
+        });
+      }
+    }catch(e){}
     const rankMap=new Map(wins.slice().sort((a,b)=>a.odds-b.odds).map((x,i)=>[x.num,i+1]));
     const n=Math.max(1,wins.length), takeback=String(rec.kind||kind215(rec.race_id))==='NAR'?.30:.225;
     const overround=wins.reduce((s,x)=>s+1/x.odds,0)||(1/Math.max(.01,1-takeback));
@@ -20775,7 +20978,6 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       marketCount:TYPES215.reduce((s,t)=>s+(rec?.markets?.[t]?.length||0),0)
     };
   }
-
   function readTrack215(){ try{ const a=JSON.parse(localStorage.getItem(TRACK_KEY215)||'[]'); return Array.isArray(a)?a:[]; }catch(e){return [];} }
   function writeTrack215(rows){ try{localStorage.setItem(TRACK_KEY215,JSON.stringify(rows.slice(-300)));}catch(e){} }
   function savePending215(fc){

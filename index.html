@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.212 Timeline JSON/CSV Folder Save</title>
+<title>The競馬 EV分析 v5.18.213 EDGE TOP10</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.212 Timeline JSON/CSV Folder Save</span>
+    <span class="ver">v5.18.213 EDGE TOP10</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -20319,11 +20319,198 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 </script>
 
 
+
+<style id="edgeTop10Style213">
+/* ============================================================
+   v5.18.213 EDGE TOP10 / 全券種横断ランキング
+   ============================================================ */
+#edgeTop10Card{border-color:rgba(0,230,118,.34);box-shadow:0 0 24px rgba(0,230,118,.08)}
+.edge-top-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.edge-top-title{display:flex;align-items:center;gap:8px;font-weight:900;color:#d9ffe8}
+.edge-top-live{display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:900;color:#a7f3d0;padding:3px 7px;border:1px solid rgba(0,230,118,.26);background:rgba(0,230,118,.09);border-radius:999px}
+.edge-top-live:before{content:"";width:6px;height:6px;border-radius:50%;background:#00e676;box-shadow:0 0 9px #00e676}
+.edge-top-controls{display:grid;grid-template-columns:1.2fr 1fr .8fr;gap:8px;margin-bottom:8px}
+.edge-top-controls .field{margin-bottom:0}
+.edge-type-filter{display:flex;flex-wrap:wrap;gap:5px;margin:8px 0 10px}
+.edge-type-filter label{display:inline-flex;align-items:center;gap:4px;padding:4px 7px;border:1px solid var(--border);border-radius:999px;font-size:10px;color:var(--muted);background:rgba(15,23,42,.35);cursor:pointer;user-select:none}
+.edge-type-filter input{accent-color:var(--green)}
+.edge-top-summary{font-size:11px;color:var(--muted);line-height:1.55;margin:4px 0 8px}
+.edge-top-scroll{overflow:auto;max-height:420px;border:1px solid rgba(51,65,85,.55);border-radius:9px}
+.edge-top-table{width:100%;border-collapse:collapse;font-size:11px;min-width:690px}
+.edge-top-table th{position:sticky;top:0;z-index:1;background:#152235;color:var(--muted);text-align:left;padding:7px 8px;white-space:nowrap}
+.edge-top-table td{padding:7px 8px;border-top:1px solid rgba(51,65,85,.44);white-space:nowrap}
+.edge-rank{font-weight:950;text-align:center;min-width:34px}
+.edge-rank.r1{color:#fbbf24}.edge-rank.r2{color:#d1d5db}.edge-rank.r3{color:#fb923c}
+.edge-selected-metric{font-weight:950;color:var(--green)}
+.edge-source-real{color:var(--green);font-weight:800}.edge-source-est{color:var(--yellow);font-weight:800}
+@media(max-width:560px){.edge-top-controls{grid-template-columns:1fr}.edge-top-scroll{max-height:360px}}
+</style>
+
 <script>
-/* v5.18.212 Timeline JSON/CSV Folder Save: final label keeper */
+/* v5.18.213 EDGE TOP10: all-bet-type cross ranking */
 (function(){
   'use strict';
-  const V='v5.18.212 Timeline JSON/CSV Folder Save';
+  const VERSION213 = 'v5.18.213 EDGE TOP10';
+  const TYPE_ORDER = ['単勝','複勝','ワイド','枠連','馬連','馬単','3連複','3連単'];
+  const STORE_KEY = 'keiba-edge-top10-v213';
+  const METRICS = {
+    ev:      {label:'EV',             get:r=>Number(r?.ev||0),       def:1.20, step:0.01, fmt:v=>v.toFixed(2)},
+    p:       {label:'想定勝率',       get:r=>Number(r?.p||0)*100,    def:20,   step:0.1,  fmt:v=>v.toFixed(1)+'%'},
+    kelly:   {label:'Kelly',          get:r=>Number(r?.kelly||0)*100,def:5,    step:0.1,  fmt:v=>v.toFixed(1)+'%'},
+    odds:    {label:'オッズ',         get:r=>Number(r?.odds||0),     def:5.0,  step:0.1,  fmt:v=>v.toFixed(1)+'倍'},
+    edgePct: {label:'EV乖離率(EV-1)', get:r=>(Number(r?.ev||0)-1)*100, def:20, step:1,    fmt:v=>(v>=0?'+':'')+v.toFixed(1)+'%'}
+  };
+
+  function esc(v){
+    return String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  }
+  function readState(){
+    const d={metric:'ev', threshold:1.20, limit:'10', types:Object.fromEntries(TYPE_ORDER.map(t=>[t,true]))};
+    try{
+      const s=JSON.parse(localStorage.getItem(STORE_KEY)||'null');
+      if(s && typeof s==='object'){
+        if(METRICS[s.metric]) d.metric=s.metric;
+        if(Number.isFinite(Number(s.threshold))) d.threshold=Number(s.threshold);
+        if(['5','10','20','ALL'].includes(String(s.limit))) d.limit=String(s.limit);
+        if(s.types && typeof s.types==='object') TYPE_ORDER.forEach(t=>{ if(t in s.types) d.types[t]=!!s.types[t]; });
+      }
+    }catch(e){}
+    return d;
+  }
+  let state=readState();
+  function saveState(){ try{ localStorage.setItem(STORE_KEY,JSON.stringify(state)); }catch(e){} }
+
+  function installCard(){
+    if(document.getElementById('edgeTop10Card')) return;
+    const anchor=document.getElementById('candBody')?.closest('.card');
+    if(!anchor) return;
+    const card=document.createElement('div');
+    card.className='card'; card.id='edgeTop10Card';
+    card.innerHTML=`
+      <div class="edge-top-head">
+        <div class="edge-top-title">🏆 EDGE TOP10 <span class="edge-top-live">全券種横断</span></div>
+        <button type="button" class="btn-sm" id="edgeTopReset213">初期値</button>
+      </div>
+      <div style="font-size:11px;color:var(--muted);line-height:1.55;margin-bottom:9px">
+        指定した指標が閾値以上の候補だけを、単勝〜3連単まで同じ物差しで横断ランキングします。買い目選定ロジック自体は変更しません。
+      </div>
+      <div class="edge-top-controls">
+        <div class="field"><label>ランキング指標</label><select id="edgeMetric213">
+          <option value="ev">EV</option><option value="p">想定勝率</option><option value="kelly">Kelly</option><option value="odds">オッズ</option><option value="edgePct">EV乖離率（EV-1）</option>
+        </select></div>
+        <div class="field"><label id="edgeThresholdLabel213">閾値（以上）</label><input type="number" id="edgeThreshold213"></div>
+        <div class="field"><label>表示件数</label><select id="edgeLimit213"><option value="5">TOP 5</option><option value="10">TOP 10</option><option value="20">TOP 20</option><option value="ALL">全件</option></select></div>
+      </div>
+      <div style="font-size:10px;color:var(--muted)">対象券種</div>
+      <div class="edge-type-filter" id="edgeTypeFilter213"></div>
+      <div id="edgeTopSummary213" class="edge-top-summary"></div>
+      <div class="edge-top-scroll">
+        <table class="edge-top-table"><thead><tr>
+          <th>順位</th><th>券種</th><th>組合せ</th><th id="edgeMetricHead213">指標</th><th>EV</th><th>想定勝率</th><th>オッズ</th><th>Kelly</th><th>オッズ源</th>
+        </tr></thead><tbody id="edgeTopBody213"><tr><td colspan="9" class="empty">EV計算後に表示します</td></tr></tbody></table>
+      </div>`;
+    anchor.parentNode.insertBefore(card,anchor);
+
+    const tf=document.getElementById('edgeTypeFilter213');
+    tf.innerHTML = TYPE_ORDER.map(t=>`<label><input type="checkbox" data-edge-type="${esc(t)}">${esc(t)}</label>`).join('');
+
+    document.getElementById('edgeMetric213')?.addEventListener('change',function(){
+      state.metric=this.value;
+      const m=METRICS[state.metric];
+      state.threshold=m.def;
+      syncControls(); saveState(); render();
+    });
+    document.getElementById('edgeThreshold213')?.addEventListener('input',function(){ state.threshold=Number(this.value||0); saveState(); render(); });
+    document.getElementById('edgeLimit213')?.addEventListener('change',function(){ state.limit=this.value; saveState(); render(); });
+    tf.querySelectorAll('input[data-edge-type]').forEach(el=>el.addEventListener('change',function(){ state.types[this.dataset.edgeType]=this.checked; saveState(); render(); }));
+    document.getElementById('edgeTopReset213')?.addEventListener('click',function(){ state={metric:'ev',threshold:1.20,limit:'10',types:Object.fromEntries(TYPE_ORDER.map(t=>[t,true]))}; saveState(); syncControls(); render(); });
+    syncControls();
+  }
+
+  function syncControls(){
+    const m=METRICS[state.metric]||METRICS.ev;
+    const metric=document.getElementById('edgeMetric213'), th=document.getElementById('edgeThreshold213'), lim=document.getElementById('edgeLimit213');
+    if(metric) metric.value=state.metric;
+    if(th){ th.step=String(m.step); th.value=String(state.threshold); }
+    if(lim) lim.value=state.limit;
+    const lbl=document.getElementById('edgeThresholdLabel213'); if(lbl) lbl.textContent=m.label+' 閾値（以上）';
+    const head=document.getElementById('edgeMetricHead213'); if(head) head.textContent=m.label;
+    document.querySelectorAll('#edgeTypeFilter213 input[data-edge-type]').forEach(el=>{ el.checked=state.types[el.dataset.edgeType]!==false; });
+  }
+
+  function sourceLabel(r){
+    const s=String(r?.oddsSource||'');
+    if(s==='real'||s==='real-win') return '<span class="edge-source-real">実</span>';
+    if(s==='estimated') return '<span class="edge-source-est">推定</span>';
+    return '<span style="color:var(--muted)">—</span>';
+  }
+  function chipClass(type){ try{return (typeof CHIP_CLASS!=='undefined' && CHIP_CLASS[type])||'';}catch(e){return '';} }
+  function currentRecs(){ try{return Array.isArray(lastRecs)?lastRecs:[];}catch(e){return [];} }
+
+  function render(){
+    installCard();
+    const body=document.getElementById('edgeTopBody213'); if(!body) return;
+    const metric=METRICS[state.metric]||METRICS.ev;
+    const all=currentRecs().filter(r=>r && state.types[r.type]!==false);
+    const threshold=Number(state.threshold||0);
+    let rows=all.map(r=>({r,v:metric.get(r)})).filter(x=>Number.isFinite(x.v)&&x.v>=threshold);
+    rows.sort((a,b)=>b.v-a.v || Number(b.r.ev||0)-Number(a.r.ev||0) || Number(b.r.p||0)-Number(a.r.p||0));
+    const matched=rows.length;
+    const lim=state.limit==='ALL'?rows.length:Math.max(1,Number(state.limit||10));
+    rows=rows.slice(0,lim);
+
+    const summary=document.getElementById('edgeTopSummary213');
+    if(summary){
+      summary.innerHTML=`<b>${esc(metric.label)} ≥ ${esc(metric.fmt(threshold))}</b>：該当 <b style="color:var(--green)">${matched}</b>件 / 対象候補 ${all.length}件　表示 ${rows.length}件`;
+    }
+    const head=document.getElementById('edgeMetricHead213'); if(head) head.textContent=metric.label;
+    if(!rows.length){
+      body.innerHTML='<tr><td colspan="9" class="empty">この条件に該当する候補はありません。閾値を下げるか券種を追加してください。</td></tr>';
+      return;
+    }
+    body.innerHTML=rows.map((x,i)=>{
+      const r=x.r, rank=i+1;
+      const medal=rank===1?'🥇':rank===2?'🥈':rank===3?'🥉':String(rank);
+      const rc=rank<=3?'r'+rank:'';
+      const ev=Number(r.ev||0), p=Number(r.p||0)*100, od=Number(r.odds||0), k=Number(r.kelly||0)*100;
+      return `<tr>
+        <td class="edge-rank ${rc}">${medal}</td>
+        <td><span class="chip ${chipClass(r.type)}">${esc(r.type)}</span></td>
+        <td><b>${esc((r.nums||[]).join('-'))}</b></td>
+        <td class="edge-selected-metric">${esc(metric.fmt(x.v))}</td>
+        <td class="${ev>=1.2?'ev-hi':ev>=1?'ev-mid':'ev-lo'}">${ev.toFixed(2)}</td>
+        <td>${p.toFixed(1)}%</td><td>${od.toFixed(1)}倍</td><td>${k.toFixed(1)}%</td><td>${sourceLabel(r)}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  function observeCandidates(){
+    const target=document.getElementById('candBody');
+    if(!target || target.__edgeTopObs213) return;
+    target.__edgeTopObs213=true;
+    const mo=new MutationObserver(()=>setTimeout(render,0));
+    mo.observe(target,{childList:true,subtree:true});
+  }
+  function mark(){
+    try{
+      window.APP_VERSION=VERSION213;
+      const v=document.querySelector('.ver');
+      if(v){const bridge=/🌉/.test(v.textContent||'');v.textContent=VERSION213+(bridge?' 🌉':'');}
+      document.title='The競馬 EV分析 '+VERSION213;
+    }catch(e){}
+  }
+  function boot(){ installCard(); observeCandidates(); syncControls(); render(); mark(); }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',boot,{once:true}); else boot();
+  [700,2200,5200,9500].forEach(ms=>setTimeout(()=>{installCard();observeCandidates();render();mark();},ms));
+  window.renderEdgeTop10213=render;
+})();
+</script>
+
+<script>
+/* v5.18.213 EDGE TOP10: final label keeper */
+(function(){
+  'use strict';
+  const V='v5.18.213 EDGE TOP10';
   function mark(){
     try{
       window.APP_VERSION=V;

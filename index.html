@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.210 NAR Fast Odds + Timeline Fix</title>
+<title>The競馬 EV分析 v5.18.211 NAR All-Markets Timeline Fix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.210 NAR Fast Odds + Timeline Fix</span>
+    <span class="ver">v5.18.211 NAR All-Markets Timeline Fix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -18589,7 +18589,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.18.210 NAR Fast Odds + Timeline Fix';
+  const VERSION202 = 'v5.18.211 NAR All-Markets Timeline Fix';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
@@ -18901,33 +18901,85 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     return out;
   }
 
+  function blockedOdds202(html){
+    const s=String(html||'');
+    if(!s || s.length<200) return true;
+    try{ if(typeof window.looksBlockedHtml==='function' && window.looksBlockedHtml(s)) return true; }catch(e){}
+    return /Access Denied|Request blocked|Pardon Our Interruption|captcha|akamai|bm-verify|Just a moment|Reference\s*#/i.test(s);
+  }
+
+  // Worker の type=odds API は既存版では内部的に type=b1（単勝中心）へ正規化される。
+  // 全券種ページ type=b0 を取りたい時だけ ?url= を直指定し、b0 をそのまま上流へ渡す。
+  async function fetchPreserveUrl202(targetUrl, timeoutMs=9000){
+    let base='';
+    try{ base=String(settings?.proxyUrl||'').replace(/\/$/,''); }catch(e){}
+    if(!base) return '';
+    const ac=new AbortController();
+    const timer=setTimeout(()=>ac.abort(),Math.max(1000,Number(timeoutMs)||9000));
+    try{
+      const sep=base.includes('?')?'&':'?';
+      const req=base+sep+'url='+encodeURIComponent(String(targetUrl||''))+'&_odds_all=1&_ts='+Date.now();
+      const res=await fetch(req,{cache:'no-store',signal:ac.signal});
+      const html=await res.text().catch(()=> '');
+      if(!res.ok) throw new Error(`all-markets Worker HTTP ${res.status}`);
+      if(blockedOdds202(html)) throw new Error('all-markets Worker blocked/empty');
+      return html;
+    }finally{ clearTimeout(timer); }
+  }
+
+  function marketTotal202(markets, includeWin=true){
+    const types=includeWin?MARKET_TYPES:MARKET_TYPES.slice(1);
+    return types.reduce((s,t)=>s+(markets?.[t]?.size||0),0);
+  }
+
   async function fetchMarkets202(kind,rid,expected){
     const markets=newMarkets202();
     const host=kind==='NAR'?'https://nar.netkeiba.com':'https://race.netkeiba.com';
+    let source='';
+
+    // v5.18.211: NARは最初に「b0を保持した直URL」で全券種を1回取得する。
+    // buildWorkerRequestUrl(type=odds) を通すとWorker側でb1へ変換される版があるため、ここだけ回避する。
+    if(kind==='NAR'){
+      const allUrls=[
+        `${host}/odds/index.html?race_id=${rid}&type=b0`,
+        `https://nar.sp.netkeiba.com/odds/index.html?race_id=${rid}`
+      ];
+      for(const url of allUrls){
+        try{
+          const html=await fetchPreserveUrl202(url, url.includes('nar.sp.')?5500:9000);
+          if(!html) continue;
+          const doc=new DOMParser().parseFromString(html,'text/html');
+          const got=parseAllMarkets202(doc,expected);
+          mergeMarkets202(markets,got);
+          if(marketTotal202(markets,true)>0) source=url+'#worker-url-preserved';
+          // 単勝以外が取れたら全券種ページ取得成功。余計な通信は止める。
+          if(marketTotal202(markets,false)>=2) break;
+        }catch(e){ lastError=String(e?.message||e); }
+      }
+    }
+
+    // 全券種ページが取れなかった場合だけ従来経路を使う。
+    // NARではb1を最後の単勝フォールバックに限定し、5秒監視で長い総当たりを繰り返さない。
     const urls = kind==='NAR' ? [
-      // v5.18.210: NARでは実機で成功率の高いdesktop/no-typeを先にする。
-      // b0は全券種取得用の第2候補、SPは最後の保険。
-      `${host}/odds/index.html?race_id=${rid}`,
-      `${host}/odds/index.html?race_id=${rid}&type=b0`,
-      `${host}/odds/index.html?race_id=${rid}&type=b1`,
-      `https://nar.sp.netkeiba.com/odds/?race_id=${rid}&type=b1`
+      `${host}/odds/index.html?race_id=${rid}&type=b1`
     ] : [
       `${host}/odds/index.html?race_id=${rid}&type=b0`,
       `${host}/odds/index.html?race_id=${rid}`
     ];
-    let source='';
-    for(const url of urls){
-      try{
-        const html=await fetchHtmlViaProxy(url);
-        if(!html || html.length<100) continue;
-        const doc=new DOMParser().parseFromString(html,'text/html');
-        const got=parseAllMarkets202(doc,expected);
-        mergeMarkets202(markets,got);
-        const total=MARKET_TYPES.reduce((s,t)=>s+(markets[t]?.size||0),0);
-        if(total){ source=url; }
-        const multi=MARKET_TYPES.slice(1).reduce((s,t)=>s+(markets[t]?.size||0),0);
-        if((markets['単勝']?.size||0)>=2 && multi>=2) break;
-      }catch(e){ lastError=String(e?.message||e); }
+    if(kind!=='NAR' || marketTotal202(markets,false)<2){
+      for(const url of urls){
+        try{
+          const html=await fetchHtmlViaProxy(url);
+          if(!html || html.length<100) continue;
+          const doc=new DOMParser().parseFromString(html,'text/html');
+          const got=parseAllMarkets202(doc,expected);
+          mergeMarkets202(markets,got);
+          const total=marketTotal202(markets,true);
+          if(total && !source) source=url;
+          const multi=marketTotal202(markets,false);
+          if((markets['単勝']?.size||0)>=2 && multi>=2) break;
+        }catch(e){ lastError=String(e?.message||e); }
+      }
     }
 
     if((markets['単勝']?.size||0)<2){
@@ -19005,6 +19057,14 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   }
 
   function latestMarkets202(){ return history.length ? (history[history.length-1].markets || {}) : {}; }
+  // 直近1回が単勝フォールバックだけでも、過去に取得済みの券種を選択肢から消さない。
+  function latestRowsForMarket202(type){
+    for(let i=history.length-1;i>=0;i--){
+      const rows=history[i]?.markets?.[type];
+      if(Array.isArray(rows) && rows.length) return rows;
+    }
+    return [];
+  }
   function horseNameMap202(){
     const map=new Map();
     const hs=(history.length?history[history.length-1].horses:expectedHorses202())||[];
@@ -19021,9 +19081,11 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 
   function refreshControls202(){
     const msel=$('oddsTsMarket'), csel=$('oddsTsCombo'); if(!msel||!csel) return;
-    const latest=latestMarkets202();
     const oldM=msel.value || '単勝';
-    msel.innerHTML=MARKET_TYPES.map(t=>`<option value="${t}" ${(latest[t]?.length||0)?'':'disabled'}>${t}${(latest[t]?.length||0)?` (${latest[t].length})`:''}</option>`).join('');
+    msel.innerHTML=MARKET_TYPES.map(t=>{
+      const n=latestRowsForMarket202(t).length;
+      return `<option value="${t}" ${n?'':'disabled'}>${t}${n?` (${n})`:''}</option>`;
+    }).join('');
     if([...msel.options].some(o=>o.value===oldM&&!o.disabled)) msel.value=oldM;
     else if([...msel.options].some(o=>o.value==='単勝'&&!o.disabled)) msel.value='単勝';
     else { const first=[...msel.options].find(o=>!o.disabled); if(first) msel.value=first.value; }
@@ -19035,7 +19097,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 
   function refreshCombo202(){
     const msel=$('oddsTsMarket'), csel=$('oddsTsCombo'); if(!msel||!csel) return;
-    const market=msel.value || '単勝', latest=latestMarkets202(), rows=(latest[market]||[]).slice().sort((a,b)=>a.odds-b.odds);
+    const market=msel.value || '単勝', rows=latestRowsForMarket202(market).slice().sort((a,b)=>a.odds-b.odds);
     const old=csel.value;
     const opts=[];
     if(market==='単勝'||market==='複勝') opts.push({v:'__ALL__',t:'全馬を表示'});
@@ -19047,7 +19109,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   }
 
   function seriesKeys202(market, choice){
-    const latest=latestMarkets202(), rows=(latest[market]||[]).slice().sort((a,b)=>a.odds-b.odds);
+    const rows=latestRowsForMarket202(market).slice().sort((a,b)=>a.odds-b.odds);
     if(choice==='__ALL__') return rows.map(r=>r.combination).slice(0,18);
     if(choice==='__TOP8__') return rows.map(r=>r.combination).slice(0,8);
     return choice ? [choice] : [];
@@ -19743,7 +19805,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   'use strict';
   if(window.__V518206_RIGHT_ODDS_WORKSPACE__) return;
   window.__V518206_RIGHT_ODDS_WORKSPACE__=true;
-  const VERSION='v5.18.210 NAR Fast Odds + Timeline Fix';
+  const VERSION='v5.18.211 NAR All-Markets Timeline Fix';
   const TYPES=['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
   const $=id=>document.getElementById(id);
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -19885,7 +19947,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 
 
 <!-- ============================================================
-     v5.18.210 NAR Fast Odds + Timeline Fix
+     v5.18.211 NAR All-Markets Timeline Fix
      - 期間横断の精算済み買い目をEV帯別に校正
      - PRE-RACE監査済みのみ / FINAL研究を切替
      - JRA非開催日の「エラー/開催場選択」表示を通常の非開催表示へ
@@ -19896,7 +19958,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   const $ = id => document.getElementById(id);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const fmtYen = n => Math.round(Number(n||0)).toLocaleString('ja-JP') + '円';
-  const VERSION209 = 'v5.18.210 NAR Fast Odds + Timeline Fix';
+  const VERSION209 = 'v5.18.211 NAR All-Markets Timeline Fix';
 
   function mark209(){
     try{
@@ -20209,10 +20271,10 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 
 
 <script>
-/* v5.18.210 NAR Fast Odds + Timeline Fix: final label keeper */
+/* v5.18.211 NAR All-Markets Timeline Fix: final label keeper */
 (function(){
   'use strict';
-  const V='v5.18.210 NAR Fast Odds + Timeline Fix';
+  const V='v5.18.211 NAR All-Markets Timeline Fix';
   function mark(){
     try{
       window.APP_VERSION=V;

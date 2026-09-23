@@ -18589,7 +18589,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.18.212 Timeline JSON/CSV Folder Save';
+  const VERSION202 = 'v5.18.215 LIVE COMMENTARY';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
@@ -20587,6 +20587,430 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   mark();
   [900,2700,6200,9000].forEach(ms=>setTimeout(mark,ms));
 })();
+</script>
+
+<script>
+/* v5.18.215 LIVE COMMENTARY / 予想印・推奨馬券・結果成績 */
+(function(){
+  'use strict';
+  if(window.__V518215_LIVE_COMMENTARY__) return;
+  window.__V518215_LIVE_COMMENTARY__ = true;
+
+  const VERSION215 = 'v5.18.215 LIVE COMMENTARY';
+  const DB_NAME215 = 'thekeiba-odds-timeline-v1';
+  const STORE215 = 'captures';
+  const TYPES215 = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
+  const TRACK_KEY215 = 'tk-live-commentary-track-v1';
+  const PREF_KEY215 = 'tk-live-commentary-pref-v1';
+  let liveBusy215 = false;
+  let resultBusy215 = false;
+  let currentForecast215 = null;
+  let lastRefreshKey215 = '';
+  let resultPoll215 = null;
+
+  const $215 = id => document.getElementById(id);
+  const esc215 = v => String(v ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const n215 = v => Number(v);
+  const finite215 = v => Number.isFinite(Number(v));
+  const pct215 = v => finite215(v) ? (Number(v)*100).toFixed(Number(v)*100<10?1:0)+'%' : '-';
+
+  function markVersion215(){
+    try{
+      window.APP_VERSION = VERSION215;
+      const v=document.querySelector('.ver');
+      if(v){ const bridge=/🌉/.test(v.textContent||''); v.textContent=VERSION215+(bridge?' 🌉':''); }
+      document.title='The競馬 EV分析 '+VERSION215;
+    }catch(e){}
+  }
+
+  function readPref215(){
+    const d={autoResult:true,autoOpen:false};
+    try{ return {...d,...JSON.parse(localStorage.getItem(PREF_KEY215)||'{}')}; }catch(e){ return d; }
+  }
+  let pref215=readPref215();
+  function savePref215(){ try{localStorage.setItem(PREF_KEY215,JSON.stringify(pref215));}catch(e){} }
+
+  function currentRaceId215(){
+    try{ if(typeof currentRaceId!=='undefined' && currentRaceId) return String(currentRaceId); }catch(e){}
+    try{ if(window.currentRaceId) return String(window.currentRaceId); }catch(e){}
+    const u=$215('raceUrl')?.value||'';
+    const m=String(u).match(/race_id=(\d{10,14})/); if(m) return m[1];
+    const s=$215('raceSelect')?.value||'';
+    const m2=String(s).match(/(\d{10,14})/); return m2?m2[1]:'';
+  }
+  function kind215(rid){
+    rid=String(rid||'');
+    if(/^\d{10,14}$/.test(rid)) return /^(0[1-9]|10)$/.test(rid.slice(4,6))?'JRA':'NAR';
+    return ($215('pickKind')?.value||'JRA').toUpperCase()==='NAR'?'NAR':'JRA';
+  }
+
+  function openDb215(){
+    return new Promise((resolve,reject)=>{
+      const req=indexedDB.open(DB_NAME215,1);
+      req.onsuccess=()=>resolve(req.result);
+      req.onerror=()=>reject(req.error||new Error('時系列DBを開けません'));
+    });
+  }
+  async function lastTwo215(rid){
+    const db=await openDb215();
+    return await new Promise((resolve,reject)=>{
+      const tx=db.transaction(STORE215,'readonly');
+      const idx=tx.objectStore(STORE215).index('race_id');
+      const req=idx.openCursor(IDBKeyRange.only(String(rid)),'prev');
+      const out=[];
+      req.onsuccess=()=>{
+        const cur=req.result;
+        if(cur && out.length<2){ out.push(cur.value); cur.continue(); }
+        else resolve(out.reverse());
+      };
+      req.onerror=()=>reject(req.error||new Error('時系列DB読込失敗'));
+    });
+  }
+
+  function nums215(key){ return String(key||'').split('-').map(Number).filter(x=>Number.isFinite(x)&&x>0); }
+  function findOdds215(rec,type,key){
+    const x=(rec?.markets?.[type]||[]).find(r=>String(r.combination)===String(key));
+    return x?Number(x.odds):NaN;
+  }
+  function rated215(rec){
+    const wins=(rec?.markets?.['単勝']||[]).map(x=>({num:Number(x.combination),odds:Number(x.odds)})).filter(x=>x.num>0&&x.odds>1);
+    if(!wins.length) return new Map();
+    const meta=new Map(); (rec.horses||[]).forEach(h=>meta.set(Number(h.num),h));
+    const rankMap=new Map(wins.slice().sort((a,b)=>a.odds-b.odds).map((x,i)=>[x.num,i+1]));
+    const n=Math.max(1,wins.length), takeback=String(rec.kind||kind215(rec.race_id))==='NAR'?.30:.225;
+    const overround=wins.reduce((s,x)=>s+1/x.odds,0)||(1/Math.max(.01,1-takeback));
+    const popRaw=Array.from({length:n},(_,i)=>1/Math.pow(i+1,1.08));
+    const popSum=popRaw.reduce((a,b)=>a+b,0)||1;
+    const raw=wins.map(x=>{
+      const h=meta.get(x.num)||{};
+      let pop=Number(h.pop||0); if(!(pop>=1&&pop<=n)) pop=rankMap.get(x.num)||0;
+      const pOdds=(1/x.odds)/Math.max(overround,1/(1-takeback));
+      const pPop=(pop>=1&&pop<=n)?(1/Math.pow(pop,1.08))/popSum:0;
+      const rp=pOdds>0&&pPop>0?pOdds*.80+pPop*.20:(pOdds||pPop||1/n);
+      return {num:x.num,name:String(h.name||''),frame:Number(h.frame||0),pop,odds:x.odds,raw:rp};
+    });
+    const total=raw.reduce((s,x)=>s+x.raw,0)||1;
+    const placeMult=Math.min(3.0,2.0+n*.045), renMult=Math.min(2.4,1.6+n*.038);
+    const out=new Map();
+    raw.forEach(h=>{
+      const winP=h.raw/total;
+      const rawPlaceP=winP*placeMult+.015;
+      const favAdj=Math.max(0,winP-.25)*.7;
+      const longAdj=winP<.08?(.08-winP)*.8:0;
+      const placeP=Math.min(.90,rawPlaceP*(1-favAdj)*(1-longAdj));
+      const renP=Math.min(.82,winP*renMult+.015);
+      out.set(h.num,{...h,winP,placeP,renP});
+    });
+    return out;
+  }
+  function modelP215(rec,type,key){
+    const rated=rated215(rec), ns=nums215(key); if(!rated.size||!ns.length) return NaN;
+    const hs=ns.map(n=>rated.get(n));
+    if(type==='単勝') return hs[0]?.winP??NaN;
+    if(type==='複勝') return hs[0]?.placeP??NaN;
+    if(type==='枠連'){
+      const fp=ns.map(f=>{
+        const arr=[...rated.values()].filter(h=>Number(h.frame)===Number(f));
+        if(!arr.length) return NaN;
+        const win=Math.min(.95,arr.reduce((s,h)=>s+h.winP,0));
+        return Math.min(.90,win*1.8+.015);
+      });
+      return fp.every(Number.isFinite)?Math.min(.34,fp[0]*fp[1]*1.10):NaN;
+    }
+    if(hs.some(h=>!h)) return NaN;
+    if(type==='ワイド') return Math.min(.50,hs[0].placeP*hs[1].placeP*1.30);
+    if(type==='馬連') return Math.min(.30,hs[0].winP*hs[1].winP*3.80);
+    if(type==='馬単') return Math.min(.22,hs[0].winP*hs[1].winP*2.40);
+    if(type==='3連複') return Math.min(.16,hs[0].placeP*hs[1].placeP*hs[2].placeP*1.45);
+    if(type==='3連単'){
+      const p=Math.min(.16,hs[0].placeP*hs[1].placeP*hs[2].placeP*1.45);
+      return Math.max(.0001,p*.22);
+    }
+    return NaN;
+  }
+
+  function minEv215(type){
+    try{
+      if(typeof settings!=='undefined' && settings?.minEVByType && finite215(settings.minEVByType[type])) return Number(settings.minEVByType[type]);
+    }catch(e){}
+    return ({'単勝':1.05,'複勝':1.05,'枠連':1.10,'ワイド':1.05,'馬連':1.10,'馬単':1.15,'3連複':1.20,'3連単':1.30})[type]||1.10;
+  }
+  function maxTickets215(){
+    try{ if(typeof settings!=='undefined') return Math.max(1,Math.min(5,Number(settings.maxTickets||3))); }catch(e){}
+    return 3;
+  }
+  function candidates215(rec){
+    const out=[];
+    TYPES215.forEach(type=>{
+      (rec?.markets?.[type]||[]).forEach(r=>{
+        const odds=Number(r.odds), p=modelP215(rec,type,r.combination);
+        if(!(odds>=1)||!Number.isFinite(p)||p<=0) return;
+        const ev=p*odds, edge=(p-1/odds)*100;
+        out.push({type,combo:String(r.combination),nums:nums215(r.combination),odds,p,ev,edge,minEv:minEv215(type)});
+      });
+    });
+    return out;
+  }
+  function marks215(rec){
+    const a=[...rated215(rec).values()].sort((a,b)=>b.winP-a.winP||a.odds-b.odds).slice(0,4);
+    const marks=['◎','○','▲','△'];
+    return a.map((h,i)=>({...h,mark:marks[i]}));
+  }
+  function recommended215(rec){
+    const all=candidates215(rec);
+    const ok=all.filter(x=>x.ev>=x.minEv).sort((a,b)=>b.ev-a.ev||b.p-a.p||a.odds-b.odds);
+    const used=new Set(), diverse=[];
+    // 同じ券種だけで埋まらないよう、まず券種ごとの最上位を並べる。
+    ok.forEach(x=>{ if(!used.has(x.type)){ diverse.push(x); used.add(x.type); } });
+    diverse.sort((a,b)=>b.ev-a.ev);
+    const remain=ok.filter(x=>!diverse.includes(x));
+    return diverse.concat(remain).slice(0,maxTickets215());
+  }
+  function forecast215(rec){
+    return {
+      schema:'thekeiba-live-forecast-v1', raceId:String(rec.race_id||''), kind:String(rec.kind||kind215(rec.race_id)),
+      label:String(rec.race_label||rec.race_id||''), capturedMs:Number(rec.captured_ms||Date.now()), capturedAt:String(rec.captured_at||new Date().toISOString()),
+      marks:marks215(rec).map(x=>({mark:x.mark,num:x.num,name:x.name,winP:x.winP,odds:x.odds,pop:x.pop})),
+      tickets:recommended215(rec).map(x=>({type:x.type,combo:x.combo,nums:x.nums,odds:x.odds,p:x.p,ev:x.ev,edge:x.edge,minEv:x.minEv})),
+      marketCount:TYPES215.reduce((s,t)=>s+(rec?.markets?.[t]?.length||0),0)
+    };
+  }
+
+  function readTrack215(){ try{ const a=JSON.parse(localStorage.getItem(TRACK_KEY215)||'[]'); return Array.isArray(a)?a:[]; }catch(e){return [];} }
+  function writeTrack215(rows){ try{localStorage.setItem(TRACK_KEY215,JSON.stringify(rows.slice(-300)));}catch(e){} }
+  function savePending215(fc){
+    if(!fc?.raceId) return;
+    const rows=readTrack215();
+    const i=rows.findIndex(x=>x.raceId===fc.raceId);
+    if(i>=0 && rows[i].settled) return;
+    const row={...(i>=0?rows[i]:{}),raceId:fc.raceId,kind:fc.kind,label:fc.label,predictedAt:fc.capturedAt,predictedMs:fc.capturedMs,marks:fc.marks,tickets:fc.tickets,settled:false};
+    if(i>=0) rows[i]=row; else rows.push(row);
+    writeTrack215(rows);
+  }
+
+  function setLiveStatus215(msg,cls=''){
+    const e=$215('liveStatus215'); if(!e) return;
+    e.className='live-status215 '+cls; e.textContent=msg;
+  }
+  function outcomeFor215(rid){ return readTrack215().find(x=>x.raceId===String(rid)&&x.settled)||null; }
+
+  function renderForecast215(fc,prevFc){
+    currentForecast215=fc;
+    savePending215(fc);
+    const markBox=$215('liveMarks215'), ticketBox=$215('liveTickets215'), textBox=$215('liveText215');
+    if(markBox){
+      markBox.innerHTML=fc.marks.length?fc.marks.map((m,i)=>`<div class="live-mark215 m${i}"><b>${m.mark}</b><span class="live-hno215">${m.num}</span><span class="live-hname215">${esc215(m.name||'')}</span><span>${pct215(m.winP)} / ${Number(m.odds||0).toFixed(1)}倍</span></div>`).join(''):'<div class="live-empty215">単勝データが不足しています</div>';
+    }
+    if(ticketBox){
+      ticketBox.innerHTML=fc.tickets.length?fc.tickets.map((t,i)=>`<div class="live-ticket215 ${i===0?'best':''}"><span>${i===0?'★':'・'} ${esc215(t.type)} <b>${esc215(t.combo)}</b></span><span>EV <b>${t.ev.toFixed(2)}</b> / ${pct215(t.p)} / ${t.odds.toFixed(1)}倍</span></div>`).join(''):'<div class="live-no-bet215">🛑 現在の券種別EV閾値を満たす推奨馬券なし＝見送り</div>';
+    }
+    const nowMark=fc.marks[0], prevMark=prevFc?.marks?.[0];
+    const nowTop=fc.tickets[0], prevTop=prevFc?.tickets?.[0];
+    const lines=[];
+    if(nowMark){
+      lines.push(`本命◎は ${nowMark.num} ${nowMark.name||''}。想定勝率 ${pct215(nowMark.winP)}、単勝 ${Number(nowMark.odds).toFixed(1)}倍。`);
+      if(prevMark){
+        if(Number(prevMark.num)!==Number(nowMark.num)) lines.push(`本命が ${prevMark.num}番から ${nowMark.num}番へ交代しました。`);
+        else if(finite215(prevMark.odds)&&finite215(nowMark.odds)){
+          const d=Number(nowMark.odds)-Number(prevMark.odds);
+          if(Math.abs(d)>=.1) lines.push(`◎の単勝は前回 ${Number(prevMark.odds).toFixed(1)}倍 → ${Number(nowMark.odds).toFixed(1)}倍。${d<0?'オッズ低下で買いが入っています。':'オッズ上昇で支持が弱まっています。'}`);
+        }
+      }
+    }
+    if(nowTop){
+      lines.push(`推奨最上位は ${nowTop.type} ${nowTop.combo}、EV ${nowTop.ev.toFixed(2)}、想定確率 ${pct215(nowTop.p)}。`);
+      if(prevTop){
+        const same=prevTop.type===nowTop.type&&prevTop.combo===nowTop.combo;
+        if(!same) lines.push(`全券種トップが ${prevTop.type} ${prevTop.combo} から入れ替わりました。`);
+        else if(finite215(prevTop.ev)){
+          const de=nowTop.ev-Number(prevTop.ev);
+          if(Math.abs(de)>=.01) lines.push(`トップEVは前回比 ${de>=0?'+':''}${de.toFixed(2)}。`);
+        }
+      }
+      if(fc.tickets.length>1) lines.push(`現在は閾値通過 ${fc.tickets.length}点を推奨表示しています。`);
+    }else lines.push('現在はEV条件を満たす買い目がなく、見送り判定です。');
+    lines.push(`取得済み市場データ ${fc.marketCount}組。予想印とEVは市場ベースモデルによる参考値です。`);
+    if(textBox) textBox.innerHTML=lines.map(s=>`<div>・${esc215(s)}</div>`).join('');
+    const tm=new Date(fc.capturedMs).toLocaleTimeString('ja-JP');
+    setLiveStatus215(`🟢 ${tm} 更新 / ${fc.kind} ${fc.label||fc.raceId}`,'ok');
+    renderRecord215(fc.raceId);
+  }
+
+  async function refreshLive215(force=false){
+    if(liveBusy215) return;
+    const rid=currentRaceId215();
+    if(!/^\d{10,14}$/.test(rid)){ setLiveStatus215('⚠️ レースを選択してください','err'); return; }
+    liveBusy215=true;
+    try{
+      const rows=await lastTwo215(rid);
+      if(!rows.length){ setLiveStatus215('📡 時系列データ待機中。「今すぐ取得」または5秒自動取得を開始してください。','wait'); return; }
+      const latest=rows[rows.length-1], prev=rows.length>1?rows[rows.length-2]:null;
+      const key=String(latest.id||latest.captured_ms||'');
+      if(!force && key===lastRefreshKey215) return;
+      lastRefreshKey215=key;
+      renderForecast215(forecast215(latest),prev?forecast215(prev):null);
+    }catch(e){ setLiveStatus215('⚠️ '+String(e?.message||e),'err'); }
+    finally{liveBusy215=false;}
+  }
+
+  function renderRecord215(rid){
+    const rows=readTrack215(), settled=rows.filter(x=>x.settled);
+    const cur=settled.find(x=>x.raceId===String(rid));
+    const curBox=$215('liveCurrentResult215');
+    if(curBox){
+      if(cur){
+        const markTxt=cur.markWin?'◎1着的中':cur.markTop4?'勝馬は印内':'◎1着不的中';
+        curBox.innerHTML=`<div class="live-result-head215 ${cur.markWin||cur.ticketHits>0?'hit':'miss'}">${cur.markWin||cur.ticketHits>0?'✅':'❌'} ${esc215(cur.label||cur.raceId)}：${markTxt} / 推奨馬券 ${cur.ticketHits}/${cur.ticketCount}的中</div><div class="live-result-sub215">着順 ${esc215((cur.finishTop||[]).join('-'))}　100円換算 投資 ${Number(cur.bet||0).toLocaleString()}円 → 払戻 ${Number(cur.ret||0).toLocaleString()}円 / ROI ${Number(cur.roi||0).toFixed(1)}%</div>`;
+      }else curBox.innerHTML='<div class="live-result-sub215">このレースはまだ成績未確定です。</div>';
+    }
+    const stat=$215('liveTrackStats215');
+    if(stat){
+      const races=settled.length;
+      const markWin=settled.filter(x=>x.markWin).length;
+      const markTop4=settled.filter(x=>x.markTop4).length;
+      const hitR=settled.filter(x=>Number(x.ticketHits||0)>0).length;
+      const tickets=settled.reduce((s,x)=>s+Number(x.ticketCount||0),0);
+      const ticketHits=settled.reduce((s,x)=>s+Number(x.ticketHits||0),0);
+      const bet=settled.reduce((s,x)=>s+Number(x.bet||0),0), ret=settled.reduce((s,x)=>s+Number(x.ret||0),0);
+      const roi=bet?ret/bet*100:0;
+      stat.innerHTML=`<div><b>${races}</b><span>確定R</span></div><div><b>${races?(markWin/races*100).toFixed(1):'0.0'}%</b><span>◎1着率</span></div><div><b>${races?(markTop4/races*100).toFixed(1):'0.0'}%</b><span>印内勝馬率</span></div><div><b>${races?(hitR/races*100).toFixed(1):'0.0'}%</b><span>馬券的中R率</span></div><div><b>${tickets?`${ticketHits}/${tickets}`:'0/0'}</b><span>推奨点的中</span></div><div><b>${roi.toFixed(1)}%</b><span>100円換算ROI</span></div>`;
+    }
+    const hist=$215('liveResultHistory215');
+    if(hist){
+      const recent=settled.slice().sort((a,b)=>Number(b.settledMs||0)-Number(a.settledMs||0)).slice(0,8);
+      hist.innerHTML=recent.length?recent.map(x=>`<div class="live-hist215"><span>${x.markWin?'◎🎯':x.markTop4?'印✓':'印×'} ${esc215(x.label||x.raceId)}</span><span>馬券 ${x.ticketHits}/${x.ticketCount} / ROI ${Number(x.roi||0).toFixed(0)}%</span></div>`).join(''):'<div class="live-empty215">確定成績はまだありません</div>';
+    }
+  }
+
+  async function checkResult215(manual=false){
+    if(resultBusy215) return;
+    const rid=currentRaceId215();
+    if(!/^\d{10,14}$/.test(rid)) return;
+    const rows=readTrack215();
+    const pos=rows.findIndex(x=>x.raceId===rid);
+    if(pos<0){ if(manual)setLiveStatus215('⚠️ 先に予想データを1回取得してください','err'); return; }
+    if(rows[pos].settled){ renderRecord215(rid); if(manual)setLiveStatus215('✅ このレースは精算済みです','ok'); return; }
+    resultBusy215=true;
+    try{
+      const k=rows[pos].kind||kind215(rid);
+      let url='';
+      try{ if(typeof resultUrl==='function') url=resultUrl(k,rid); }catch(e){}
+      if(!url) url=`https://${k==='NAR'?'nar.':''}netkeiba.com/race/result.html?race_id=${rid}&rf=race_submenu`;
+      let html='';
+      try{
+        if(typeof fetchHtmlViaProxy==='function') html=await fetchHtmlViaProxy(url);
+        else { const r=await fetch(url,{cache:'no-store'}); html=await r.text(); }
+      }catch(e){ if(manual) throw e; return; }
+      const doc=new DOMParser().parseFromString(String(html||''),'text/html');
+      let finish=[]; try{ if(typeof parseFinishFromResultDoc==='function') finish=parseFinishFromResultDoc(doc)||[]; }catch(e){}
+      if(finish.length<2){ if(manual)setLiveStatus215('⏳ まだ結果未確定です。確定後に自動で再確認します。','wait'); return; }
+      let payouts={}; try{ if(typeof parsePayoutsFromResultDoc==='function') payouts=parsePayoutsFromResultDoc(doc)||{}; }catch(e){}
+      const row=rows[pos], winner=Number(finish[0]?.horseNo||0), marks=row.marks||[], tickets=row.tickets||[];
+      let ticketHits=0, ret=0, missingPay=0;
+      tickets.forEach(t=>{
+        let hit=false; try{ if(typeof judgeTicketHit==='function') hit=!!judgeTicketHit({type:t.type,nums:t.nums,odds:t.odds},finish); }catch(e){}
+        if(hit){
+          ticketHits++;
+          let pay=0; try{ if(typeof payoutForTicket==='function') pay=Number(payoutForTicket({type:t.type,nums:t.nums,odds:t.odds},payouts)?.amount||0); }catch(e){}
+          if(pay>0) ret+=pay; else missingPay++;
+        }
+      });
+      const bet=tickets.length*100;
+      rows[pos]={...row,settled:true,settledAt:new Date().toISOString(),settledMs:Date.now(),finishTop:finish.slice(0,3).map(x=>Number(x.horseNo)),winner,markWin:Number(marks[0]?.num||0)===winner,markTop4:marks.some(m=>Number(m.num)===winner),ticketHits,ticketCount:tickets.length,bet,ret,roi:bet?ret/bet*100:0,payoutMissingHits:missingPay};
+      writeTrack215(rows);
+      renderRecord215(rid);
+      setLiveStatus215(`🏁 結果確定：${finish.slice(0,3).map(x=>x.horseNo).join('-')} / ◎${rows[pos].markWin?'的中':'不的中'} / 推奨馬券 ${ticketHits}/${tickets.length}的中${missingPay?'（払戻未取得あり）':''}`,'ok');
+    }catch(e){ if(manual)setLiveStatus215('⚠️ 結果取得失敗：'+String(e?.message||e),'err'); }
+    finally{resultBusy215=false;}
+  }
+
+  function showLive215(){
+    try{
+      if(typeof window.showOddsTimeline206==='function') window.showOddsTimeline206();
+      else if(typeof window.showOddsTimeline==='function') window.showOddsTimeline();
+    }catch(e){}
+    const frame=$215('rightAnalysisFrame'), odds=$215('rightOddsTimelinePane'), pc3=$215('rightPreclose3mPane'), live=$215('rightLiveCommentaryPane');
+    if(frame) frame.style.display='none'; if(odds) odds.style.display='none'; if(pc3) pc3.style.display='none'; if(live) live.style.display='flex';
+    $215('rightProfitModeBtn')?.classList.remove('active'); $215('rightOddsModeBtn')?.classList.remove('active'); $215('rightLiveModeBtn')?.classList.add('active');
+    const title=document.querySelector('#rightAnalysisPane .right-analysis-title b'); if(title) title.textContent='🗣 リアルタイム解説';
+    try{ if(typeof window.setRightAnalysisPanel==='function') window.setRightAnalysisPanel(true); }catch(e){}
+    refreshLive215(true);
+    try{ if(typeof window.captureOddsTimelineNow==='function') window.captureOddsTimelineNow(); }catch(e){}
+  }
+  function hideLive215(){ const live=$215('rightLiveCommentaryPane'); if(live) live.style.display='none'; $215('rightLiveModeBtn')?.classList.remove('active'); }
+
+  function installStyle215(){
+    if($215('liveCommentaryStyle215')) return;
+    const s=document.createElement('style'); s.id='liveCommentaryStyle215'; s.textContent=`
+      #rightLiveCommentaryPane{display:none;flex:1;min-height:0;flex-direction:column;background:#07111d;overflow:auto;padding:9px}
+      .live-card215{border:1px solid rgba(0,230,118,.22);border-radius:13px;background:linear-gradient(180deg,rgba(16,30,49,.96),rgba(8,20,34,.96));padding:10px;margin-bottom:9px;box-shadow:0 8px 28px rgba(0,0,0,.18)}
+      .live-head215{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}.live-head215 b{color:#d9ffe8;font-size:12px}.live-badge215{font-size:9px;color:#a7f3d0;border:1px solid rgba(0,230,118,.28);background:rgba(0,230,118,.08);padding:3px 7px;border-radius:999px}
+      .live-tools215{display:flex;gap:6px;flex-wrap:wrap;align-items:center}.live-tools215 label{font-size:10px;color:#cbd5e1;display:flex;align-items:center;gap:4px}.live-tools215 input{accent-color:#00e676}
+      .live-status215{font-size:10px;padding:6px 8px;border-radius:7px;background:rgba(148,163,184,.08);color:#94a3b8;margin-bottom:8px}.live-status215.ok{color:#86efac;background:rgba(0,230,118,.08)}.live-status215.err{color:#fca5a5;background:rgba(248,113,113,.08)}.live-status215.wait{color:#93c5fd}
+      .live-marks215{display:grid;grid-template-columns:1fr 1fr;gap:6px}.live-mark215{display:grid;grid-template-columns:24px 28px minmax(60px,1fr) auto;gap:5px;align-items:center;padding:7px;border:1px solid rgba(51,65,85,.55);border-radius:9px;font-size:10px}.live-mark215 b{font-size:17px}.live-mark215.m0 b{color:#fbbf24}.live-mark215.m1 b{color:#e2e8f0}.live-mark215.m2 b{color:#fb923c}.live-mark215.m3 b{color:#60a5fa}.live-hno215{font-weight:950;font-size:14px;color:#d9ffe8}.live-hname215{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .live-ticket215{display:flex;justify-content:space-between;gap:8px;padding:7px 8px;border-bottom:1px solid rgba(51,65,85,.4);font-size:10px}.live-ticket215.best{background:rgba(0,230,118,.08);border:1px solid rgba(0,230,118,.22);border-radius:8px}.live-ticket215 b{color:#a7f3d0}.live-no-bet215{padding:9px;border:1px solid rgba(251,191,36,.25);background:rgba(251,191,36,.07);color:#fde68a;border-radius:8px;font-size:10px}
+      .live-text215{font-size:11px;line-height:1.62;color:#cbd5e1}.live-text215 div+div{margin-top:3px}
+      .live-track215{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.live-track215 div{background:rgba(15,23,42,.52);border:1px solid rgba(51,65,85,.45);border-radius:8px;padding:7px;text-align:center}.live-track215 b{display:block;font-size:14px;color:#d9ffe8}.live-track215 span{display:block;font-size:8px;color:#94a3b8;margin-top:2px}
+      .live-result-head215{font-size:11px;font-weight:900;padding:7px 8px;border-radius:8px;margin-bottom:5px}.live-result-head215.hit{color:#a7f3d0;background:rgba(0,230,118,.09)}.live-result-head215.miss{color:#fca5a5;background:rgba(248,113,113,.07)}.live-result-sub215{font-size:10px;color:#94a3b8;line-height:1.5}.live-hist215{display:flex;justify-content:space-between;gap:8px;font-size:9px;padding:5px 2px;border-bottom:1px solid rgba(51,65,85,.35)}.live-empty215{padding:12px;text-align:center;color:#64748b;font-size:10px}
+      #rightLiveModeBtn.active{background:linear-gradient(135deg,#00c853,#00e676);color:#03130b;border-color:rgba(0,230,118,.75);box-shadow:0 0 12px rgba(0,230,118,.25)}
+      @media(max-width:980px){.live-marks215{grid-template-columns:1fr}.live-track215{grid-template-columns:repeat(2,1fr)}.live-ticket215{flex-direction:column;gap:2px}}
+    `; document.head.appendChild(s);
+  }
+
+  function installUi215(){
+    if($215('rightLiveCommentaryPane')) return;
+    const frame=$215('rightAnalysisFrame'), actions=document.querySelector('#rightAnalysisPane .right-analysis-actions');
+    if(!frame||!actions) return;
+    const btn=document.createElement('button'); btn.id='rightLiveModeBtn'; btn.type='button'; btn.className='btn-sm odds-mode-tab'; btn.textContent='🗣 実況'; btn.onclick=showLive215;
+    const oddsBtn=$215('rightOddsModeBtn'); if(oddsBtn) oddsBtn.insertAdjacentElement('afterend',btn); else actions.insertBefore(btn,actions.firstChild);
+    const pane=document.createElement('div'); pane.id='rightLiveCommentaryPane'; pane.innerHTML=`
+      <div class="live-card215">
+        <div class="live-head215"><b>🗣 リアルタイム解説</b><span class="live-badge215">5秒データ連動</span></div>
+        <div class="live-tools215"><button class="btn-sm" id="liveNow215" type="button">🔄 更新</button><button class="btn-sm" id="liveResultNow215" type="button">🏁 結果確認</button><label><input type="checkbox" id="liveAutoResult215">結果を自動確認</label></div>
+      </div>
+      <div id="liveStatus215" class="live-status215 wait">レースを選択してください。</div>
+      <div class="live-card215"><div class="live-head215"><b>🏇 予想印</b><span class="live-badge215">想定勝率順</span></div><div id="liveMarks215" class="live-marks215"></div></div>
+      <div class="live-card215"><div class="live-head215"><b>🎫 推奨馬券</b><span class="live-badge215">券種別EV閾値通過</span></div><div id="liveTickets215"></div></div>
+      <div class="live-card215"><div class="live-head215"><b>📣 データ実況</b><span class="live-badge215">前回比</span></div><div id="liveText215" class="live-text215"></div></div>
+      <div class="live-card215"><div class="live-head215"><b>🏁 このレースの成績</b><span class="live-badge215">結果連動</span></div><div id="liveCurrentResult215"></div></div>
+      <div class="live-card215"><div class="live-head215"><b>📊 累計成績</b><span class="live-badge215">保存済み</span></div><div id="liveTrackStats215" class="live-track215"></div><div id="liveResultHistory215" style="margin-top:8px"></div></div>`;
+    frame.insertAdjacentElement('afterend',pane);
+
+    $215('liveNow215').onclick=()=>{ refreshLive215(true); try{window.captureOddsTimelineNow?.();}catch(e){} };
+    $215('liveResultNow215').onclick=()=>checkResult215(true);
+    const auto=$215('liveAutoResult215'); auto.checked=pref215.autoResult!==false; auto.onchange=()=>{pref215.autoResult=auto.checked;savePref215();};
+    ['rightProfitModeBtn','rightOddsModeBtn','rightPrecloseModeBtn'].forEach(id=>$215(id)?.addEventListener('click',hideLive215));
+
+    const watch=$215('oddsTsCount')||$215('oddsTsStatus');
+    if(watch && !watch.__liveObs215){
+      watch.__liveObs215=true;
+      const mo=new MutationObserver(()=>setTimeout(()=>refreshLive215(false),40));
+      mo.observe(watch,{childList:true,characterData:true,subtree:true});
+    }
+    const cand=$215('candBody');
+    if(cand && !cand.__liveCandObs215){ cand.__liveCandObs215=true; new MutationObserver(()=>setTimeout(()=>refreshLive215(true),80)).observe(cand,{childList:true,subtree:true}); }
+    ['raceSelect','raceUrl','pickKind','pickVenue'].forEach(id=>$215(id)?.addEventListener(id==='raceUrl'?'input':'change',()=>setTimeout(()=>{lastRefreshKey215='';refreshLive215(true);renderRecord215(currentRaceId215());},250)));
+    renderRecord215(currentRaceId215());
+
+    if(resultPoll215) clearInterval(resultPoll215);
+    resultPoll215=setInterval(()=>{
+      const visible=$215('rightLiveCommentaryPane')?.style.display==='flex';
+      if(visible && pref215.autoResult!==false && !document.hidden) checkResult215(false);
+    },60000);
+  }
+
+  function boot215(){ installStyle215(); installUi215(); markVersion215(); if(pref215.autoOpen)showLive215(); }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',boot215,{once:true}); else boot215();
+  [600,1800,4200,8200,13000].forEach(ms=>setTimeout(()=>{installStyle215();installUi215();markVersion215();},ms));
+  try{
+    const ver=document.querySelector('.ver');
+    if(ver){ const mo=new MutationObserver(()=>{ if(!String(ver.textContent||'').startsWith(VERSION215)) markVersion215(); }); mo.observe(ver,{childList:true,subtree:true,characterData:true}); }
+  }catch(e){}
+  window.showLiveCommentary215=showLive215;
+  window.refreshLiveCommentary215=()=>refreshLive215(true);
+  window.checkLivePredictionResult215=()=>checkResult215(true);
+})();
+
 </script>
 </body>
 </html>

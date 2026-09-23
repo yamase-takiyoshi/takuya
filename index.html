@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.205 SafariRightPanelFix</title>
+<title>The競馬 EV分析 v5.18.208 Odds Metrics Switch</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.205 SafariRightPanelFix</span>
+    <span class="ver">v5.18.208 Odds Metrics Switch</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -789,7 +789,7 @@ body.right-analysis-active #rightAnalysisPane{
 const TICKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 
 // ─── 表示バージョン統一（HeaderVerSync） ─────────────────────────
-window.APP_VERSION = 'v5.18.199 NAR Worker404Fix + IntegratedProxy';
+window.APP_VERSION = 'v5.18.207 Race-by-Race Odds Archive';
 window.setAppVersionLabel = function setAppVersionLabel(){
   try{
     const ver = document.querySelector('.ver');
@@ -16058,7 +16058,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 (function(){
   'use strict';
 
-  var VERSION = 'v5.18.192 CompleteRightMeta';
+  var VERSION = 'v5.18.207 Race-by-Race Odds Archive';
   var PANEL_STATE_KEY = 'tk-right-analysis-panel-v3'; // v5.18.205: 旧OFF状態を引き継がず、ワイド画面では右側分析を初回表示
   var BRIDGE_KEY = 'keibaProfitGraphBridge_v1';
   var LIVE_FILE_NAME = 'The競馬_EV分析_右側リアルタイム.json';
@@ -18584,7 +18584,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.18.205 SafariRightPanelFix + FreezeGuard + OddsTimeline5s';
+  const VERSION202 = 'v5.18.208 Odds Metrics Switch';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
@@ -18650,15 +18650,15 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   }
 
   function expectedHorses202(){
-    try{ if(typeof horses !== 'undefined' && Array.isArray(horses)) return horses.map(h => ({num:Number(h.num),name:String(h.name||''),odds:Number(h.odds||0),pop:Number(h.pop||0)})); }catch(e){}
-    try{ if(Array.isArray(window.horses)) return window.horses.map(h => ({num:Number(h.num),name:String(h.name||''),odds:Number(h.odds||0),pop:Number(h.pop||0)})); }catch(e){}
+    try{ if(typeof horses !== 'undefined' && Array.isArray(horses)) return horses.map(h => ({num:Number(h.num),name:String(h.name||''),odds:Number(h.odds||0),pop:Number(h.pop||0),frame:Number(h.frame||0)})); }catch(e){}
+    try{ if(Array.isArray(window.horses)) return window.horses.map(h => ({num:Number(h.num),name:String(h.name||''),odds:Number(h.odds||0),pop:Number(h.pop||0),frame:Number(h.frame||0)})); }catch(e){}
     const out = [];
     document.querySelectorAll('#horseRows .horse-row').forEach(row => {
       const nums = row.querySelectorAll('input');
       if(nums.length >= 5){
         const no = Number(nums[1].value || 0);
         const name = String(nums[2].value || '');
-        if(no > 0) out.push({num:no,name,odds:Number(nums[3].value||0),pop:Number(nums[4].value||0)});
+        if(no > 0) out.push({num:no,name,odds:Number(nums[3].value||0),pop:Number(nums[4].value||0),frame:Number(nums[0].value||0)});
       }
     });
     return out;
@@ -18701,6 +18701,44 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       req.onsuccess = () => resolve((req.result || []).sort((a,b)=>a.captured_ms-b.captured_ms));
       req.onerror = () => reject(req.error || new Error('IndexedDB read failed'));
     });
+  }
+
+  async function dbAll202(){
+    const db = await dbOpen202();
+    return await new Promise((resolve,reject) => {
+      const tx = db.transaction(STORE,'readonly');
+      const req = tx.objectStore(STORE).getAll();
+      req.onsuccess = () => resolve((req.result || []).sort((a,b)=>a.captured_ms-b.captured_ms));
+      req.onerror = () => reject(req.error || new Error('IndexedDB all read failed'));
+    });
+  }
+
+  async function refreshRaceArchive202(preferRid=''){
+    const sel=$('oddsTsRaceArchive'); if(!sel) return;
+    let rows=[]; try{ rows=await dbAll202(); }catch(e){ rows=[]; }
+    const grouped=new Map();
+    rows.forEach(r=>{
+      const rid=String(r?.race_id||''); if(!rid) return;
+      let g=grouped.get(rid);
+      if(!g){ g={rid,count:0,last:0,first:0,label:'',kind:''}; grouped.set(rid,g); }
+      g.count++;
+      const ms=Number(r.captured_ms||0); if(!g.first||ms<g.first)g.first=ms; if(ms>g.last)g.last=ms;
+      if(r.race_label)g.label=String(r.race_label); if(r.kind)g.kind=String(r.kind);
+    });
+    const current=currentRaceId202();
+    const list=[...grouped.values()].sort((a,b)=>b.last-a.last);
+    const opts=[];
+    if(current && !grouped.has(current)) opts.push({rid:current,text:`現在選択中：${current}（履歴0点）`});
+    list.forEach(g=>{
+      const d=g.last?new Date(g.last).toLocaleDateString('ja-JP',{month:'2-digit',day:'2-digit'}):'';
+      const lab=norm(g.label)||g.rid;
+      opts.push({rid:g.rid,text:`${d} ${g.kind||kindFromRid202(g.rid)} ${lab}　${g.count}点`});
+    });
+    if(!opts.length){ sel.innerHTML='<option value="">保存済みレースなし</option>'; return; }
+    sel.innerHTML=opts.map(o=>`<option value="${esc(o.rid)}">${esc(o.text)}</option>`).join('');
+    const want=String(preferRid||activeRid||current||'');
+    if(want && opts.some(o=>o.rid===want)) sel.value=want;
+    else sel.value=opts[0].rid;
   }
 
   async function dbClearRace202(rid){
@@ -18923,12 +18961,13 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
         captured_ms:now,
         captured_at:new Date(now).toISOString(),
         source:got.source || '',
-        horses:expected.map(h=>({num:Number(h.num),name:String(h.name||'')})),
+        horses:expected.map(h=>({num:Number(h.num),name:String(h.name||''),pop:Number(h.pop||0),frame:Number(h.frame||0),odds:Number(h.odds||0)})),
         markets:packed
       };
       await dbPut202(rec);
       history.push(rec);
       history.sort((a,b)=>a.captured_ms-b.captured_ms);
+      refreshRaceArchive202(rid).catch(()=>{});
       if(history.length>MAX_RECORDS_PER_RACE) history=history.slice(-MAX_RECORDS_PER_RACE);
       if(history.length % 50 === 0) trimRace202(rid).catch(()=>{});
       activeKind=kind; activeRaceLabel=rec.race_label;
@@ -18949,6 +18988,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       try{ history=await dbRace202(activeRid); }catch(e){ history=[]; }
     }
     refreshControls202(); draw202();
+    await refreshRaceArchive202(activeRid).catch(()=>{});
     const n=history.length;
     setStatus202(activeRid ? `📚 ${activeKind} ${activeRid}：保存済み ${n} 点` : 'レースを選択してください。', n?'ok':'wait');
   }
@@ -19008,37 +19048,153 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     return x?Number(x.odds):NaN;
   }
 
+  // v5.18.208: 時系列オッズを「想定確率 / 市場確率 / EV / 乖離」に切替。
+  // 想定確率は本体の現行EVモデルに合わせ、単勝オッズ80% + 人気20%を基礎に正規化する。
+  // 過去レコードに人気が保存されていない場合は、その時点の単勝オッズ順位を人気順位として補完する。
+  function metricMode202(){ return $('oddsTsMetric')?.value || 'odds'; }
+  function syncMetricUi202(){
+    const m=metricMode202(), log=$('oddsTsLog');
+    if(log){
+      log.disabled = m!=='odds';
+      if(m!=='odds') log.checked=false;
+      const lab=log.closest('label'); if(lab) lab.style.opacity=m==='odds'?'1':'.45';
+    }
+  }
+  function nums202(key){ return String(key||'').split('-').map(Number).filter(n=>Number.isFinite(n)&&n>0); }
+  function captureRated202(rec){
+    if(!rec) return new Map();
+    const wins=(rec.markets?.['単勝']||[]).map(x=>({num:Number(x.combination),odds:Number(x.odds)})).filter(x=>x.num>0&&x.odds>1);
+    if(!wins.length) return new Map();
+    const meta=new Map();
+    (rec.horses||[]).forEach(h=>meta.set(Number(h.num),h));
+    if(String(rec.race_id||'')===String(currentRaceId202()||'')){
+      expectedHorses202().forEach(h=>{
+        const old=meta.get(Number(h.num))||{};
+        meta.set(Number(h.num),{...h,...old,frame:Number(old.frame||h.frame||0),pop:Number(old.pop||h.pop||0)});
+      });
+    }
+    const oddsRank=wins.slice().sort((a,b)=>a.odds-b.odds).map((x,i)=>[x.num,i+1]);
+    const rankMap=new Map(oddsRank);
+    const n=Math.max(1,wins.length), takeback=String(rec.kind||activeKind)==='NAR'?0.30:0.225;
+    const overround=wins.reduce((s,x)=>s+1/x.odds,0) || (1/Math.max(.01,1-takeback));
+    const popRaw=Array.from({length:n},(_,i)=>1/Math.pow(i+1,1.08));
+    const popSum=popRaw.reduce((a,b)=>a+b,0)||1;
+    const raw=wins.map(x=>{
+      const h=meta.get(x.num)||{};
+      let pop=Number(h.pop||0); if(!(pop>=1&&pop<=n)) pop=rankMap.get(x.num)||0;
+      const pOdds=(1/x.odds)/Math.max(overround,1/(1-takeback));
+      const pPop=(pop>=1&&pop<=n)?(1/Math.pow(pop,1.08))/popSum:0;
+      const rp=pOdds>0&&pPop>0?pOdds*.80+pPop*.20:(pOdds||pPop||1/n);
+      return {num:x.num,odds:x.odds,pop,frame:Number(h.frame||0),raw:rp};
+    });
+    const total=raw.reduce((s,x)=>s+x.raw,0)||1;
+    const placeMult=Math.min(3.0,2.0+n*.045), renMult=Math.min(2.4,1.6+n*.038);
+    const out=new Map();
+    raw.forEach(h=>{
+      const winP=h.raw/total;
+      const rawPlaceP=winP*placeMult+.015;
+      const favAdj=Math.max(0,winP-.25)*.7;
+      const longAdj=winP<.08?(.08-winP)*.8:0;
+      const placeP=Math.min(.90,rawPlaceP*(1-favAdj)*(1-longAdj));
+      const renP=Math.min(.82,winP*renMult+.015);
+      out.set(h.num,{...h,winP,placeP,renP});
+    });
+    return out;
+  }
+  function modelP202(rec,market,key){
+    const rated=captureRated202(rec), ns=nums202(key); if(!rated.size||!ns.length) return NaN;
+    const hs=ns.map(n=>rated.get(n));
+    if(market==='単勝') return hs[0]?.winP ?? NaN;
+    if(market==='複勝') return hs[0]?.placeP ?? NaN;
+    if(market==='枠連'){
+      const frames=ns;
+      const fp=frames.map(f=>{
+        const arr=[...rated.values()].filter(h=>Number(h.frame)===Number(f));
+        if(!arr.length) return NaN;
+        const win=Math.min(.95,arr.reduce((s,h)=>s+h.winP,0));
+        return Math.min(.90,win*1.8+.015);
+      });
+      return fp.every(Number.isFinite)?Math.min(.34,fp[0]*fp[1]*1.10):NaN;
+    }
+    if(hs.some(h=>!h)) return NaN;
+    if(market==='ワイド') return Math.min(.50,hs[0].placeP*hs[1].placeP*1.30);
+    if(market==='馬連') return Math.min(.30,hs[0].winP*hs[1].winP*3.80);
+    if(market==='馬単') return Math.min(.22,hs[0].winP*hs[1].winP*2.40);
+    if(market==='3連複') return Math.min(.16,hs[0].placeP*hs[1].placeP*hs[2].placeP*1.45);
+    if(market==='3連単'){
+      const p=Math.min(.16,hs[0].placeP*hs[1].placeP*hs[2].placeP*1.45);
+      return Math.max(.0001,p*.22);
+    }
+    return NaN;
+  }
+  function metricValue202(rec,market,key,mode=metricMode202()){
+    const o=findOdds202(rec,market,key); if(!Number.isFinite(o)||o<=0) return NaN;
+    if(mode==='odds') return o;
+    if(mode==='marketP') return 100/o;
+    const p=modelP202(rec,market,key); if(!Number.isFinite(p)||p<0) return NaN;
+    if(mode==='modelP') return p*100;
+    if(mode==='ev') return p*o;
+    if(mode==='edge') return (p-1/o)*100;
+    return o;
+  }
+  function metricLabel202(mode=metricMode202()){
+    return mode==='modelP'?'想定確率':mode==='marketP'?'市場確率':mode==='ev'?'EV':mode==='edge'?'乖離':'オッズ';
+  }
+  function metricFmt202(v,mode=metricMode202(),axis=false){
+    if(!Number.isFinite(v)) return '-';
+    if(mode==='odds') return axis?(v>=100?Math.round(v).toString():v.toFixed(v<10?1:0)):v.toFixed(1)+'倍';
+    if(mode==='modelP'||mode==='marketP') return v.toFixed(v<10?2:1)+'%';
+    if(mode==='ev') return v.toFixed(2);
+    if(mode==='edge') return (v>=0?'+':'')+v.toFixed(2)+(axis?'':'pt');
+    return String(v);
+  }
+
   function draw202(){
     const canvas=$('oddsTsCanvas'); if(!canvas) return;
+    syncMetricUi202();
     const parent=canvas.parentElement; const cssW=Math.max(320,parent?.clientWidth||600); const cssH=360; const dpr=Math.max(1,window.devicePixelRatio||1);
     canvas.style.width='100%'; canvas.style.height=cssH+'px';
     canvas.width=Math.floor(cssW*dpr); canvas.height=Math.floor(cssH*dpr);
     const ctx=canvas.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,cssW,cssH);
     ctx.fillStyle='#07111d'; ctx.fillRect(0,0,cssW,cssH);
-    const market=$('oddsTsMarket')?.value||'単勝', choice=$('oddsTsCombo')?.value||'__ALL__', log=!!$('oddsTsLog')?.checked;
+    const market=$('oddsTsMarket')?.value||'単勝', choice=$('oddsTsCombo')?.value||'__ALL__', mode=metricMode202();
+    const log=mode==='odds' && !!$('oddsTsLog')?.checked;
     const keys=seriesKeys202(market,choice);
     if(history.length<1 || !keys.length){
       ctx.fillStyle='#94a3b8'; ctx.font='13px -apple-system,BlinkMacSystemFont,sans-serif'; ctx.textAlign='center';
       ctx.fillText('「今すぐ取得」または5秒自動更新で時系列データを保存します',cssW/2,cssH/2);
       renderLegend202(market,keys); return;
     }
-    const L=54,R=16,T=22,B=42,W=cssW-L-R,H=cssH-T-B;
+    const L=58,R=16,T=24,B=42,W=cssW-L-R,H=cssH-T-B;
     const t0=history[0].captured_ms, t1=history[history.length-1].captured_ms;
     const vals=[];
-    keys.forEach(k=>history.forEach(r=>{ const v=findOdds202(r,market,k); if(Number.isFinite(v)&&v>0) vals.push(v); }));
-    if(!vals.length){ renderLegend202(market,keys); return; }
+    keys.forEach(k=>history.forEach(r=>{ const v=metricValue202(r,market,k,mode); if(Number.isFinite(v) && (mode!=='odds'||v>0)) vals.push(v); }));
+    if(!vals.length){
+      ctx.fillStyle='#94a3b8';ctx.font='12px -apple-system,BlinkMacSystemFont,sans-serif';ctx.textAlign='center';
+      ctx.fillText(mode==='odds'?'表示できるオッズがありません':'この履歴では '+metricLabel202(mode)+' を算出できません',cssW/2,cssH/2);
+      renderLegend202(market,keys); return;
+    }
     const transform=v=>log?Math.log10(Math.max(v,1e-6)):v;
     const inv=v=>log?Math.pow(10,v):v;
     let y0=Math.min(...vals.map(transform)), y1=Math.max(...vals.map(transform));
-    if(y0===y1){ y0-=0.05; y1+=0.05; }
-    const pad=(y1-y0)*0.08; y0-=pad; y1+=pad;
+    if(mode==='modelP'||mode==='marketP') y0=Math.min(0,y0);
+    if(mode==='ev'){ y0=Math.min(y0,1); y1=Math.max(y1,1); }
+    if(mode==='edge'){ y0=Math.min(y0,0); y1=Math.max(y1,0); }
+    if(y0===y1){ const bump=Math.max(.05,Math.abs(y0)*.08||.05); y0-=bump; y1+=bump; }
+    const pad=(y1-y0)*.08; y0-=pad; y1+=pad;
     const xOf=t=>L + (t1===t0?W/2:(t-t0)/(t1-t0)*W);
     const yOf=v=>T+H-(transform(v)-y0)/(y1-y0)*H;
 
     ctx.strokeStyle='rgba(148,163,184,.18)'; ctx.lineWidth=1; ctx.font='10px -apple-system,BlinkMacSystemFont,sans-serif'; ctx.fillStyle='#94a3b8'; ctx.textAlign='right'; ctx.textBaseline='middle';
     for(let i=0;i<=5;i++){
       const yy=T+H*i/5; ctx.beginPath(); ctx.moveTo(L,yy); ctx.lineTo(L+W,yy); ctx.stroke();
-      const v=inv(y1-(y1-y0)*i/5); ctx.fillText(v>=100?Math.round(v).toString():v.toFixed(v<10?1:0),L-7,yy);
+      const v=inv(y1-(y1-y0)*i/5); ctx.fillText(metricFmt202(v,mode,true),L-7,yy);
+    }
+    // EV=1.00 / 乖離=0 の基準線
+    const ref=mode==='ev'?1:(mode==='edge'?0:NaN);
+    if(Number.isFinite(ref) && ref>=inv(y0) && ref<=inv(y1)){
+      const yy=yOf(ref); ctx.save(); ctx.strokeStyle=mode==='ev'?'rgba(251,191,36,.72)':'rgba(148,163,184,.60)';ctx.setLineDash([5,4]);ctx.lineWidth=1.3;
+      ctx.beginPath();ctx.moveTo(L,yy);ctx.lineTo(L+W,yy);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle=mode==='ev'?'#fbbf24':'#94a3b8';ctx.textAlign='left';ctx.fillText(mode==='ev'?'EV 1.00':'0pt',L+4,yy-9);ctx.restore();
     }
     ctx.textAlign='center'; ctx.textBaseline='top';
     const ticks=Math.min(5,Math.max(1,history.length-1));
@@ -19051,34 +19207,40 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     keys.forEach((k,idx)=>{
       ctx.strokeStyle=PALETTE[idx%PALETTE.length]; ctx.lineWidth=2; ctx.beginPath(); let started=false;
       history.forEach(r=>{
-        const v=findOdds202(r,market,k); if(!Number.isFinite(v)||v<=0) return;
+        const v=metricValue202(r,market,k,mode); if(!Number.isFinite(v)||(mode==='odds'&&v<=0)) return;
         const x=xOf(r.captured_ms), y=yOf(v); if(!started){ctx.moveTo(x,y); started=true;} else ctx.lineTo(x,y);
       });
       if(started) ctx.stroke();
       if(history.length<=60){
         ctx.fillStyle=PALETTE[idx%PALETTE.length];
-        history.forEach(r=>{ const v=findOdds202(r,market,k); if(!Number.isFinite(v)||v<=0)return; const x=xOf(r.captured_ms),y=yOf(v); ctx.beginPath();ctx.arc(x,y,2.2,0,Math.PI*2);ctx.fill(); });
+        history.forEach(r=>{ const v=metricValue202(r,market,k,mode); if(!Number.isFinite(v)||(mode==='odds'&&v<=0))return; const x=xOf(r.captured_ms),y=yOf(v); ctx.beginPath();ctx.arc(x,y,2.2,0,Math.PI*2);ctx.fill(); });
       }
     });
     ctx.fillStyle='#cbd5e1';ctx.font='11px -apple-system,BlinkMacSystemFont,sans-serif';ctx.textAlign='left';ctx.textBaseline='top';
-    ctx.fillText(`${market} オッズ${log?'（対数目盛）':''}`,L,T-17);
+    ctx.fillText(`${market} ${metricLabel202(mode)}${log?'（対数目盛）':''}`,L,T-18);
     renderLegend202(market,keys);
   }
 
   function renderLegend202(market,keys){
     const el=$('oddsTsLegend'); if(!el) return;
+    const mode=metricMode202();
     if(!keys.length){ el.innerHTML='<div class="odds-ts-empty">表示する組合せがありません</div>'; return; }
     const rows=keys.map((k,idx)=>{
       let first=NaN,last=NaN,min=Infinity,max=-Infinity;
-      history.forEach(r=>{ const v=findOdds202(r,market,k); if(Number.isFinite(v)&&v>0){ if(!Number.isFinite(first))first=v; last=v; min=Math.min(min,v); max=Math.max(max,v); }});
-      const ch=Number.isFinite(first)&&Number.isFinite(last)?((last/first-1)*100):NaN;
-      return `<div class="odds-ts-legend-row"><i style="background:${PALETTE[idx%PALETTE.length]}"></i><b>${esc(comboLabel202(market,k))}</b><span>現在 ${Number.isFinite(last)?last.toFixed(1):'-'}倍</span><span>最小 ${Number.isFinite(min)?min.toFixed(1):'-'}</span><span>最大 ${Number.isFinite(max)?max.toFixed(1):'-'}</span><span class="${Number.isFinite(ch)?(ch<0?'down':ch>0?'up':''):''}">${Number.isFinite(ch)?`${ch>=0?'+':''}${ch.toFixed(1)}%`:'-'}</span></div>`;
+      history.forEach(r=>{ const v=metricValue202(r,market,k,mode); if(Number.isFinite(v) && (mode!=='odds'||v>0)){ if(!Number.isFinite(first))first=v; last=v; min=Math.min(min,v); max=Math.max(max,v); }});
+      const ch=Number.isFinite(first)&&Number.isFinite(last)&&Math.abs(first)>1e-12?((last/first-1)*100):NaN;
+      const delta=Number.isFinite(first)&&Number.isFinite(last)?last-first:NaN;
+      const changeText=mode==='edge'
+        ? (Number.isFinite(delta)?`${delta>=0?'+':''}${delta.toFixed(2)}pt`:'-')
+        : (Number.isFinite(ch)?`${ch>=0?'+':''}${ch.toFixed(1)}%`:'-');
+      const cls=Number.isFinite(delta)?(delta<0?'down':delta>0?'up':''):'';
+      return `<div class="odds-ts-legend-row"><i style="background:${PALETTE[idx%PALETTE.length]}"></i><b>${esc(comboLabel202(market,k))}</b><span>現在 ${metricFmt202(last,mode)}</span><span>最小 ${metricFmt202(min,mode)}</span><span>最大 ${metricFmt202(max,mode)}</span><span class="${cls}">${changeText}</span></div>`;
     }).join('');
     el.innerHTML=rows;
     const meta=$('oddsTsMeta');
     if(meta){
       const first=history[0]?.captured_ms,last=history[history.length-1]?.captured_ms;
-      meta.textContent=history.length?`${history.length}点 / ${new Date(first).toLocaleTimeString('ja-JP')}〜${new Date(last).toLocaleTimeString('ja-JP')}`:'0点';
+      meta.textContent=history.length?`${history.length}点 / ${new Date(first).toLocaleTimeString('ja-JP')}〜${new Date(last).toLocaleTimeString('ja-JP')} / ${metricLabel202(mode)}`:'0点';
     }
   }
 
@@ -19106,7 +19268,10 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 
   function startPoll202(){
     if(pollTimer) clearInterval(pollTimer);
-    pollTimer=setInterval(()=>{ if(oddsMode && $('oddsTsAuto')?.checked && !document.hidden) capture202(false); },POLL_MS);
+    pollTimer=setInterval(()=>{
+      const current=currentRaceId202();
+      if(oddsMode && $('oddsTsAuto')?.checked && !document.hidden && (!activeRid || activeRid===current)) capture202(false);
+    },POLL_MS);
   }
 
   function download202(name,text,type='application/json'){
@@ -19114,13 +19279,16 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   }
   function exportJson202(){
     if(!activeRid || !history.length){ setStatus202('⚠️ 保存済み履歴がありません。','err'); return; }
-    const obj={schema:'thekeiba-odds-timeline-export-v1',version:VERSION202,exported_at:new Date().toISOString(),race_id:activeRid,kind:activeKind,race_label:activeRaceLabel,count:history.length,captures:history};
+    const obj={schema:'thekeiba-odds-timeline-export-v1',version:VERSION202,exported_at:new Date().toISOString(),race_id:activeRid,kind:activeKind,race_label:activeRaceLabel,count:history.length,metric_definitions:{model_probability:'現行EVモデル（単勝オッズ80%＋人気20%を基礎に正規化し、券種別式へ展開）',market_probability:'1 / 実オッズ',ev:'想定確率 × 実オッズ',edge_pp:'想定確率 - 市場確率（percentage points）'},captures:history};
     download202(`odds_timeline_${activeRid}.json`,JSON.stringify(obj,null,2));
   }
   function exportCsv202(){
     if(!activeRid || !history.length){ setStatus202('⚠️ 保存済み履歴がありません。','err'); return; }
-    const lines=['captured_at,race_id,kind,market,combination,odds'];
-    history.forEach(r=>MARKET_TYPES.forEach(t=>(r.markets?.[t]||[]).forEach(x=>lines.push([r.captured_at,r.race_id,r.kind,t,x.combination,x.odds].map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')))));
+    const lines=['captured_at,race_id,kind,market,combination,odds,model_probability_pct,market_probability_pct,ev,edge_pp'];
+    history.forEach(r=>MARKET_TYPES.forEach(t=>(r.markets?.[t]||[]).forEach(x=>{
+      const mp=metricValue202(r,t,x.combination,'modelP'), mkp=metricValue202(r,t,x.combination,'marketP'), ev=metricValue202(r,t,x.combination,'ev'), edge=metricValue202(r,t,x.combination,'edge');
+      lines.push([r.captured_at,r.race_id,r.kind,t,x.combination,x.odds,Number.isFinite(mp)?mp.toFixed(6):'',Number.isFinite(mkp)?mkp.toFixed(6):'',Number.isFinite(ev)?ev.toFixed(6):'',Number.isFinite(edge)?edge.toFixed(6):''].map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(','));
+    })));
     download202(`odds_timeline_${activeRid}.csv`,lines.join('\n'),'text/csv;charset=utf-8');
   }
 
@@ -19136,7 +19304,15 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       <div class="odds-ts-toolbar">
         <div class="odds-ts-race-line"><b id="oddsTsRace">レース未選択</b><span id="oddsTsCount">0点</span></div>
         <div class="odds-ts-controls">
+          <label>レース履歴<select id="oddsTsRaceArchive"><option value="">保存済みレースを読込中…</option></select></label>
           <label>券種<select id="oddsTsMarket">${MARKET_TYPES.map(t=>`<option>${t}</option>`).join('')}</select></label>
+          <label>指標<select id="oddsTsMetric">
+            <option value="odds">オッズ</option>
+            <option value="modelP">想定確率</option>
+            <option value="marketP">市場確率</option>
+            <option value="ev">EV</option>
+            <option value="edge">乖離</option>
+          </select></label>
           <label>表示<select id="oddsTsCombo"><option value="__ALL__">全馬を表示</option></select></label>
           <label class="odds-ts-check"><input type="checkbox" id="oddsTsAuto" checked>5秒自動</label>
           <label class="odds-ts-check"><input type="checkbox" id="oddsTsLog">対数</label>
@@ -19146,20 +19322,31 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
           <button class="btn-sm" id="oddsTsCsv" type="button">CSV</button>
         </div>
         <div id="oddsTsStatus" class="odds-ts-status wait">レースを選択してください。</div>
+        <div class="odds-ts-metric-note">想定確率＝現行EVモデル / 市場確率＝1÷実オッズ / EV＝想定確率×実オッズ / 乖離＝想定確率−市場確率</div>
       </div>
       <div class="odds-ts-chart-wrap"><canvas id="oddsTsCanvas"></canvas></div>
       <div class="odds-ts-foot"><span id="oddsTsMeta">0点</span><span>ブラウザを閉じてもIndexedDBに保存</span></div>
       <div id="oddsTsLegend" class="odds-ts-legend"></div>`;
     frame.insertAdjacentElement('afterend',pane);
 
+    $('oddsTsRaceArchive').addEventListener('change',async e=>{
+      const rid=String(e.target.value||''); if(!rid) return;
+      await loadRaceContext202(rid);
+      const left=currentRaceId202();
+      if(left && rid!==left){
+        if($('oddsTsAuto')) $('oddsTsAuto').checked=false;
+        setStatus202(`📚 保存済み履歴を閲覧中：${rid}（左側の現在レースとは別です）`,'ok');
+      }
+    });
     $('oddsTsMarket').addEventListener('change',()=>{refreshCombo202();draw202();});
+    $('oddsTsMetric').addEventListener('change',()=>{ syncMetricUi202(); draw202(); });
     $('oddsTsCombo').addEventListener('change',draw202);
     $('oddsTsLog').addEventListener('change',draw202);
     $('oddsTsNow').addEventListener('click',()=>capture202(true));
     $('oddsTsClear').addEventListener('click',async()=>{
       if(!activeRid) return;
       if(!confirm(`${activeRid} の時系列オッズ履歴を消去しますか？`)) return;
-      await dbClearRace202(activeRid); history=[]; refreshControls202(); draw202(); setStatus202('🗑 履歴を消去しました。','ok');
+      await dbClearRace202(activeRid); history=[]; refreshControls202(); draw202(); await refreshRaceArchive202(currentRaceId202()).catch(()=>{}); setStatus202('🗑 履歴を消去しました。','ok');
     });
     $('oddsTsJson').addEventListener('click',exportJson202);
     $('oddsTsCsv').addEventListener('click',exportCsv202);
@@ -19184,6 +19371,8 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     });
     window.addEventListener('resize',()=>{ if(oddsMode) draw202(); });
     document.addEventListener('visibilitychange',()=>{ if(!document.hidden && oddsMode){ draw202(); if($('oddsTsAuto')?.checked) capture202(false); } });
+    refreshRaceArchive202(currentRaceId202()).catch(()=>{});
+    syncMetricUi202();
     startPoll202();
   }
 
@@ -19194,8 +19383,8 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       .odds-mode-tab.active{background:linear-gradient(135deg,#00c853,#00e676);color:#03130b;border-color:rgba(0,230,118,.75);box-shadow:0 0 12px rgba(0,230,118,.25)}
       .odds-ts-toolbar{padding:10px;border-bottom:1px solid rgba(0,230,118,.20);background:#0b1726}
       .odds-ts-race-line{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;font-size:12px}.odds-ts-race-line b{color:#d9ffe8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.odds-ts-race-line span{font-size:10px;color:#8bd9ae;white-space:nowrap}
-      .odds-ts-controls{display:flex;gap:6px;align-items:end;flex-wrap:wrap}.odds-ts-controls label{display:flex;flex-direction:column;gap:3px;font-size:9px;color:#94a3b8}.odds-ts-controls select{min-width:92px;max-width:190px;background:#101e31;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:5px 7px;font-size:10px}.odds-ts-controls .odds-ts-check{flex-direction:row;align-items:center;gap:4px;font-size:10px;color:#cbd5e1;padding-bottom:6px}.odds-ts-controls .odds-ts-check input{accent-color:#00e676}
-      .odds-ts-status{margin-top:7px;padding:5px 7px;border-radius:6px;font-size:10px;line-height:1.45;background:rgba(148,163,184,.08);color:#94a3b8}.odds-ts-status.ok{background:rgba(0,230,118,.08);color:#86efac}.odds-ts-status.err{background:rgba(248,113,113,.08);color:#fca5a5}.odds-ts-status.wait{color:#93c5fd}
+      .odds-ts-controls{display:flex;gap:6px;align-items:end;flex-wrap:wrap}.odds-ts-controls label{display:flex;flex-direction:column;gap:3px;font-size:9px;color:#94a3b8}.odds-ts-controls select{min-width:92px;max-width:190px;background:#101e31;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:5px 7px;font-size:10px}#oddsTsRaceArchive{min-width:230px;max-width:360px}.odds-ts-controls .odds-ts-check{flex-direction:row;align-items:center;gap:4px;font-size:10px;color:#cbd5e1;padding-bottom:6px}.odds-ts-controls .odds-ts-check input{accent-color:#00e676}
+      .odds-ts-status{margin-top:7px;padding:5px 7px;border-radius:6px;font-size:10px;line-height:1.45;background:rgba(148,163,184,.08);color:#94a3b8}.odds-ts-status.ok{background:rgba(0,230,118,.08);color:#86efac}.odds-ts-status.err{background:rgba(248,113,113,.08);color:#fca5a5}.odds-ts-status.wait{color:#93c5fd}.odds-ts-metric-note{margin-top:5px;font-size:9px;line-height:1.45;color:#64748b}
       .odds-ts-chart-wrap{padding:8px 8px 0;flex:none}.odds-ts-chart-wrap canvas{display:block;width:100%;height:360px;border:1px solid rgba(51,65,85,.65);border-radius:10px;background:#07111d}
       .odds-ts-foot{display:flex;justify-content:space-between;gap:8px;padding:5px 10px;font-size:9px;color:#64748b;border-bottom:1px solid rgba(51,65,85,.45)}
       .odds-ts-legend{flex:1;min-height:0;overflow:auto;padding:6px 8px 12px}.odds-ts-legend-row{display:grid;grid-template-columns:10px minmax(90px,1.4fr) repeat(4,minmax(58px,.75fr));gap:6px;align-items:center;padding:5px 4px;border-bottom:1px solid rgba(51,65,85,.35);font-size:9px;color:#cbd5e1}.odds-ts-legend-row i{width:8px;height:8px;border-radius:99px}.odds-ts-legend-row b{font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.odds-ts-legend-row .up{color:#fca5a5}.odds-ts-legend-row .down{color:#86efac}.odds-ts-empty{padding:20px;text-align:center;color:#64748b;font-size:11px}
@@ -19212,6 +19401,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   }catch(e){}
   window.showOddsTimeline = ()=>showMode202('odds');
   window.captureOddsTimelineNow = ()=>capture202(true);
+  window.refreshOddsRaceArchive = ()=>refreshRaceArchive202(activeRid||currentRaceId202());
 })();
 
 </script>
@@ -19224,7 +19414,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   if(window.__V518204_FREEZE_GUARD__) return;
   window.__V518204_FREEZE_GUARD__ = true;
 
-  const VERSION204 = 'v5.18.205 SafariRightPanelFix + FreezeGuard + OddsTimeline5s';
+  const VERSION204 = 'v5.18.207 Race-by-Race Odds Archive';
   const $204 = id => document.getElementById(id);
   const esc204 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
 
@@ -19446,7 +19636,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   'use strict';
   if(window.__V518205_RIGHT_PANEL_FIX__) return;
   window.__V518205_RIGHT_PANEL_FIX__ = true;
-  const VERSION205 = 'v5.18.205 SafariRightPanelFix + FreezeGuard + OddsTimeline5s';
+  const VERSION205 = 'v5.18.207 Race-by-Race Odds Archive';
   const SAFE_URL = 'https://yamase-takiyoshi.github.io/takuya/keiba_profit_spec_chart_switcher_candle_v22.html?src=bridge2&embed=1';
   const $ = id => document.getElementById(id);
 
@@ -19482,14 +19672,8 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     paint(true);
     try{ localStorage.setItem('tk-right-analysis-panel-v3','1'); }catch(e){}
     const frame=$('rightAnalysisFrame');
-    if(frame && (!frame.getAttribute('src') || frame.getAttribute('src')==='about:blank')){
-      // まずレイアウトを描画し、その後iframeを遅延ロード。Safariの初期描画詰まりを避ける。
-      setTimeout(()=>{
-        try{
-          if(document.body.classList.contains('right-analysis-active') && frame.getAttribute('src')==='about:blank') frame.src=SAFE_URL;
-        }catch(e){}
-      },220);
-    }
+    // v5.18.206: 右側は締切3分前/時系列オッズ専用。重い収支iframeは自動ロードしない。
+    if(frame) frame.src='about:blank';
     return true;
   }
   function safeClose(){
@@ -19520,6 +19704,168 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   window.addEventListener('resize',()=>{ if(!wide()) paint(false); });
   window.addEventListener('orientationchange',()=>setTimeout(()=>{ if(wide() && localStorage.getItem('tk-right-analysis-panel-v3')!=='0') safeOpen(); },250));
   [100,600,1800,4500].forEach(ms=>setTimeout(()=>{ markVersion(); if(wide() && localStorage.getItem('tk-right-analysis-panel-v3')!=='0' && !document.body.classList.contains('right-analysis-active')) safeOpen(); },ms));
+})();
+</script>
+
+
+
+<!-- v5.18.207 RightOddsWorkspace: 締切3分前 + レース別時系列オッズ -->
+<style id="rightOddsWorkspace207Style">
+#rightPreclose3mPane{display:none;flex:1;min-height:0;flex-direction:column;background:#07111d;overflow:hidden}
+.pc3-toolbar{padding:10px;border-bottom:1px solid rgba(0,230,118,.20);background:#0b1726}
+.pc3-race{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;font-size:12px}
+.pc3-race b{color:#d9ffe8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pc3-race span{font-size:10px;color:#8bd9ae;white-space:nowrap}
+.pc3-controls{display:flex;gap:6px;align-items:end;flex-wrap:wrap}.pc3-controls label{display:flex;flex-direction:column;gap:3px;font-size:9px;color:#94a3b8}
+.pc3-controls select{min-width:110px;background:#101e31;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:5px 7px;font-size:10px}
+.pc3-status{margin-top:7px;padding:7px 8px;border-radius:7px;font-size:10px;line-height:1.55;background:rgba(148,163,184,.08);color:#94a3b8}
+.pc3-status.ok{background:rgba(0,230,118,.08);color:#86efac}.pc3-status.warn{background:rgba(251,191,36,.08);color:#fde68a}.pc3-status.err{background:rgba(248,113,113,.08);color:#fca5a5}
+.pc3-meta{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;padding:8px 10px;border-bottom:1px solid rgba(51,65,85,.45)}
+.pc3-meta>div{background:rgba(15,23,42,.55);border:1px solid rgba(51,65,85,.6);border-radius:8px;padding:7px;text-align:center}.pc3-meta b{display:block;font-size:12px;color:#e2e8f0}.pc3-meta span{display:block;font-size:8px;color:#64748b;margin-top:2px}
+.pc3-table-wrap{flex:1;min-height:0;overflow:auto;padding:8px}.pc3-table{width:100%;border-collapse:collapse;font-size:10px}.pc3-table th{position:sticky;top:0;background:#101e31;color:#94a3b8;padding:7px 6px;text-align:left;border-bottom:1px solid #334155;z-index:1}.pc3-table td{padding:7px 6px;border-bottom:1px solid rgba(51,65,85,.38);color:#cbd5e1}.pc3-table td.num{text-align:right;font-variant-numeric:tabular-nums}.pc3-verified{color:#86efac;font-weight:800}.pc3-unverified{color:#fde68a;font-weight:800}.pc3-empty{padding:28px 14px;text-align:center;color:#64748b;font-size:11px;line-height:1.7}
+@media(max-width:980px){.pc3-meta{grid-template-columns:1fr 1fr}.pc3-table{font-size:9px}}
+</style>
+<script>
+(function(){
+  'use strict';
+  if(window.__V518206_RIGHT_ODDS_WORKSPACE__) return;
+  window.__V518206_RIGHT_ODDS_WORKSPACE__=true;
+  const VERSION='v5.18.208 Odds Metrics Switch';
+  const TYPES=['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
+  const $=id=>document.getElementById(id);
+  const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+  let currentSnap=null, refreshSeq=0;
+
+  function currentRid(){
+    try{ if(typeof currentRaceId!=='undefined' && currentRaceId) return String(currentRaceId).replace(/[^0-9]/g,''); }catch(e){}
+    try{ if(window.currentRaceId) return String(window.currentRaceId).replace(/[^0-9]/g,''); }catch(e){}
+    const u=$('raceUrl')?.value||''; let m=String(u).match(/race_id=(\d{10,14})/); if(m)return m[1];
+    const v=$('raceSelect')?.value||''; m=String(v).match(/(\d{10,14})/); return m?m[1]:'';
+  }
+  function raceLabel(){
+    const box=$('raceTitleBox'); if(box && String(box.textContent||'').trim()) return String(box.textContent||'').trim();
+    const s=$('raceSelect'); const t=s?.selectedOptions?.[0]?.textContent||''; return String(t).trim()||currentRid()||'レース未選択';
+  }
+  function markVersion(){
+    try{
+      window.APP_VERSION=VERSION;
+      const v=document.querySelector('.ver'); if(v && v.textContent!==VERSION) v.textContent=VERSION;
+      document.title='The競馬 EV分析 '+VERSION;
+    }catch(e){}
+  }
+  function openPanel(){
+    try{
+      document.body.classList.add('right-analysis-active');
+      const p=$('rightAnalysisPane'); if(p)p.setAttribute('aria-hidden','false');
+      const b=$('rightAnalysisBtn'); if(b){b.classList.add('active');b.setAttribute('aria-pressed','true');b.textContent='📊 右側ON';}
+      const f=$('rightAnalysisFrame'); if(f)f.src='about:blank';
+    }catch(e){}
+  }
+  function install(){
+    const pane=$('rightAnalysisPane'), frame=$('rightAnalysisFrame'), actions=pane?.querySelector('.right-analysis-actions');
+    if(!pane||!frame||!actions) return false;
+    // 収支分析専用操作は非表示。右側をオッズ専用ワークスペースにする。
+    ['rightProfitModeBtn'].forEach(id=>{const x=$(id);if(x)x.style.display='none';});
+    Array.from(actions.children).forEach(el=>{
+      const txt=String(el.textContent||'').trim();
+      if(['↔ 同期','↻','↗'].includes(txt)) el.style.display='none';
+    });
+    if(!$('rightPrecloseModeBtn')){
+      const b=document.createElement('button'); b.id='rightPrecloseModeBtn'; b.type='button'; b.className='btn-sm odds-mode-tab active'; b.textContent='⏱️ 3分前';
+      b.onclick=()=>show206('preclose'); actions.insertBefore(b,actions.firstChild);
+    }
+    const odds=$('rightOddsModeBtn'); if(odds){ odds.textContent='📈 時系列'; odds.style.display=''; }
+    if(!$('rightPreclose3mPane')){
+      const p=document.createElement('div'); p.id='rightPreclose3mPane'; p.innerHTML=`
+        <div class="pc3-toolbar">
+          <div class="pc3-race"><b id="pc3Race">レース未選択</b><span id="pc3Rid"></span></div>
+          <div class="pc3-controls">
+            <label>券種<select id="pc3Market">${TYPES.map(t=>`<option value="${t}">${t}</option>`).join('')}</select></label>
+            <button class="btn-sm" id="pc3Refresh" type="button">🔄 3分前を読込</button>
+            <button class="btn-sm" id="pc3OpenTimeline" type="button">📈 時系列へ</button>
+          </div>
+          <div id="pc3Status" class="pc3-status">レースを選択してください。</div>
+        </div>
+        <div id="pc3Meta" class="pc3-meta" style="display:none"></div>
+        <div id="pc3TableWrap" class="pc3-table-wrap"><div class="pc3-empty">締切3分前スナップショットを読み込みます。<br>保存済みデータが無い場合は「未保存」と表示します。</div></div>`;
+      frame.insertAdjacentElement('afterend',p);
+      $('pc3Market')?.addEventListener('change',render206);
+      $('pc3Refresh')?.addEventListener('click',()=>refresh206(true));
+      $('pc3OpenTimeline')?.addEventListener('click',()=>show206('timeline'));
+    }
+    return true;
+  }
+  function snapRows(type){
+    const s=currentSnap; if(!s)return [];
+    if(type==='単勝'){
+      const base=Array.isArray(s.odds)?s.odds:[];
+      if(base.length) return base.map(x=>({combination:String(x.horse_no||''),name:String(x.horse_name||''),odds:Number(x.odds||0),pop:Number(x.popularity||0)})).filter(x=>x.odds>=1);
+    }
+    const a=s.additional_markets && Array.isArray(s.additional_markets[type]) ? s.additional_markets[type] : [];
+    return a.map(x=>({combination:String(x.combination||''),name:'',odds:Number(x.odds!=null?x.odds:x.odds_min||0),pop:0})).filter(x=>x.combination&&x.odds>=1);
+  }
+  function available(type){ return snapRows(type).length>0; }
+  function localTime(v){
+    if(!v)return '-'; const d=new Date(v); return Number.isNaN(d.getTime())?String(v):d.toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  }
+  function render206(){
+    const rid=currentRid(), s=currentSnap, market=$('pc3Market')?.value||'単勝';
+    if($('pc3Race'))$('pc3Race').textContent=raceLabel(); if($('pc3Rid'))$('pc3Rid').textContent=rid||'';
+    const sel=$('pc3Market');
+    if(sel && s){ Array.from(sel.options).forEach(o=>{o.disabled=!available(o.value);}); if(sel.selectedOptions[0]?.disabled){const ok=Array.from(sel.options).find(o=>!o.disabled);if(ok)sel.value=ok.value;} }
+    const chosen=sel?.value||market, rows=snapRows(chosen);
+    const status=$('pc3Status'), meta=$('pc3Meta'), wrap=$('pc3TableWrap');
+    if(!s){ if(meta)meta.style.display='none'; if(status){status.className='pc3-status warn';status.innerHTML='⚠️ このレースの締切3分前スナップショットはまだ保存されていません。';} if(wrap)wrap.innerHTML='<div class="pc3-empty">保存済みの「締切3分前オッズ」がありません。<br>本番監視では取得時刻が検証されたスナップショットだけを3分前データとして扱います。</div>'; return; }
+    const verified=s.preclose3m_verified===true||s.timing_verified===true;
+    const delta=Number(s.capture_delta_sec);
+    if(status){status.className='pc3-status '+(verified?'ok':'warn');status.innerHTML=`${verified?'✅':'⚠️'} <b>${verified?'締切3分前・時刻検証済み':'スナップショットあり・時刻要確認'}</b>　${esc(String(s.venue_name||''))} ${esc(String(s.race_no||''))}R ${esc(String(s.race_name||''))}`;}
+    if(meta){meta.style.display='grid';meta.innerHTML=`
+      <div><b>${esc(localTime(s.target_at))}</b><span>目標時刻（締切3分前）</span></div>
+      <div><b>${esc(localTime(s.captured_at))}</b><span>実取得時刻</span></div>
+      <div><b class="${verified?'pc3-verified':'pc3-unverified'}">${Number.isFinite(delta)?(delta>=0?'+':'')+delta+'秒':'-'}</b><span>取得誤差</span></div>
+      <div><b class="${verified?'pc3-verified':'pc3-unverified'}">${verified?'VERIFIED':'CHECK'}</b><span>時刻検証</span></div>`;}
+    if(!rows.length){ if(wrap)wrap.innerHTML=`<div class="pc3-empty">${esc(chosen)} の3分前オッズはこのスナップショットにありません。<br>単勝以外は、Worker側で all-markets 保存された場合に表示されます。</div>`; return; }
+    rows.sort((a,b)=>a.odds-b.odds);
+    const single=(chosen==='単勝'||chosen==='複勝');
+    if(wrap)wrap.innerHTML=`<table class="pc3-table"><thead><tr><th>${single?'馬番 / 馬名':'組合せ'}</th><th style="text-align:right">3分前オッズ</th>${chosen==='単勝'?'<th style="text-align:right">人気</th>':''}</tr></thead><tbody>${rows.map(r=>`<tr><td>${single?`<b>${esc(r.combination)}</b>${r.name?' '+esc(r.name):''}`:esc(r.combination)}</td><td class="num"><b>${r.odds.toFixed(1)}</b></td>${chosen==='単勝'?`<td class="num">${r.pop||'-'}</td>`:''}</tr>`).join('')}</tbody></table>`;
+  }
+  async function refresh206(force){
+    const seq=++refreshSeq, rid=currentRid(); currentSnap=null; render206();
+    if(!rid){ const st=$('pc3Status'); if(st){st.className='pc3-status err';st.textContent='⚠️ レースを選択してください。';} return; }
+    const st=$('pc3Status'); if(st){st.className='pc3-status';st.textContent='🔄 保存済みの締切3分前スナップショットを確認中…';}
+    try{
+      let s=null;
+      if(typeof window.__precloseGetSnapshot==='function') s=await window.__precloseGetSnapshot(rid);
+      if(seq!==refreshSeq)return; currentSnap=s||null; render206();
+    }catch(e){ if(seq!==refreshSeq)return; currentSnap=null; render206(); if(st){st.className='pc3-status err';st.textContent='⚠️ 3分前スナップショット読込失敗: '+String(e?.message||e);} }
+  }
+  function show206(mode){
+    install(); openPanel();
+    const isPc=mode!=='timeline';
+    const frame=$('rightAnalysisFrame'), pc=$('rightPreclose3mPane'), ts=$('rightOddsTimelinePane');
+    if(frame){frame.style.display='none';frame.src='about:blank';}
+    if(pc)pc.style.display=isPc?'flex':'none'; if(ts)ts.style.display=isPc?'none':'flex';
+    $('rightPrecloseModeBtn')?.classList.toggle('active',isPc); $('rightOddsModeBtn')?.classList.toggle('active',!isPc);
+    const title=document.querySelector('#rightAnalysisPane .right-analysis-title b'); if(title)title.textContent=isPc?'⏱️ 締切3分前オッズ':'📈 時系列オッズ';
+    if(isPc) refresh206(false); else { try{ if(typeof window.showOddsTimeline==='function') window.showOddsTimeline(); }catch(e){} }
+    try{localStorage.setItem('tk-right-odds-mode-v1',isPc?'preclose':'timeline');}catch(e){}
+  }
+  function bindRace(){
+    ['raceSelect','raceUrl','pickKind','pickVenue'].forEach(id=>{const el=$(id);if(!el||el.__pc3Bound)return;el.__pc3Bound=true;el.addEventListener(id==='raceUrl'?'input':'change',()=>{clearTimeout(window.__pc3RaceTimer);window.__pc3RaceTimer=setTimeout(()=>refresh206(false),300);});});
+    window.addEventListener('thekeiba-preclose-snapshot',e=>{ const rid=currentRid(); if(String(e?.detail?.race_id||'')===rid){currentSnap=e.detail;render206();} });
+  }
+  function boot(){
+    markVersion(); if(!install())return; bindRace();
+    // 205以前の収支iframeを完全に止める。
+    const f=$('rightAnalysisFrame'); if(f){f.src='about:blank';f.style.display='none';}
+    let mode='preclose'; try{mode=localStorage.getItem('tk-right-odds-mode-v1')||'preclose';}catch(e){}
+    // 初回は締切3分前。ユーザーが前回時系列を選んでいれば復元。
+    show206(mode==='timeline'?'timeline':'preclose');
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
+  // 古い遅延パッチの後でも、表示ラベルとオッズ専用右側を維持。MutationObserverは作らず競合ループを避ける。
+  [200,1000,3000,7000,12000,22000,36000,56000].forEach(ms=>setTimeout(()=>{markVersion();install();const f=$('rightAnalysisFrame');if(f&&f.src!=='about:blank')f.src='about:blank';},ms));
+  window.showPreClose3mOdds=()=>show206('preclose');
+  window.showOddsTimeline206=()=>show206('timeline');
 })();
 </script>
 

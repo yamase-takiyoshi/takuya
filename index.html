@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.211 NAR All-Markets Timeline Fix</title>
+<title>The競馬 EV分析 v5.18.212 Timeline JSON/CSV Folder Save</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.211 NAR All-Markets Timeline Fix</span>
+    <span class="ver">v5.18.212 Timeline JSON/CSV Folder Save</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -18589,7 +18589,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.18.211 NAR All-Markets Timeline Fix';
+  const VERSION202 = 'v5.18.212 Timeline JSON/CSV Folder Save';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
@@ -19347,22 +19347,71 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     },POLL_MS);
   }
 
-  function download202(name,text,type='application/json'){
-    const blob=new Blob([text],{type}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  // v5.18.212: JSON/CSVとも、iPad/iPhoneでは共有シート経由で「ファイルに保存」を使い、
+  // 保存先フォルダをその都度選択できるようにする。PCではFile System Access APIを優先。
+  async function saveTimelineFile202(name,text,type='application/json'){
+    const blob=new Blob([text],{type});
+
+    // ① PC Chrome/Edge等: 保存ダイアログで任意フォルダを選択
+    if(typeof window.showSaveFilePicker==='function'){
+      try{
+        const ext=/\.csv$/i.test(name)?'.csv':'.json';
+        const accept=ext==='.csv' ? {'text/csv':['.csv']} : {'application/json':['.json']};
+        const handle=await window.showSaveFilePicker({
+          suggestedName:name,
+          types:[{description:ext==='.csv'?'CSV':'JSON',accept}]
+        });
+        const writable=await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        setStatus202(`📁 保存しました: ${name}`,'ok');
+        return true;
+      }catch(e){
+        if(e && e.name==='AbortError'){ setStatus202('保存をキャンセルしました。','wait'); return false; }
+      }
+    }
+
+    // ② iPad/iPhone Safari: 共有シート →「ファイルに保存」→ 好きなフォルダを選択
+    try{
+      if(navigator.share && navigator.canShare){
+        const file=new File([blob],name,{type});
+        if(navigator.canShare({files:[file]})){
+          await navigator.share({files:[file]});
+          setStatus202(`📁 ${name} を共有/保存しました。`,'ok');
+          return true;
+        }
+      }
+    }catch(e){
+      if(e && e.name==='AbortError'){ setStatus202('保存をキャンセルしました。','wait'); return false; }
+    }
+
+    // ③ 非対応環境だけ従来ダウンロードへフォールバック
+    try{
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a');
+      a.href=url; a.download=name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),1500);
+      setStatus202(`⬇️ ${name} を既定のダウンロード先へ保存しました。`,'ok');
+      return true;
+    }catch(e){
+      setStatus202(`⚠️ 保存に失敗しました: ${String(e?.message||e)}`,'err');
+      return false;
+    }
   }
-  function exportJson202(){
+  async function exportJson202(){
     if(!activeRid || !history.length){ setStatus202('⚠️ 保存済み履歴がありません。','err'); return; }
     const obj={schema:'thekeiba-odds-timeline-export-v1',version:VERSION202,exported_at:new Date().toISOString(),race_id:activeRid,kind:activeKind,race_label:activeRaceLabel,count:history.length,metric_definitions:{model_probability:'現行EVモデル（単勝オッズ80%＋人気20%を基礎に正規化し、券種別式へ展開）',market_probability:'1 / 実オッズ',ev:'想定確率 × 実オッズ',edge_pp:'想定確率 - 市場確率（percentage points）'},captures:history};
-    download202(`odds_timeline_${activeRid}.json`,JSON.stringify(obj,null,2));
+    await saveTimelineFile202(`odds_timeline_${activeRid}.json`,JSON.stringify(obj,null,2),'application/json');
   }
-  function exportCsv202(){
+  async function exportCsv202(){
     if(!activeRid || !history.length){ setStatus202('⚠️ 保存済み履歴がありません。','err'); return; }
     const lines=['captured_at,race_id,kind,market,combination,odds,model_probability_pct,market_probability_pct,ev,edge_pp'];
     history.forEach(r=>MARKET_TYPES.forEach(t=>(r.markets?.[t]||[]).forEach(x=>{
       const mp=metricValue202(r,t,x.combination,'modelP'), mkp=metricValue202(r,t,x.combination,'marketP'), ev=metricValue202(r,t,x.combination,'ev'), edge=metricValue202(r,t,x.combination,'edge');
       lines.push([r.captured_at,r.race_id,r.kind,t,x.combination,x.odds,Number.isFinite(mp)?mp.toFixed(6):'',Number.isFinite(mkp)?mkp.toFixed(6):'',Number.isFinite(ev)?ev.toFixed(6):'',Number.isFinite(edge)?edge.toFixed(6):''].map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(','));
     })));
-    download202(`odds_timeline_${activeRid}.csv`,lines.join('\n'),'text/csv;charset=utf-8');
+    await saveTimelineFile202(`odds_timeline_${activeRid}.csv`,lines.join('\n'),'text/csv;charset=utf-8');
   }
 
   function installUi202(){
@@ -19805,7 +19854,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   'use strict';
   if(window.__V518206_RIGHT_ODDS_WORKSPACE__) return;
   window.__V518206_RIGHT_ODDS_WORKSPACE__=true;
-  const VERSION='v5.18.211 NAR All-Markets Timeline Fix';
+  const VERSION='v5.18.212 Timeline JSON/CSV Folder Save';
   const TYPES=['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
   const $=id=>document.getElementById(id);
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -19947,7 +19996,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 
 
 <!-- ============================================================
-     v5.18.211 NAR All-Markets Timeline Fix
+     v5.18.212 Timeline JSON/CSV Folder Save
      - 期間横断の精算済み買い目をEV帯別に校正
      - PRE-RACE監査済みのみ / FINAL研究を切替
      - JRA非開催日の「エラー/開催場選択」表示を通常の非開催表示へ
@@ -19958,7 +20007,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   const $ = id => document.getElementById(id);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const fmtYen = n => Math.round(Number(n||0)).toLocaleString('ja-JP') + '円';
-  const VERSION209 = 'v5.18.211 NAR All-Markets Timeline Fix';
+  const VERSION209 = 'v5.18.212 Timeline JSON/CSV Folder Save';
 
   function mark209(){
     try{
@@ -20271,10 +20320,10 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 
 
 <script>
-/* v5.18.211 NAR All-Markets Timeline Fix: final label keeper */
+/* v5.18.212 Timeline JSON/CSV Folder Save: final label keeper */
 (function(){
   'use strict';
-  const V='v5.18.211 NAR All-Markets Timeline Fix';
+  const V='v5.18.212 Timeline JSON/CSV Folder Save';
   function mark(){
     try{
       window.APP_VERSION=V;

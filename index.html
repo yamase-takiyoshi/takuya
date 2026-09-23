@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.208 Odds Metrics Switch</title>
+<title>The競馬 EV分析 v5.18.209 EV Calibration + JRA No-Race Fix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.208 Odds Metrics Switch</span>
+    <span class="ver">v5.18.209 EV Calibration + JRA No-Race Fix</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1326,8 +1326,10 @@ function pgjTicketDetailRows(src){
         的中:pgjNum(d.的中 ?? (d.hit ? 1 : 0))
       };
       const odds = pgjNum(d.想定オッズ ?? d.odds), pop = pgjNum(d.平均人気 ?? d.popularity), ev = pgjNum(d.EV ?? d.ev);
+      const probPct = pgjNum(d.想定確率 ?? d.modelProbabilityPct ?? ((ev > 0 && odds > 0) ? (ev / odds * 100) : 0));
       if(odds > 0){ row.想定オッズ = odds; row.オッズ帯 = String(d.オッズ帯 || '') || pgjOddsBand(odds); }
       if(pop > 0){ row.平均人気 = pop; row.人気帯 = String(d.人気帯 || '') || pgjPopBand(pop); }
+      if(probPct > 0) row.想定確率 = probPct;
       if(ev > 0) row.EV = ev;
       return row;
     }).filter(d => d.券種名 && d.買い目 && d.購入額 > 0);
@@ -10386,7 +10388,7 @@ if(horses.length === 0){
       ticketDetails.push({
         券種名:String(t.type || '不明'), 買い目:Array.isArray(t.nums) ? t.nums.join('-') : String(t.nums || ''),
         馬名:String(popOdds.馬名 || ''), 点数:1, 購入額:a, 払戻額:r, 的中:isHit ? 1 : 0,
-        想定オッズ:Number(popOdds.想定オッズ || 0), EV:Number(t.ev || 0), 平均人気:Number(popOdds.平均人気 || 0),
+        想定オッズ:Number(popOdds.想定オッズ || 0), 想定確率:Number(t.p || 0) * 100, EV:Number(t.ev || 0), 平均人気:Number(popOdds.平均人気 || 0),
         人気帯:typeof pgjPopBand === 'function' ? pgjPopBand(popOdds.平均人気) : '',
         オッズ帯:typeof pgjOddsBand === 'function' ? pgjOddsBand(popOdds.想定オッズ) : ''
       });
@@ -18584,7 +18586,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.18.208 Odds Metrics Switch';
+  const VERSION202 = 'v5.18.209 EV Calibration + JRA No-Race Fix';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
@@ -19729,7 +19731,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   'use strict';
   if(window.__V518206_RIGHT_ODDS_WORKSPACE__) return;
   window.__V518206_RIGHT_ODDS_WORKSPACE__=true;
-  const VERSION='v5.18.208 Odds Metrics Switch';
+  const VERSION='v5.18.209 EV Calibration + JRA No-Race Fix';
   const TYPES=['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
   const $=id=>document.getElementById(id);
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -19866,6 +19868,330 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   [200,1000,3000,7000,12000,22000,36000,56000].forEach(ms=>setTimeout(()=>{markVersion();install();const f=$('rightAnalysisFrame');if(f&&f.src!=='about:blank')f.src='about:blank';},ms));
   window.showPreClose3mOdds=()=>show206('preclose');
   window.showOddsTimeline206=()=>show206('timeline');
+})();
+</script>
+
+
+<!-- ============================================================
+     v5.18.209 EV Calibration + JRA No-Race Fix
+     - 期間横断の精算済み買い目をEV帯別に校正
+     - PRE-RACE監査済みのみ / FINAL研究を切替
+     - JRA非開催日の「エラー/開催場選択」表示を通常の非開催表示へ
+     ============================================================ -->
+<script>
+(function(){
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const fmtYen = n => Math.round(Number(n||0)).toLocaleString('ja-JP') + '円';
+  const VERSION209 = 'v5.18.209 EV Calibration + JRA No-Race Fix';
+
+  function mark209(){
+    try{
+      window.APP_VERSION = VERSION209;
+      const ver = document.querySelector('.header .ver');
+      if(ver && !String(ver.textContent||'').startsWith(VERSION209)){
+        const bridge = /🌉/.test(String(ver.textContent||''));
+        ver.textContent = VERSION209 + (bridge ? ' 🌉' : '');
+      }
+      document.title = 'The競馬 EV分析 ' + VERSION209;
+    }catch(e){}
+  }
+
+  // ─────────────────────────────────────────────
+  // JRA非開催日のUI修正
+  // ─────────────────────────────────────────────
+  function jraNoRaceMessage(date, reason){
+    const status = $('urlStatus');
+    const raceSelect = $('raceSelect');
+    const venueEl = $('pickVenue');
+    if(venueEl) venueEl.innerHTML = '<option value="">開催なし</option>';
+    if(raceSelect) raceSelect.innerHTML = '<option value="">JRA開催なし</option>';
+    if(status){
+      status.innerHTML = `<div class="url-status ok">📅 ${esc(date)} はJRA開催なし${reason ? `（${esc(reason)}）` : '（確認済み）'}</div>`;
+    }
+    window.__jraVenueFetchDone = true;
+    window.__jraNoRaceConfirmed = true;
+  }
+
+  function installJraNoRaceFix(){
+    if(window.__jraNoRaceFix209Installed) return;
+    window.__jraNoRaceFix209Installed = true;
+
+    const originalActive = window.loadActiveVenuesForDate;
+    if(typeof originalActive === 'function'){
+      window.loadActiveVenuesForDate = async function(){
+        const date = $('pickDate')?.value || (typeof window.todayYmd === 'function' ? window.todayYmd() : '');
+        const kind = $('pickKind')?.value || 'JRA';
+        window.__jraNoRaceConfirmed = false;
+
+        // 土日・祝日ですらない日は外部通信せず「非開催」と確定。
+        // 祝日でもJRA非開催のことがあるため、祝日は従来の実データ確認へ回す。
+        if(kind === 'JRA' && date && typeof window.isJraPossibleRaceDay === 'function' && !window.isJraPossibleRaceDay(date)){
+          jraNoRaceMessage(date, '平日');
+          return [];
+        }
+
+        const ret = await originalActive.apply(this, arguments);
+        if(kind === 'JRA'){
+          const status = $('urlStatus');
+          const venueEl = $('pickVenue');
+          const text = String(status?.textContent || '');
+          const noErr = !status?.querySelector('.err');
+          const noVenue = !String(venueEl?.value || '') && /開催なし/.test(String(venueEl?.selectedOptions?.[0]?.textContent || ''));
+          const confirmed = window.__jraVenueFetchDone === true && noErr && noVenue && /開催なし/.test(text);
+          window.__jraNoRaceConfirmed = !!confirmed;
+          if(confirmed){
+            const rs = $('raceSelect');
+            if(rs) rs.innerHTML = '<option value="">JRA開催なし</option>';
+          }
+        }
+        return ret;
+      };
+    }
+
+    const originalRaceList = window.loadRaceList;
+    if(typeof originalRaceList === 'function'){
+      window.loadRaceList = async function(){
+        const date = $('pickDate')?.value || (typeof window.todayYmd === 'function' ? window.todayYmd() : '');
+        const kind = $('pickKind')?.value || 'JRA';
+        const venueCode = $('pickVenue')?.value || '';
+        const venueText = String($('pickVenue')?.selectedOptions?.[0]?.textContent || '');
+        const noRace = kind === 'JRA' && !venueCode && window.__jraVenueFetchDone === true &&
+          (window.__jraNoRaceConfirmed === true || /開催なし/.test(venueText));
+        if(noRace){
+          jraNoRaceMessage(date, /平日/.test(String($('urlStatus')?.textContent||'')) ? '平日' : '確認済み');
+          return [];
+        }
+        return await originalRaceList.apply(this, arguments);
+      };
+    }
+  }
+
+  // ─────────────────────────────────────────────
+  // EV校正・実績検証
+  // ─────────────────────────────────────────────
+  const CAL_BUCKETS = [
+    {label:'0.80未満', lo:-Infinity, hi:0.80},
+    {label:'0.80–0.99', lo:0.80, hi:1.00},
+    {label:'1.00–1.09', lo:1.00, hi:1.10},
+    {label:'1.10–1.19', lo:1.10, hi:1.20},
+    {label:'1.20–1.49', lo:1.20, hi:1.50},
+    {label:'1.50–1.99', lo:1.50, hi:2.00},
+    {label:'2.00以上', lo:2.00, hi:Infinity}
+  ];
+
+  function installCalibrationCard(){
+    if($('evCalibrationCard')) return;
+    const anchor = $('rangeSimCard');
+    if(!anchor) return;
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.id = 'evCalibrationCard';
+    card.style.marginTop = '12px';
+    card.innerHTML = `
+      <div class="section-header">
+        <h2>📐 EV校正・実績検証</h2>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <select id="evCalScope" class="btn-sm" style="height:32px;padding:4px 7px">
+            <option value="PRE">PRE-RACE監査済みのみ</option>
+            <option value="ALL">FINAL研究も含む（参考）</option>
+          </select>
+          <button class="btn-sm" type="button" id="evCalRefresh">↻ 更新</button>
+          <button class="btn-sm" type="button" id="evCalCsv">CSV</button>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--muted);line-height:1.6;margin-bottom:10px">
+        期間横断シミュレーションの<b>精算済み買い目</b>をEV帯別に集計します。
+        想定的中率と実的中率が近いほど確率モデルの校正が良く、実ROIがEV帯とともに上がるかを確認できます。<br>
+        <b>PRE-RACE監査済み</b>は発走前時点を証明できたオッズだけ、<b>FINAL研究</b>は確定後最終オッズを含む参考値です。
+      </div>
+      <div id="evCalStatus" style="margin-bottom:8px"></div>
+      <div id="evCalSummary" class="summary-grid" style="margin-bottom:10px"></div>
+      <div style="overflow-x:auto">
+        <table class="result-table" style="min-width:860px">
+          <thead><tr>
+            <th>EV帯</th><th style="text-align:right">件数</th><th style="text-align:right">平均EV</th>
+            <th style="text-align:right">想定的中率</th><th style="text-align:right">実的中率</th>
+            <th style="text-align:right">校正差</th><th style="text-align:right">投資</th>
+            <th style="text-align:right">払戻</th><th style="text-align:right">実ROI</th>
+          </tr></thead>
+          <tbody id="evCalBody"><tr><td colspan="9" class="empty">期間横断シミュレーションを実行すると集計します。</td></tr></tbody>
+        </table>
+      </div>
+      <div id="evCalNote" style="font-size:11px;color:var(--muted);margin-top:8px;line-height:1.55"></div>`;
+    anchor.insertAdjacentElement('afterend', card);
+    $('evCalScope')?.addEventListener('change', renderCalibration);
+    $('evCalRefresh')?.addEventListener('click', renderCalibration);
+    $('evCalCsv')?.addEventListener('click', exportCalibrationCsv);
+  }
+
+  function calSourceRows(){
+    try{
+      return Array.isArray(window.__rsLastRows) ? window.__rsLastRows : [];
+    }catch(e){ return []; }
+  }
+
+  function collectCalibrationItems(scope){
+    const rows = calSourceRows();
+    const out = [];
+    let settledRows = 0, auditedRows = 0;
+    rows.forEach(r => {
+      if(!r || r.status !== 'ok' || !r.hasFinish) return;
+      settledRows++;
+      if(r.auditEligible === true) auditedRows++;
+      if(scope === 'PRE' && r.auditEligible !== true) return;
+      const det = Array.isArray(r.ticketDetails) ? r.ticketDetails : [];
+      det.forEach(d => {
+        const bet = Number(d.購入額 ?? d.amount ?? 0);
+        const ret = Number(d.払戻額 ?? d.ret ?? 0);
+        const ev = Number(d.EV ?? d.ev ?? 0);
+        const odds = Number(d.想定オッズ ?? d.odds ?? 0);
+        let p = Number(d.想定確率 ?? d.modelProbabilityPct ?? 0) / 100;
+        if(!(p > 0) && ev > 0 && odds > 0) p = ev / odds;
+        if(!(bet > 0) || !(ev > 0) || !Number.isFinite(p)) return;
+        p = Math.max(0, Math.min(1, p));
+        out.push({
+          date:String(r.date||''), venue:String(r.venueName||''), race:Number(r.no||0), rid:String(r.rid||''),
+          type:String(d.券種名||''), combo:String(d.買い目||''), ev, odds, p,
+          hit:Number(d.的中||0) > 0 ? 1 : 0, bet, ret,
+          auditEligible:r.auditEligible === true,
+          snapshot:String(r.oddsSnapshotType||'')
+        });
+      });
+    });
+    return {items:out, settledRows, auditedRows, allRows:rows.length};
+  }
+
+  function bucketOf(ev){ return CAL_BUCKETS.find(b => ev >= b.lo && ev < b.hi); }
+  function aggregate(items){
+    return CAL_BUCKETS.map(b => {
+      const a = items.filter(x => x.ev >= b.lo && x.ev < b.hi);
+      const n = a.length;
+      const bet = a.reduce((s,x)=>s+x.bet,0), ret = a.reduce((s,x)=>s+x.ret,0);
+      const avgEv = n ? a.reduce((s,x)=>s+x.ev,0)/n : 0;
+      const expHit = n ? a.reduce((s,x)=>s+x.p,0)/n*100 : 0;
+      const actHit = n ? a.reduce((s,x)=>s+x.hit,0)/n*100 : 0;
+      const roi = bet ? ret/bet*100 : 0;
+      return {label:b.label,n,bet,ret,avgEv,expHit,actHit,diff:actHit-expHit,roi};
+    });
+  }
+
+  function renderCalibration(){
+    installCalibrationCard();
+    const body = $('evCalBody'), sum = $('evCalSummary'), st = $('evCalStatus'), note = $('evCalNote');
+    if(!body || !sum || !st) return;
+    const scope = $('evCalScope')?.value || 'PRE';
+    const pack = collectCalibrationItems(scope);
+    const items = pack.items;
+
+    if(!calSourceRows().length){
+      body.innerHTML = '<tr><td colspan="9" class="empty">期間横断シミュレーションを実行すると集計します。</td></tr>';
+      sum.innerHTML = '';
+      st.innerHTML = '<div class="url-status">📐 まだ期間横断の実績データがありません。</div>';
+      if(note) note.textContent = '';
+      return;
+    }
+
+    if(!items.length){
+      body.innerHTML = '<tr><td colspan="9" class="empty">この条件で校正できる精算済み買い目がありません。</td></tr>';
+      sum.innerHTML = '';
+      if(scope === 'PRE'){
+        st.innerHTML = `<div class="url-status">⏱️ PRE-RACE監査済み 0件です。精算済み${pack.settledRows}Rのうち監査対象は${pack.auditedRows}R。<br>「FINAL研究も含む」に切り替えると参考値を確認できます。</div>`;
+      }else{
+        st.innerHTML = '<div class="url-status">📐 精算済み買い目にEV情報がありません。</div>';
+      }
+      if(note) note.textContent = '※ 監査済み0件は異常ではありません。発走前時点を証明できるスナップショットが保存されていない過去レースは監査対象外です。';
+      return;
+    }
+
+    const ag = aggregate(items);
+    body.innerHTML = ag.map(g => {
+      const roiColor = g.n ? (g.roi >= 100 ? 'var(--green)' : 'var(--yellow)') : 'var(--muted)';
+      const diffColor = !g.n ? 'var(--muted)' : (Math.abs(g.diff) <= 3 ? 'var(--green)' : (Math.abs(g.diff) <= 8 ? 'var(--yellow)' : 'var(--red)'));
+      return `<tr>
+        <td><b>${esc(g.label)}</b></td>
+        <td style="text-align:right">${g.n || '-'}</td>
+        <td style="text-align:right">${g.n ? g.avgEv.toFixed(2) : '-'}</td>
+        <td style="text-align:right">${g.n ? g.expHit.toFixed(1)+'%' : '-'}</td>
+        <td style="text-align:right">${g.n ? g.actHit.toFixed(1)+'%' : '-'}</td>
+        <td style="text-align:right;color:${diffColor}">${g.n ? (g.diff>=0?'+':'')+g.diff.toFixed(1)+'pt' : '-'}</td>
+        <td style="text-align:right">${g.n ? fmtYen(g.bet) : '-'}</td>
+        <td style="text-align:right">${g.n ? fmtYen(g.ret) : '-'}</td>
+        <td style="text-align:right;color:${roiColor};font-weight:800">${g.n ? g.roi.toFixed(1)+'%' : '-'}</td>
+      </tr>`;
+    }).join('');
+
+    const totalBet = items.reduce((s,x)=>s+x.bet,0), totalRet = items.reduce((s,x)=>s+x.ret,0);
+    const avgEv = items.reduce((s,x)=>s+x.ev,0)/items.length;
+    const expHit = items.reduce((s,x)=>s+x.p,0)/items.length*100;
+    const actHit = items.reduce((s,x)=>s+x.hit,0)/items.length*100;
+    const roi = totalBet ? totalRet/totalBet*100 : 0;
+    sum.innerHTML = `
+      <div class="summary-item"><div class="val">${items.length}</div><div class="lbl">買い目件数</div></div>
+      <div class="summary-item"><div class="val">${avgEv.toFixed(2)}</div><div class="lbl">平均EV</div></div>
+      <div class="summary-item"><div class="val">${expHit.toFixed(1)}%</div><div class="lbl">想定的中率</div></div>
+      <div class="summary-item"><div class="val">${actHit.toFixed(1)}%</div><div class="lbl">実的中率</div></div>
+      <div class="summary-item"><div class="val" style="color:${roi>=100?'var(--green)':'var(--yellow)'}">${roi.toFixed(1)}%</div><div class="lbl">実ROI</div></div>
+      <div class="summary-item"><div class="val">${(actHit-expHit>=0?'+':'')+(actHit-expHit).toFixed(1)}pt</div><div class="lbl">全体校正差</div></div>`;
+    st.innerHTML = `<div class="url-status ${scope==='PRE'?'ok':''}">${scope==='PRE'?'✅ PRE-RACE監査済みのみ':'📚 FINAL研究を含む参考集計'}：${items.length}買い目 / ${pack.auditedRows}監査済みR / ${pack.settledRows}精算済みR</div>`;
+    if(note){
+      note.innerHTML = '見方：<b>EVが高い帯ほど実ROIも上がる</b>か、また<b>想定的中率と実的中率の差が小さい</b>かを確認します。件数が少ない帯はブレが大きいため、まず100件、できれば500〜1,000件以上を目安に比較してください。';
+    }
+  }
+
+  function exportCalibrationCsv(){
+    const scope = $('evCalScope')?.value || 'PRE';
+    const pack = collectCalibrationItems(scope);
+    if(!pack.items.length){
+      const st = $('evCalStatus');
+      if(st) st.innerHTML = '<div class="url-status err">⚠️ CSVに出力できる校正データがありません。</div>';
+      return;
+    }
+    const ag = aggregate(pack.items);
+    const lines = [['EV帯','件数','平均EV','想定的中率%','実的中率%','校正差pt','投資円','払戻円','実ROI%']];
+    ag.forEach(g => lines.push([g.label,g.n,g.n?g.avgEv.toFixed(6):'',g.n?g.expHit.toFixed(6):'',g.n?g.actHit.toFixed(6):'',g.n?g.diff.toFixed(6):'',g.bet,g.ret,g.n?g.roi.toFixed(6):'']));
+    lines.push([]);
+    lines.push(['date','venue','race','race_id','券種','買い目','EV','想定確率%','想定オッズ','的中','購入額','払戻額','PRE_RACE監査']);
+    pack.items.forEach(x => lines.push([x.date,x.venue,x.race,x.rid,x.type,x.combo,x.ev.toFixed(6),(x.p*100).toFixed(6),x.odds,x.hit,x.bet,x.ret,x.auditEligible?'1':'0']));
+    const csv = '\ufeff' + lines.map(row => row.map(v => '"'+String(v??'').replace(/"/g,'""')+'"').join(',')).join('\r\n');
+    const blob = new Blob([csv], {type:'text/csv;charset=utf-8'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `ev_calibration_${scope}_${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  }
+
+  function observeRangeResult(){
+    const target = $('rsTable');
+    if(!target || target.__evCalObs209) return;
+    target.__evCalObs209 = true;
+    let timer = null;
+    const mo = new MutationObserver(()=>{
+      clearTimeout(timer);
+      timer = setTimeout(renderCalibration, 120);
+    });
+    mo.observe(target,{childList:true,subtree:true,characterData:true});
+  }
+
+  function boot(){
+    mark209();
+    installJraNoRaceFix();
+    installCalibrationCard();
+    observeRangeResult();
+    renderCalibration();
+  }
+  // 本スクリプトはbody末尾にあるため、既存DOMContentLoadedハンドラより先に
+  // JRA非開催ラッパーだけは即時導入して初期表示にも効かせる。
+  mark209();
+  installJraNoRaceFix();
+  installCalibrationCard();
+  observeRangeResult();
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, {once:true});
+  else boot();
+  [800,2500,6000].forEach(ms=>setTimeout(()=>{mark209();installCalibrationCard();observeRangeResult();},ms));
+  window.renderEvCalibration209 = renderCalibration;
 })();
 </script>
 

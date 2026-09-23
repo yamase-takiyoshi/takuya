@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.213 EDGE TOP10</title>
+<title>The競馬 EV分析 v5.18.214 DISPLAY FILTERS</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.213 EDGE TOP10</span>
+    <span class="ver">v5.18.214 DISPLAY FILTERS</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -19095,24 +19095,84 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     const count=$('oddsTsCount'); if(count) count.textContent=`${history.length.toLocaleString()}点`;
   }
 
+  // v5.18.214: 「表示」セレクトを指標連動フィルタへ拡張。
+  // TOP N / EV閾値 / 乖離プラス / 全券種横断TOP10 を同じ時系列グラフで切替える。
+  function latestMetricSortedRows202(market, mode=metricMode202()){
+    const rec=history[history.length-1];
+    const rows=latestRowsForMarket202(market).slice();
+    if(!rec) return rows.sort((a,b)=>Number(a.odds)-Number(b.odds));
+    return rows.map(r=>({
+      ...r,
+      __metric: metricValue202(rec,market,r.combination,mode)
+    })).filter(r=>Number.isFinite(r.__metric))
+      .sort((a,b)=>mode==='odds' ? a.__metric-b.__metric : b.__metric-a.__metric);
+  }
+
   function refreshCombo202(){
     const msel=$('oddsTsMarket'), csel=$('oddsTsCombo'); if(!msel||!csel) return;
-    const market=msel.value || '単勝', rows=latestRowsForMarket202(market).slice().sort((a,b)=>a.odds-b.odds);
+    const market=msel.value || '単勝';
+    const rows=latestRowsForMarket202(market).slice().sort((a,b)=>a.odds-b.odds);
     const old=csel.value;
-    const opts=[];
-    if(market==='単勝'||market==='複勝') opts.push({v:'__ALL__',t:'全馬を表示'});
-    opts.push({v:'__TOP8__',t:'現在低オッズ 上位8組'});
-    rows.forEach(r=>opts.push({v:r.combination,t:`${comboLabel202(market,r.combination)}　${Number(r.odds).toFixed(1)}倍`}));
-    csel.innerHTML=opts.map(o=>`<option value="${esc(o.v)}">${esc(o.t)}</option>`).join('');
-    if(opts.some(o=>o.v===old)) csel.value=old;
+    const mode=metricMode202();
+    const metricName=metricLabel202(mode);
+    const topWord=mode==='odds' ? '現在低オッズ' : `現在${metricName}`;
+    const allLabel=(market==='単勝'||market==='複勝') ? '全馬を表示' : '全組合せを表示（最大18）';
+    const opts=[
+      {v:'__ALL__',t:allLabel},
+      {v:'__TOP3__',t:`${topWord} 上位3`},
+      {v:'__TOP5__',t:`${topWord} 上位5`},
+      {v:'__TOP8__',t:`${topWord} 上位8`},
+      {v:'__TOP10__',t:`${topWord} 上位10`},
+      {v:'__TOP20__',t:`${topWord} 上位20`},
+      {v:'__EV100__',t:'EV 1.00以上（最大20）'},
+      {v:'__EV110__',t:'EV 1.10以上（最大20）'},
+      {v:'__EV120__',t:'EV 1.20以上（最大20）'},
+      {v:'__EDGE_POS__',t:'乖離プラスのみ（最大20）'},
+      {v:'__CROSS_TOP10__',t:`全券種横断 ${mode==='odds'?'低オッズ':metricName} 上位10`}
+    ];
+    if(rows.length) opts.push({v:'__SEP__',t:'──────── 個別選択 ────────',disabled:true});
+    rows.forEach(r=>opts.push({v:String(r.combination),t:`${comboLabel202(market,r.combination)}　${Number(r.odds).toFixed(1)}倍`}));
+    csel.innerHTML=opts.map(o=>`<option value="${esc(o.v)}"${o.disabled?' disabled':''}>${esc(o.t)}</option>`).join('');
+    if(opts.some(o=>o.v===old&&!o.disabled)) csel.value=old;
     else csel.value=(market==='単勝'||market==='複勝')?'__ALL__':'__TOP8__';
   }
 
-  function seriesKeys202(market, choice){
-    const rows=latestRowsForMarket202(market).slice().sort((a,b)=>a.odds-b.odds);
-    if(choice==='__ALL__') return rows.map(r=>r.combination).slice(0,18);
-    if(choice==='__TOP8__') return rows.map(r=>r.combination).slice(0,8);
-    return choice ? [choice] : [];
+  function seriesItems202(market, choice){
+    const rows=latestRowsForMarket202(market).slice();
+    const rec=history[history.length-1];
+    const mk=(m,k)=>({market:m,key:String(k)});
+    if(choice==='__ALL__') return rows.slice().sort((a,b)=>Number(a.odds)-Number(b.odds)).slice(0,18).map(r=>mk(market,r.combination));
+    const mTop=String(choice||'').match(/^__TOP(3|5|8|10|20)__$/);
+    if(mTop){
+      const n=Number(mTop[1]);
+      return latestMetricSortedRows202(market).slice(0,n).map(r=>mk(market,r.combination));
+    }
+    const evCut={__EV100__:1.00,__EV110__:1.10,__EV120__:1.20}[choice];
+    if(evCut){
+      if(!rec) return [];
+      return rows.map(r=>({r,v:metricValue202(rec,market,r.combination,'ev')}))
+        .filter(x=>Number.isFinite(x.v)&&x.v>=evCut).sort((a,b)=>b.v-a.v).slice(0,20)
+        .map(x=>mk(market,x.r.combination));
+    }
+    if(choice==='__EDGE_POS__'){
+      if(!rec) return [];
+      return rows.map(r=>({r,v:metricValue202(rec,market,r.combination,'edge')}))
+        .filter(x=>Number.isFinite(x.v)&&x.v>0).sort((a,b)=>b.v-a.v).slice(0,20)
+        .map(x=>mk(market,x.r.combination));
+    }
+    if(choice==='__CROSS_TOP10__'){
+      if(!rec) return [];
+      const mode=metricMode202();
+      const all=[];
+      MARKET_TYPES.forEach(m=>latestRowsForMarket202(m).forEach(r=>{
+        const v=metricValue202(rec,m,r.combination,mode);
+        if(Number.isFinite(v) && (mode!=='odds'||v>0)) all.push({market:m,key:String(r.combination),v});
+      }));
+      all.sort((a,b)=>mode==='odds' ? a.v-b.v : b.v-a.v);
+      return all.slice(0,10).map(x=>({market:x.market,key:x.key}));
+    }
+    if(choice && choice!=='__SEP__') return [mk(market,choice)];
+    return [];
   }
 
   function findOdds202(rec,market,key){
@@ -19232,20 +19292,20 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     ctx.fillStyle='#07111d'; ctx.fillRect(0,0,cssW,cssH);
     const market=$('oddsTsMarket')?.value||'単勝', choice=$('oddsTsCombo')?.value||'__ALL__', mode=metricMode202();
     const log=mode==='odds' && !!$('oddsTsLog')?.checked;
-    const keys=seriesKeys202(market,choice);
-    if(history.length<1 || !keys.length){
+    const items=seriesItems202(market,choice);
+    if(history.length<1 || !items.length){
       ctx.fillStyle='#94a3b8'; ctx.font='13px -apple-system,BlinkMacSystemFont,sans-serif'; ctx.textAlign='center';
       ctx.fillText('「今すぐ取得」または5秒自動更新で時系列データを保存します',cssW/2,cssH/2);
-      renderLegend202(market,keys); return;
+      renderLegend202(market,items,choice); return;
     }
     const L=58,R=16,T=24,B=42,W=cssW-L-R,H=cssH-T-B;
     const t0=history[0].captured_ms, t1=history[history.length-1].captured_ms;
     const vals=[];
-    keys.forEach(k=>history.forEach(r=>{ const v=metricValue202(r,market,k,mode); if(Number.isFinite(v) && (mode!=='odds'||v>0)) vals.push(v); }));
+    items.forEach(it=>history.forEach(r=>{ const v=metricValue202(r,it.market,it.key,mode); if(Number.isFinite(v) && (mode!=='odds'||v>0)) vals.push(v); }));
     if(!vals.length){
       ctx.fillStyle='#94a3b8';ctx.font='12px -apple-system,BlinkMacSystemFont,sans-serif';ctx.textAlign='center';
       ctx.fillText(mode==='odds'?'表示できるオッズがありません':'この履歴では '+metricLabel202(mode)+' を算出できません',cssW/2,cssH/2);
-      renderLegend202(market,keys); return;
+      renderLegend202(market,items,choice); return;
     }
     const transform=v=>log?Math.log10(Math.max(v,1e-6)):v;
     const inv=v=>log?Math.pow(10,v):v;
@@ -19277,43 +19337,48 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       ctx.fillText(new Date(tt).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit'}),xx,T+H+8);
     }
 
-    keys.forEach((k,idx)=>{
+    items.forEach((it,idx)=>{
       ctx.strokeStyle=PALETTE[idx%PALETTE.length]; ctx.lineWidth=2; ctx.beginPath(); let started=false;
       history.forEach(r=>{
-        const v=metricValue202(r,market,k,mode); if(!Number.isFinite(v)||(mode==='odds'&&v<=0)) return;
+        const v=metricValue202(r,it.market,it.key,mode); if(!Number.isFinite(v)||(mode==='odds'&&v<=0)) return;
         const x=xOf(r.captured_ms), y=yOf(v); if(!started){ctx.moveTo(x,y); started=true;} else ctx.lineTo(x,y);
       });
       if(started) ctx.stroke();
       if(history.length<=60){
         ctx.fillStyle=PALETTE[idx%PALETTE.length];
-        history.forEach(r=>{ const v=metricValue202(r,market,k,mode); if(!Number.isFinite(v)||(mode==='odds'&&v<=0))return; const x=xOf(r.captured_ms),y=yOf(v); ctx.beginPath();ctx.arc(x,y,2.2,0,Math.PI*2);ctx.fill(); });
+        history.forEach(r=>{ const v=metricValue202(r,it.market,it.key,mode); if(!Number.isFinite(v)||(mode==='odds'&&v<=0))return; const x=xOf(r.captured_ms),y=yOf(v); ctx.beginPath();ctx.arc(x,y,2.2,0,Math.PI*2);ctx.fill(); });
       }
     });
     ctx.fillStyle='#cbd5e1';ctx.font='11px -apple-system,BlinkMacSystemFont,sans-serif';ctx.textAlign='left';ctx.textBaseline='top';
-    ctx.fillText(`${market} ${metricLabel202(mode)}${log?'（対数目盛）':''}`,L,T-18);
-    renderLegend202(market,keys);
+    const scopeLabel=choice==='__CROSS_TOP10__'?'全券種横断':market;
+    ctx.fillText(`${scopeLabel} ${metricLabel202(mode)}${log?'（対数目盛）':''}`,L,T-18);
+    renderLegend202(market,items,choice);
   }
 
-  function renderLegend202(market,keys){
+  function renderLegend202(market,items,choice){
     const el=$('oddsTsLegend'); if(!el) return;
     const mode=metricMode202();
-    if(!keys.length){ el.innerHTML='<div class="odds-ts-empty">表示する組合せがありません</div>'; return; }
-    const rows=keys.map((k,idx)=>{
+    if(!items.length){ el.innerHTML='<div class="odds-ts-empty">表示条件に該当する組合せがありません</div>'; return; }
+    const cross=choice==='__CROSS_TOP10__';
+    const rows=items.map((it,idx)=>{
       let first=NaN,last=NaN,min=Infinity,max=-Infinity;
-      history.forEach(r=>{ const v=metricValue202(r,market,k,mode); if(Number.isFinite(v) && (mode!=='odds'||v>0)){ if(!Number.isFinite(first))first=v; last=v; min=Math.min(min,v); max=Math.max(max,v); }});
+      history.forEach(r=>{ const v=metricValue202(r,it.market,it.key,mode); if(Number.isFinite(v) && (mode!=='odds'||v>0)){ if(!Number.isFinite(first))first=v; last=v; min=Math.min(min,v); max=Math.max(max,v); }});
       const ch=Number.isFinite(first)&&Number.isFinite(last)&&Math.abs(first)>1e-12?((last/first-1)*100):NaN;
       const delta=Number.isFinite(first)&&Number.isFinite(last)?last-first:NaN;
       const changeText=mode==='edge'
         ? (Number.isFinite(delta)?`${delta>=0?'+':''}${delta.toFixed(2)}pt`:'-')
         : (Number.isFinite(ch)?`${ch>=0?'+':''}${ch.toFixed(1)}%`:'-');
       const cls=Number.isFinite(delta)?(delta<0?'down':delta>0?'up':''):'';
-      return `<div class="odds-ts-legend-row"><i style="background:${PALETTE[idx%PALETTE.length]}"></i><b>${esc(comboLabel202(market,k))}</b><span>現在 ${metricFmt202(last,mode)}</span><span>最小 ${metricFmt202(min,mode)}</span><span>最大 ${metricFmt202(max,mode)}</span><span class="${cls}">${changeText}</span></div>`;
+      const base=comboLabel202(it.market,it.key);
+      const label=(cross||it.market!==market)?`${it.market} ${base}`:base;
+      return `<div class="odds-ts-legend-row"><i style="background:${PALETTE[idx%PALETTE.length]}"></i><b>${esc(label)}</b><span>現在 ${metricFmt202(last,mode)}</span><span>最小 ${metricFmt202(min,mode)}</span><span>最大 ${metricFmt202(max,mode)}</span><span class="${cls}">${changeText}</span></div>`;
     }).join('');
     el.innerHTML=rows;
     const meta=$('oddsTsMeta');
     if(meta){
       const first=history[0]?.captured_ms,last=history[history.length-1]?.captured_ms;
-      meta.textContent=history.length?`${history.length}点 / ${new Date(first).toLocaleTimeString('ja-JP')}〜${new Date(last).toLocaleTimeString('ja-JP')} / ${metricLabel202(mode)}`:'0点';
+      const scope=cross?'全券種横断':market;
+      meta.textContent=history.length?`${history.length}点 / ${new Date(first).toLocaleTimeString('ja-JP')}〜${new Date(last).toLocaleTimeString('ja-JP')} / ${scope} ${metricLabel202(mode)}`:'0点';
     }
   }
 
@@ -19444,7 +19509,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
           <button class="btn-sm" id="oddsTsCsv" type="button">CSV</button>
         </div>
         <div id="oddsTsStatus" class="odds-ts-status wait">レースを選択してください。</div>
-        <div class="odds-ts-metric-note">想定確率＝現行EVモデル / 市場確率＝1÷実オッズ / EV＝想定確率×実オッズ / 乖離＝想定確率−市場確率</div>
+        <div class="odds-ts-metric-note">想定確率＝現行EVモデル / 市場確率＝1÷実オッズ / EV＝想定確率×実オッズ / 乖離＝想定確率−市場確率 / 「表示」は選択指標に連動</div>
       </div>
       <div class="odds-ts-chart-wrap"><canvas id="oddsTsCanvas"></canvas></div>
       <div class="odds-ts-foot"><span id="oddsTsMeta">0点</span><span>ブラウザを閉じてもIndexedDBに保存</span></div>
@@ -19461,7 +19526,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       }
     });
     $('oddsTsMarket').addEventListener('change',()=>{refreshCombo202();draw202();});
-    $('oddsTsMetric').addEventListener('change',()=>{ syncMetricUi202(); draw202(); });
+    $('oddsTsMetric').addEventListener('change',()=>{ syncMetricUi202(); refreshCombo202(); draw202(); });
     $('oddsTsCombo').addEventListener('change',draw202);
     $('oddsTsLog').addEventListener('change',draw202);
     $('oddsTsNow').addEventListener('click',()=>capture202(true));
@@ -20322,7 +20387,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 
 <style id="edgeTop10Style213">
 /* ============================================================
-   v5.18.213 EDGE TOP10 / 全券種横断ランキング
+   v5.18.214 DISPLAY FILTERS / 全券種横断ランキング
    ============================================================ */
 #edgeTop10Card{border-color:rgba(0,230,118,.34);box-shadow:0 0 24px rgba(0,230,118,.08)}
 .edge-top-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:10px}
@@ -20347,10 +20412,10 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 </style>
 
 <script>
-/* v5.18.213 EDGE TOP10: all-bet-type cross ranking */
+/* v5.18.214 DISPLAY FILTERS: all-bet-type cross ranking */
 (function(){
   'use strict';
-  const VERSION213 = 'v5.18.213 EDGE TOP10';
+  const VERSION213 = 'v5.18.214 DISPLAY FILTERS';
   const TYPE_ORDER = ['単勝','複勝','ワイド','枠連','馬連','馬単','3連複','3連単'];
   const STORE_KEY = 'keiba-edge-top10-v213';
   const METRICS = {
@@ -20507,10 +20572,10 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 </script>
 
 <script>
-/* v5.18.213 EDGE TOP10: final label keeper */
+/* v5.18.214 DISPLAY FILTERS: final label keeper */
 (function(){
   'use strict';
-  const V='v5.18.213 EDGE TOP10';
+  const V='v5.18.214 DISPLAY FILTERS';
   function mark(){
     try{
       window.APP_VERSION=V;

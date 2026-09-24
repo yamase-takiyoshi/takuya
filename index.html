@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.219 ALWAYS-ON TIMELINE</title>
+<title>The競馬 EV分析 v5.18.220 TIMELINE GRAPH +10M</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.219 ALWAYS-ON TIMELINE</span>
+    <span class="ver">v5.18.220 TIMELINE GRAPH +10M</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -18680,7 +18680,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.18.219 ALWAYS-ON TIMELINE';
+  const VERSION202 = 'v5.18.220 TIMELINE GRAPH +10M';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
@@ -19199,6 +19199,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 
   async function loadRaceContext202(rid){
     activeRid=String(rid||''); activeKind=kindFromRid202(activeRid); activeRaceLabel=raceLabel202();
+    try{ window.dispatchEvent(new CustomEvent('thekeiba-timeline-race-loaded',{detail:{race_id:activeRid}})); }catch(e){}
     history=[];
     if(activeRid){
       try{ history=await dbRace202(activeRid); }catch(e){ history=[]; }
@@ -19499,6 +19500,64 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     return String(v);
   }
 
+
+  const TIMELINE_META_KEY220='thekeiba_timeline_meta_v220';
+  const POST_GRAPH_TAIL_MS202=10*60*1000;
+
+  function savedTimelineMeta202(rid){
+    try{
+      const all=JSON.parse(localStorage.getItem(TIMELINE_META_KEY220)||'{}')||{};
+      return all[String(rid||'')]||null;
+    }catch(e){ return null; }
+  }
+
+  function uiPostMs202(rid){
+    try{
+      const sel=$('raceSelect');
+      const opt=sel?.selectedOptions?.[0];
+      const optRid=String(opt?.dataset?.raceId||'');
+      if(opt && (!rid || optRid===String(rid))){
+        const hhmm=String(opt.dataset.postTime||'').trim();
+        const date=String($('pickDate')?.value||'').trim();
+        if(/^\d{4}-\d{2}-\d{2}$/.test(date) && /^\d{1,2}:\d{2}$/.test(hhmm)){
+          const [h,m]=hhmm.split(':').map(Number);
+          const ms=new Date(`${date}T${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:00+09:00`).getTime();
+          if(Number.isFinite(ms)) return ms;
+        }
+      }
+    }catch(e){}
+    try{
+      const label=String(history?.[0]?.race_label||raceLabel202()||'');
+      const m=label.match(/(\d{4})[\/-](\d{2})[\/-](\d{2})[\s\S]*?(\d{1,2}):(\d{2})\s*発走/);
+      if(m){
+        const ms=new Date(`${m[1]}-${m[2]}-${m[3]}T${String(m[4]).padStart(2,'0')}:${m[5]}:00+09:00`).getTime();
+        if(Number.isFinite(ms)) return ms;
+      }
+    }catch(e){}
+    return NaN;
+  }
+
+  function timelineGraphWindow202(){
+    const rid=String(activeRid||currentRaceId202()||'');
+    const meta=savedTimelineMeta202(rid);
+    let endMs=Number(meta?.end_at_ms||0);
+    let postMs=Number(meta?.post_ms||0);
+    if(!(postMs>0) && endMs>0) postMs=endMs-POST_GRAPH_TAIL_MS202;
+    if(!(postMs>0)) postMs=uiPostMs202(rid);
+    if(!(endMs>0) && postMs>0) endMs=postMs+POST_GRAPH_TAIL_MS202;
+
+    const rows=(endMs>0 ? history.filter(r=>Number(r?.captured_ms||0)<=endMs) : history.slice());
+    const first=rows[0]||history[0]||null;
+    const last=rows[rows.length-1]||history[history.length-1]||null;
+    let t0=Number(first?.captured_ms||0), t1=Number(last?.captured_ms||0);
+    const now=Date.now();
+    if(endMs>0 && now>=endMs) t1=endMs;
+    else if(endMs>0 && t1>endMs) t1=endMs;
+    if(!(t0>0)) t0=t1||now;
+    if(!(t1>t0)) t1=t0+1000;
+    return {rid,rows,t0,t1,postMs,endMs,capped:endMs>0&&now>=endMs};
+  }
+
   function draw202(){
     const canvas=$('oddsTsCanvas'); if(!canvas) return;
     syncMetricUi202();
@@ -19516,9 +19575,11 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       renderLegend202(market,items,choice); return;
     }
     const L=58,R=16,T=24,B=42,W=cssW-L-R,H=cssH-T-B;
-    const t0=history[0].captured_ms, t1=history[history.length-1].captured_ms;
+    const graph=timelineGraphWindow202();
+    const graphRows=graph.rows;
+    const t0=graph.t0, t1=graph.t1;
     const vals=[];
-    items.forEach(it=>history.forEach(r=>{ const v=metricValue202(r,it.market,it.key,mode); if(Number.isFinite(v) && (mode!=='odds'||v>0)) vals.push(v); }));
+    items.forEach(it=>graphRows.forEach(r=>{ const v=metricValue202(r,it.market,it.key,mode); if(Number.isFinite(v) && (mode!=='odds'||v>0)) vals.push(v); }));
     if(!vals.length){
       ctx.fillStyle='#94a3b8';ctx.font='12px -apple-system,BlinkMacSystemFont,sans-serif';ctx.textAlign='center';
       ctx.fillText(mode==='odds'?'表示できるオッズがありません':'この履歴では '+metricLabel202(mode)+' を算出できません',cssW/2,cssH/2);
@@ -19547,23 +19608,37 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       ctx.beginPath();ctx.moveTo(L,yy);ctx.lineTo(L+W,yy);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle=mode==='ev'?'#fbbf24':'#94a3b8';ctx.textAlign='left';ctx.fillText(mode==='ev'?'EV 1.00':'0pt',L+4,yy-9);ctx.restore();
     }
     ctx.textAlign='center'; ctx.textBaseline='top';
-    const ticks=Math.min(5,Math.max(1,history.length-1));
+    const ticks=Math.min(5,Math.max(1,graphRows.length-1));
     for(let i=0;i<=ticks;i++){
       const tt=t0+(t1-t0)*(ticks?i/ticks:0), xx=xOf(tt);
       ctx.beginPath(); ctx.moveTo(xx,T); ctx.lineTo(xx,T+H); ctx.stroke();
       ctx.fillText(new Date(tt).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit'}),xx,T+H+8);
     }
 
+    // v5.18.220: 後から見ても基準時刻が分かるよう、締切3分前・発走・発走+10分を固定表示。
+    const timeMarker=(ms,label,stroke,fill,dash=[5,4])=>{
+      if(!(Number.isFinite(ms)&&ms>=t0&&ms<=t1)) return;
+      const xx=xOf(ms); ctx.save(); ctx.strokeStyle=stroke; ctx.fillStyle=fill; ctx.lineWidth=1.25; ctx.setLineDash(dash);
+      ctx.beginPath(); ctx.moveTo(xx,T); ctx.lineTo(xx,T+H); ctx.stroke(); ctx.setLineDash([]);
+      ctx.font='10px -apple-system,BlinkMacSystemFont,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='bottom';
+      ctx.fillText(label,xx,T+H-4); ctx.restore();
+    };
+    if(Number.isFinite(graph.postMs)){
+      timeMarker(graph.postMs-3*60*1000,'3分前','rgba(251,191,36,.72)','#fbbf24',[4,4]);
+      timeMarker(graph.postMs,'発走','rgba(248,113,113,.82)','#f87171',[6,4]);
+    }
+    if(Number.isFinite(graph.endMs)) timeMarker(graph.endMs,'+10分','rgba(148,163,184,.66)','#94a3b8',[2,4]);
+
     items.forEach((it,idx)=>{
       ctx.strokeStyle=PALETTE[idx%PALETTE.length]; ctx.lineWidth=2; ctx.beginPath(); let started=false;
-      history.forEach(r=>{
+      graphRows.forEach(r=>{
         const v=metricValue202(r,it.market,it.key,mode); if(!Number.isFinite(v)||(mode==='odds'&&v<=0)) return;
         const x=xOf(r.captured_ms), y=yOf(v); if(!started){ctx.moveTo(x,y); started=true;} else ctx.lineTo(x,y);
       });
       if(started) ctx.stroke();
-      if(history.length<=60){
+      if(graphRows.length<=60){
         ctx.fillStyle=PALETTE[idx%PALETTE.length];
-        history.forEach(r=>{ const v=metricValue202(r,it.market,it.key,mode); if(!Number.isFinite(v)||(mode==='odds'&&v<=0))return; const x=xOf(r.captured_ms),y=yOf(v); ctx.beginPath();ctx.arc(x,y,2.2,0,Math.PI*2);ctx.fill(); });
+        graphRows.forEach(r=>{ const v=metricValue202(r,it.market,it.key,mode); if(!Number.isFinite(v)||(mode==='odds'&&v<=0))return; const x=xOf(r.captured_ms),y=yOf(v); ctx.beginPath();ctx.arc(x,y,2.2,0,Math.PI*2);ctx.fill(); });
       }
     });
     ctx.fillStyle='#cbd5e1';ctx.font='11px -apple-system,BlinkMacSystemFont,sans-serif';ctx.textAlign='left';ctx.textBaseline='top';
@@ -19576,10 +19651,11 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     const el=$('oddsTsLegend'); if(!el) return;
     const mode=metricMode202();
     if(!items.length){ el.innerHTML='<div class="odds-ts-empty">表示条件に該当する組合せがありません</div>'; return; }
+    const graph=timelineGraphWindow202(), graphRows=graph.rows;
     const cross=choice==='__CROSS_TOP10__';
     const rows=items.map((it,idx)=>{
       let first=NaN,last=NaN,min=Infinity,max=-Infinity;
-      history.forEach(r=>{ const v=metricValue202(r,it.market,it.key,mode); if(Number.isFinite(v) && (mode!=='odds'||v>0)){ if(!Number.isFinite(first))first=v; last=v; min=Math.min(min,v); max=Math.max(max,v); }});
+      graphRows.forEach(r=>{ const v=metricValue202(r,it.market,it.key,mode); if(Number.isFinite(v) && (mode!=='odds'||v>0)){ if(!Number.isFinite(first))first=v; last=v; min=Math.min(min,v); max=Math.max(max,v); }});
       const ch=Number.isFinite(first)&&Number.isFinite(last)&&Math.abs(first)>1e-12?((last/first-1)*100):NaN;
       const delta=Number.isFinite(first)&&Number.isFinite(last)?last-first:NaN;
       const changeText=mode==='edge'
@@ -19593,9 +19669,10 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     el.innerHTML=rows;
     const meta=$('oddsTsMeta');
     if(meta){
-      const first=history[0]?.captured_ms,last=history[history.length-1]?.captured_ms;
+      const first=graphRows[0]?.captured_ms,last=graphRows[graphRows.length-1]?.captured_ms;
       const scope=cross?'全券種横断':market;
-      meta.textContent=history.length?`${history.length}点 / ${new Date(first).toLocaleTimeString('ja-JP')}〜${new Date(last).toLocaleTimeString('ja-JP')} / ${scope} ${metricLabel202(mode)}`:'0点';
+      const cap=Number.isFinite(graph.endMs)?' / 表示上限 発走+10分':'';
+      meta.textContent=graphRows.length?`${graphRows.length}点 / ${new Date(first).toLocaleTimeString('ja-JP')}〜${new Date(last).toLocaleTimeString('ja-JP')} / ${scope} ${metricLabel202(mode)}${cap}`:'0点';
     }
   }
 
@@ -19793,6 +19870,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       horseBox202.addEventListener('change',kick,true);
     }
     window.addEventListener('resize',()=>{ if(oddsMode) draw202(); });
+    window.addEventListener('thekeiba-timeline-meta-updated',e=>{ if(String(e?.detail?.race_id||'')===String(activeRid||'')) draw202(); });
     document.addEventListener('visibilitychange',()=>{
       if(!document.hidden){
         if(oddsMode) draw202();
@@ -20839,7 +20917,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   if(window.__V518216_LIVE_COMMENTARY__) return;
   window.__V518216_LIVE_COMMENTARY__ = true;
 
-  const VERSION215 = 'v5.18.219 ALWAYS-ON TIMELINE';
+  const VERSION215 = 'v5.18.220 TIMELINE GRAPH +10M';
   const DB_NAME215 = 'thekeiba-odds-timeline-v1';
   const STORE215 = 'captures';
   const TYPES215 = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
@@ -21271,7 +21349,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 </script>
 
 <!-- ============================================================
-     v5.18.219 Always-On Timeline Cloud Sync
+     v5.18.220 Always-On Timeline + Post+10m Graph
      - 別デバイス0台 / iPad終了中でも companion Durable Object Worker が収集
      - HTML起動時にWorker履歴をIndexedDBへ同期
      - 既存5秒ローカル収集はそのまま併用
@@ -21279,7 +21357,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 <script>
 (function(){
   'use strict';
-  const VERSION219='v5.18.219 ALWAYS-ON TIMELINE';
+  const VERSION219='v5.18.220 TIMELINE GRAPH +10M';
   const CFG_KEY219='thekeiba_timeline_cloud_v219';
   const DB_NAME219='thekeiba-odds-timeline-v1';
   const STORE219='captures';
@@ -21313,6 +21391,38 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   function upstream219(){try{return String(settings?.proxyUrl||'').trim();}catch(e){return '';}}
   function headers219(json=false){const h={};if(json)h['Content-Type']='application/json';const t=cfg219().token;if(t)h['X-Timeline-Token']=t;return h;}
   function base219(){return cfg219().workerUrl.replace(/\/$/,'');}
+  const META_KEY220='thekeiba_timeline_meta_v220';
+  function rememberMeta219(rid,meta){
+    if(!rid||!meta)return;
+    try{
+      const all=JSON.parse(localStorage.getItem(META_KEY220)||'{}')||{};
+      all[String(rid)]={...meta,remembered_at:new Date().toISOString()};
+      localStorage.setItem(META_KEY220,JSON.stringify(all));
+    }catch(e){}
+  }
+  function uiPostMs219(rid){
+    try{
+      const opt=$219('raceSelect')?.selectedOptions?.[0], optRid=String(opt?.dataset?.raceId||'');
+      const date=String($219('pickDate')?.value||''), hhmm=String(opt?.dataset?.postTime||'');
+      if(opt && (!rid||optRid===String(rid)) && /^\d{4}-\d{2}-\d{2}$/.test(date) && /^\d{1,2}:\d{2}$/.test(hhmm)){
+        const [h,m]=hhmm.split(':').map(Number);
+        const ms=new Date(`${date}T${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:00+09:00`).getTime();
+        if(Number.isFinite(ms))return ms;
+      }
+    }catch(e){}
+    return NaN;
+  }
+  async function cacheStatus219(rid){
+    if(!/^\d{10,14}$/.test(String(rid||''))||!base219())return null;
+    try{
+      const j=await fetch219(`/timeline/status?race_id=${encodeURIComponent(rid)}`,{headers:headers219(false)});
+      if(j?.meta){
+        rememberMeta219(rid,j.meta);
+        try{window.dispatchEvent(new CustomEvent('thekeiba-timeline-meta-updated',{detail:{race_id:String(rid),meta:j.meta}}));}catch(e){}
+      }
+      return j;
+    }catch(e){return null;}
+  }
   function status219(msg,type=''){
     const a=$219('timelineCloudStatus219'),b=$219('oddsTsCloud219');
     const html=`<div class="url-status ${type==='ok'?'ok':type==='err'?'err':''}" style="line-height:1.5">${esc219(msg)}</div>`;
@@ -21328,21 +21438,29 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   async function putMany219(rows){if(!rows?.length)return 0;const db=await dbOpen219();return await new Promise((resolve,reject)=>{const tx=db.transaction(STORE219,'readwrite'),st=tx.objectStore(STORE219);rows.forEach(r=>{if(r&&r.id&&r.race_id)st.put(r);});tx.oncomplete=()=>resolve(rows.length);tx.onerror=()=>reject(tx.error||new Error('IndexedDB sync failed'));});}
   async function startCurrent219(silent=false){
     const rid=currentRid219();if(!/^\d{10,14}$/.test(rid)){if(!silent)status219('⚠️ レースを選択してください','err');return null;}
-    const body={race_id:rid,kind:kind219(rid),race_label:label219(),upstream_proxy:upstream219(),interval_ms:5000,end_at_ms:Date.now()+3*60*60*1000};
+    const postMs=uiPostMs219(rid);
+    const endAt=Number.isFinite(postMs)?postMs+10*60*1000:Date.now()+3*60*60*1000;
+    const body={race_id:rid,kind:kind219(rid),race_label:label219(),upstream_proxy:upstream219(),interval_ms:5000,end_at_ms:endAt};
     const j=await fetch219('/timeline/start',{method:'POST',headers:headers219(true),body:JSON.stringify(body)});
-    status219(`☁️ ${rid} 常時収集ON（デバイス0台 / iPadを閉じてもWorker継続）`,'ok');return j;
+    if(j?.meta){ if(Number.isFinite(postMs))j.meta.post_ms=postMs; rememberMeta219(rid,j.meta); }
+    status219(`☁️ ${rid} 常時収集ON（発走+10分で収集終了 / デバイス0台）`,'ok');return j;
   }
   async function syncCurrent219(silent=false){
     if(busy219)return;const rid=currentRid219();if(!/^\d{10,14}$/.test(rid)||!base219())return;
     busy219=true;
     try{
+      const statusP=cacheStatus219(rid);
       const since=await lastMs219(rid);const j=await fetch219(`/timeline/history?race_id=${encodeURIComponent(rid)}&since=${encodeURIComponent(since)}&limit=5000`,{headers:headers219(false)});
       const rows=Array.isArray(j.captures)?j.captures:[];const n=await putMany219(rows);
+      await statusP;
       if(n){
         try{await window.reloadOddsTimelineRace202?.(rid);}catch(e){}
         try{window.refreshOddsRaceArchive?.();}catch(e){}
         status219(`☁️ Worker履歴を同期：+${n}点 / ${rid}`,'ok');
-      }else if(!silent)status219(`☁️ Worker同期済み：新規0点 / ${rid}`,'ok');
+      }else{
+        try{await window.reloadOddsTimelineRace202?.(rid);}catch(e){}
+        if(!silent)status219(`☁️ Worker同期済み：新規0点 / ${rid}`,'ok');
+      }
     }catch(e){if(!silent)status219('⚠️ 常時時系列同期: '+String(e?.message||e),'err');}
     finally{busy219=false;}
   }
@@ -21352,8 +21470,8 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     const settingsTab=$219('tab-settings');
     if(settingsTab&&!$219('timelineCloudCard219')){
       const c=cfg219(),card=document.createElement('div');card.className='card';card.id='timelineCloudCard219';card.innerHTML=`
-        <div class="section-header"><h2>☁️ 常時時系列オッズ（デバイス0台）</h2><span class="nar-badge">v5.18.219</span></div>
-        <div style="font-size:11px;color:var(--muted);line-height:1.65;margin-bottom:10px">Durable Object Workerがサーバー側で時系列オッズを継続収集します。別デバイス未接続・iPad/PCを閉じた状態でも継続し、次回起動時にIndexedDBへ同期します。既存の端末5秒収集もそのまま併用します。</div>
+        <div class="section-header"><h2>☁️ 常時時系列オッズ（デバイス0台）</h2><span class="nar-badge">v5.18.220</span></div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.65;margin-bottom:10px">Durable Object Workerがサーバー側で時系列オッズを継続収集します。別デバイス未接続・iPad/PCを閉じた状態でも継続し、次回起動時にIndexedDBへ同期します。グラフは発走後10分で打ち止めし、3分前・発走・+10分の基準線を固定表示します。既存の端末5秒収集もそのまま併用します。</div>
         <div class="field"><label>常時時系列Worker URL</label><input id="timelineCloudUrl219" type="url" value="${esc219(c.workerUrl)}" placeholder="https://the-keiba-timeline-collector.xxxxx.workers.dev"></div>
         <div class="field"><label>Token（Workerに設定した場合のみ）</label><input id="timelineCloudToken219" type="password" value="${esc219(c.token)}" autocomplete="off"></div>
         <label style="display:flex;gap:8px;align-items:center;font-size:12px;margin:7px 0"><input id="timelineCloudAutoReg219" type="checkbox" ${c.autoRegister?'checked':''}> レース選択時に常時収集を自動開始</label>
@@ -21380,6 +21498,10 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   function boot219(){
     installUi219();setVersion219();startTimer219();
     ['raceSelect','raceUrl','pickKind','pickVenue'].forEach(id=>$219(id)?.addEventListener(id==='raceUrl'?'input':'change',onRace219));
+    window.addEventListener('thekeiba-timeline-race-loaded',e=>{
+      const rid=String(e?.detail?.race_id||'');
+      if(base219()&&/^\d{10,14}$/.test(rid)) cacheStatus219(rid);
+    });
     document.addEventListener('visibilitychange',()=>{if(!document.hidden){installUi219();setVersion219();syncCurrent219(true);}});
     if(base219()){health219().then(()=>{onRace219();});}
   }

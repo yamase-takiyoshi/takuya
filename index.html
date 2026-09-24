@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.220 TIMELINE GRAPH +10M</title>
+<title>The競馬 EV分析 v5.18.221 TIMELINE STOP +10M</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.220 TIMELINE GRAPH +10M</span>
+    <span class="ver">v5.18.221 TIMELINE STOP +10M</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -18680,7 +18680,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.18.220 TIMELINE GRAPH +10M';
+  const VERSION202 = 'v5.18.221 TIMELINE STOP +10M';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
@@ -19155,6 +19155,12 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       setStatus202('⚠️ レースを選択してください。','err');
       return;
     }
+    const stopState221=timelineCollectionState221(rid);
+    if(stopState221.stopped){
+      updateTimelineStopUi221(stopState221);
+      setStatus202(`🏁 ${rid} は発走+10分で時系列収集を終了・固定済みです。新しい点は追加しません。`,'ok');
+      return;
+    }
     if(!force && document.hidden) return;
     captureBusy=true;
     try{
@@ -19207,7 +19213,13 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     refreshControls202(); draw202();
     await refreshRaceArchive202(activeRid).catch(()=>{});
     const n=history.length;
-    setStatus202(activeRid ? `📚 ${activeKind} ${activeRid}：保存済み ${n} 点` : 'レースを選択してください。', n?'ok':'wait');
+    const stopState221=timelineCollectionState221(activeRid);
+    updateTimelineStopUi221(stopState221);
+    if(activeRid && stopState221.stopped){
+      setStatus202(`🏁 ${activeKind} ${activeRid}：発走+10分で固定済み / ${n}点`,'ok');
+    }else{
+      setStatus202(activeRid ? `📚 ${activeKind} ${activeRid}：保存済み ${n} 点` : 'レースを選択してください。', n?'ok':'wait');
+    }
   }
 
   function latestMarkets202(){ return history.length ? (history[history.length-1].markets || {}) : {}; }
@@ -19558,6 +19570,37 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     return {rid,rows,t0,t1,postMs,endMs,capped:endMs>0&&now>=endMs};
   }
 
+
+  function timelineCollectionState221(rid=currentRaceId202()){
+    rid=String(rid||activeRid||'');
+    const meta=savedTimelineMeta202(rid);
+    let endMs=Number(meta?.end_at_ms||0);
+    let postMs=Number(meta?.post_ms||0);
+    if(!(postMs>0) && endMs>0) postMs=endMs-POST_GRAPH_TAIL_MS202;
+    if(!(postMs>0)) postMs=uiPostMs202(rid);
+    if(!(endMs>0) && postMs>0) endMs=postMs+POST_GRAPH_TAIL_MS202;
+    const now=Date.now();
+    return {
+      rid,postMs,endMs,now,
+      stopped: endMs>0 && now>=endMs,
+      remainingMs: endMs>0 ? Math.max(0,endMs-now) : NaN
+    };
+  }
+
+  function updateTimelineStopUi221(state=timelineCollectionState221()){
+    const stopped=!!state?.stopped;
+    const nowBtn=$('oddsTsNow');
+    if(nowBtn){
+      nowBtn.disabled=stopped;
+      nowBtn.title=stopped?'発走+10分で時系列を固定済みです':'現在時点を取得';
+    }
+    const meta=$('oddsTsMeta');
+    if(stopped && meta && !/固定済/.test(meta.textContent||'')){
+      meta.textContent=(meta.textContent||'')+' / 🏁 発走+10分で固定済';
+    }
+    return stopped;
+  }
+
   function draw202(){
     const canvas=$('oddsTsCanvas'); if(!canvas) return;
     syncMetricUi202();
@@ -19615,7 +19658,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       ctx.fillText(new Date(tt).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit'}),xx,T+H+8);
     }
 
-    // v5.18.220: 後から見ても基準時刻が分かるよう、締切3分前・発走・発走+10分を固定表示。
+    // v5.18.221: 発走+10分で収集・更新を停止し、後から見ても同じ完成形を表示。
     const timeMarker=(ms,label,stroke,fill,dash=[5,4])=>{
       if(!(Number.isFinite(ms)&&ms>=t0&&ms<=t1)) return;
       const xx=xOf(ms); ctx.save(); ctx.strokeStyle=stroke; ctx.fillStyle=fill; ctx.lineWidth=1.25; ctx.setLineDash(dash);
@@ -19664,14 +19707,15 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       const cls=Number.isFinite(delta)?(delta<0?'down':delta>0?'up':''):'';
       const base=comboLabel202(it.market,it.key);
       const label=(cross||it.market!==market)?`${it.market} ${base}`:base;
-      return `<div class="odds-ts-legend-row"><i style="background:${PALETTE[idx%PALETTE.length]}"></i><b>${esc(label)}</b><span>現在 ${metricFmt202(last,mode)}</span><span>最小 ${metricFmt202(min,mode)}</span><span>最大 ${metricFmt202(max,mode)}</span><span class="${cls}">${changeText}</span></div>`;
+      const lastLabel=graph.capped?'最終':'現在';
+      return `<div class="odds-ts-legend-row"><i style="background:${PALETTE[idx%PALETTE.length]}"></i><b>${esc(label)}</b><span>${lastLabel} ${metricFmt202(last,mode)}</span><span>最小 ${metricFmt202(min,mode)}</span><span>最大 ${metricFmt202(max,mode)}</span><span class="${cls}">${changeText}</span></div>`;
     }).join('');
     el.innerHTML=rows;
     const meta=$('oddsTsMeta');
     if(meta){
       const first=graphRows[0]?.captured_ms,last=graphRows[graphRows.length-1]?.captured_ms;
       const scope=cross?'全券種横断':market;
-      const cap=Number.isFinite(graph.endMs)?' / 表示上限 発走+10分':'';
+      const cap=graph.capped?' / 🏁 発走+10分で固定済':(Number.isFinite(graph.endMs)?' / 発走+10分で自動停止':'');
       meta.textContent=graphRows.length?`${graphRows.length}点 / ${new Date(first).toLocaleTimeString('ja-JP')}〜${new Date(last).toLocaleTimeString('ja-JP')} / ${scope} ${metricLabel202(mode)}${cap}`:'0点';
     }
   }
@@ -19704,7 +19748,14 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       const current=currentRaceId202();
       // v5.18.218: 「時系列」画面を閉じても、5秒自動がONならブラウザ前面中は収集を継続。
       // デバイス未接続時は fetchMarkets202 が Worker直結へ自動フォールバックする。
-      if($('oddsTsAuto')?.checked && !document.hidden && current && (!activeRid || activeRid===current)) capture202(false);
+      if($('oddsTsAuto')?.checked && !document.hidden && current && (!activeRid || activeRid===current)){
+        const st221=timelineCollectionState221(current);
+        if(st221.stopped){
+          updateTimelineStopUi221(st221);
+        }else{
+          capture202(false);
+        }
+      }
     },POLL_MS);
   }
 
@@ -19827,8 +19878,18 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     $('oddsTsCombo').addEventListener('change',draw202);
     $('oddsTsLog').addEventListener('change',draw202);
     $('oddsTsAuto').addEventListener('change',e=>{
-      if(e.target.checked && !document.hidden) capture202(true);
-      setStatus202(e.target.checked ? '▶️ 5秒自動を開始（デバイス未接続時はWorker直結）' : '⏸ 5秒自動を停止', e.target.checked?'ok':'wait');
+      if(e.target.checked){
+        const st221=timelineCollectionState221(currentRaceId202());
+        if(st221.stopped){
+          updateTimelineStopUi221(st221);
+          setStatus202('🏁 このレースは発走+10分で固定済みです。5秒自動ONは次のレースでそのまま使えます。','ok');
+          return;
+        }
+        if(!document.hidden) capture202(true);
+        setStatus202('▶️ 5秒自動を開始（発走+10分で自動停止 / デバイス未接続時はWorker直結）','ok');
+      }else{
+        setStatus202('⏸ 5秒自動を停止','wait');
+      }
     });
     $('oddsTsNow').addEventListener('click',()=>capture202(true));
     $('oddsTsClear').addEventListener('click',async()=>{
@@ -19870,11 +19931,20 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       horseBox202.addEventListener('change',kick,true);
     }
     window.addEventListener('resize',()=>{ if(oddsMode) draw202(); });
-    window.addEventListener('thekeiba-timeline-meta-updated',e=>{ if(String(e?.detail?.race_id||'')===String(activeRid||'')) draw202(); });
+    window.addEventListener('thekeiba-timeline-meta-updated',e=>{
+      if(String(e?.detail?.race_id||'')===String(activeRid||'')){
+        draw202();
+        updateTimelineStopUi221(timelineCollectionState221(activeRid));
+      }
+    });
     document.addEventListener('visibilitychange',()=>{
       if(!document.hidden){
         if(oddsMode) draw202();
-        if($('oddsTsAuto')?.checked) capture202(false);
+        if($('oddsTsAuto')?.checked){
+          const st221=timelineCollectionState221(currentRaceId202());
+          if(st221.stopped) updateTimelineStopUi221(st221);
+          else capture202(false);
+        }
       }
     });
     refreshRaceArchive202(currentRaceId202()).catch(()=>{});
@@ -20917,7 +20987,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   if(window.__V518216_LIVE_COMMENTARY__) return;
   window.__V518216_LIVE_COMMENTARY__ = true;
 
-  const VERSION215 = 'v5.18.220 TIMELINE GRAPH +10M';
+  const VERSION215 = 'v5.18.221 TIMELINE STOP +10M';
   const DB_NAME215 = 'thekeiba-odds-timeline-v1';
   const STORE215 = 'captures';
   const TYPES215 = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
@@ -21349,7 +21419,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 </script>
 
 <!-- ============================================================
-     v5.18.220 Always-On Timeline + Post+10m Graph
+     v5.18.221 Always-On Timeline + Hard Stop at Post+10m
      - 別デバイス0台 / iPad終了中でも companion Durable Object Worker が収集
      - HTML起動時にWorker履歴をIndexedDBへ同期
      - 既存5秒ローカル収集はそのまま併用
@@ -21357,7 +21427,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 <script>
 (function(){
   'use strict';
-  const VERSION219='v5.18.220 TIMELINE GRAPH +10M';
+  const VERSION219='v5.18.221 TIMELINE STOP +10M';
   const CFG_KEY219='thekeiba_timeline_cloud_v219';
   const DB_NAME219='thekeiba-odds-timeline-v1';
   const STORE219='captures';
@@ -21439,11 +21509,16 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   async function startCurrent219(silent=false){
     const rid=currentRid219();if(!/^\d{10,14}$/.test(rid)){if(!silent)status219('⚠️ レースを選択してください','err');return null;}
     const postMs=uiPostMs219(rid);
-    const endAt=Number.isFinite(postMs)?postMs+10*60*1000:Date.now()+3*60*60*1000;
+    let saved=null;try{const all=JSON.parse(localStorage.getItem(META_KEY220)||'{}')||{};saved=all[String(rid)]||null;}catch(e){}
+    const endAt=Number(saved?.end_at_ms||0)>0?Number(saved.end_at_ms):(Number.isFinite(postMs)?postMs+10*60*1000:Date.now()+3*60*60*1000);
+    if(endAt>0 && Date.now()>=endAt){
+      if(!silent)status219(`🏁 ${rid} は発走+10分で収集終了・固定済みです。再開しません。`,'ok');
+      return {ok:true,skipped:true,reason:'POST_PLUS_10M_FIXED',race_id:rid,end_at_ms:endAt};
+    }
     const body={race_id:rid,kind:kind219(rid),race_label:label219(),upstream_proxy:upstream219(),interval_ms:5000,end_at_ms:endAt};
     const j=await fetch219('/timeline/start',{method:'POST',headers:headers219(true),body:JSON.stringify(body)});
     if(j?.meta){ if(Number.isFinite(postMs))j.meta.post_ms=postMs; rememberMeta219(rid,j.meta); }
-    status219(`☁️ ${rid} 常時収集ON（発走+10分で収集終了 / デバイス0台）`,'ok');return j;
+    status219(`☁️ ${rid} 常時収集ON（発走+10分で完全停止・固定 / デバイス0台）`,'ok');return j;
   }
   async function syncCurrent219(silent=false){
     if(busy219)return;const rid=currentRid219();if(!/^\d{10,14}$/.test(rid)||!base219())return;
@@ -21470,8 +21545,8 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     const settingsTab=$219('tab-settings');
     if(settingsTab&&!$219('timelineCloudCard219')){
       const c=cfg219(),card=document.createElement('div');card.className='card';card.id='timelineCloudCard219';card.innerHTML=`
-        <div class="section-header"><h2>☁️ 常時時系列オッズ（デバイス0台）</h2><span class="nar-badge">v5.18.220</span></div>
-        <div style="font-size:11px;color:var(--muted);line-height:1.65;margin-bottom:10px">Durable Object Workerがサーバー側で時系列オッズを継続収集します。別デバイス未接続・iPad/PCを閉じた状態でも継続し、次回起動時にIndexedDBへ同期します。グラフは発走後10分で打ち止めし、3分前・発走・+10分の基準線を固定表示します。既存の端末5秒収集もそのまま併用します。</div>
+        <div class="section-header"><h2>☁️ 常時時系列オッズ（デバイス0台）</h2><span class="nar-badge">v5.18.221</span></div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.65;margin-bottom:10px">Durable Object Workerがサーバー側で時系列オッズを継続収集します。別デバイス未接続・iPad/PCを閉じた状態でも継続し、次回起動時にIndexedDBへ同期します。発走+10分に達したらWorker・端末の5秒収集をそのレースについて終了し、その時点の時系列を完成形として固定します。以後は新しい点を追加せず、後から同じグラフを閲覧できます。3分前・発走・+10分の基準線も固定表示します。</div>
         <div class="field"><label>常時時系列Worker URL</label><input id="timelineCloudUrl219" type="url" value="${esc219(c.workerUrl)}" placeholder="https://the-keiba-timeline-collector.xxxxx.workers.dev"></div>
         <div class="field"><label>Token（Workerに設定した場合のみ）</label><input id="timelineCloudToken219" type="password" value="${esc219(c.token)}" autocomplete="off"></div>
         <label style="display:flex;gap:8px;align-items:center;font-size:12px;margin:7px 0"><input id="timelineCloudAutoReg219" type="checkbox" ${c.autoRegister?'checked':''}> レース選択時に常時収集を自動開始</label>

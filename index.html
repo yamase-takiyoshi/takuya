@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.218 HORSE CARD AUTO</title>
+<title>The競馬 EV分析 v5.18.219 NAR OFFICIAL FIX</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.218 HORSE CARD AUTO</span>
+    <span class="ver">v5.18.219 NAR OFFICIAL FIX</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -20805,7 +20805,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   if(window.__V518216_LIVE_COMMENTARY__) return;
   window.__V518216_LIVE_COMMENTARY__ = true;
 
-  const VERSION215 = 'v5.18.218 HORSE CARD AUTO';
+  const VERSION215 = 'v5.18.219 NAR OFFICIAL FIX';
   const DB_NAME215 = 'thekeiba-odds-timeline-v1';
   const STORE215 = 'captures';
   const TYPES215 = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
@@ -21238,7 +21238,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 
 
 <!-- ============================================================
-     v5.18.218 HORSE CARD AUTO
+     v5.18.219 NAR OFFICIAL FIX
      ・レース選択直後に左側の出馬表（馬名/枠/馬番/単勝/人気）を自動取得。
      ・v5.18.216 の「旧レース馬名を流用しない」安全策は維持しつつ、
        空欄のまま時系列だけ進む状態を解消する。
@@ -21251,7 +21251,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   if(window.__V518218_HORSE_CARD_AUTO__) return;
   window.__V518218_HORSE_CARD_AUTO__ = true;
 
-  const VERSION218 = 'v5.18.218 HORSE CARD AUTO';
+  const VERSION218 = 'v5.18.219 NAR OFFICIAL FIX';
   const $218 = id => document.getElementById(id);
   let timer218 = 0;
   let busy218 = false;
@@ -21483,6 +21483,341 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',install218,{once:true});
   else install218();
   [1200,3200,7000].forEach(ms=>setTimeout(()=>{ mark218(); if(!leftReady218(selectedRid218())) schedule218('再同期',120); },ms));
+})();
+</script>
+
+
+<script>
+/* ============================================================
+   v5.18.219 NAR OFFICIAL VENUE FIX
+   ・NAR開催場判定を netkeiba kaisai_id 総当たりから切り離す。
+   ・地方競馬全国協会 keiba.go.jp を正とし、TodayRaceInfoTop →
+     各場 RaceList の順で判定する。
+   ・通信失敗を「開催なし」に変換しない。
+   ・開催場/レース一覧だけを差し替え、既存のオッズ・EV・右側分析は触らない。
+   ============================================================ */
+(function(){
+  'use strict';
+  if(window.__V518219_NAR_OFFICIAL_FIX__) return;
+  window.__V518219_NAR_OFFICIAL_FIX__ = true;
+
+  const VERSION219 = 'v5.18.219 NAR OFFICIAL FIX';
+  const $219 = id => document.getElementById(id);
+  const esc219 = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+  const digits219 = d => String(d || '').replace(/\D/g,'').slice(0,8);
+  const dashed219 = d => { const x=digits219(d); return x.length===8 ? `${x.slice(0,4)}-${x.slice(4,6)}-${x.slice(6,8)}` : String(d||''); };
+  const slash219 = d => { const x=digits219(d); return x.length===8 ? `${x.slice(0,4)}/${x.slice(4,6)}/${x.slice(6,8)}` : String(d||''); };
+
+  // netkeiba場コード / 表示名 / 地方競馬情報サイト babaCode
+  const VENUES219 = [
+    ['30','門別','36'],['35','盛岡','10'],['36','水沢','11'],['42','浦和','18'],['43','船橋','19'],['44','大井','20'],
+    ['45','川崎','21'],['46','金沢','22'],['47','笠松','23'],['48','名古屋','24'],['50','園田','27'],['51','姫路','28'],
+    ['54','高知','31'],['55','佐賀','32'],['65','帯広','03']
+  ];
+  const byNet219 = new Map(VENUES219.map(v=>[v[0],v]));
+  const byBaba219 = new Map(VENUES219.map(v=>[String(Number(v[2])),v]));
+  const cache219 = Object.create(null);
+  let seq219 = 0;
+
+  function mark219(){
+    try{
+      window.APP_VERSION = VERSION219;
+      const v=document.querySelector('.ver');
+      if(v){ const bridge=/🌉/.test(v.textContent||''); v.textContent=VERSION219+(bridge?' 🌉':''); }
+      document.title='The競馬 EV分析 '+VERSION219;
+    }catch(e){}
+  }
+  function proxyBase219(){
+    let a='';
+    try{ a=String($219('proxyUrl')?.value || window.settings?.proxyUrl || settings?.proxyUrl || '').trim(); }catch(e){}
+    return a.replace(/\/$/,'');
+  }
+  function blocked219(t){
+    return !t || /Access Denied|Reference\s*#|don't have permission|Just a moment|Incapsula|akamai|Pardon Our Interruption|errors\.edgesuite\.net|captcha/i.test(String(t));
+  }
+  function timeout219(p, ms, label){
+    let tm;
+    const t=new Promise((_,rej)=>{tm=setTimeout(()=>{const e=new Error((label||'通信')+'タイムアウト');e.name='TimeoutError';rej(e)},ms)});
+    return Promise.race([Promise.resolve(p).finally(()=>clearTimeout(tm)),t]);
+  }
+  async function fetchHtml219(url, ms=6500){
+    // 既存fetchHtmlViaProxyを優先。Worker/ブリッジ設定をそのまま利用する。
+    try{
+      const fn=window.fetchHtmlViaProxy || ((typeof fetchHtmlViaProxy==='function') ? fetchHtmlViaProxy : null);
+      if(typeof fn==='function'){
+        const h=await timeout219(fn(url),ms,'地方競馬公式取得');
+        if(h && !blocked219(h)) return String(h);
+      }
+    }catch(e){ console.warn('[219] fetchHtmlViaProxy', url, e && e.message); }
+
+    const base=proxyBase219();
+    if(!base) throw new Error('Workers URL未設定');
+    const sep=base.includes('?')?'&':'?';
+    const ac=typeof AbortController==='function'?new AbortController():null;
+    const tm=setTimeout(()=>{try{ac?.abort()}catch(e){}},ms);
+    try{
+      const r=await fetch(base+sep+'url='+encodeURIComponent(url)+'&_nar219=1&_ts='+Date.now(),{cache:'no-store',signal:ac?.signal});
+      const t=await r.text().catch(()=> '');
+      if(!r.ok) throw new Error('Worker HTTP '+r.status);
+      if(blocked219(t)) throw new Error('上流サイト遮断/空応答');
+      return t;
+    }finally{clearTimeout(tm);}
+  }
+  function decode219(s){
+    try{ const ta=document.createElement('textarea'); ta.innerHTML=String(s||''); return ta.value; }
+    catch(e){ return String(s||''); }
+  }
+  function plain219(html){
+    return decode219(String(html||'')
+      .replace(/<script[\s\S]*?<\/script>/gi,' ')
+      .replace(/<style[\s\S]*?<\/style>/gi,' ')
+      .replace(/<[^>]+>/g,' '))
+      .replace(/[\t\r\n]+/g,' ').replace(/[\s　]+/g,' ').trim();
+  }
+  function explicitNoRace219(html){
+    return /該当データなし|開催がありません|本日の開催はありません|対象のレースはありません|レースはありません/i.test(plain219(html));
+  }
+  function raceId219(date, netCode, no){
+    const d=digits219(date);
+    return `${d.slice(0,4)}${String(netCode).padStart(2,'0')}${d.slice(4,8)}${String(no).padStart(2,'0')}`;
+  }
+  function cleanRaceName219(s,no){
+    let t=decode219(String(s||'')).replace(/<[^>]+>/g,' ').replace(/[\s　]+/g,' ').trim();
+    t=t.replace(new RegExp('^\\s*(?:第)?'+Number(no)+'R\\s*'),'')
+      .replace(/^\d{1,2}:\d{2}(?:発走)?\s*/,'')
+      .replace(/(?:出馬表|オッズ|映像|動画|結果|競走成績|払戻金?).*$/,'')
+      .trim();
+    if(!t || /^(?:出馬表|オッズ|映像|動画|結果|成績|払戻)$/.test(t)) return '';
+    if(t.length>70) t=t.slice(0,70).trim();
+    return t;
+  }
+  function parseRaces219(html,date,netCode){
+    const nums=new Set();
+    const names=new Map();
+    const raw=String(html||'');
+    // 公式リンクのk_raceNoを最優先。
+    let m;
+    const re=/k_raceNo=(\d{1,2})/g;
+    while((m=re.exec(raw))){ const n=Number(m[1]); if(n>=1&&n<=12) nums.add(n); }
+
+    try{
+      const doc=new DOMParser().parseFromString(raw,'text/html');
+      Array.from(doc.querySelectorAll('a[href*="k_raceNo="]')).forEach(a=>{
+        const mm=String(a.getAttribute('href')||'').match(/k_raceNo=(\d{1,2})/);
+        if(!mm) return; const no=Number(mm[1]); if(!(no>=1&&no<=12)) return;
+        nums.add(no);
+        let node=a, text='';
+        for(let i=0;i<5 && node;i++,node=node.parentElement){ text += ' '+(node.textContent||''); }
+        const p=plain219(text);
+        const rr=new RegExp('(?:^|\\s)(?:第)?'+no+'R\\s+(.{1,100}?)(?=\\s+(?:出馬表|オッズ|映像|動画|結果|競走成績|払戻|[1-9]R|1[0-2]R)|$)');
+        const z=p.match(rr);
+        const nm=cleanRaceName219(z?z[1]:a.textContent,no);
+        if(nm && !names.has(no)) names.set(no,nm);
+      });
+    }catch(e){}
+
+    if(!nums.size){
+      const p=plain219(raw);
+      const rr=/(?:^|\s)([1-9]|1[0-2])R\s+(.{1,100}?)(?=\s+(?:出馬表|オッズ|映像|動画|結果|競走成績|払戻|[1-9]R|1[0-2]R)|$)/g;
+      while((m=rr.exec(p))){ const no=Number(m[1]); nums.add(no); const nm=cleanRaceName219(m[2],no); if(nm&&!names.has(no)) names.set(no,nm); }
+    }
+    return [...nums].sort((a,b)=>a-b).map(no=>({
+      raceNo:no,
+      raceName:names.get(no)||`${no}R`,
+      raceId:raceId219(date,netCode,no),
+      venueCode:String(netCode)
+    }));
+  }
+  function officialListUrls219(date, baba){
+    const ds=encodeURIComponent(slash219(date));
+    const b=String(Number(baba));
+    return [
+      `https://www.keiba.go.jp/KeibaWebSP/TodayRaceInfo/S_RaceList?k_babaCode=${b}&k_raceDate=${ds}`,
+      `https://www.keiba.go.jp/KeibaWeb/TodayRaceInfo/RaceList?k_raceDate=${ds}&k_babaCode=${b}`
+    ];
+  }
+  async function fetchVenueRaces219(date,v){
+    const [net,name,baba]=v;
+    let lastErr='';
+    for(const url of officialListUrls219(date,baba)){
+      try{
+        const html=await fetchHtml219(url,6000);
+        if(explicitNoRace219(html)) return {ok:true,noRace:true,races:[],html,url};
+        const races=parseRaces219(html,date,net);
+        if(races.length) return {ok:true,noRace:false,races,html,url};
+        lastErr='公式HTMLは取得できたがレース番号を解析できません';
+      }catch(e){ lastErr=String(e&&e.message||e); }
+    }
+    return {ok:false,noRace:false,races:[],error:lastErr||'取得失敗'};
+  }
+  function parseTopCodes219(html,date){
+    const target=slash219(date);
+    const codes=new Set();
+    let sawDate=false;
+    try{
+      const doc=new DOMParser().parseFromString(String(html||''),'text/html');
+      Array.from(doc.querySelectorAll('a[href*="k_babaCode="]')).forEach(a=>{
+        const href=decode219(a.getAttribute('href')||'').replace(/&amp;/g,'&');
+        const b=(href.match(/k_babaCode=(\d+)/)||[])[1];
+        const rd=(href.match(/k_raceDate=([^&]+)/)||[])[1];
+        let dd=''; try{dd=decodeURIComponent(rd||'');}catch(e){dd=rd||'';}
+        if(dd===target){ sawDate=true; const v=byBaba219.get(String(Number(b||0))); if(v) codes.add(v[0]); }
+      });
+    }catch(e){}
+    const raw=decode219(String(html||'')).replace(/&amp;/g,'&');
+    const re=/k_babaCode=(\d+)[^"'<>]{0,220}?k_raceDate=([^&"'<>\s]+)/g;
+    let m;
+    while((m=re.exec(raw))){
+      let dd=''; try{dd=decodeURIComponent(m[2]);}catch(e){dd=m[2];}
+      if(dd===target){ sawDate=true; const v=byBaba219.get(String(Number(m[1]))); if(v) codes.add(v[0]); }
+    }
+    return {codes:[...codes],sawDate};
+  }
+  async function topActiveCodes219(date){
+    const urls=[
+      'https://www.keiba.go.jp/KeibaWeb/TodayRaceInfo/TodayRaceInfoTop',
+      'https://www.keiba.go.jp/KeibaWebSP/TodayRaceInfo/S_TodayRaceInfoTop'
+    ];
+    let last='';
+    for(const url of urls){
+      try{
+        const html=await fetchHtml219(url,6000);
+        const p=parseTopCodes219(html,date);
+        if(p.codes.length || p.sawDate) return {ok:true,...p,html,url};
+        last='対象日リンクなし';
+      }catch(e){ last=String(e&&e.message||e); }
+    }
+    return {ok:false,codes:[],sawDate:false,error:last};
+  }
+  function renderVenues219(items, provisional=false){
+    const sel=$219('pickVenue'); if(!sel) return;
+    if(items.length){
+      sel.innerHTML=items.map(x=>{
+        const cnt=x.races?.length ? `${x.races.length}R` : (x.confirmed?'開催確認':'取得中');
+        return `<option value="${esc219(x.net)}" data-nar219-confirmed="${x.confirmed?'1':'0'}">${esc219(x.name)}（${esc219(cnt)}）</option>`;
+      }).join('');
+    }else if(provisional){
+      sel.innerHTML=VENUES219.map(v=>`<option value="${v[0]}">${esc219(v[1])}（取得再試行）</option>`).join('');
+    }else sel.innerHTML='<option value="">開催なし</option>';
+  }
+  function renderRaces219(races,date,net){
+    const sel=$219('raceSelect'), urlIn=$219('raceUrl'), box=$219('raceTitleBox');
+    if(!sel) return;
+    const v=byNet219.get(String(net)); const vn=v?v[1]:String(net);
+    sel.innerHTML=races.map(r=>{
+      const url=`https://nar.netkeiba.com/race/shutuba.html?race_id=${r.raceId}&rf=race_submenu`;
+      const nm=r.raceName||`${r.raceNo}R`;
+      const label=`${slash219(date)} ${vn} ${r.raceNo}R ${nm} / ${r.raceId}`;
+      return `<option value="${esc219(url)}" data-race-id="${r.raceId}" data-race-no="${r.raceNo}" data-race-name="${esc219(nm)}">${esc219(label)}</option>`;
+    }).join('');
+    const o=sel.options[0];
+    if(o){
+      if(urlIn) urlIn.value=o.value;
+      window.currentRaceId=o.dataset.raceId||''; window.currentRaceName=o.dataset.raceName||'';
+      try{ currentRaceId=window.currentRaceId; currentRaceName=window.currentRaceName; }catch(e){}
+      if(box){ box.style.display='block'; box.textContent=o.textContent||''; }
+    }
+  }
+
+  async function loadActive219(){
+    const kind=$219('pickKind')?.value||'JRA';
+    if(kind!=='NAR') return typeof prevActive219==='function' ? prevActive219.apply(this,arguments) : undefined;
+    const my=++seq219;
+    const date=$219('pickDate')?.value || (typeof todayYmd==='function'?todayYmd():'');
+    const status=$219('urlStatus');
+    const rs=$219('raceSelect'); if(rs) rs.innerHTML='<option value="">NAR開催場を公式サイトで確認中...</option>';
+    const u=$219('raceUrl'); if(u) u.value='';
+    const box=$219('raceTitleBox'); if(box){box.style.display='none';box.textContent='';}
+    if(status) status.innerHTML=`<div class="url-status">🏇 ${esc219(date)} NAR：地方競馬公式から開催場を確認中...</div>`;
+
+    let top={ok:false,codes:[],sawDate:false};
+    try{ top=await topActiveCodes219(date); }catch(e){}
+    if(my!==seq219) return [];
+
+    let targets=[];
+    if(top.ok && top.codes.length){
+      targets=top.codes.map(c=>byNet219.get(c)).filter(Boolean);
+    }else if(top.ok && top.sawDate && !top.codes.length){
+      renderVenues219([],false);
+      if(status) status.innerHTML=`<div class="url-status ok">📅 ${esc219(date)} はNAR開催なし（地方競馬公式の当日欄で確認）</div>`;
+      return [];
+    }else{
+      // 過去日/未来日などTopに対象日が無い場合だけ、各場RaceListを並列確認。
+      targets=VENUES219.slice();
+    }
+
+    if(status) status.innerHTML=`<div class="url-status">🏇 ${esc219(date)} NAR：${targets.length}開催場を公式RaceListで確認中...</div>`;
+    const settled=await Promise.all(targets.map(async v=>{
+      const d=await fetchVenueRaces219(date,v);
+      return {v,d};
+    }));
+    if(my!==seq219) return [];
+
+    const active=[]; let failures=0, confirmedNo=0;
+    for(const {v,d} of settled){
+      const [net,name]=v;
+      if(d.ok && d.races.length){ cache219[digits219(date)+'-'+net]=d.races; active.push({net,name,races:d.races,confirmed:true}); }
+      else if(d.ok && d.noRace) confirmedNo++;
+      else {
+        failures++;
+        // Topで開催確認済みの場は、RaceList解析失敗でも開催場として残す。
+        if(top.codes && top.codes.includes(net)) active.push({net,name,races:[],confirmed:true,error:d.error||''});
+      }
+    }
+
+    if(active.length){
+      renderVenues219(active,false);
+      if(status) status.innerHTML=`<div class="url-status ok">✅ ${esc219(date)} NAR開催場：${active.map(x=>esc219(x.name+(x.races.length?'（'+x.races.length+'R）':'（開催確認）'))).join('、')}<br><span style="font-size:11px;opacity:.86">地方競馬公式 keiba.go.jp を正として判定 / netkeiba kaisai_id 判定は使用しません</span></div>`;
+      // 最初の場のレース一覧まで自動表示。RaceList未取得ならユーザーの一覧ボタンで再試行。
+      if(active[0].races.length) setTimeout(()=>{ try{ loadList219(); }catch(e){} },60);
+      return active;
+    }
+
+    if(failures){
+      renderVenues219([],true);
+      if(status) status.innerHTML=`<div class="url-status err">⚠️ ${esc219(date)} NARの開催確認に失敗しました。通信失敗を「開催なし」にはしていません。<br><span style="font-size:11px;opacity:.86">開催場は再試行用に残しています。Worker/プロキシを確認してもう一度お試しください。</span></div>`;
+      return [];
+    }
+
+    renderVenues219([],false);
+    if(status) status.innerHTML=`<div class="url-status ok">📅 ${esc219(date)} はNAR開催なし（地方競馬公式RaceListで確認）</div>`;
+    return [];
+  }
+
+  async function loadList219(){
+    const kind=$219('pickKind')?.value||'JRA';
+    if(kind!=='NAR') return typeof prevList219==='function' ? prevList219.apply(this,arguments) : undefined;
+    const date=$219('pickDate')?.value || (typeof todayYmd==='function'?todayYmd():'');
+    const net=String($219('pickVenue')?.value||'');
+    const status=$219('urlStatus'), sel=$219('raceSelect');
+    const v=byNet219.get(net);
+    if(!v){ if(status) status.innerHTML='<div class="url-status">開催場を選択してください</div>'; return []; }
+    let races=cache219[digits219(date)+'-'+net]||[];
+    if(!races.length){
+      if(status) status.innerHTML=`<div class="url-status">🏇 ${esc219(date)} ${esc219(v[1])}：地方競馬公式RaceListを取得中...</div>`;
+      const d=await fetchVenueRaces219(date,v);
+      if(d.ok && d.races.length){ races=d.races; cache219[digits219(date)+'-'+net]=races; }
+      else if(d.ok && d.noRace){ if(sel) sel.innerHTML='<option value="">この開催場は当日開催なし</option>'; if(status) status.innerHTML=`<div class="url-status">${esc219(date)} ${esc219(v[1])} は開催なし（地方競馬公式確認）</div>`; return []; }
+      else { if(sel) sel.innerHTML='<option value="">レース一覧取得失敗</option>'; if(status) status.innerHTML=`<div class="url-status err">⚠️ ${esc219(date)} ${esc219(v[1])} のレース一覧取得に失敗しました。開催なし扱いにはしていません。<br><span style="font-size:11px;opacity:.86">${esc219(d.error||'Worker/上流応答を確認してください')}</span></div>`; return []; }
+    }
+    renderRaces219(races,date,net);
+    if(status) status.innerHTML=`<div class="url-status ok">✅ ${esc219(date)} ${esc219(v[1])} ${races.length}R を地方競馬公式から取得しました</div>`;
+    try{ if(typeof window.applySelectedRaceUrl==='function') window.applySelectedRaceUrl(); }catch(e){}
+    return races;
+  }
+
+  const prevActive219 = window.loadActiveVenuesForDate || ((typeof loadActiveVenuesForDate==='function')?loadActiveVenuesForDate:null);
+  const prevList219 = window.loadRaceList || ((typeof loadRaceList==='function')?loadRaceList:null);
+  window.loadActiveVenuesForDate=loadActive219;
+  window.loadRaceList=loadList219;
+  try{ loadActiveVenuesForDate=loadActive219; }catch(e){}
+  try{ loadRaceList=loadList219; }catch(e){}
+
+  mark219();
+  [600,1800,3800,7800].forEach(ms=>setTimeout(mark219,ms));
+  setTimeout(()=>{
+    try{ if(($219('pickKind')?.value||'')==='NAR') loadActive219(); }catch(e){console.error('[219 init]',e);}
+  },420);
 })();
 </script>
 

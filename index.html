@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.222 LIVE LEFT SCROLL</title>
+<title>The競馬 EV分析 v5.18.223 NAR MOBILE ODDS</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.222 LIVE LEFT SCROLL</span>
+    <span class="ver">v5.18.223 NAR MOBILE ODDS</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -4469,6 +4469,13 @@ function buildWorkerRequestUrl(targetUrl){
   const u = String(targetUrl || '');
   const rid = (u.match(/race_id=(\d{10,14})/) || [])[1] || '';
 
+  // v5.18.223: NAR携帯版はURLそのものをWorkerへ渡す。
+  // type=odds&kind=NAR に畳むとWorker側でPC版へ戻ってしまい、
+  // SP経路を追加した意味がなくなるため ?url= を維持する。
+  if(/\/\/nar\.sp\.netkeiba\.com\//i.test(u)){
+    return base + '?url=' + encodeURIComponent(u);
+  }
+
   // v5.18.14: race_idで直接取れるページはWorkersのtype/race_id APIを使う。
   // これによりHTML本体は出馬表・オッズ・結果を明確に分離し、
   // shutuba.htmlの斤量セルを単勝オッズとして拾う事故を防ぐ。
@@ -4479,7 +4486,7 @@ function buildWorkerRequestUrl(targetUrl){
     else if(/shutuba\.html/.test(u)) type = 'shutuba';
 
     if(type){
-      const kind = /nar\.netkeiba/.test(u) ? 'NAR' : 'JRA';
+      const kind = /\/\/(?:nar|nar\.sp)\.netkeiba\.com\//i.test(u) ? 'NAR' : 'JRA';
       return `${base}?type=${encodeURIComponent(type)}&kind=${encodeURIComponent(kind)}&race_id=${encodeURIComponent(rid)}`;
     }
   }
@@ -4711,8 +4718,8 @@ async function fetchHtmlViaProxy(url){
     return cached;
   }
 
-  const isNetkeiba = /\/\/(nar|race|db)\.netkeiba\.com\//.test(String(url));
-  const isRaceData = /\/race\/(shutuba|result)\.html|\/odds\//.test(String(url));
+  const isNetkeiba = /\/\/(?:nar|race|db|nar\.sp)\.netkeiba\.com\//i.test(String(url));
+  const isRaceData = /\/race\/(?:shutuba|result|race_result)\.html|\/odds\//i.test(String(url));
 
   // v5.18.97/102: netkeibaは Userscriptブリッジ（iPad回線IP・Akamai回避）を最優先。
   // NARだけでなく race.netkeiba.com(JRA) もワーカーIPが弾かれるため、全ホストでブリッジ優先。
@@ -5326,10 +5333,19 @@ function buildNetkeibaOddsUrls(kind, raceId){
   if(!raceId) return [];
   if(kind === 'NAR'){
     return [
-      // v5.18.47: 確定済みレースは結果ページの最終単勝オッズ・人気を最優先。
+      // v5.18.223: NARは携帯版(SP)オッズを最優先。
+      // nar.sp.netkeiba.com の odds/index.html は race_id だけで単勝・複勝を含むオッズ画面を返し、
+      // PC版 /odds/index.html がタイムアウトする環境でも取得できる経路として使う。
+      `https://nar.sp.netkeiba.com/odds/index.html?race_id=${raceId}`,
+      // PC版は type=b0（単勝・複勝）を明示してから試す。裸URLより先にする。
+      `https://nar.netkeiba.com/odds/index.html?race_id=${raceId}&type=b0`,
+      // 確定済みレース用の最終値フォールバック。
       `https://nar.netkeiba.com/race/result.html?race_id=${raceId}&rf=race_submenu`,
-      `https://nar.netkeiba.com/odds/index.html?race_id=${raceId}`,
+      `https://nar.sp.netkeiba.com/race/race_result.html?race_id=${raceId}`,
+      // 旧経路も互換性のため残す。
       `https://nar.netkeiba.com/odds/index.html?race_id=${raceId}&type=b1`,
+      `https://nar.netkeiba.com/odds/index.html?race_id=${raceId}`,
+      `https://nar.sp.netkeiba.com/race/shutuba.html?race_id=${raceId}`,
       `https://nar.netkeiba.com/race/shutuba.html?race_id=${raceId}&rf=race_submenu`
     ];
   }
@@ -6292,7 +6308,7 @@ async function fetchWinOddsPopularity(kind, raceId, expectedHorses){
   dbgAppend(`🔍 オッズ取得開始: ${raceId}`);
 
   for(const url of buildNetkeibaOddsUrls(kind, raceId)){
-    const shortUrl = url.replace('https://race.netkeiba.com','').replace('https://nar.netkeiba.com','');
+    const shortUrl = url.replace('https://race.netkeiba.com','').replace('https://nar.netkeiba.com','').replace('https://nar.sp.netkeiba.com','/SP');
     try{
       const html = await fetchHtmlViaProxy(url);
       if(!html){ dbgAppend(`⬜ 空レスポンス: ${shortUrl}`); continue; }
@@ -18680,7 +18696,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.18.222 LIVE LEFT SCROLL';
+  const VERSION202 = 'v5.18.223 NAR MOBILE ODDS';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
@@ -18699,6 +18715,8 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   let oddsMode = false;
   let lastError = '';
 
+  // v5.18.223: NAR MOBILE ODDS FALLBACK
+  // 左側NARオッズは携帯版 nar.sp.netkeiba.com を最優先し、PC版は type=b0 を明示してフォールバック。
   // v5.18.222: LIVE LEFT SCROLL
   // 最新値を右端に置き、時間が進むほど古い履歴が左へ流れる。
   // ユーザーが横ドラッグした時だけ追従を解除し、「最新へ」で即復帰する。
@@ -21111,7 +21129,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   if(window.__V518216_LIVE_COMMENTARY__) return;
   window.__V518216_LIVE_COMMENTARY__ = true;
 
-  const VERSION215 = 'v5.18.222 LIVE LEFT SCROLL';
+  const VERSION215 = 'v5.18.223 NAR MOBILE ODDS';
   const DB_NAME215 = 'thekeiba-odds-timeline-v1';
   const STORE215 = 'captures';
   const TYPES215 = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
@@ -21551,7 +21569,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 <script>
 (function(){
   'use strict';
-  const VERSION219='v5.18.222 LIVE LEFT SCROLL';
+  const VERSION219='v5.18.223 NAR MOBILE ODDS';
   const CFG_KEY219='thekeiba_timeline_cloud_v219';
   const DB_NAME219='thekeiba-odds-timeline-v1';
   const STORE219='captures';

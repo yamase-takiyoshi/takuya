@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.237 NAR公式単勝オッズ取得</title>
+<title>The競馬 EV分析 v5.18.238 NAR公式枠番＋右側時系列</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.237 NAR公式単勝オッズ取得</span>
+    <span class="ver">v5.18.238 NAR公式枠番＋右側時系列</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -18774,7 +18774,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.18.237 NAR公式単勝オッズ取得';
+  const VERSION202 = 'v5.18.238 NAR公式枠番＋右側時系列';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
@@ -19224,6 +19224,22 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     const markets=newMarkets202();
     const host=kind==='NAR'?'https://nar.netkeiba.com':'https://race.netkeiba.com';
     let source='';
+
+    // 左画面と同じ地方競馬公式オッズを右側でも使用する。
+    // 公式値が取れたらnetkeibaへの長い再試行を避け、単勝の時系列点を保存する。
+    if(kind==='NAR' && typeof window.officialNarWinOddsUrl237==='function'){
+      const officialUrl=window.officialNarWinOddsUrl237(rid);
+      if(officialUrl){
+        try{
+          const html=await fetchPreserveUrl202(officialUrl,9000);
+          const map=window.parseOfficialNarWinOdds237(html,expected);
+          if(map.size>=2){
+            map.forEach((v,n)=>markets['単勝'].set(String(n),Number(v.odds)));
+            return {markets,source:officialUrl};
+          }
+        }catch(e){ lastError=String(e?.message||e); }
+      }
+    }
 
     // v5.18.218: 時系列オッズは「デバイス(Userscript Bridge)必須」にしない。
     // ブリッジが未接続/不在なら、既存Cloudflare Workerへ b0 URLを直接渡して全券種を取得する。
@@ -21266,7 +21282,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   if(window.__V518216_LIVE_COMMENTARY__) return;
   window.__V518216_LIVE_COMMENTARY__ = true;
 
-  const VERSION215 = 'v5.18.237 NAR公式単勝オッズ取得';
+  const VERSION215 = 'v5.18.238 NAR公式枠番＋右側時系列';
   const DB_NAME215 = 'thekeiba-odds-timeline-v1';
   const STORE215 = 'captures';
   const TYPES215 = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
@@ -21721,7 +21737,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 <script>
 (function(){
   'use strict';
-  const VERSION219='v5.18.237 NAR公式単勝オッズ取得';
+  const VERSION219='v5.18.238 NAR公式枠番＋右側時系列';
   const CFG_KEY219='thekeiba_timeline_cloud_v219';
   const CFG_GLOBAL_KEY219='thekeiba_timeline_cloud_global';
   const DEFAULT_WORKER_URL219='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
@@ -21946,7 +21962,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION227 = 'v5.18.237 NAR公式単勝オッズ取得';
+  const VERSION227 = 'v5.18.238 NAR公式枠番＋右側時系列';
   let oddsJobSeq227 = 0;
 
   function el227(id){ return document.getElementById(id); }
@@ -22592,7 +22608,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   if(window.__THEKEIBA_232__) return;
   window.__THEKEIBA_232__ = true;
 
-  const VERSION = 'v5.18.237 NAR公式単勝オッズ取得';
+  const VERSION = 'v5.18.238 NAR公式枠番＋右側時系列';
   const JRA_VENUE_NAMES = {'01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京','06':'中山','07':'中京','08':'京都','09':'阪神','10':'小倉',
     '30':'門別','35':'盛岡','36':'水沢','42':'浦和','43':'船橋','44':'大井','45':'川崎','46':'金沢','47':'笠松','48':'名古屋','50':'園田','51':'姫路','54':'高知','55':'佐賀','65':'帯広'};
   const $ = id => document.getElementById(id);
@@ -23115,6 +23131,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     const no = Number(rid.slice(10,12));
     return `https://www.keiba.go.jp/KeibaWeb/TodayRaceInfo/OddsTanFuku?k_raceDate=${encodeURIComponent(date)}&k_raceNo=${no}&k_babaCode=${code}`;
   }
+  window.officialNarWinOddsUrl237=officialNarWinOddsUrl237;
 
   function parseOfficialNarWinOdds237(html, expected){
     const map = new Map();
@@ -23139,12 +23156,15 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
         const odds = Number(oddsText);
         if(odds < 1 || odds > 999.9) continue;
         const popularity = Number(texts[ni-3] || 0);
-        map.set(num, {odds, pop:popularity >= 1 && popularity <= 18 ? popularity : 0});
+        const frame = Number(texts[ni-2] || 0);
+        map.set(num, {odds, pop:popularity >= 1 && popularity <= 18 ? popularity : 0,
+          frame:frame >= 1 && frame <= 8 ? frame : 0});
       }
       if(map.size >= 2) break;
     }
     return map.size >= 2 ? map : new Map();
   }
+  window.parseOfficialNarWinOdds237=parseOfficialNarWinOdds237;
 
   function parseOddsAny(html, url, expected){
     if(/www\.keiba\.go\.jp\/KeibaWeb\/TodayRaceInfo\/OddsTanFuku/i.test(url))
@@ -23421,6 +23441,11 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     scr.forEach(n => map.delete(n));
     if(map.size >= 2){
       horses = mergeOddsPopularityIntoHorses(horses, map);
+      // 公式オッズ表から取得した枠番も馬番で結合する。既存枠番は上書きしない。
+      if(/OddsTanFuku/.test(usedUrl)) horses=horses.map(h=>{
+        const f=Number(map.get(Number(h.num))?.frame||0);
+        return {...h,frame:Number(h.frame)>=1?Number(h.frame):(f>=1&&f<=8?f:0)};
+      });
       try{ horses = fillNarPopularityFromOdds(horses); }catch(e){}
       if(typeof oddsLookMisKeyedByUmaban === 'function' && oddsLookMisKeyedByUmaban(horses)){
         horses = horses.map(h => ({ ...h, odds:0, pop:0, provisionalOdds:false }));
@@ -23434,6 +23459,9 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       const src = /OddsTanFuku/.test(usedUrl) ? '地方競馬公式' : (/api_get/.test(usedUrl) ? 'API' : (usedUrl ? 'オッズページ' : '確定結果'));
       const at = new Date().toLocaleTimeString('ja-JP', { hour:'2-digit', minute:'2-digit' });
       oddsStatus(`✅ 単勝オッズ ${oc}/${horses.length}頭を反映（${esc(src)}・${esc(at)}時点）`, 'ok');
+      if(/OddsTanFuku/.test(usedUrl)){
+        try{ window.captureOddsTimelineNow?.(); }catch(e){}
+      }
     }else{
       oddsStatus(`⚠️ オッズ未取得${fails ? `（${fails}経路失敗）` : ''}。発売前の可能性があります。馬名・枠・馬番はそのまま使えます。`, 'err');
     }

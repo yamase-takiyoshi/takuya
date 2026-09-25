@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.239 JRA右側API＋NAR公式時系列</title>
+<title>The競馬 EV分析 v5.18.240 1時間時系列＋タップ移動</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.239 JRA右側API＋NAR公式時系列</span>
+    <span class="ver">v5.18.240 1時間時系列＋タップ移動</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -18775,7 +18775,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.18.239 JRA右側API＋NAR公式時系列';
+  const VERSION202 = 'v5.18.240 1時間時系列＋タップ移動';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
@@ -18803,7 +18803,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   let viewFollowLatest202 = true;
   let viewEndMs202 = NaN;
   let dragView202 = null;
-  const VIEW_DEFAULT_MS202 = 10 * 60 * 1000;
+  const VIEW_DEFAULT_MS202 = 60 * 60 * 1000;
 
   const $ = id => document.getElementById(id);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -19358,7 +19358,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     const stopState221=timelineCollectionState221(rid);
     if(stopState221.stopped){
       updateTimelineStopUi221(stopState221);
-      setStatus202(`🏁 ${rid} は発走+10分で時系列収集を終了・固定済みです。新しい点は追加しません。`,'ok');
+      setStatus202(`🏁 ${rid} は発走+10分（レース終了の目安から5分後）で時系列収集を終了・固定済みです。新しい点は追加しません。`,'ok');
       return;
     }
     if(!force && document.hidden) return;
@@ -19422,7 +19422,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     const stopState221=timelineCollectionState221(activeRid);
     updateTimelineStopUi221(stopState221);
     if(activeRid && stopState221.stopped){
-      setStatus202(`🏁 ${activeKind} ${activeRid}：発走+10分で固定済み / ${n}点`,'ok');
+      setStatus202(`🏁 ${activeKind} ${activeRid}：発走+10分（終了目安+5分）で固定済み / ${n}点`,'ok');
     }else{
       setStatus202(activeRid ? `📚 ${activeKind} ${activeRid}：保存済み ${n} 点` : 'レースを選択してください。', n?'ok':'wait');
     }
@@ -19756,7 +19756,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   }
 
   function timelineViewSpan202(){
-    const raw=String($('oddsTsWindow')?.value||'600000');
+    const raw=String($('oddsTsWindow')?.value||'3600000');
     if(raw==='all') return Infinity;
     const n=Number(raw);
     return Number.isFinite(n)&&n>=60*1000 ? n : VIEW_DEFAULT_MS202;
@@ -19858,11 +19858,11 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     const nowBtn=$('oddsTsNow');
     if(nowBtn){
       nowBtn.disabled=stopped;
-      nowBtn.title=stopped?'発走+10分で時系列を固定済みです':'現在時点を取得';
+      nowBtn.title=stopped?'発走+10分（終了目安+5分）で時系列を固定済みです':'現在時点を取得';
     }
     const meta=$('oddsTsMeta');
     if(stopped && meta && !/固定済/.test(meta.textContent||'')){
-      meta.textContent=(meta.textContent||'')+' / 🏁 発走+10分で固定済';
+      meta.textContent=(meta.textContent||'')+' / 🏁 発走+10分（終了目安+5分）で固定済';
     }
     return stopped;
   }
@@ -19923,7 +19923,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       ctx.beginPath();ctx.moveTo(L,yy);ctx.lineTo(L+W,yy);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle=mode==='ev'?'#fbbf24':'#94a3b8';ctx.textAlign='left';ctx.fillText(mode==='ev'?'EV 1.00':'0pt',L+4,yy-9);ctx.restore();
     }
     ctx.textAlign='center'; ctx.textBaseline='top';
-    const ticks=Math.min(5,Math.max(1,graphRows.length-1));
+    const ticks=Number.isFinite(graph.viewSpan) ? 6 : Math.min(5,Math.max(1,graphRows.length-1));
     for(let i=0;i<=ticks;i++){
       const tt=t0+(t1-t0)*(ticks?i/ticks:0), xx=xOf(tt);
       ctx.beginPath(); ctx.moveTo(xx,T); ctx.lineTo(xx,T+H); ctx.stroke();
@@ -19941,7 +19941,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     }
     ctx.restore();
 
-    // v5.18.222: 発走+10分で収集・更新を停止し、後から見ても同じ完成形を表示。
+    // v5.18.222: 発走+10分（終了目安+5分）で収集・更新を停止し、後から見ても同じ完成形を表示。
     const timeMarker=(ms,label,stroke,fill,dash=[5,4])=>{
       if(!(Number.isFinite(ms)&&ms>=t0&&ms<=t1)) return;
       const xx=xOf(ms); ctx.save(); ctx.strokeStyle=stroke; ctx.fillStyle=fill; ctx.lineWidth=1.25; ctx.setLineDash(dash);
@@ -19998,7 +19998,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     if(meta){
       const first=graphRows[0]?.captured_ms,last=graphRows[graphRows.length-1]?.captured_ms;
       const scope=cross?'全券種横断':market;
-      const cap=graph.capped?' / 🏁 発走+10分で固定済':(Number.isFinite(graph.endMs)?' / 発走+10分で自動停止':'');
+      const cap=graph.capped?' / 🏁 発走+10分（終了目安+5分）で固定済':(Number.isFinite(graph.endMs)?' / 発走+10分（終了目安+5分）で自動停止':'');
       const view=Number.isFinite(graph.viewSpan)?` / ${Math.round(graph.viewSpan/60000)}分窓${graph.follow?' LIVE':''}`:' / 全期間';
       meta.textContent=graphRows.length?`${graphRows.length}点 / ${new Date(first).toLocaleTimeString('ja-JP')}〜${new Date(last).toLocaleTimeString('ja-JP')} / ${scope} ${metricLabel202(mode)}${view}${cap}`:'0点';
     }
@@ -20136,8 +20136,9 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
           <label class="odds-ts-check"><input type="checkbox" id="oddsTsLog">対数</label>
           <label>表示幅<select id="oddsTsWindow">
             <option value="300000">直近5分</option>
-            <option value="600000" selected>直近10分</option>
+            <option value="600000">直近10分</option>
             <option value="1800000">直近30分</option>
+            <option value="3600000" selected>直近1時間</option>
             <option value="all">全期間</option>
           </select></label>
           <button class="btn-sm odds-ts-latest active" id="oddsTsLatest" type="button">▶ 最新へ</button>
@@ -20148,7 +20149,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
         </div>
         <div id="oddsTsStatus" class="odds-ts-status wait">レースを選択してください。</div>
         <div class="odds-ts-metric-note">想定確率＝現行EVモデル / 市場確率＝1÷実オッズ / EV＝想定確率×実オッズ / 乖離＝想定確率−市場確率 / 「表示」は選択指標に連動</div>
-        <div class="odds-ts-metric-note" style="color:#8bd9ae">v5.18.222: 最新値を右端に固定し、更新ごとに履歴が左へ流れます。グラフを左右ドラッグすると過去へ移動し、追従を一時停止します。「▶ 最新へ」でLIVEへ復帰します。</div>
+        <div class="odds-ts-metric-note" style="color:#8bd9ae">v5.18.222: 最新値を右端に固定し、更新ごとに履歴が左へ流れます。グラフの左半分をタップすると過去へ15分、右半分をタップすると新しい時刻へ15分移動します。左右ドラッグでも移動でき、追従を一時停止します。「▶ 最新へ」でLIVEへ復帰します。</div>
       </div>
       <div class="odds-ts-chart-wrap"><canvas id="oddsTsCanvas"></canvas></div>
       <div class="odds-ts-foot"><span id="oddsTsMeta">0点</span><span>デバイス未接続→Worker直結 / 履歴はIndexedDB保存</span></div>
@@ -20184,17 +20185,26 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       timelineCanvas202.addEventListener('pointerdown',e=>{
         if(!Number.isFinite(timelineViewSpan202()) || !history.length) return;
         const g=timelineGraphWindow202();
-        dragView202={startX:e.clientX,startEnd:g.t1};
+        dragView202={startX:e.clientX,startEnd:g.t1,moved:false};
         timelineCanvas202.__timelinePointerId202=e.pointerId;
         try{ timelineCanvas202.setPointerCapture?.(e.pointerId); }catch(err){}
         timelineCanvas202.classList.add('dragging');
       });
       timelineCanvas202.addEventListener('pointermove',e=>{
         if(!dragView202) return;
+        if(Math.abs(e.clientX-dragView202.startX)<8 && !dragView202.moved) return;
+        dragView202.moved=true;
         const rect=timelineCanvas202.getBoundingClientRect();
         timelinePanByPixels202(e.clientX-dragView202.startX,rect.width);
       });
-      timelineCanvas202.addEventListener('pointerup',endDrag);
+      timelineCanvas202.addEventListener('pointerup',e=>{
+        if(dragView202 && !dragView202.moved && Math.abs(e.clientX-dragView202.startX)<8){
+          const rect=timelineCanvas202.getBoundingClientRect();
+          const direction=e.clientX<rect.left+rect.width/2?1:-1;
+          timelinePanByPixels202(direction*rect.width/4,rect.width);
+        }
+        endDrag();
+      });
       timelineCanvas202.addEventListener('pointercancel',endDrag);
     }
 
@@ -20203,11 +20213,11 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
         const st221=timelineCollectionState221(currentRaceId202());
         if(st221.stopped){
           updateTimelineStopUi221(st221);
-          setStatus202('🏁 このレースは発走+10分で固定済みです。5秒自動ONは次のレースでそのまま使えます。','ok');
+          setStatus202('🏁 このレースは発走+10分（終了目安+5分）で固定済みです。5秒自動ONは次のレースでそのまま使えます。グラフを左右にタップまたはドラッグできます。','ok');
           return;
         }
         if(!document.hidden) capture202(true);
-        setStatus202('▶️ 5秒自動を開始（発走+10分で自動停止 / デバイス未接続時はWorker直結）','ok');
+        setStatus202('▶️ 5秒自動を開始（発走+10分（終了目安+5分）で自動停止 / デバイス未接続時はWorker直結）','ok');
       }else{
         setStatus202('⏸ 5秒自動を停止','wait');
       }
@@ -21315,7 +21325,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   if(window.__V518216_LIVE_COMMENTARY__) return;
   window.__V518216_LIVE_COMMENTARY__ = true;
 
-  const VERSION215 = 'v5.18.239 JRA右側API＋NAR公式時系列';
+  const VERSION215 = 'v5.18.240 1時間時系列＋タップ移動';
   const DB_NAME215 = 'thekeiba-odds-timeline-v1';
   const STORE215 = 'captures';
   const TYPES215 = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
@@ -21770,7 +21780,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 <script>
 (function(){
   'use strict';
-  const VERSION219='v5.18.239 JRA右側API＋NAR公式時系列';
+  const VERSION219='v5.18.240 1時間時系列＋タップ移動';
   const CFG_KEY219='thekeiba_timeline_cloud_v219';
   const CFG_GLOBAL_KEY219='thekeiba_timeline_cloud_global';
   const DEFAULT_WORKER_URL219='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
@@ -21909,13 +21919,13 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     let saved=null;try{const all=JSON.parse(localStorage.getItem(META_KEY220)||'{}')||{};saved=all[String(rid)]||null;}catch(e){}
     const endAt=Number(saved?.end_at_ms||0)>0?Number(saved.end_at_ms):(Number.isFinite(postMs)?postMs+10*60*1000:Date.now()+3*60*60*1000);
     if(endAt>0 && Date.now()>=endAt){
-      if(!silent)status219(`🏁 ${rid} は発走+10分で収集終了・固定済みです。再開しません。`,'ok');
+      if(!silent)status219(`🏁 ${rid} は発走+10分（終了目安+5分）で収集終了・固定済みです。再開しません。`,'ok');
       return {ok:true,skipped:true,reason:'POST_PLUS_10M_FIXED',race_id:rid,end_at_ms:endAt};
     }
     const body={race_id:rid,kind:kind219(rid),race_label:label219(),upstream_proxy:upstream219(),interval_ms:5000,end_at_ms:endAt};
     const j=await fetch219('/timeline/start',{method:'POST',headers:headers219(true),body:JSON.stringify(body)});
     if(j?.meta){ if(Number.isFinite(postMs))j.meta.post_ms=postMs; rememberMeta219(rid,j.meta); }
-    status219(`☁️ ${rid} 常時収集ON（発走+10分で完全停止・固定 / デバイス0台）`,'ok');return j;
+    status219(`☁️ ${rid} 常時収集ON（発走+10分（終了目安+5分）で完全停止・固定 / デバイス0台）`,'ok');return j;
   }
   async function syncCurrent219(silent=false){
     if(busy219)return;const rid=currentRid219();if(!/^\d{10,14}$/.test(rid)||!base219())return;
@@ -21943,7 +21953,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     if(settingsTab&&!$219('timelineCloudCard219')){
       const c=cfg219(),card=document.createElement('div');card.className='card';card.id='timelineCloudCard219';card.innerHTML=`
         <div class="section-header"><h2>☁️ 常時時系列オッズ（デバイス0台）</h2><span class="nar-badge">v5.18.224</span></div>
-        <div style="font-size:11px;color:var(--muted);line-height:1.65;margin-bottom:10px">Durable Object Workerがサーバー側で時系列オッズを継続収集します。別デバイス未接続・iPad/PCを閉じた状態でも継続し、次回起動時にIndexedDBへ同期します。発走+10分に達したらWorker・端末の5秒収集をそのレースについて終了し、その時点の時系列を完成形として固定します。以後は新しい点を追加せず、後から同じグラフを閲覧できます。3分前・発走・+10分の基準線も固定表示します。</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.65;margin-bottom:10px">Durable Object Workerがサーバー側で時系列オッズを継続収集します。別デバイス未接続・iPad/PCを閉じた状態でも継続し、次回起動時にIndexedDBへ同期します。発走+10分（終了目安+5分）に達したらWorker・端末の5秒収集をそのレースについて終了し、その時点の時系列を完成形として固定します。以後は新しい点を追加せず、後から同じグラフを閲覧できます。3分前・発走・+10分の基準線も固定表示します。</div>
         <div class="field"><label>常時時系列Worker URL</label><input id="timelineCloudUrl219" type="url" value="${esc219(c.workerUrl)}" placeholder="https://the-keiba-timeline-collector.xxxxx.workers.dev"></div>
         <div class="field"><label>Token（Workerに設定した場合のみ）</label><input id="timelineCloudToken219" type="password" value="${esc219(c.token)}" autocomplete="off"></div>
         <label style="display:flex;gap:8px;align-items:center;font-size:12px;margin:7px 0"><input id="timelineCloudAutoReg219" type="checkbox" ${c.autoRegister?'checked':''}> レース選択時に常時収集を自動開始</label>
@@ -21995,7 +22005,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION227 = 'v5.18.239 JRA右側API＋NAR公式時系列';
+  const VERSION227 = 'v5.18.240 1時間時系列＋タップ移動';
   let oddsJobSeq227 = 0;
 
   function el227(id){ return document.getElementById(id); }
@@ -22641,7 +22651,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   if(window.__THEKEIBA_232__) return;
   window.__THEKEIBA_232__ = true;
 
-  const VERSION = 'v5.18.239 JRA右側API＋NAR公式時系列';
+  const VERSION = 'v5.18.240 1時間時系列＋タップ移動';
   const JRA_VENUE_NAMES = {'01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京','06':'中山','07':'中京','08':'京都','09':'阪神','10':'小倉',
     '30':'門別','35':'盛岡','36':'水沢','42':'浦和','43':'船橋','44':'大井','45':'川崎','46':'金沢','47':'笠松','48':'名古屋','50':'園田','51':'姫路','54':'高知','55':'佐賀','65':'帯広'};
   const $ = id => document.getElementById(id);

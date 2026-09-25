@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.238 NAR公式枠番＋右側時系列</title>
+<title>The競馬 EV分析 v5.18.239 JRA右側API＋NAR公式時系列</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.238 NAR公式枠番＋右側時系列</span>
+    <span class="ver">v5.18.239 JRA右側API＋NAR公式時系列</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -4611,6 +4611,7 @@ function raceHtmlLooksFinalResult(text){
 function raceHtmlCachePolicy(url, text){
   const u = String(url || '');
   // 変動が激しい情報は短く、確定後に変わらない情報は長く保存。
+  if(/OddsTanFuku|api_get_(?:jra|nar)_odds/i.test(u)) return { ttl:4*1000, label:'ライブオッズ' };
   if(/\/odds(?:\/|\?|\/index\.html)/i.test(u)) return { ttl:10*1000, label:'オッズ' };
   if(/db\.netkeiba\.com\/race\/\d+/i.test(u)) return { ttl:30*24*60*60*1000, label:'確定DB結果' };
   if(/\/race\/(?:result|race_result)\.html/i.test(u)){
@@ -18774,7 +18775,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.18.238 NAR公式枠番＋右側時系列';
+  const VERSION202 = 'v5.18.239 JRA右側API＋NAR公式時系列';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
@@ -19225,6 +19226,22 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     const host=kind==='NAR'?'https://nar.netkeiba.com':'https://race.netkeiba.com';
     let source='';
 
+    if(kind==='JRA' && typeof window.parseJraOddsJson232==='function'){
+      const api=`https://race.netkeiba.com/api/api_get_jra_odds.html?race_id=${rid}&type=1&action=init`;
+      try{
+        let timeoutId;
+        const html=await Promise.race([
+          fetchHtmlViaProxy(api),
+          new Promise((_,reject)=>{timeoutId=setTimeout(()=>reject(new Error('JRA API timeout')),8500);})
+        ]).finally(()=>clearTimeout(timeoutId));
+        const map=window.parseJraOddsJson232(html);
+        const valid=new Set(expected.map(h=>Number(h.num)));
+        map.forEach((v,n)=>{if(valid.has(Number(n)) && Number(v.odds)>=1)
+          markets['単勝'].set(String(n),Number(v.odds));});
+        if(markets['単勝'].size>=2) return {markets,source:api};
+      }catch(e){ lastError=String(e?.message||e); }
+    }
+
     // 左画面と同じ地方競馬公式オッズを右側でも使用する。
     // 公式値が取れたらnetkeibaへの長い再試行を避け、単勝の時系列点を保存する。
     if(kind==='NAR' && typeof window.officialNarWinOddsUrl237==='function'){
@@ -19239,6 +19256,17 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
           }
         }catch(e){ lastError=String(e?.message||e); }
       }
+    }
+
+    // 左側で確認済みの同一レース・直近値のみ使う。古いレースや古い値は転用しない。
+    const verified=window.__leftVerifiedOdds239;
+    if(verified && String(verified.rid)===String(rid) && Date.now()-Number(verified.fetched_ms)<30000){
+      const valid=new Set(expected.map(h=>Number(h.num)));
+      (verified.rows||[]).forEach(x=>{
+        if(valid.has(Number(x.num)) && Number(x.odds)>=1)
+          markets['単勝'].set(String(x.num),Number(x.odds));
+      });
+      if(markets['単勝'].size>=2) return {markets,source:'左側取得済み:'+verified.source};
     }
 
     // v5.18.218: 時系列オッズは「デバイス(Userscript Bridge)必須」にしない。
@@ -19343,6 +19371,11 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       const packed=serializeMarkets202(got.markets);
       const total=Object.values(packed).reduce((s,a)=>s+a.length,0);
       if(!total) throw new Error(lastError || 'オッズを取得できませんでした');
+      const previous=history.length?history[history.length-1]:null;
+      if(previous && JSON.stringify(previous.markets)===JSON.stringify(packed)){
+        setStatus202('✅ 前回からオッズに変化なし。新しい点は追加しません。','ok');
+        return;
+      }
       const now=Date.now();
       const rec={
         schema:'thekeiba-odds-timeline-v1',
@@ -21282,7 +21315,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   if(window.__V518216_LIVE_COMMENTARY__) return;
   window.__V518216_LIVE_COMMENTARY__ = true;
 
-  const VERSION215 = 'v5.18.238 NAR公式枠番＋右側時系列';
+  const VERSION215 = 'v5.18.239 JRA右側API＋NAR公式時系列';
   const DB_NAME215 = 'thekeiba-odds-timeline-v1';
   const STORE215 = 'captures';
   const TYPES215 = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
@@ -21737,7 +21770,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 <script>
 (function(){
   'use strict';
-  const VERSION219='v5.18.238 NAR公式枠番＋右側時系列';
+  const VERSION219='v5.18.239 JRA右側API＋NAR公式時系列';
   const CFG_KEY219='thekeiba_timeline_cloud_v219';
   const CFG_GLOBAL_KEY219='thekeiba_timeline_cloud_global';
   const DEFAULT_WORKER_URL219='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
@@ -21962,7 +21995,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION227 = 'v5.18.238 NAR公式枠番＋右側時系列';
+  const VERSION227 = 'v5.18.239 JRA右側API＋NAR公式時系列';
   let oddsJobSeq227 = 0;
 
   function el227(id){ return document.getElementById(id); }
@@ -22608,7 +22641,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   if(window.__THEKEIBA_232__) return;
   window.__THEKEIBA_232__ = true;
 
-  const VERSION = 'v5.18.238 NAR公式枠番＋右側時系列';
+  const VERSION = 'v5.18.239 JRA右側API＋NAR公式時系列';
   const JRA_VENUE_NAMES = {'01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京','06':'中山','07':'中京','08':'京都','09':'阪神','10':'小倉',
     '30':'門別','35':'盛岡','36':'水沢','42':'浦和','43':'船橋','44':'大井','45':'川崎','46':'金沢','47':'笠松','48':'名古屋','50':'園田','51':'姫路','54':'高知','55':'佐賀','65':'帯広'};
   const $ = id => document.getElementById(id);
@@ -23459,7 +23492,9 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       const src = /OddsTanFuku/.test(usedUrl) ? '地方競馬公式' : (/api_get/.test(usedUrl) ? 'API' : (usedUrl ? 'オッズページ' : '確定結果'));
       const at = new Date().toLocaleTimeString('ja-JP', { hour:'2-digit', minute:'2-digit' });
       oddsStatus(`✅ 単勝オッズ ${oc}/${horses.length}頭を反映（${esc(src)}・${esc(at)}時点）`, 'ok');
-      if(/OddsTanFuku/.test(usedUrl)){
+      if(oc>=2){
+        window.__leftVerifiedOdds239={rid:String(rid),fetched_ms:Date.now(),source:src,
+          rows:horses.filter(h=>Number(h.odds)>=1).map(h=>({num:Number(h.num),odds:Number(h.odds)}))};
         try{ window.captureOddsTimelineNow?.(); }catch(e){}
       }
     }else{

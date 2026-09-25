@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.224 WORKER URL PERSIST</title>
+<title>The競馬 EV分析 v5.18.225 SAFARI IDB RECOVERY</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.224 WORKER URL PERSIST</span>
+    <span class="ver">v5.18.225 SAFARI IDB RECOVERY</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -18696,7 +18696,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.18.224 WORKER URL PERSIST';
+  const VERSION202 = 'v5.18.225 SAFARI IDB RECOVERY';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
@@ -18706,6 +18706,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   const PALETTE = ['#00e676','#60a5fa','#fbbf24','#f472b6','#c084fc','#fb923c','#22d3ee','#a3e635','#f87171','#34d399','#93c5fd','#f9a8d4','#d8b4fe','#fdba74','#67e8f9','#bef264','#fca5a5','#6ee7b7'];
 
   let dbPromise = null;
+  let dbHandle202 = null;
   let history = [];
   let activeRid = '';
   let activeKind = '';
@@ -18827,9 +18828,25 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     return [];
   }
 
+  // v5.18.225: Safari/iPadOS で IndexedDB 接続が OS 側から closing/closed にされた場合でも、
+  // stale な dbPromise を使い続けず接続を破棄して1回だけ自動再接続する。
+  function isClosingDbError202(err){
+    const name=String(err?.name||'');
+    const msg=String(err?.message||err||'');
+    return name==='InvalidStateError' || name==='AbortError' || /database connection is closing|connection is closing|database.*closed|connection.*closed/i.test(msg);
+  }
+  function resetDb202(db){
+    const target=db || dbHandle202;
+    if(!db || dbHandle202===db){
+      dbHandle202=null;
+      dbPromise=null;
+    }
+    try{ target?.close?.(); }catch(e){}
+  }
   function dbOpen202(){
     if(dbPromise) return dbPromise;
     dbPromise = new Promise((resolve,reject) => {
+      if(!window.indexedDB){ reject(new Error('IndexedDB unavailable')); return; }
       const req = indexedDB.open(DB_NAME, DB_VERSION);
       req.onupgradeneeded = () => {
         const db = req.result;
@@ -18839,41 +18856,75 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
         if(!st.indexNames.contains('race_id')) st.createIndex('race_id','race_id',{unique:false});
         if(!st.indexNames.contains('captured_ms')) st.createIndex('captured_ms','captured_ms',{unique:false});
       };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error || new Error('IndexedDB open failed'));
-    });
+      req.onsuccess = () => {
+        const db=req.result;
+        dbHandle202=db;
+        db.onversionchange=()=>{
+          try{db.close();}catch(e){}
+          if(dbHandle202===db){ dbHandle202=null; dbPromise=null; }
+        };
+        try{db.addEventListener('close',()=>{ if(dbHandle202===db){dbHandle202=null;dbPromise=null;} },{once:true});}catch(e){}
+        resolve(db);
+      };
+      req.onerror = () => { dbPromise=null; reject(req.error || new Error('IndexedDB open failed')); };
+    }).catch(err=>{ dbPromise=null; throw err; });
     return dbPromise;
+  }
+  async function dbRetry202(work){
+    let lastErr=null;
+    for(let attempt=0; attempt<2; attempt++){
+      let db=null;
+      try{
+        db=await dbOpen202();
+        return await work(db);
+      }catch(e){
+        lastErr=e;
+        if(attempt===0 && isClosingDbError202(e)){
+          resetDb202(db);
+          await new Promise(r=>setTimeout(r,60));
+          continue;
+        }
+        throw e;
+      }
+    }
+    throw lastErr || new Error('IndexedDB retry failed');
   }
 
   async function dbPut202(rec){
-    const db = await dbOpen202();
-    await new Promise((resolve,reject) => {
+    return dbRetry202(db=>new Promise((resolve,reject) => {
       const tx = db.transaction(STORE,'readwrite');
       tx.objectStore(STORE).put(rec);
-      tx.oncomplete = resolve;
+      tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error || new Error('IndexedDB write failed'));
-    });
+      tx.onabort = () => reject(tx.error || new Error('IndexedDB write aborted'));
+    }));
   }
 
   async function dbRace202(rid){
-    const db = await dbOpen202();
-    return await new Promise((resolve,reject) => {
+    return dbRetry202(db=>new Promise((resolve,reject) => {
+      let out=[];
       const tx = db.transaction(STORE,'readonly');
       const idx = tx.objectStore(STORE).index('race_id');
       const req = idx.getAll(IDBKeyRange.only(String(rid)));
-      req.onsuccess = () => resolve((req.result || []).sort((a,b)=>a.captured_ms-b.captured_ms));
+      req.onsuccess = () => { out=(req.result || []).sort((a,b)=>a.captured_ms-b.captured_ms); };
       req.onerror = () => reject(req.error || new Error('IndexedDB read failed'));
-    });
+      tx.oncomplete = () => resolve(out);
+      tx.onerror = () => reject(tx.error || new Error('IndexedDB read transaction failed'));
+      tx.onabort = () => reject(tx.error || new Error('IndexedDB read aborted'));
+    }));
   }
 
   async function dbAll202(){
-    const db = await dbOpen202();
-    return await new Promise((resolve,reject) => {
+    return dbRetry202(db=>new Promise((resolve,reject) => {
+      let out=[];
       const tx = db.transaction(STORE,'readonly');
       const req = tx.objectStore(STORE).getAll();
-      req.onsuccess = () => resolve((req.result || []).sort((a,b)=>a.captured_ms-b.captured_ms));
+      req.onsuccess = () => { out=(req.result || []).sort((a,b)=>a.captured_ms-b.captured_ms); };
       req.onerror = () => reject(req.error || new Error('IndexedDB all read failed'));
-    });
+      tx.oncomplete = () => resolve(out);
+      tx.onerror = () => reject(tx.error || new Error('IndexedDB all read transaction failed'));
+      tx.onabort = () => reject(tx.error || new Error('IndexedDB all read aborted'));
+    }));
   }
 
   async function refreshRaceArchive202(preferRid=''){
@@ -18905,29 +18956,29 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   }
 
   async function dbClearRace202(rid){
-    const db = await dbOpen202();
     const rows = await dbRace202(rid);
-    await new Promise((resolve,reject) => {
+    return dbRetry202(db=>new Promise((resolve,reject) => {
       const tx = db.transaction(STORE,'readwrite');
       const st = tx.objectStore(STORE);
       rows.forEach(r => st.delete(r.id));
-      tx.oncomplete = resolve;
+      tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error || new Error('IndexedDB clear failed'));
-    });
+      tx.onabort = () => reject(tx.error || new Error('IndexedDB clear aborted'));
+    }));
   }
 
   async function trimRace202(rid){
     const rows = await dbRace202(rid);
     if(rows.length <= MAX_RECORDS_PER_RACE) return;
     const del = rows.slice(0, rows.length - MAX_RECORDS_PER_RACE);
-    const db = await dbOpen202();
-    await new Promise((resolve,reject) => {
+    return dbRetry202(db=>new Promise((resolve,reject) => {
       const tx = db.transaction(STORE,'readwrite');
       const st = tx.objectStore(STORE);
       del.forEach(r => st.delete(r.id));
-      tx.oncomplete = resolve;
+      tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error || new Error('IndexedDB trim failed'));
-    });
+      tx.onabort = () => reject(tx.error || new Error('IndexedDB trim aborted'));
+    }));
   }
 
   function newMarkets202(){
@@ -19322,13 +19373,13 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     if(changed && sig!==lastHorseSyncSig202){
       const saveRows=rows.slice(-60).filter(r=>Array.isArray(r.horses));
       if(saveRows.length){
-        const db=await dbOpen202();
-        await new Promise((resolve,reject)=>{
+        await dbRetry202(db=>new Promise((resolve,reject)=>{
           const tx=db.transaction(STORE,'readwrite'), st=tx.objectStore(STORE);
           saveRows.forEach(r=>st.put(r));
-          tx.oncomplete=resolve;
+          tx.oncomplete=()=>resolve();
           tx.onerror=()=>reject(tx.error||new Error('horse name sync failed'));
-        });
+          tx.onabort=()=>reject(tx.error||new Error('horse name sync aborted'));
+        }));
       }
       lastHorseSyncSig202=sig;
     }
@@ -20117,6 +20168,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     const ver=document.querySelector('.ver');
     if(ver){ const mo=new MutationObserver(()=>{ if(!String(ver.textContent||'').startsWith(VERSION202)) setVersion202(); }); mo.observe(ver,{childList:true,characterData:true,subtree:true}); }
   }catch(e){}
+  window.__TIMELINE_IDB_RECOVERY_225__ = true;
   window.showOddsTimeline = ()=>showMode202('odds');
   window.captureOddsTimelineNow = ()=>capture202(true);
   window.refreshOddsRaceArchive = ()=>refreshRaceArchive202(activeRid||currentRaceId202());
@@ -21129,7 +21181,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   if(window.__V518216_LIVE_COMMENTARY__) return;
   window.__V518216_LIVE_COMMENTARY__ = true;
 
-  const VERSION215 = 'v5.18.224 WORKER URL PERSIST';
+  const VERSION215 = 'v5.18.225 SAFARI IDB RECOVERY';
   const DB_NAME215 = 'thekeiba-odds-timeline-v1';
   const STORE215 = 'captures';
   const TYPES215 = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
@@ -21184,20 +21236,34 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       req.onerror=()=>reject(req.error||new Error('時系列DBを開けません'));
     });
   }
+  function idbClosing215(e){ return String(e?.name||'')==='InvalidStateError' || /connection is closing|connection.*closed|database.*closed/i.test(String(e?.message||e||'')); }
   async function lastTwo215(rid){
-    const db=await openDb215();
-    return await new Promise((resolve,reject)=>{
-      const tx=db.transaction(STORE215,'readonly');
-      const idx=tx.objectStore(STORE215).index('race_id');
-      const req=idx.openCursor(IDBKeyRange.only(String(rid)),'prev');
-      const out=[];
-      req.onsuccess=()=>{
-        const cur=req.result;
-        if(cur && out.length<2){ out.push(cur.value); cur.continue(); }
-        else resolve(out.reverse());
-      };
-      req.onerror=()=>reject(req.error||new Error('時系列DB読込失敗'));
-    });
+    let lastErr=null;
+    for(let attempt=0;attempt<2;attempt++){
+      const db=await openDb215();
+      try{
+        const out=await new Promise((resolve,reject)=>{
+          const tx=db.transaction(STORE215,'readonly');
+          const idx=tx.objectStore(STORE215).index('race_id');
+          const req=idx.openCursor(IDBKeyRange.only(String(rid)),'prev');
+          const rows=[];
+          req.onsuccess=()=>{
+            const cur=req.result;
+            if(cur && rows.length<2){ rows.push(cur.value); cur.continue(); }
+          };
+          req.onerror=()=>reject(req.error||new Error('時系列DB読込失敗'));
+          tx.oncomplete=()=>resolve(rows.reverse());
+          tx.onerror=()=>reject(tx.error||new Error('時系列DB読込トランザクション失敗'));
+          tx.onabort=()=>reject(tx.error||new Error('時系列DB読込中断'));
+        });
+        return out;
+      }catch(e){
+        lastErr=e;
+        if(!(attempt===0 && idbClosing215(e))) throw e;
+        await new Promise(r=>setTimeout(r,40));
+      }finally{ try{db.close();}catch(e){} }
+    }
+    throw lastErr||new Error('時系列DB読込失敗');
   }
 
   function nums215(key){ return String(key||'').split('-').map(Number).filter(x=>Number.isFinite(x)&&x>0); }
@@ -21569,7 +21635,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 <script>
 (function(){
   'use strict';
-  const VERSION219='v5.18.224 WORKER URL PERSIST';
+  const VERSION219='v5.18.225 SAFARI IDB RECOVERY';
   const CFG_KEY219='thekeiba_timeline_cloud_v219';
   const CFG_GLOBAL_KEY219='thekeiba_timeline_cloud_global';
   const DEFAULT_WORKER_URL219='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
@@ -21665,8 +21731,42 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     if(!r.ok||!j||j.ok===false)throw new Error((j&&(j.error||j.message))||`HTTP ${r.status}`);return j;
   }
   function dbOpen219(){return new Promise((resolve,reject)=>{const req=indexedDB.open(DB_NAME219,1);req.onupgradeneeded=()=>{const db=req.result;let st;if(!db.objectStoreNames.contains(STORE219))st=db.createObjectStore(STORE219,{keyPath:'id'});else st=req.transaction.objectStore(STORE219);if(!st.indexNames.contains('race_id'))st.createIndex('race_id','race_id',{unique:false});if(!st.indexNames.contains('captured_ms'))st.createIndex('captured_ms','captured_ms',{unique:false});};req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error||new Error('IndexedDB open failed'));});}
-  async function lastMs219(rid){const db=await dbOpen219();return await new Promise((resolve,reject)=>{const tx=db.transaction(STORE219,'readonly');const idx=tx.objectStore(STORE219).index('race_id');const q=idx.getAll(IDBKeyRange.only(String(rid)));q.onsuccess=()=>resolve((q.result||[]).reduce((m,x)=>Math.max(m,Number(x?.captured_ms||0)),0));q.onerror=()=>reject(q.error);});}
-  async function putMany219(rows){if(!rows?.length)return 0;const db=await dbOpen219();return await new Promise((resolve,reject)=>{const tx=db.transaction(STORE219,'readwrite'),st=tx.objectStore(STORE219);rows.forEach(r=>{if(r&&r.id&&r.race_id)st.put(r);});tx.oncomplete=()=>resolve(rows.length);tx.onerror=()=>reject(tx.error||new Error('IndexedDB sync failed'));});}
+  function idbClosing219(e){return String(e?.name||'')==='InvalidStateError'||String(e?.name||'')==='AbortError'||/connection is closing|connection.*closed|database.*closed/i.test(String(e?.message||e||''));}
+  async function idbRun219(mode,work){
+    let lastErr=null;
+    for(let attempt=0;attempt<2;attempt++){
+      const db=await dbOpen219();
+      try{
+        return await new Promise((resolve,reject)=>{
+          const tx=db.transaction(STORE219,mode),st=tx.objectStore(STORE219);
+          let result;
+          try{ result=work(st,tx,reject); }catch(e){ try{tx.abort();}catch(_){} reject(e); return; }
+          tx.oncomplete=()=>resolve(typeof result==='function'?result():result);
+          tx.onerror=()=>reject(tx.error||new Error('IndexedDB transaction failed'));
+          tx.onabort=()=>reject(tx.error||new Error('IndexedDB transaction aborted'));
+        });
+      }catch(e){
+        lastErr=e;
+        if(!(attempt===0&&idbClosing219(e)))throw e;
+        await new Promise(r=>setTimeout(r,50));
+      }finally{try{db.close();}catch(e){}}
+    }
+    throw lastErr||new Error('IndexedDB retry failed');
+  }
+  async function lastMs219(rid){
+    let rows=[];
+    await idbRun219('readonly',(st,tx,reject)=>{
+      const q=st.index('race_id').getAll(IDBKeyRange.only(String(rid)));
+      q.onsuccess=()=>{rows=q.result||[];};
+      q.onerror=()=>reject(q.error||new Error('IndexedDB lastMs read failed'));
+    });
+    return rows.reduce((m,x)=>Math.max(m,Number(x?.captured_ms||0)),0);
+  }
+  async function putMany219(rows){
+    if(!rows?.length)return 0;
+    await idbRun219('readwrite',(st)=>{rows.forEach(r=>{if(r&&r.id&&r.race_id)st.put(r);});});
+    return rows.length;
+  }
   async function startCurrent219(silent=false){
     const rid=currentRid219();if(!/^\d{10,14}$/.test(rid)){if(!silent)status219('⚠️ レースを選択してください','err');return null;}
     const postMs=uiPostMs219(rid);

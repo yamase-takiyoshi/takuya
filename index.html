@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.243 全8券種取得＋買い目1点</title>
+<title>The競馬 EV分析 v5.18.244 全8券種JSON取得</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.243 全8券種取得＋買い目1点</span>
+    <span class="ver">v5.18.244 全8券種JSON取得</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -4531,11 +4531,7 @@ function buildWorkerRequestUrl(targetUrl){
 
     if(type){
       const kind = /\/\/(?:nar|nar\.sp)\.netkeiba\.com\//i.test(u) ? 'NAR' : 'JRA';
-      // v5.18.243: netkeiba の券種コードをWorkerへ保持して渡す。
-      // 単複=b1 / 枠連=b3 / 馬連=b4 / ワイド=b5 / 馬単=b6 / 3連複=b7 / 3連単=b8
-      const om = u.match(/[?&]type=(b1|b3|b4|b5|b6|b7|b8)(?:&|$)/i);
-      const oddsType = om ? String(om[1]).toLowerCase() : '';
-      return `${base}?type=${encodeURIComponent(type)}&kind=${encodeURIComponent(kind)}&race_id=${encodeURIComponent(rid)}${oddsType?`&odds_type=${encodeURIComponent(oddsType)}`:''}`;
+      return `${base}?type=${encodeURIComponent(type)}&kind=${encodeURIComponent(kind)}&race_id=${encodeURIComponent(rid)}`;
     }
   }
 
@@ -18779,15 +18775,13 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.18.243 全8券種取得＋買い目1点';
+  const VERSION202 = 'v5.18.244 全8券種JSON取得';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
   const POLL_MS = 5000;
   const MAX_RECORDS_PER_RACE = 5000;
   const MARKET_TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
-  // netkeiba 現行券種コード（JRA/NAR共通）
-  const NETKEIBA_MARKET_CODE202 = {'単勝':'b1','複勝':'b1','枠連':'b3','馬連':'b4','ワイド':'b5','馬単':'b6','3連複':'b7','3連単':'b8'};
   const PALETTE = ['#00e676','#60a5fa','#fbbf24','#f472b6','#c084fc','#fb923c','#22d3ee','#a3e635','#f87171','#34d399','#93c5fd','#f9a8d4','#d8b4fe','#fdba74','#67e8f9','#bef264','#fca5a5','#6ee7b7'];
 
   let dbPromise = null;
@@ -19227,130 +19221,122 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     return types.reduce((s,t)=>s+(markets?.[t]?.size||0),0);
   }
 
-  function allMarketFetchDefs202(kind,rid,preferredMarket=''){
-    const host=kind==='NAR'?'https://nar.netkeiba.com':'https://race.netkeiba.com';
-    // b1 は単勝+複勝を同時取得するため1回だけ。
-    const defs=[
-      {code:'b1',types:['単勝','複勝']},
-      {code:'b3',types:['枠連']},
-      {code:'b4',types:['馬連']},
-      {code:'b5',types:['ワイド']},
-      {code:'b6',types:['馬単']},
-      {code:'b7',types:['3連複']},
-      {code:'b8',types:['3連単']}
-    ];
-    const prefCode=NETKEIBA_MARKET_CODE202[preferredMarket]||'';
-    defs.sort((a,b)=>(a.code===prefCode?-1:0)-(b.code===prefCode?-1:0));
-    return defs.map(d=>({...d,url:`${host}/odds/index.html?race_id=${rid}&type=${d.code}`}));
+// Shared by the browser and the Durable Object collector.
+// netkeiba data.odds is keyed by ticket type; never infer a type from a flat map.
+const TICKET_DEFS243 = [
+  {id:1,name:'単勝',arity:1},
+  {id:2,name:'複勝',arity:1,range:true},
+  {id:3,name:'枠連',arity:2,unordered:true,frame:true},
+  {id:4,name:'馬連',arity:2,unordered:true},
+  {id:5,name:'ワイド',arity:2,unordered:true,range:true},
+  {id:6,name:'馬単',arity:2},
+  {id:7,name:'3連複',arity:3,unordered:true},
+  {id:8,name:'3連単',arity:3}
+];
+
+function oddsNumber243(value){
+  if(typeof value==='number') return Number.isFinite(value)&&value>=1?value:NaN;
+  const text=String(value??'').replace(/[,\s倍]/g,'');
+  return /^\d+(?:\.\d+)?$/.test(text)&&Number(text)>=1?Number(text):NaN;
+}
+
+function oddsKey243(key,def){
+  const s=String(key??'').trim();
+  let nums;
+  if(def.arity===1 && /^\d{1,2}$/.test(s)) nums=[Number(s)];
+  else if(new RegExp('^\\d{'+(def.arity*2)+'}$').test(s)) nums=s.match(/\d{2}/g).map(Number);
+  else if(/^\d{1,2}(?:\s*[-,>→]\s*\d{1,2})+$/.test(s)) nums=s.split(/\s*[-,>→]\s*/).map(Number);
+  else return '';
+  if(nums.length!==def.arity || nums.some(n=>n<1||n>(def.frame?8:18))) return '';
+  if(!def.frame && new Set(nums).size!==nums.length) return '';
+  if(def.unordered) nums.sort((a,b)=>a-b);
+  return nums.join('-');
+}
+
+function parseTicketJson243(raw,def,rid){
+  const j=typeof raw==='string'?JSON.parse(raw.trim()):raw;
+  const responseRid=j?.data?.race_id??j?.race_id;
+  if(responseRid!=null && String(responseRid)!==String(rid)) throw new Error('別レースの応答');
+  const root=j?.data?.odds??j?.odds;
+  const values=root?.[String(def.id)];
+  if(!values || typeof values!=='object') throw new Error(`${def.name}のJSONデータなし（未発売・取得拒否等）`);
+  const byKey=new Map();
+  for(const [key,v] of Object.entries(values)){
+    const combination=oddsKey243(key,def); if(!combination) continue;
+    let low,high,pop;
+    if(Array.isArray(v)) { low=v[0]; high=def.range?v[1]:undefined; pop=v[2]; }
+    else if(v && typeof v==='object') {
+      low=v.odds_min??v.min??v.odds??v.value;
+      high=def.range?(v.odds_max??v.max):undefined;
+      pop=v.popularity??v.pop;
+    } else low=v;
+    const lo=oddsNumber243(low),hi=oddsNumber243(high);
+    if(!Number.isFinite(lo)) continue;
+    const row={combination,odds:lo};
+    if(def.range){
+      row.odds_min=Number.isFinite(hi)?Math.min(lo,hi):lo;
+      row.odds_max=Number.isFinite(hi)?Math.max(lo,hi):lo;
+      row.odds=row.odds_min;
+    }
+    if(Number.isInteger(Number(pop))&&Number(pop)>0) row.popularity=Number(pop);
+    byKey.set(combination,row);
+  }
+  return [...byKey.values()].sort((a,b)=>a.odds-b.odds||a.combination.localeCompare(b.combination,'ja',{numeric:true}));
+}
+
+async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
+  if(!/^\d{12}$/.test(String(rid))) throw new Error('race_idは12桁で指定してください');
+  const nar=kind==='NAR';
+  const endpoint=nar?'https://nar.netkeiba.com/api/api_get_nar_odds.html':'https://race.netkeiba.com/api/api_get_jra_odds.html';
+  const markets={},diagnostics={};
+  const sources=[];
+  let cursor=0,done=0;
+  async function run(){
+    while(cursor<TICKET_DEFS243.length){
+      const def=TICKET_DEFS243[cursor++];
+      const url=`${endpoint}?race_id=${rid}&type=${def.id}&action=init`;
+      try{
+        const raw=await fetchText(url);
+        const rows=parseTicketJson243(raw,def,rid);
+        if(rows.length){markets[def.name]=rows;sources.push(url);}
+        diagnostics[def.name]={state:rows.length?'ok':'empty',count:rows.length,message:rows.length?'':'有効なオッズなし（未発売・売止等）'};
+      }catch(e){diagnostics[def.name]={state:'error',count:0,message:String(e?.message||e).slice(0,180)};}
+      done++;
+      try{onProgress(done,diagnostics);}catch(_){}
+    }
+  }
+  // One batch per race. A slow/failed ticket never prevents the other seven.
+  await Promise.all([run(),run(),run()]);
+  const ordered={};
+  for(const def of TICKET_DEFS243) if(markets[def.name]) ordered[def.name]=markets[def.name];
+  return {markets:ordered,diagnostics,source:sources.sort().join(' | '),market_count:Object.keys(ordered).length};
+}
+
+  function renderMarketStatus243(diagnostics={},done=8){
+    const el=$('oddsTsMarkets243'); if(!el) return;
+    const ok=MARKET_TYPES.filter(t=>diagnostics[t]?.count>0).length;
+    el.innerHTML=`<summary>全券種取得 ${ok}/8 券種${done<8?`・確認中 ${done}/8`:''}</summary>`+
+      MARKET_TYPES.map(t=>{
+        const d=diagnostics[t];
+        const label=d?.count>0?`${d.count}点`:(!d?'取得待ち':d.message||'未取得');
+        return `<div style="padding:2px 0;color:${d?.count>0?'#86efac':'#cbd5e1'}">${esc(t)}：${esc(label)}</div>`;
+      }).join('');
   }
 
-  async function fetchAllMarketPages202(kind,rid,expected,preferredMarket=''){
-    const merged=newMarkets202();
-    const defs=allMarketFetchDefs202(kind,rid,preferredMarket);
-    const results=await Promise.all(defs.map(async d=>{
-      try{
-        // ?url= 直指定で券種コードを絶対に潰さない。旧Workerでも利用可。
-        const html=await fetchPreserveUrl202(d.url,7000);
-        if(!html) return {ok:false,def:d,error:'empty'};
-        const doc=new DOMParser().parseFromString(html,'text/html');
-        const got=parseAllMarkets202(doc,expected);
-        return {ok:true,def:d,got};
-      }catch(e){
-        return {ok:false,def:d,error:String(e?.message||e)};
-      }
-    }));
-    let okPages=0;
-    results.forEach(r=>{
-      if(!r.ok||!r.got) return;
-      okPages++;
-      // 取得したページに対応する券種だけを採用し、ナビゲーション文字列による誤分類を防ぐ。
-      r.def.types.forEach(t=>{
-        const src=r.got[t];
-        if(src&&typeof src.forEach==='function') src.forEach((v,k)=>{
-          if(Number(v)>=1) merged[t].set(String(k),Number(v));
-        });
-      });
+  async function fetchMarkets202(kind,rid,expected){
+    // All eight API requests are scheduled even when win odds have succeeded.
+    // Reuse the existing JSON-capable transport, with its communication timeout.
+    renderMarketStatus243({},0);
+    const got=await fetchAllTickets243(kind,rid,async url=>{
+      const raw=await fetchHtmlViaProxy(url);
+      if(!/^\s*[{[]/.test(String(raw||''))) throw new Error('JSON以外の応答（未公開・接続拒否等）');
+      return raw;
+    },(done,diagnostics)=>{
+      if(activeRid===rid && currentRaceId202()===rid) renderMarketStatus243(diagnostics,done);
     });
-    return {markets:merged,okPages,results,source:`${kind} netkeiba b1/b3-b8 (${okPages}/7)`};
-  }
-
-  async function fetchMarkets202(kind,rid,expected,preferredMarket=''){
-    const markets=newMarkets202();
-    let source='';
-
-    // v5.18.243: 7ページ（b1,b3,b4,b5,b6,b7,b8）を並列取得して8券種を埋める。
-    // b1=単勝/複勝、b3=枠連、b4=馬連、b5=ワイド、b6=馬単、b7=3連複、b8=3連単。
-    // 従来の b0 一括ページ依存をやめ、各券種を明示して取りに行く。
-    if(String(settings?.proxyUrl||'').trim()){
-      try{
-        const all=await fetchAllMarketPages202(kind,rid,expected,preferredMarket);
-        mergeMarkets202(markets,all.markets);
-        if(marketTotal202(markets,true)>0) source=all.source+'#worker-url-preserved';
-        const chosenCount=markets?.[preferredMarket]?.size||0;
-        const nonWin=marketTotal202(markets,false);
-        // 選択券種が取れていて、単勝以外も十分取れたらここで完了。
-        if((!preferredMarket||chosenCount>0) && nonWin>=2 && (markets['単勝']?.size||0)>=2){
-          return {markets,source};
-        }
-      }catch(e){ lastError=String(e?.message||e); }
-    }
-
-    // JRA単勝APIは補助経路として維持。全券種取得に失敗しても単勝時系列を止めない。
-    if(kind==='JRA' && (markets['単勝']?.size||0)<2 && typeof window.parseJraOddsJson232==='function'){
-      const api=`https://race.netkeiba.com/api/api_get_jra_odds.html?race_id=${rid}&type=1&action=init`;
-      try{
-        let timeoutId;
-        const text=await Promise.race([
-          fetchHtmlViaProxy(api),
-          new Promise((_,reject)=>{timeoutId=setTimeout(()=>reject(new Error('JRA API timeout')),8500);})
-        ]).finally(()=>clearTimeout(timeoutId));
-        const map=window.parseJraOddsJson232(text);
-        const valid=new Set(expected.map(h=>Number(h.num)));
-        map.forEach((v,n)=>{if((!valid.size||valid.has(Number(n))) && Number(v.odds)>=1)
-          markets['単勝'].set(String(n),Number(v.odds));});
-        if(markets['単勝'].size>=2 && !source) source=api;
-      }catch(e){ lastError=String(e?.message||e); }
-    }
-
-    // NAR公式の単勝を補助。全券種側の一部が遮断されても単勝は可能な限り残す。
-    if(kind==='NAR' && (markets['単勝']?.size||0)<2 && typeof window.officialNarWinOddsUrl237==='function'){
-      const officialUrl=window.officialNarWinOddsUrl237(rid);
-      if(officialUrl){
-        try{
-          const html=await fetchPreserveUrl202(officialUrl,9000);
-          const map=window.parseOfficialNarWinOdds237(html,expected);
-          if(map.size>=2){
-            map.forEach((v,n)=>markets['単勝'].set(String(n),Number(v.odds)));
-            if(!source) source=officialUrl;
-          }
-        }catch(e){ lastError=String(e?.message||e); }
-      }
-    }
-
-    // 左側で確認済みの同一レース・直近単勝値も最後に合流。
-    const verified=window.__leftVerifiedOdds239;
-    if((markets['単勝']?.size||0)<2 && verified && String(verified.rid)===String(rid) && Date.now()-Number(verified.fetched_ms)<30000){
-      const valid=new Set(expected.map(h=>Number(h.num)));
-      (verified.rows||[]).forEach(x=>{
-        if((!valid.size||valid.has(Number(x.num))) && Number(x.odds)>=1)
-          markets['単勝'].set(String(x.num),Number(x.odds));
-      });
-      if(markets['単勝'].size>=2 && !source) source='左側取得済み:'+verified.source;
-    }
-
-    if((markets['単勝']?.size||0)<2){
-      try{
-        const fn=window.fetchWinOddsPopularity || (typeof fetchWinOddsPopularity==='function'?fetchWinOddsPopularity:null);
-        if(typeof fn==='function'){
-          const wm=await fn(kind,rid,expected);
-          if(wm && typeof wm.forEach==='function') wm.forEach((v,k)=>{
-            const od=Number(v?.odds!=null?v.odds:v); if(od>=1) markets['単勝'].set(String(Number(k)),Math.round(od*10)/10);
-          });
-          if((markets['単勝']?.size||0)>=2 && !source) source='fetchWinOddsPopularity';
-        }
-      }catch(e){ lastError=String(e?.message||e); }
-    }
-    return {markets,source};
+    const maps=newMarkets202();
+    for(const [type,rows] of Object.entries(got.markets)) rows.forEach(r=>maps[type].set(r.combination,r.odds));
+    return {markets:maps,packed:got.markets,diagnostics:got.diagnostics,source:got.source};
   }
 
   async function capture202(force=false){
@@ -19374,14 +19360,15 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       setStatus202(`🔄 ${kind} ${rid} オッズ取得中…`,'wait');
       const selectedMarket=$('oddsTsMarket')?.value||'単勝';
       const got=await fetchMarkets202(kind,rid,expected,selectedMarket);
-      const packed=serializeMarkets202(got.markets);
+      if(rid!==currentRaceId202() || rid!==activeRid) return;
+      const packed=got.packed||serializeMarkets202(got.markets);
+      const missingMarkets=MARKET_TYPES.filter(t=>!packed[t]?.length);
       const total=Object.values(packed).reduce((s,a)=>s+a.length,0);
-      if(!total) throw new Error(lastError || 'オッズを取得できませんでした');
+      if(!total) throw new Error('全8券種を確認しましたが、有効なオッズを取得できませんでした。券種別の取得状況を確認してください。');
       const previous=history.length?history[history.length-1]:null;
       if(previous && JSON.stringify(previous.markets)===JSON.stringify(packed)){
-        if(!packed[selectedMarket]?.length)
-          setStatus202(`⚠️ ${selectedMarket}は選択できますが、オッズが未取得のためグラフはまだ表示できません。`,'wait');
-        else setStatus202('✅ 前回からオッズに変化なし。新しい点は追加しません。','ok');
+        const suffix=missingMarkets.length?' / 未取得：'+missingMarkets.join('・'):'';
+        setStatus202(`全券種を確認：${8-missingMarkets.length}/8券種。取得値に変化なし${suffix}`,missingMarkets.length?'wait':'ok');
         return;
       }
       const now=Date.now();
@@ -19395,7 +19382,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
         captured_at:new Date(now).toISOString(),
         source:got.source || '',
         horses:expected.map(h=>({num:Number(h.num),name:String(h.name||''),pop:Number(h.pop||0),frame:Number(h.frame||0),odds:Number(h.odds||0)})),
-        markets:packed
+        markets:packed, market_status:got.diagnostics
       };
       await dbPut202(rec);
       history.push(rec);
@@ -19409,14 +19396,11 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       const counts=Object.entries(packed).map(([k,v])=>`${k}:${v.length}`).join(' / ');
       const srcText202 = String(got.source||'').includes('worker-direct-no-device') ? '☁️ Worker直結（デバイス不要）'
         : (window.__fetchPath==='bridge' ? '🌉 デバイスBridge' : (String(got.source||'').includes('worker') ? '☁️ Worker' : '🌐 自動取得'));
-      if(!packed[selectedMarket]?.length){
-        setStatus202(`⚠️ ${selectedMarket}を選択しましたが、この券種のオッズはまだ取得できません。取得できた券種のみ保存：${counts}`,'wait');
-      }else{
-        setStatus202(`✅ ${new Date(now).toLocaleTimeString('ja-JP')} 保存　${srcText202}　${counts}`,'ok');
-      }
+      const suffix=missingMarkets.length?' / 未取得：'+missingMarkets.join('・'):'';
+      setStatus202(`${missingMarkets.length?'⚠️':'✅'} ${new Date(now).toLocaleTimeString('ja-JP')} 保存 ${8-missingMarkets.length}/8券種　${counts}${suffix}`,missingMarkets.length?'wait':'ok');
     }catch(e){
       lastError=String(e?.message||e);
-      setStatus202(`⚠️ ${lastError}`,'err');
+      if(rid===currentRaceId202() && rid===activeRid) setStatus202(`⚠️ ${lastError}`,'err');
     }finally{ captureBusy=false; }
   }
 
@@ -19889,7 +19873,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     const nowBtn=$('oddsTsNow');
     if(nowBtn){
       nowBtn.disabled=stopped;
-      nowBtn.title=stopped?'発走+10分（終了目安+5分）で時系列を固定済みです':'現在時点を取得';
+      nowBtn.title=stopped?'発走+10分（終了目安+5分）で時系列を固定済みです':'全8券種を取得';
     }
     const meta=$('oddsTsMeta');
     if(stopped && meta && !/固定済/.test(meta.textContent||'')){
@@ -20174,13 +20158,14 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
             <option value="all">全期間</option>
           </select></label>
           <button class="btn-sm odds-ts-latest active" id="oddsTsLatest" type="button">▶ 最新へ</button>
-          <button class="btn-sm" id="oddsTsNow" type="button">🔄 今すぐ取得</button>
+          <button class="btn-sm" id="oddsTsNow" type="button">🔄 全8券種取得</button>
           <button class="btn-sm" id="oddsTsClear" type="button">🗑 履歴消去</button>
           <button class="btn-sm" id="oddsTsJson" type="button">JSON</button>
           <button class="btn-sm" id="oddsTsCsv" type="button">CSV</button>
         </div>
         <div id="oddsTsStatus" class="odds-ts-status wait">レースを選択してください。</div>
-        <div class="odds-ts-metric-note">想定確率＝現行EVモデル / 市場確率＝1÷実オッズ / EV＝想定確率×実オッズ / 乖離＝想定確率−市場確率 / 「表示」は選択指標に連動</div>
+        <details id="oddsTsMarkets243" style="font-size:11px;line-height:1.6;margin:6px 0"><summary>全券種取得状況（8券種）</summary>「全8券種取得」で確認します。</details>
+        <div class="odds-ts-metric-note">想定確率＝現行EVモデル / 市場確率＝1÷実オッズ / EV＝想定確率×実オッズ / 乖離＝想定確率−市場確率 / 複勝・ワイドのグラフはオッズ下限（上下限を保存） / 「表示」は選択指標に連動</div>
         <div class="odds-ts-metric-note" style="color:#8bd9ae">v5.18.222: 最新値を右端に固定し、更新ごとに履歴が左へ流れます。グラフの左半分をタップすると過去へ15分、右半分をタップすると新しい時刻へ15分移動します。左右ドラッグでも移動でき、追従を一時停止します。「▶ 最新へ」でLIVEへ復帰します。</div>
       </div>
       <div class="odds-ts-chart-wrap"><canvas id="oddsTsCanvas"></canvas></div>
@@ -20200,6 +20185,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     $('oddsTsMarket').addEventListener('change',()=>{
       refreshCombo202();draw202();
       const market=$('oddsTsMarket').value;
+      if(activeRid && activeRid!==currentRaceId202()) return;
       if(!latestRowsForMarket202(market).length){
         setStatus202(`🔄 ${market}は未取得です。取得を試みます。`,'wait');
         if(captureBusy) setTimeout(()=>capture202(true),1200);
@@ -21370,7 +21356,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   if(window.__V518216_LIVE_COMMENTARY__) return;
   window.__V518216_LIVE_COMMENTARY__ = true;
 
-  const VERSION215 = 'v5.18.243 全8券種取得＋買い目1点';
+  const VERSION215 = 'v5.18.244 全8券種JSON取得';
   const DB_NAME215 = 'thekeiba-odds-timeline-v1';
   const STORE215 = 'captures';
   const TYPES215 = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
@@ -21825,7 +21811,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 <script>
 (function(){
   'use strict';
-  const VERSION219='v5.18.243 全8券種取得＋買い目1点';
+  const VERSION219='v5.18.244 全8券種JSON取得';
   const CFG_KEY219='thekeiba_timeline_cloud_v219';
   const CFG_GLOBAL_KEY219='thekeiba_timeline_cloud_global';
   const DEFAULT_WORKER_URL219='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
@@ -22050,7 +22036,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION227 = 'v5.18.243 全8券種取得＋買い目1点';
+  const VERSION227 = 'v5.18.244 全8券種JSON取得';
   let oddsJobSeq227 = 0;
 
   function el227(id){ return document.getElementById(id); }
@@ -22696,7 +22682,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   if(window.__THEKEIBA_232__) return;
   window.__THEKEIBA_232__ = true;
 
-  const VERSION = 'v5.18.243 全8券種取得＋買い目1点';
+  const VERSION = 'v5.18.244 全8券種JSON取得';
   const JRA_VENUE_NAMES = {'01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京','06':'中山','07':'中京','08':'京都','09':'阪神','10':'小倉',
     '30':'門別','35':'盛岡','36':'水沢','42':'浦和','43':'船橋','44':'大井','45':'川崎','46':'金沢','47':'笠松','48':'名古屋','50':'園田','51':'姫路','54':'高知','55':'佐賀','65':'帯広'};
   const $ = id => document.getElementById(id);

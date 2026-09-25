@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.229 WORKER RACECARD JSON FIRST + ASYNC ODDS</title>
+<title>The競馬 EV分析 v5.18.230 WORKER RACECARD JSON FIRST + ASYNC ODDS</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.229 WORKER RACECARD JSON FIRST + ASYNC ODDS</span>
+    <span class="ver">v5.18.230 WORKER RACECARD JSON FIRST + ASYNC ODDS</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1285,7 +1285,7 @@ async function pgjBackfillTrackCondByRaceId(records, opts){
   opts = opts || {};
   const list = Array.isArray(records) ? records : [];
   const ids = [...new Set(list.filter(pgjRecordNeedsRaceMetaBackfill)
-    .map(r => String(r.race_id || r.rid || r.raceId || '').replace(/[^0-9]/g, '')).filter(id => id.length >= 10))]
+    .map(r => String(r.race_id || r.rid || r.raceId || '').replace(/[^0-9]/g, '')).filter(id => id.length === 12))]
     .slice(0, Number(opts.max || 120));
   let filled = 0;
   for(const id of ids){
@@ -3605,7 +3605,7 @@ function shutubaUrl(kind, raceId){
 
 function extractVenueCodeFromRaceId(raceId, kind){
   const id = String(raceId || '');
-  if(id.length < 10) return '';
+  if(!/^\d{12}$/.test(id)) return '';
 
   // netkeiba race_id は JRA/NAR とも先頭4桁が年、次の2桁が開催場コード。
   // JRA例: YYYY + 場コード + 開催回 + 日次 + RR
@@ -3629,7 +3629,7 @@ function cleanRaceName(txt, raceNo){
     .replace(/出馬表|オッズ|結果|払戻|予想|レース情報|レース一覧|netkeiba\.com|netkeiba|ネット競馬/g, '')
     .replace(/\|.*$/, '').trim();
   // NR以降の文字列を取得（C2六組のように数字を含む名前も許容）
-  const m = t.match(new RegExp(String(raceNo) + 'R\\s*(.{1,60}?)(?:\\s*\\/\\s*\\d{10,14}|$)'));
+  const m = t.match(new RegExp(String(raceNo) + 'R\\s*(.{1,60}?)(?:\\s*\\/\\s*\\d{12}|$)'));
   if(m) t = m[1].trim();
   else t = t.replace(new RegExp('.*' + String(raceNo) + 'R\\s*'), '').trim();
   t = t.replace(/^\d{1,2}R\s*/, '').replace(/^(レース|Race)\s*/i, '').trim();
@@ -3662,7 +3662,7 @@ function parseRaceIdsFromList(html, kind, venueCode, date){
     const kdm = href.match(/kaisai_date=(\d{8})/);
     if(kind === 'JRA' && kdm && kdm[1] !== ymdParts(date).yyyymmdd) return;
 
-    const m = href.match(/race_id=(\d{10,14})/);
+    const m = href.match(/race_id=(\d{12})/);
     if(!m) return;
     const id = m[1];
     if(!raceIdMatchesSelectedDate(kind, id, date)) return;
@@ -3676,7 +3676,7 @@ function parseRaceIdsFromList(html, kind, venueCode, date){
   });
 
   if(!map.size){
-    const re = /race_id=(\d{10,14})/g;
+    const re = /race_id=(\d{12})/g;
     let m;
     while((m = re.exec(html))){
       const id = m[1];
@@ -3954,7 +3954,7 @@ function validateRaceUrlForCurrentSelection(rawUrl){
   try{ u = new URL(rawUrl); }catch(e){ return {ok:false, message:'URL形式が不正です'}; }
 
   const raceId = u.searchParams.get('race_id') || '';
-  if(!/^\d{10,14}$/.test(raceId)) return {ok:false, message:'race_id が取得できません'};
+  if(!/^\d{12}$/.test(raceId)) return {ok:false, message:'race_id が取得できません'};
 
   // v5.18.101: race_idの場コードを真実の出所として、hostと区分をそれに合わせて自己修復する。
   // NAR用一覧ビルダーがJRAのrace_idに nar.netkeiba.com を付けてしまった場合などを、
@@ -4009,7 +4009,7 @@ async function probeNarRaceById(date, venueCode, raceNo){
   try{
     const canonical = doc.querySelector('link[rel="canonical"]')?.getAttribute('href') || '';
     const ogUrl = doc.querySelector('meta[property="og:url"]')?.getAttribute('content') || '';
-    const cm = String(canonical || ogUrl || '').match(/race_id=(\d{10,14})/);
+    const cm = String(canonical || ogUrl || '').match(/race_id=(\d{12})/);
     if(cm && cm[1] !== raceId) return null;
   }catch(e){}
 
@@ -4365,7 +4365,7 @@ function extractJraRaceNamesFromList(html, venueCode){
   const venue = venueName('JRA', venueCode);
   Array.from(doc.querySelectorAll('a[href*="race_id="]')).forEach(a => {
     const href = a.getAttribute('href') || a.href || '';
-    const m = href.match(/race_id=(\d{10,14})/);
+    const m = href.match(/race_id=(\d{12})/);
     if(!m) return;
     const id = m[1];
     if(extractVenueCodeFromRaceId(id, 'JRA') !== venueCode) return;
@@ -4467,7 +4467,7 @@ function jraHtmlMatchesSelectedDate(html, date){
 function buildWorkerRequestUrl(targetUrl){
   const base = String(settings.proxyUrl || '').replace(/\/$/, '');
   const u = String(targetUrl || '');
-  const rid = (u.match(/race_id=(\d{10,14})/) || [])[1] || '';
+  const rid = (u.match(/race_id=(\d{12})/) || [])[1] || '';
 
   // v5.18.223: NAR携帯版はURLそのものをWorkerへ渡す。
   // type=odds&kind=NAR に畳むとWorker側でPC版へ戻ってしまい、
@@ -4788,7 +4788,7 @@ async function verifyJraRaceDateByShutuba(date, raceId){
     const doc = new DOMParser().parseFromString(html, 'text/html');
     const canonical = doc.querySelector('link[rel="canonical"]')?.getAttribute('href') || '';
     const ogUrl = doc.querySelector('meta[property="og:url"]')?.getAttribute('content') || '';
-    const cm = String(canonical || ogUrl || '').match(/race_id=(\d{10,14})/);
+    const cm = String(canonical || ogUrl || '').match(/race_id=(\d{12})/);
     if(cm && cm[1] !== id) return false;
   }catch(e){}
 
@@ -6613,7 +6613,7 @@ async function fetchRace(){
     } catch(fetchErr){
       const msg = fetchErr.message || '';
       if((msg.includes('400') || msg.includes('404')) && rawUrl.includes('shutuba.html')){
-        const rid0 = (rawUrl.match(/race_id=(\d{10,14})/) || [])[1] || '';
+        const rid0 = (rawUrl.match(/race_id=(\d{12})/) || [])[1] || '';
         const kind0 = document.getElementById('pickKind')?.value || (rawUrl.includes('nar.netkeiba') ? 'NAR' : 'JRA');
         const host0 = kind0 === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com';
         if(rid0){
@@ -6635,7 +6635,7 @@ async function fetchRace(){
 
     // v5.18.60: 確定済みレースは、入力欄がshutuba.htmlのままでもresult.htmlを本体として反映する。
     // オークス等の確定レースは結果ページの最終単勝オッズ・最終人気をそのまま表示する。
-    const ridAuto = (activeUrl.match(/race_id=(\d{10,14})/) || [])[1] || validation.raceId || '';
+    const ridAuto = (activeUrl.match(/race_id=(\d{12})/) || [])[1] || validation.raceId || '';
     const kindAuto = document.getElementById('pickKind')?.value || (activeUrl.includes('nar.netkeiba') ? 'NAR' : 'JRA');
     if(ridAuto && /\/race\/shutuba\.html/i.test(activeUrl)){
       try{
@@ -6659,7 +6659,7 @@ async function fetchRace(){
 
     const titleFromDoc = parseRaceTitleFromDoc(doc);
     if(titleFromDoc) currentRaceName = titleFromDoc;
-    const rid = (activeUrl.match(/race_id=(\d{10,14})/) || [])[1];
+    const rid = (activeUrl.match(/race_id=(\d{12})/) || [])[1];
     if(rid) currentRaceId = rid;
     const box = document.getElementById('raceTitleBox');
     if(box && currentRaceName){
@@ -6675,7 +6675,7 @@ async function fetchRace(){
     // （ブリッジが無応答だと1回22秒×連鎖で15秒ガードに全部潰されるため、ここでは使わない）
     window.__narRescueLog = '';
     if(horses.length < 2){
-      const ridR = (activeUrl.match(/race_id=(\d{10,14})/) || [])[1] || validation.raceId || '';
+      const ridR = (activeUrl.match(/race_id=(\d{12})/) || [])[1] || validation.raceId || '';
       const isNarR = /nar(?:\.sp)?\.netkeiba\.com/.test(activeUrl) || (ridR && !/^(0[1-9]|10)$/.test(ridR.slice(4,6)));
       if(ridR && isNarR && settings.proxyUrl){
         try{
@@ -6700,7 +6700,7 @@ async function fetchRace(){
     // （馬リンク0）場合、db.netkeiba.com/race/{race_id}/ の静的結果ページに切替える。
     // db版は UA 非依存で確定の着順/枠/馬番/単勝/人気を静的HTMLで返す。
     if(horses.length < 2){
-      const ridForDb = (activeUrl.match(/race_id=(\d{10,14})/) || [])[1] || validation.raceId || '';
+      const ridForDb = (activeUrl.match(/race_id=(\d{12})/) || [])[1] || validation.raceId || '';
       if(ridForDb){
         window.__dbFallbackError = '';
         try{
@@ -6858,7 +6858,7 @@ async function fetchRace(){
     let hint = '';
     if(msg.includes('400') || msg.includes('404')){
       const rawUrl = document.getElementById('raceUrl').value.trim();
-      const rid = (rawUrl.match(/race_id=(\d{10,14})/) || [])[1] || '';
+      const rid = (rawUrl.match(/race_id=(\d{12})/) || [])[1] || '';
       const kind = document.getElementById('pickKind')?.value || 'JRA';
       if(rid){
         const host = kind === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com';
@@ -7998,7 +7998,7 @@ function cleanRaceName49(text, raceNo, raceId){
   for(const re of patterns){
     const m = t.match(re);
     if(m){
-      let n = m[1].replace(/\s*\d{10,14}.*$/,'').replace(/^\d{1,2}R\s*/,'').trim();
+      let n = m[1].replace(/\s*\d{12}.*$/,'').replace(/^\d{1,2}R\s*/,'').trim();
       n = n.replace(/\s+/g,' ').trim();
       if(n && !isGenericRaceName49(n, no) && /[一-龥ぁ-んァ-ヶA-Za-z]/.test(n)) return n.slice(0,50);
     }
@@ -8198,7 +8198,7 @@ function cleanNarRaceName68(raw, raceNo, raceId){
     if(m){
       let n = m[1]
         .replace(/^\d{1,2}R\s*/,'')
-        .replace(/\s*\d{10,14}.*$/,'')
+        .replace(/\s*\d{12}.*$/,'')
         .replace(/\s+/g,' ')
         .trim();
       if(n && !isGenericRaceName68(n, no) && /[一-龥ぁ-んァ-ヶA-Za-z]/.test(n)) return n.slice(0,50);
@@ -8418,7 +8418,7 @@ loadRaceList = async function(){
         let n = m[1]
           .replace(/^\d{1,2}R\s*/,'')
           .replace(/^第\d{1,2}R\s*/,'')
-          .replace(/\s*\d{10,14}.*$/,'')
+          .replace(/\s*\d{12}.*$/,'')
           .replace(/門別|盛岡|水沢|浦和|船橋|大井|川崎|金沢|笠松|名古屋|園田|姫路|高知|佐賀/g,' ')
           .replace(/\s+/g,' ')
           .trim();
@@ -9400,7 +9400,7 @@ if(horses.length === 0){
     return /^\d{8}$/.test(d) && d < t;
   }
   function nar85RaceIdFromUrl(url){
-    return (String(url || '').match(/race_id=(\d{10,14})/) || [])[1] || '';
+    return (String(url || '').match(/race_id=(\d{12})/) || [])[1] || '';
   }
   function nar85ResultUrl(raceId){
     return `https://nar.netkeiba.com/race/result.html?race_id=${raceId}&rf=race_submenu`;
@@ -10020,7 +10020,7 @@ if(horses.length === 0){
     try{
       const canonical = doc.querySelector('link[rel="canonical"]')?.getAttribute('href') || '';
       const ogUrl = doc.querySelector('meta[property="og:url"]')?.getAttribute('content') || '';
-      const cm = String(canonical || ogUrl || '').match(/race_id=(\d{10,14})/);
+      const cm = String(canonical || ogUrl || '').match(/race_id=(\d{12})/);
       if(cm && cm[1] !== rid) return false;
     }catch(e){}
     // 実在判定：出走馬（または結果）テーブルに2頭以上。race_idのこだま返しは信用しない。
@@ -10528,7 +10528,7 @@ if(horses.length === 0){
     const out = [];
     [...sel.querySelectorAll('option')].forEach(o => {
       if(!o.value || !/race_id=/.test(o.value)) return;
-      const rid = o.dataset.raceId || (o.value.match(/race_id=(\d{10,14})/) || [])[1] || '';
+      const rid = o.dataset.raceId || (o.value.match(/race_id=(\d{12})/) || [])[1] || '';
       if(!rid) return;
       const no = Number(o.dataset.raceNo || String(rid).slice(-2)) || out.length + 1;
       const name = o.dataset.raceName || '';
@@ -10802,7 +10802,7 @@ if(horses.length === 0){
     const out = [];
     [...sel.querySelectorAll('option')].forEach(o => {
       if(!o.value || !/race_id=/.test(o.value)) return;
-      const rid = o.dataset.raceId || (o.value.match(/race_id=(\d{10,14})/) || [])[1] || '';
+      const rid = o.dataset.raceId || (o.value.match(/race_id=(\d{12})/) || [])[1] || '';
       if(!rid) return;
       const no = Number(o.dataset.raceNo || String(rid).slice(-2)) || out.length + 1;
       out.push({ rid, no, name: o.dataset.raceName || '' });
@@ -11781,7 +11781,7 @@ if(horses.length === 0){
     const out = [];
     [...sel.querySelectorAll('option')].forEach(o => {
       if(!o.value || !/race_id=/.test(o.value)) return;
-      const rid = o.dataset.raceId || (o.value.match(/race_id=(\d{10,14})/) || [])[1] || '';
+      const rid = o.dataset.raceId || (o.value.match(/race_id=(\d{12})/) || [])[1] || '';
       if(!rid) return;
       const no = Number(o.dataset.raceNo || String(rid).slice(-2)) || out.length + 1;
       const name = o.dataset.raceName || '';
@@ -12192,7 +12192,7 @@ if(horses.length === 0){
       if(sel){
         [...sel.querySelectorAll('option')].forEach(o => {
           if(!o.value || !/race_id=/.test(o.value)) return;
-          const rid = o.dataset.raceId || (o.value.match(/race_id=(\d{10,14})/) || [])[1] || '';
+          const rid = o.dataset.raceId || (o.value.match(/race_id=(\d{12})/) || [])[1] || '';
           if(!rid) return;
           const no = Number(o.dataset.raceNo || String(rid).slice(-2));
           if(no >= 1 && no <= 12 && !map[no]) map[no] = rid;
@@ -13153,7 +13153,7 @@ if(horses.length === 0){
   };
   function spUrls153(url){
     const u = String(url || '');
-    const rid = (u.match(/race_id=(\d{10,14})/) || [])[1] || '';
+    const rid = (u.match(/race_id=(\d{12})/) || [])[1] || '';
     if(!rid) return [];
     const arr = [];
     // URLのホストだけで全種類を候補化しない。
@@ -13250,7 +13250,7 @@ if(horses.length === 0){
     let u;
     try{ u = new URL(rawUrl); }catch(e){ return {ok:false, message:'URL形式が不正です'}; }
     const raceId = u.searchParams.get('race_id') || '';
-    if(!/^\d{10,14}$/.test(raceId)) return {ok:false, message:'race_id が取得できません'};
+    if(!/^\d{12}$/.test(raceId)) return {ok:false, message:'race_id が取得できません'};
     const trueKind = (typeof trackKindOfRaceId === 'function') ? trackKindOfRaceId(raceId) : (/^(0[1-9]|10)$/.test(raceId.slice(4,6)) ? 'JRA':'NAR');
     if(trueKind !== 'NAR') return prevValidate153 ? prevValidate153.apply(this, arguments) : {ok:false, message:'NARのrace_idではありません'};
     if(!/^(nar\.sp\.netkeiba\.com|nar\.netkeiba\.com)$/.test(u.hostname)){
@@ -14410,7 +14410,7 @@ function json(obj, status = 200) {
 
     Array.from(doc.querySelectorAll('a[href*="race_id="]')).forEach(a => {
       const href = a.getAttribute('href') || a.href || '';
-      const m = href.match(/race_id=(\d{10,14})/);
+      const m = href.match(/race_id=(\d{12})/);
       if(!m) return;
       const id = m[1];
       try{
@@ -14478,13 +14478,13 @@ function json(obj, status = 200) {
     const dateLabel = (typeof raceListDateLabel === 'function') ? raceListDateLabel(date) : String(date || '').replace(/-/g,'/');
     const vName = (typeof venueName === 'function') ? venueName(kind, venueCode) : '';
     Array.from(sel.options).forEach(opt => {
-      const id = opt.dataset.raceId || (opt.textContent.match(/\/(?:\s*)(\d{10,14})/)||[])[1] || (opt.value.match(/race_id=(\d{10,14})/)||[])[1] || '';
+      const id = opt.dataset.raceId || (opt.textContent.match(/\/(?:\s*)(\d{12})/)||[])[1] || (opt.value.match(/race_id=(\d{12})/)||[])[1] || '';
       const no = Number((id && id.slice(-2)) || (opt.textContent.match(/(?:^|\s)([1-9]|1[0-2])R/)||[])[1] || 0);
       if(!(no >= 1 && no <= 12)) return;
       let name = cleanRaceName160(opt.dataset.raceName || '', no);
       if(!name){
         const raw = String(opt.textContent || '')
-          .replace(/\/\s*\d{10,14}.*/, ' ')
+          .replace(/\/\s*\d{12}.*/, ' ')
           .replace(/^.*?(?:[1-9]|1[0-2])R\s*/, ' ');
         name = cleanRaceName160(raw, no);
       }
@@ -14859,7 +14859,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
   function narCandidates166(url){
     const u = String(url || '').replace(/&amp;/g, '&');
-    const rid = (u.match(/race_id=(\d{10,14})/) || [])[1] || '';
+    const rid = (u.match(/race_id=(\d{12})/) || [])[1] || '';
     const out = [u, normalizeNarDesktop166(u), normalizeNarSp166(u)];
     if(rid){
       // 元URLと同じページ種別だけを候補にする。
@@ -16550,13 +16550,13 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     if(window.currentRaceId) return String(window.currentRaceId);
     try{
       const u = document.getElementById('raceUrl')?.value || '';
-      const m = u.match(/race_id=(\d{10,14})/); if(m) return m[1];
+      const m = u.match(/race_id=(\d{12})/); if(m) return m[1];
     }catch(e){}
     return '';
   }
   function kindByRaceId(rid){
     rid = String(rid || '');
-    if(!/^\d{10,14}$/.test(rid)) return '';
+    if(!/^\d{12}$/.test(rid)) return '';
     const code = rid.slice(4,6);
     return /^(0[1-9]|10)$/.test(code) ? 'JRA' : 'NAR';
   }
@@ -17417,7 +17417,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     if(!sel) return [];
     const out = [];
     Array.from(sel.options || []).forEach((o,idx) => {
-      const rid = String(o.dataset.raceId || ((String(o.value||'').match(/race_id=(\d{10,14})/)||[])[1]) || '').replace(/[^0-9]/g,'');
+      const rid = String(o.dataset.raceId || ((String(o.value||'').match(/race_id=(\d{12})/)||[])[1]) || '').replace(/[^0-9]/g,'');
       if(!rid) return;
       const no = Number(o.dataset.raceNo || rid.slice(-2) || idx+1);
       out.push({rid, no, name:String(o.dataset.raceName || '').trim(), url:String(o.value||'')});
@@ -18762,15 +18762,15 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     try{ if(typeof currentRaceId !== 'undefined' && currentRaceId) return String(currentRaceId); }catch(e){}
     try{ if(window.currentRaceId) return String(window.currentRaceId); }catch(e){}
     const u = $('raceUrl')?.value || '';
-    let m = String(u).match(/race_id=(\d{10,14})/); if(m) return m[1];
+    let m = String(u).match(/race_id=(\d{12})/); if(m) return m[1];
     const sel = $('raceSelect')?.value || '';
-    m = String(sel).match(/(\d{10,14})/); if(m) return m[1];
+    m = String(sel).match(/(\d{12})/); if(m) return m[1];
     return '';
   }
 
   function kindFromRid202(rid){
     rid = String(rid || '');
-    if(/^\d{10,14}$/.test(rid)){
+    if(/^\d{12}$/.test(rid)){
       const code = rid.slice(4,6);
       if(/^(0[1-9]|10)$/.test(code)) return 'JRA';
       return 'NAR';
@@ -19245,7 +19245,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   async function capture202(force=false){
     if(captureBusy) return;
     const rid=currentRaceId202();
-    if(!/^\d{10,14}$/.test(rid)){
+    if(!/^\d{12}$/.test(rid)){
       setStatus202('⚠️ レースを選択してください。','err');
       return;
     }
@@ -20238,12 +20238,12 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       host = String(u.hostname || '').toLowerCase();
       rid = String(u.searchParams.get('race_id') || '').replace(/\D/g,'');
     }catch(e){
-      const m = text.match(/race_id=(\d{10,14})/);
+      const m = text.match(/race_id=(\d{12})/);
       if(m) rid = m[1];
     }
     if(host === 'nar.netkeiba.com' || host === 'nar.sp.netkeiba.com') return 'NAR';
     if(host === 'race.netkeiba.com') return 'JRA';
-    if(/^\d{10,14}$/.test(rid)){
+    if(/^\d{12}$/.test(rid)){
       const code = rid.slice(4,6);
       return /^(0[1-9]|10)$/.test(code) ? 'JRA' : 'NAR';
     }
@@ -20535,8 +20535,8 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   function currentRid(){
     try{ if(typeof currentRaceId!=='undefined' && currentRaceId) return String(currentRaceId).replace(/[^0-9]/g,''); }catch(e){}
     try{ if(window.currentRaceId) return String(window.currentRaceId).replace(/[^0-9]/g,''); }catch(e){}
-    const u=$('raceUrl')?.value||''; let m=String(u).match(/race_id=(\d{10,14})/); if(m)return m[1];
-    const v=$('raceSelect')?.value||''; m=String(v).match(/(\d{10,14})/); return m?m[1]:'';
+    const u=$('raceUrl')?.value||''; let m=String(u).match(/race_id=(\d{12})/); if(m)return m[1];
+    const v=$('raceSelect')?.value||''; m=String(v).match(/(\d{12})/); return m?m[1]:'';
   }
   function raceLabel(){
     const box=$('raceTitleBox'); if(box && String(box.textContent||'').trim()) return String(box.textContent||'').trim();
@@ -21241,13 +21241,13 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     try{ if(typeof currentRaceId!=='undefined' && currentRaceId) return String(currentRaceId); }catch(e){}
     try{ if(window.currentRaceId) return String(window.currentRaceId); }catch(e){}
     const u=$215('raceUrl')?.value||'';
-    const m=String(u).match(/race_id=(\d{10,14})/); if(m) return m[1];
+    const m=String(u).match(/race_id=(\d{12})/); if(m) return m[1];
     const s=$215('raceSelect')?.value||'';
-    const m2=String(s).match(/(\d{10,14})/); return m2?m2[1]:'';
+    const m2=String(s).match(/(\d{12})/); return m2?m2[1]:'';
   }
   function kind215(rid){
     rid=String(rid||'');
-    if(/^\d{10,14}$/.test(rid)) return /^(0[1-9]|10)$/.test(rid.slice(4,6))?'JRA':'NAR';
+    if(/^\d{12}$/.test(rid)) return /^(0[1-9]|10)$/.test(rid.slice(4,6))?'JRA':'NAR';
     return ($215('pickKind')?.value||'JRA').toUpperCase()==='NAR'?'NAR':'JRA';
   }
 
@@ -21474,7 +21474,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   async function refreshLive215(force=false){
     if(liveBusy215) return;
     const rid=currentRaceId215();
-    if(!/^\d{10,14}$/.test(rid)){ setLiveStatus215('⚠️ レースを選択してください','err'); return; }
+    if(!/^\d{12}$/.test(rid)){ setLiveStatus215('⚠️ レースを選択してください','err'); return; }
     liveBusy215=true;
     try{
       const rows=await lastTwo215(rid);
@@ -21520,7 +21520,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   async function checkResult215(manual=false){
     if(resultBusy215) return;
     const rid=currentRaceId215();
-    if(!/^\d{10,14}$/.test(rid)) return;
+    if(!/^\d{12}$/.test(rid)) return;
     const rows=readTrack215();
     const pos=rows.findIndex(x=>x.raceId===rid);
     if(pos<0){ if(manual)setLiveStatus215('⚠️ 先に予想データを1回取得してください','err'); return; }
@@ -21699,8 +21699,8 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   function currentRid219(){
     try{if(typeof currentRaceId!=='undefined'&&currentRaceId)return String(currentRaceId);}catch(e){}
     try{if(window.currentRaceId)return String(window.currentRaceId);}catch(e){}
-    let m=String($219('raceUrl')?.value||'').match(/race_id=(\d{10,14})/);if(m)return m[1];
-    m=String($219('raceSelect')?.value||'').match(/(\d{10,14})/);return m?m[1]:'';
+    let m=String($219('raceUrl')?.value||'').match(/race_id=(\d{12})/);if(m)return m[1];
+    m=String($219('raceSelect')?.value||'').match(/(\d{12})/);return m?m[1]:'';
   }
   function kind219(rid){
     const k=String($219('pickKind')?.value||'').toUpperCase(); if(k==='NAR'||k==='JRA')return k;
@@ -21732,7 +21732,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     return NaN;
   }
   async function cacheStatus219(rid){
-    if(!/^\d{10,14}$/.test(String(rid||''))||!base219())return null;
+    if(!/^\d{12}$/.test(String(rid||''))||!base219())return null;
     try{
       const j=await fetch219(`/timeline/status?race_id=${encodeURIComponent(rid)}`,{headers:headers219(false)});
       if(j?.meta){
@@ -21790,7 +21790,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     return rows.length;
   }
   async function startCurrent219(silent=false){
-    const rid=currentRid219();if(!/^\d{10,14}$/.test(rid)){if(!silent)status219('⚠️ レースを選択してください','err');return null;}
+    const rid=currentRid219();if(!/^\d{12}$/.test(rid)){if(!silent)status219('⚠️ レースを選択してください','err');return null;}
     const postMs=uiPostMs219(rid);
     let saved=null;try{const all=JSON.parse(localStorage.getItem(META_KEY220)||'{}')||{};saved=all[String(rid)]||null;}catch(e){}
     const endAt=Number(saved?.end_at_ms||0)>0?Number(saved.end_at_ms):(Number.isFinite(postMs)?postMs+10*60*1000:Date.now()+3*60*60*1000);
@@ -21804,7 +21804,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     status219(`☁️ ${rid} 常時収集ON（発走+10分で完全停止・固定 / デバイス0台）`,'ok');return j;
   }
   async function syncCurrent219(silent=false){
-    if(busy219)return;const rid=currentRid219();if(!/^\d{10,14}$/.test(rid)||!base219())return;
+    if(busy219)return;const rid=currentRid219();if(!/^\d{12}$/.test(rid)||!base219())return;
     busy219=true;
     try{
       const statusP=cacheStatus219(rid);
@@ -21862,7 +21862,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     ['raceSelect','raceUrl','pickKind','pickVenue'].forEach(id=>$219(id)?.addEventListener(id==='raceUrl'?'input':'change',onRace219));
     window.addEventListener('thekeiba-timeline-race-loaded',e=>{
       const rid=String(e?.detail?.race_id||'');
-      if(base219()&&/^\d{10,14}$/.test(rid)) cacheStatus219(rid);
+      if(base219()&&/^\d{12}$/.test(rid)) cacheStatus219(rid);
     });
     document.addEventListener('visibilitychange',()=>{if(!document.hidden){installUi219();setVersion219();syncCurrent219(true);}});
     if(base219()){health219().then(()=>{onRace219();});}
@@ -21881,7 +21881,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION227 = 'v5.18.229 WORKER RACECARD JSON FIRST + ASYNC ODDS';
+  const VERSION227 = 'v5.18.230 WORKER RACECARD JSON FIRST + ASYNC ODDS';
   let oddsJobSeq227 = 0;
 
   function el227(id){ return document.getElementById(id); }
@@ -21891,7 +21891,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     })[c]);
   }
   function rid227(url){
-    return (String(url || '').match(/race_id=(\d{10,14})/) || [])[1] || '';
+    return (String(url || '').match(/race_id=(\d{12})/) || [])[1] || '';
   }
   function kind227(url, rid){
     try{
@@ -22010,10 +22010,12 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   }
 
   async function workerRaceCard229(kind, raceId){
+    raceId = String(raceId || '').replace(/[^0-9]/g,'');
+    if(!/^\d{12}$/.test(raceId)) throw new Error('race_idは12桁で指定してください');
     const base = proxyBase229();
     if(!base) throw new Error('Worker URL未設定');
 
-    // v6.1.2 Workerの専用API。HTMLを何本も直列取得せず、
+    // v6.1.3 Workerの専用API。race_idは12桁固定。HTMLを何本も直列取得せず、
     // Worker側で NAR公式 / netkeiba を並行取得して、馬番・馬名だけ先にJSONで返す。
     const url = `${base}/racecard?race_id=${encodeURIComponent(raceId)}&kind=${encodeURIComponent(kind)}&_=${Date.now()}`;
     const ctl = new AbortController();
@@ -22072,7 +22074,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   }
 
   async function bridgeCard227(url){
-    // v5.18.229: 専用Worker /racecard が失敗した場合だけ住宅IPブリッジを使う。
+    // v5.18.230: 専用Worker /racecard が失敗した場合だけ住宅IPブリッジを使う。
     if(typeof fetchViaBridge !== 'function') return null;
     if(typeof window.__narBridgeFetch !== 'function' || window.__bridgeAbsent === true) return null;
     try{
@@ -22089,7 +22091,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     const urls = canonicalCardUrls227(kind, raceId, rawUrl);
     let lastErr = null;
 
-    // v5.18.229: まず専用Worker /racecard JSON APIを1回だけ呼ぶ。
+    // v5.18.230: まず専用Worker /racecard JSON APIを1回だけ呼ぶ。
     // NARはWorker側で地方競馬公式を最優先するため、nar.netkeibaのAkamai遮断に依存しない。
     try{
       const hit = await workerRaceCard229(kind, raceId);

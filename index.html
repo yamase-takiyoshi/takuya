@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.221 TIMELINE STOP +10M</title>
+<title>The競馬 EV分析 v5.18.222 LIVE LEFT SCROLL</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.221 TIMELINE STOP +10M</span>
+    <span class="ver">v5.18.222 LIVE LEFT SCROLL</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -18680,7 +18680,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.18.221 TIMELINE STOP +10M';
+  const VERSION202 = 'v5.18.222 LIVE LEFT SCROLL';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
@@ -18698,6 +18698,14 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   let pollTimer = null;
   let oddsMode = false;
   let lastError = '';
+
+  // v5.18.222: LIVE LEFT SCROLL
+  // 最新値を右端に置き、時間が進むほど古い履歴が左へ流れる。
+  // ユーザーが横ドラッグした時だけ追従を解除し、「最新へ」で即復帰する。
+  let viewFollowLatest202 = true;
+  let viewEndMs202 = NaN;
+  let dragView202 = null;
+  const VIEW_DEFAULT_MS202 = 10 * 60 * 1000;
 
   const $ = id => document.getElementById(id);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -19205,6 +19213,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 
   async function loadRaceContext202(rid){
     activeRid=String(rid||''); activeKind=kindFromRid202(activeRid); activeRaceLabel=raceLabel202();
+    viewFollowLatest202=true; viewEndMs202=NaN; dragView202=null;
     try{ window.dispatchEvent(new CustomEvent('thekeiba-timeline-race-loaded',{detail:{race_id:activeRid}})); }catch(e){}
     history=[];
     if(activeRid){
@@ -19549,7 +19558,14 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     return NaN;
   }
 
-  function timelineGraphWindow202(){
+  function timelineViewSpan202(){
+    const raw=String($('oddsTsWindow')?.value||'600000');
+    if(raw==='all') return Infinity;
+    const n=Number(raw);
+    return Number.isFinite(n)&&n>=60*1000 ? n : VIEW_DEFAULT_MS202;
+  }
+
+  function timelineBaseWindow202(){
     const rid=String(activeRid||currentRaceId202()||'');
     const meta=savedTimelineMeta202(rid);
     let endMs=Number(meta?.end_at_ms||0);
@@ -19557,17 +19573,70 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     if(!(postMs>0) && endMs>0) postMs=endMs-POST_GRAPH_TAIL_MS202;
     if(!(postMs>0)) postMs=uiPostMs202(rid);
     if(!(endMs>0) && postMs>0) endMs=postMs+POST_GRAPH_TAIL_MS202;
-
+    const now=Date.now();
     const rows=(endMs>0 ? history.filter(r=>Number(r?.captured_ms||0)<=endMs) : history.slice());
     const first=rows[0]||history[0]||null;
     const last=rows[rows.length-1]||history[history.length-1]||null;
-    let t0=Number(first?.captured_ms||0), t1=Number(last?.captured_ms||0);
-    const now=Date.now();
-    if(endMs>0 && now>=endMs) t1=endMs;
-    else if(endMs>0 && t1>endMs) t1=endMs;
-    if(!(t0>0)) t0=t1||now;
-    if(!(t1>t0)) t1=t0+1000;
-    return {rid,rows,t0,t1,postMs,endMs,capped:endMs>0&&now>=endMs};
+    let firstMs=Number(first?.captured_ms||0);
+    let latestMs=Number(last?.captured_ms||0);
+    if(!(firstMs>0)) firstMs=latestMs||now;
+    if(!(latestMs>0)) latestMs=firstMs||now;
+    if(endMs>0 && now>=endMs) latestMs=endMs;
+    else if(endMs>0 && latestMs>endMs) latestMs=endMs;
+    return {rid,rows,firstMs,latestMs,postMs,endMs,capped:endMs>0&&now>=endMs};
+  }
+
+  function timelineGraphWindow202(){
+    const base=timelineBaseWindow202();
+    const span=timelineViewSpan202();
+    if(!base.rows.length){
+      return {...base,t0:base.firstMs,t1:base.latestMs||base.firstMs+1000,viewSpan:span,follow:viewFollowLatest202};
+    }
+
+    // 全期間は従来どおり全履歴を表示。
+    if(!Number.isFinite(span)){
+      let t0=base.firstMs, t1=base.latestMs;
+      if(!(t1>t0)) t1=t0+1000;
+      return {...base,rows:base.rows.slice(),t0,t1,viewSpan:Infinity,follow:true};
+    }
+
+    const maxEnd=Math.max(base.latestMs,base.firstMs+1000);
+    let t1=viewFollowLatest202 ? maxEnd : Number(viewEndMs202||maxEnd);
+    const minEnd=base.firstMs + span;
+    // 履歴が表示幅より短い場合も「最新＝右端」を優先し、左側を空白時間として残す。
+    const clampMin=Math.min(minEnd,maxEnd);
+    t1=Math.max(clampMin,Math.min(maxEnd,t1));
+    if(viewFollowLatest202) viewEndMs202=t1;
+    let t0=t1-span;
+
+    const visible=base.rows.filter(r=>{
+      const ms=Number(r?.captured_ms||0);
+      return ms>=t0 && ms<=t1;
+    });
+    return {...base,rows:visible,t0,t1,viewSpan:span,follow:viewFollowLatest202};
+  }
+
+  function timelineSetLatest202(){
+    viewFollowLatest202=true;
+    viewEndMs202=NaN;
+    draw202();
+  }
+
+  function timelinePanByPixels202(dx,canvasWidth){
+    const span=timelineViewSpan202();
+    if(!Number.isFinite(span) || !history.length) return;
+    const base=timelineBaseWindow202();
+    const width=Math.max(120,Number(canvasWidth)||600);
+    const startEnd=Number(dragView202?.startEnd||base.latestMs);
+    let next=startEnd-(Number(dx)||0)/width*span;
+    const maxEnd=Math.max(base.latestMs,base.firstMs+1000);
+    const minEnd=Math.min(base.firstMs+span,maxEnd);
+    next=Math.max(minEnd,Math.min(maxEnd,next));
+    viewEndMs202=next;
+    // 右端2秒以内まで戻したら自動追従へ復帰。
+    viewFollowLatest202=Math.abs(maxEnd-next)<=2000;
+    if(viewFollowLatest202) viewEndMs202=maxEnd;
+    draw202();
   }
 
 
@@ -19621,6 +19690,12 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     const graph=timelineGraphWindow202();
     const graphRows=graph.rows;
     const t0=graph.t0, t1=graph.t1;
+    const latestBtn202=$('oddsTsLatest');
+    if(latestBtn202){
+      latestBtn202.classList.toggle('active',!!graph.follow);
+      latestBtn202.textContent=graph.follow ? '● LIVE' : '▶ 最新へ';
+      latestBtn202.title=graph.follow ? '最新時刻を右端に追従中' : '最新時刻へ戻る';
+    }
     const vals=[];
     items.forEach(it=>graphRows.forEach(r=>{ const v=metricValue202(r,it.market,it.key,mode); if(Number.isFinite(v) && (mode!=='odds'||v>0)) vals.push(v); }));
     if(!vals.length){
@@ -19657,8 +19732,19 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       ctx.beginPath(); ctx.moveTo(xx,T); ctx.lineTo(xx,T+H); ctx.stroke();
       ctx.fillText(new Date(tt).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit'}),xx,T+H+8);
     }
+    // 左＝過去 / 右＝最新 を常時明示。LIVE時は右端を強調する。
+    ctx.save();
+    ctx.font='10px -apple-system,BlinkMacSystemFont,sans-serif'; ctx.textBaseline='top';
+    ctx.textAlign='left'; ctx.fillStyle='#64748b'; ctx.fillText('← 過去',L,T+H+26);
+    ctx.textAlign='right'; ctx.fillStyle=graph.follow&&!graph.capped?'#86efac':'#94a3b8';
+    ctx.fillText(graph.capped?'確定 →':(graph.follow?'● LIVE 最新 →':'最新 →'),L+W,T+H+26);
+    if(graph.follow&&!graph.capped){
+      ctx.strokeStyle='rgba(0,230,118,.45)'; ctx.lineWidth=1.2; ctx.setLineDash([3,3]);
+      ctx.beginPath(); ctx.moveTo(L+W,T); ctx.lineTo(L+W,T+H); ctx.stroke(); ctx.setLineDash([]);
+    }
+    ctx.restore();
 
-    // v5.18.221: 発走+10分で収集・更新を停止し、後から見ても同じ完成形を表示。
+    // v5.18.222: 発走+10分で収集・更新を停止し、後から見ても同じ完成形を表示。
     const timeMarker=(ms,label,stroke,fill,dash=[5,4])=>{
       if(!(Number.isFinite(ms)&&ms>=t0&&ms<=t1)) return;
       const xx=xOf(ms); ctx.save(); ctx.strokeStyle=stroke; ctx.fillStyle=fill; ctx.lineWidth=1.25; ctx.setLineDash(dash);
@@ -19716,7 +19802,8 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       const first=graphRows[0]?.captured_ms,last=graphRows[graphRows.length-1]?.captured_ms;
       const scope=cross?'全券種横断':market;
       const cap=graph.capped?' / 🏁 発走+10分で固定済':(Number.isFinite(graph.endMs)?' / 発走+10分で自動停止':'');
-      meta.textContent=graphRows.length?`${graphRows.length}点 / ${new Date(first).toLocaleTimeString('ja-JP')}〜${new Date(last).toLocaleTimeString('ja-JP')} / ${scope} ${metricLabel202(mode)}${cap}`:'0点';
+      const view=Number.isFinite(graph.viewSpan)?` / ${Math.round(graph.viewSpan/60000)}分窓${graph.follow?' LIVE':''}`:' / 全期間';
+      meta.textContent=graphRows.length?`${graphRows.length}点 / ${new Date(first).toLocaleTimeString('ja-JP')}〜${new Date(last).toLocaleTimeString('ja-JP')} / ${scope} ${metricLabel202(mode)}${view}${cap}`:'0点';
     }
   }
 
@@ -19850,6 +19937,13 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
           <label>表示<select id="oddsTsCombo"><option value="__ALL__">全馬を表示</option></select></label>
           <label class="odds-ts-check"><input type="checkbox" id="oddsTsAuto" checked>5秒自動（Worker補完）</label>
           <label class="odds-ts-check"><input type="checkbox" id="oddsTsLog">対数</label>
+          <label>表示幅<select id="oddsTsWindow">
+            <option value="300000">直近5分</option>
+            <option value="600000" selected>直近10分</option>
+            <option value="1800000">直近30分</option>
+            <option value="all">全期間</option>
+          </select></label>
+          <button class="btn-sm odds-ts-latest active" id="oddsTsLatest" type="button">▶ 最新へ</button>
           <button class="btn-sm" id="oddsTsNow" type="button">🔄 今すぐ取得</button>
           <button class="btn-sm" id="oddsTsClear" type="button">🗑 履歴消去</button>
           <button class="btn-sm" id="oddsTsJson" type="button">JSON</button>
@@ -19857,7 +19951,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
         </div>
         <div id="oddsTsStatus" class="odds-ts-status wait">レースを選択してください。</div>
         <div class="odds-ts-metric-note">想定確率＝現行EVモデル / 市場確率＝1÷実オッズ / EV＝想定確率×実オッズ / 乖離＝想定確率−市場確率 / 「表示」は選択指標に連動</div>
-        <div class="odds-ts-metric-note" style="color:#8bd9ae">v5.18.218: 時系列デバイス未接続時はCloudflare Workerへ自動フォールバック。5秒自動は右側画面を閉じてもブラウザ前面中は継続します。</div>
+        <div class="odds-ts-metric-note" style="color:#8bd9ae">v5.18.222: 最新値を右端に固定し、更新ごとに履歴が左へ流れます。グラフを左右ドラッグすると過去へ移動し、追従を一時停止します。「▶ 最新へ」でLIVEへ復帰します。</div>
       </div>
       <div class="odds-ts-chart-wrap"><canvas id="oddsTsCanvas"></canvas></div>
       <div class="odds-ts-foot"><span id="oddsTsMeta">0点</span><span>デバイス未接続→Worker直結 / 履歴はIndexedDB保存</span></div>
@@ -19877,6 +19971,36 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     $('oddsTsMetric').addEventListener('change',()=>{ syncMetricUi202(); refreshCombo202(); draw202(); });
     $('oddsTsCombo').addEventListener('change',draw202);
     $('oddsTsLog').addEventListener('change',draw202);
+    $('oddsTsWindow').addEventListener('change',()=>{ viewFollowLatest202=true; viewEndMs202=NaN; draw202(); });
+    $('oddsTsLatest').addEventListener('click',timelineSetLatest202);
+
+    // v5.18.222: iPad/PC 共通の横ドラッグ。Y軸は固定Canvas内に残したまま時間窓だけ移動する。
+    const timelineCanvas202=$('oddsTsCanvas');
+    if(timelineCanvas202){
+      const endDrag=()=>{
+        if(!dragView202) return;
+        dragView202=null;
+        try{ timelineCanvas202.releasePointerCapture?.(timelineCanvas202.__timelinePointerId202); }catch(e){}
+        timelineCanvas202.__timelinePointerId202=null;
+        timelineCanvas202.classList.remove('dragging');
+      };
+      timelineCanvas202.addEventListener('pointerdown',e=>{
+        if(!Number.isFinite(timelineViewSpan202()) || !history.length) return;
+        const g=timelineGraphWindow202();
+        dragView202={startX:e.clientX,startEnd:g.t1};
+        timelineCanvas202.__timelinePointerId202=e.pointerId;
+        try{ timelineCanvas202.setPointerCapture?.(e.pointerId); }catch(err){}
+        timelineCanvas202.classList.add('dragging');
+      });
+      timelineCanvas202.addEventListener('pointermove',e=>{
+        if(!dragView202) return;
+        const rect=timelineCanvas202.getBoundingClientRect();
+        timelinePanByPixels202(e.clientX-dragView202.startX,rect.width);
+      });
+      timelineCanvas202.addEventListener('pointerup',endDrag);
+      timelineCanvas202.addEventListener('pointercancel',endDrag);
+    }
+
     $('oddsTsAuto').addEventListener('change',e=>{
       if(e.target.checked){
         const st221=timelineCollectionState221(currentRaceId202());
@@ -19961,7 +20085,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       .odds-ts-race-line{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;font-size:12px}.odds-ts-race-line b{color:#d9ffe8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.odds-ts-race-line span{font-size:10px;color:#8bd9ae;white-space:nowrap}
       .odds-ts-controls{display:flex;gap:6px;align-items:end;flex-wrap:wrap}.odds-ts-controls label{display:flex;flex-direction:column;gap:3px;font-size:9px;color:#94a3b8}.odds-ts-controls select{min-width:92px;max-width:190px;background:#101e31;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:5px 7px;font-size:10px}#oddsTsRaceArchive{min-width:230px;max-width:360px}.odds-ts-controls .odds-ts-check{flex-direction:row;align-items:center;gap:4px;font-size:10px;color:#cbd5e1;padding-bottom:6px}.odds-ts-controls .odds-ts-check input{accent-color:#00e676}
       .odds-ts-status{margin-top:7px;padding:5px 7px;border-radius:6px;font-size:10px;line-height:1.45;background:rgba(148,163,184,.08);color:#94a3b8}.odds-ts-status.ok{background:rgba(0,230,118,.08);color:#86efac}.odds-ts-status.err{background:rgba(248,113,113,.08);color:#fca5a5}.odds-ts-status.wait{color:#93c5fd}.odds-ts-metric-note{margin-top:5px;font-size:9px;line-height:1.45;color:#64748b}
-      .odds-ts-chart-wrap{padding:8px 8px 0;flex:none}.odds-ts-chart-wrap canvas{display:block;width:100%;height:360px;border:1px solid rgba(51,65,85,.65);border-radius:10px;background:#07111d}
+      .odds-ts-chart-wrap{padding:8px 8px 0;flex:none;position:relative}.odds-ts-chart-wrap canvas{display:block;width:100%;height:360px;border:1px solid rgba(51,65,85,.65);border-radius:10px;background:#07111d;touch-action:pan-y;cursor:grab;user-select:none;-webkit-user-select:none}.odds-ts-chart-wrap canvas.dragging{cursor:grabbing}.odds-ts-latest{border-color:rgba(0,230,118,.28)!important;color:#a7f3d0!important}.odds-ts-latest.active{background:rgba(0,230,118,.14)!important;border-color:rgba(0,230,118,.55)!important;color:#86efac!important;box-shadow:0 0 10px rgba(0,230,118,.12)}
       .odds-ts-foot{display:flex;justify-content:space-between;gap:8px;padding:5px 10px;font-size:9px;color:#64748b;border-bottom:1px solid rgba(51,65,85,.45)}
       .odds-ts-legend{flex:1;min-height:0;overflow:auto;padding:6px 8px 12px}.odds-ts-legend-row{display:grid;grid-template-columns:10px minmax(90px,1.4fr) repeat(4,minmax(58px,.75fr));gap:6px;align-items:center;padding:5px 4px;border-bottom:1px solid rgba(51,65,85,.35);font-size:9px;color:#cbd5e1}.odds-ts-legend-row i{width:8px;height:8px;border-radius:99px}.odds-ts-legend-row b{font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.odds-ts-legend-row .up{color:#fca5a5}.odds-ts-legend-row .down{color:#86efac}.odds-ts-empty{padding:20px;text-align:center;color:#64748b;font-size:11px}
       @media(max-width:980px){.odds-ts-chart-wrap canvas{height:300px}.odds-ts-legend-row{grid-template-columns:10px minmax(80px,1.3fr) repeat(2,minmax(55px,.7fr))}.odds-ts-legend-row span:nth-of-type(3),.odds-ts-legend-row span:nth-of-type(4){display:none}}
@@ -20987,7 +21111,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   if(window.__V518216_LIVE_COMMENTARY__) return;
   window.__V518216_LIVE_COMMENTARY__ = true;
 
-  const VERSION215 = 'v5.18.221 TIMELINE STOP +10M';
+  const VERSION215 = 'v5.18.222 LIVE LEFT SCROLL';
   const DB_NAME215 = 'thekeiba-odds-timeline-v1';
   const STORE215 = 'captures';
   const TYPES215 = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
@@ -21427,7 +21551,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 <script>
 (function(){
   'use strict';
-  const VERSION219='v5.18.221 TIMELINE STOP +10M';
+  const VERSION219='v5.18.222 LIVE LEFT SCROLL';
   const CFG_KEY219='thekeiba_timeline_cloud_v219';
   const DB_NAME219='thekeiba-odds-timeline-v1';
   const STORE219='captures';

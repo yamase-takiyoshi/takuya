@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.230 RACE START TIME RESTORE + WORKER RACECARD</title>
+<title>The競馬 EV分析 v5.18.231 RACE START TIME ALWAYS VISIBLE + WORKER RACECARD</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.230 RACE START TIME RESTORE + WORKER RACECARD</span>
+    <span class="ver">v5.18.231 RACE START TIME ALWAYS VISIBLE + WORKER RACECARD</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -3645,6 +3645,60 @@ function cleanRaceName(txt, raceNo){
   return t || `${raceNo}R`;
 }
 
+
+// v5.18.231: 発走時刻を一覧/出馬表/Worker JSONのどこからでも復元する。
+function normalizeRaceStartTime231(value){
+  const raw = String(value == null ? '' : value).trim();
+  if(!raw) return '';
+  // ISO/日時文字列中の HH:MM も許容。ただし時だけに正規化する。
+  const m = raw.match(/(?:^|[T\s])([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?(?:$|[+Z\s])/i)
+         || raw.match(/^([01]?\d|2[0-3]):([0-5]\d)$/)
+         || raw.match(/([01]?\d|2[0-3]):([0-5]\d)/);
+  if(!m) return '';
+  return `${String(Number(m[1])).padStart(2,'0')}:${m[2]}`;
+}
+
+function extractRaceStartTimeFromText231(text){
+  const t = normalizeJapaneseSpaces ? normalizeJapaneseSpaces(text) : String(text || '').replace(/\s+/g,' ').trim();
+  if(!t) return '';
+  let m = t.match(/([01]?\d|2[0-3]):([0-5]\d)\s*発走/)
+       || t.match(/発走(?:時刻)?\s*[:：]?\s*([01]?\d|2[0-3]):([0-5]\d)/);
+  if(m) return `${String(Number(m[1])).padStart(2,'0')}:${m[2]}`;
+  // レース一覧の時刻セルは「15:30」のみの場合がある。
+  m = t.match(/(?:^|\s)([01]?\d|2[0-3]):([0-5]\d)(?=\s|$)/);
+  return m ? `${String(Number(m[1])).padStart(2,'0')}:${m[2]}` : '';
+}
+
+function extractRaceStartTimeFromDoc231(doc, raceNo){
+  if(!doc) return '';
+  const pieces = [];
+  const sels = [
+    '.RaceData01','.RaceData02','[class*="RaceData"]',
+    '.RaceList_Itemtime','.RaceList_ItemTime','[class*="RaceTime"]','[class*="RaceStart"]',
+    '.RaceList_Item01','.RaceList_Item02','h1','title'
+  ];
+  for(const sel of sels){
+    try{
+      doc.querySelectorAll(sel).forEach(el => pieces.push(el.textContent || ''));
+    }catch(e){}
+  }
+  try{
+    const desc = doc.querySelector('meta[name="description"],meta[property="og:description"]')?.getAttribute('content') || '';
+    if(desc) pieces.push(desc);
+  }catch(e){}
+  const joined = pieces.join(' ');
+  let tm = extractRaceStartTimeFromText231(joined);
+  if(tm) return tm;
+  // レース番号周辺を優先する保険。
+  if(raceNo){
+    const all = normalizeJapaneseSpaces ? normalizeJapaneseSpaces(doc.body?.textContent || '') : String(doc.body?.textContent || '');
+    const re = new RegExp(`(?:^|\\s)${Number(raceNo)}R[^\\n]{0,180}?([01]?\\d|2[0-3]):([0-5]\\d)(?:\\s*発走)?`);
+    const m = all.match(re);
+    if(m) return `${String(Number(m[1])).padStart(2,'0')}:${m[2]}`;
+  }
+  return '';
+}
+
 function parseRaceIdsFromList(html, kind, venueCode, date){
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
@@ -3671,8 +3725,13 @@ function parseRaceIdsFromList(html, kind, venueCode, date){
     const raceNo = Number(id.slice(-2));
     const parentText = (a.closest('li, tr, dd, dl, .RaceList_DataItem, .RaceList_Item, .RaceList_Box, .RaceList_Table') || a.parentElement || a).textContent;
     const name = cleanRaceName(parentText || a.textContent, raceNo);
-    if(!map.has(id)) map.set(id, { raceId:id, raceNo, venueCode:vc, raceName:name, shutuba:shutubaUrl(kind, id) });
-    else if(name && name !== `${raceNo}R`) map.get(id).raceName = name;
+    const startTime = extractRaceStartTimeFromText231(parentText || a.textContent || '');
+    if(!map.has(id)) map.set(id, { raceId:id, raceNo, venueCode:vc, raceName:name, startTime, shutuba:shutubaUrl(kind, id) });
+    else {
+      const prev = map.get(id);
+      if(name && name !== `${raceNo}R`) prev.raceName = name;
+      if(startTime && !prev.startTime) prev.startTime = startTime;
+    }
   });
 
   if(!map.size){
@@ -5105,28 +5164,33 @@ async function enrichRaceNamesFromShutuba(races, kind){
   for(const r of races){
     const raceNo = Number(r.raceNo || String(r.raceId || '').slice(-2));
     let name = cleanRaceNameSafe51(r.raceName || '', raceNo) || String(r.raceName || '').trim();
+    let startTime = normalizeRaceStartTime231(r.startTime || r.postTime || '');
     const generic = !cleanRaceNameSafe51(name, raceNo);
-    if(generic && r.raceId){
+    // v5.18.231: レース名が既に取れていても発走時刻が無ければ出馬表を1回だけ確認する。
+    // JRAは旧処理どおり汎用名の補完、NARは一覧に時刻が無いケースを補完する。
+    if((generic || !startTime) && r.raceId){
       try{
         const html = await fetchHtmlViaProxy(shutubaUrl(kind, r.raceId));
         const doc = new DOMParser().parseFromString(html, 'text/html');
-        let got = parseRaceTitleFromDoc(doc, raceNo);
+        let got = generic ? parseRaceTitleFromDoc(doc, raceNo) : '';
+        if(!startTime) startTime = extractRaceStartTimeFromDoc231(doc, raceNo) || '';
         // NARの一部レースは出馬表側のtitleが「レース一覧」になるため、結果ページも確認する。
-        if(!got && kind === 'NAR'){
+        if((!got || !startTime) && kind === 'NAR'){
           try{
             const resultUrl = `https://nar.netkeiba.com/race/result.html?race_id=${r.raceId}&rf=race_submenu`;
             const html2 = await fetchHtmlViaProxy(resultUrl);
             const doc2 = new DOMParser().parseFromString(html2, 'text/html');
-            got = parseRaceTitleFromDoc(doc2, raceNo);
+            if(!got) got = parseRaceTitleFromDoc(doc2, raceNo);
+            if(!startTime) startTime = extractRaceStartTimeFromDoc231(doc2, raceNo) || '';
           }catch(e2){}
         }
         if(got) name = got;
       }catch(e){
-        console.warn('race name from shutuba failed', r.raceId, e);
+        console.warn('race name/start time from shutuba failed', r.raceId, e);
       }
     }
     name = cleanRaceNameSafe51(name, raceNo) || `${raceNo}R`;
-    out.push({ ...r, raceName: name });
+    out.push({ ...r, raceName: name, startTime });
   }
   return out;
 }
@@ -5259,9 +5323,11 @@ async function loadRaceList(){
       const no = Number(r.raceNo || String(r.raceId).slice(-2));
       const raceName = String(r.raceName || '').trim();
       const safeName = raceName && !/^\d{1,2}R$/.test(raceName) ? raceName : `${no}R`;
+      const startTime = normalizeRaceStartTime231(r.startTime || r.postTime || '');
       const labelName = safeName === `${no}R` ? `${no}R` : `${no}R ${safeName}`;
-      const label = `${dateLabel} ${venueName(kind, venueCode)} ${labelName} / ${r.raceId}`;
-      return `<option value="${url}" data-race-id="${r.raceId}" data-race-name="${escapeHtml(safeName)}">${escapeHtml(label)}</option>`;
+      const timeLabel = startTime ? ` ${startTime}発走` : '';
+      const label = `${dateLabel} ${venueName(kind, venueCode)} ${labelName}${timeLabel} / ${r.raceId}`;
+      return `<option value="${url}" data-race-id="${r.raceId}" data-race-no="${no}" data-race-name="${escapeHtml(safeName)}" data-post-time="${escapeHtml(startTime)}" data-start-time="${escapeHtml(startTime)}">${escapeHtml(label)}</option>`;
     }).join('');
 
     applySelectedRaceUrl();
@@ -5290,9 +5356,16 @@ function applySelectedRaceUrl(){
     raceUrl.value = shutubaUrl(kind, raceId);
     currentRaceName = opt?.dataset?.raceName || opt?.textContent || '';
     currentRaceId = raceId;
+    const startTime = normalizeRaceStartTime231(opt?.dataset?.postTime || opt?.dataset?.startTime || '');
+    const raceNo = Number(opt?.dataset?.raceNo || String(raceId).slice(-2) || 0);
+    try{
+      window.currentRaceStartTime = startTime;
+      window.__raceStartTime230 = startTime;
+    }catch(e){}
     if(box){
       box.style.display = currentRaceName ? 'block' : 'none';
-      box.textContent = raceId ? `選択中: ${currentRaceName} / ${raceId}` : '';
+      const prefix = `${raceNo ? raceNo + 'R ' : ''}${startTime ? startTime + '発走 ' : ''}`;
+      box.textContent = raceId ? `選択中: ${prefix}${currentRaceName} / ${raceId}` : '';
     }
   }else{
     raceUrl.value = '';
@@ -21881,7 +21954,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION227 = 'v5.18.230 RACE START TIME RESTORE + WORKER RACECARD';
+  const VERSION227 = 'v5.18.231 RACE START TIME ALWAYS VISIBLE + WORKER RACECARD';
   let oddsJobSeq227 = 0;
 
   function el227(id){ return document.getElementById(id); }
@@ -21978,7 +22051,12 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
         hs = parseHorsesFromDoc(doc, url);
       }
     }catch(e){ hs = []; }
-    return { doc, horses: Array.isArray(hs) ? hs : [] };
+    const raceNo = Number(String(rid227(url) || '').slice(-2) || 0);
+    let raceName = '';
+    try{ raceName = parseRaceTitleFromDoc(doc, raceNo) || ''; }catch(e){}
+    let startTime = '';
+    try{ startTime = extractRaceStartTimeFromDoc231(doc, raceNo) || ''; }catch(e){}
+    return { doc, horses: Array.isArray(hs) ? hs : [], raceName, startTime };
   }
 
   function proxyBase229(){
@@ -22058,13 +22136,16 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     const venue = String(j?.race?.venue_name || '');
     const raceName = String(j?.race?.name || '').trim();
     const startTimeRaw = String(
-      j?.race?.start_time || j?.race?.startTime || j?.race?.post_time ||
-      j?.start_time || j?.post_time || ''
+      j?.race?.start_time || j?.race?.startTime || j?.race?.post_time || j?.race?.postTime ||
+      j?.race?.time || j?.race?.start || j?.race?.start_at || j?.race?.startAt ||
+      j?.start_time || j?.startTime || j?.post_time || j?.postTime || j?.time || ''
     ).trim();
-    const startTimeMatch = startTimeRaw.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
-    const startTime = startTimeMatch
-      ? `${String(Number(startTimeMatch[1])).padStart(2,'0')}:${startTimeMatch[2]}`
-      : '';
+    let startTime = '';
+    try{ startTime = normalizeRaceStartTime231(startTimeRaw); }catch(e){}
+    // Worker世代差で専用フィールドが無い場合、JSON内の「HH:MM発走」も保険で拾う。
+    if(!startTime){
+      try{ startTime = extractRaceStartTimeFromText231(JSON.stringify(j)); }catch(e){}
+    }
 
     return {
       url: String(j.source_url || j.final_url || ''),
@@ -22088,7 +22169,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       const html = await timeout227(fetchViaBridge(url), 6500, '出馬表ブリッジ');
       if(html && !blocked227(html)){
         const p = parseCard227(html, url);
-        if(p.horses.length >= 2) return { url, html, doc:p.doc, horses:p.horses, path:'bridge-first' };
+        if(p.horses.length >= 2) return { url, html, doc:p.doc, horses:p.horses, raceName:p.raceName || '', startTime:p.startTime || '', path:'bridge-first' };
       }
     }catch(e){}
     return null;
@@ -22121,7 +22202,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
         if(!html || blocked227(html)) continue;
         const p = parseCard227(html, url);
         if(p.horses.length >= 2){
-          return { url, html, doc:p.doc, horses:p.horses, path:window.__fetchPath || 'worker' };
+          return { url, html, doc:p.doc, horses:p.horses, raceName:p.raceName || '', startTime:p.startTime || '', path:window.__fetchPath || 'worker' };
         }
         lastErr = new Error('HTMLは取得できましたが出走馬テーブルを解析できませんでした');
       }catch(e){ lastErr = e; }
@@ -22481,15 +22562,15 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     return true;
   }
 
-  // v5.18.230: Worker /racecard の発走時刻をレース選択と出馬表タイトルへ復活。
+  // v5.18.231: Worker /racecard・一覧・出馬表の発走時刻をレース選択とタイトルへ常時表示。
   // race_id一致時だけ書き換え、別レースの非同期応答による誤表示を防ぐ。
   function applyRaceStartTime230(card, raceId){
-    const tm = String(card?.startTime || '').trim();
-    if(!/^([01]?\d|2[0-3]):[0-5]\d$/.test(tm)) return '';
-    const normalized = tm.length === 4 ? '0' + tm : tm;
-
     const sel = el227('raceSelect');
     const opt = sel?.selectedOptions?.[0] || null;
+    const tm = String(card?.startTime || opt?.dataset?.postTime || opt?.dataset?.startTime || '').trim();
+    let normalized = '';
+    try{ normalized = normalizeRaceStartTime231(tm); }catch(e){}
+    if(!normalized) return '';
     const optRid = String(opt?.dataset?.raceId || rid227(opt?.value || '') || '');
     if(opt && optRid && optRid === String(raceId)){
       opt.dataset.postTime = normalized;
@@ -22657,6 +22738,178 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 
   setVersion227();
   [0, 250, 1000, 3000, 8000, 16000].forEach(ms => setTimeout(setVersion227, ms));
+})();
+</script>
+
+
+<!-- v5.18.231 FINAL Start-Time Guard: 後段のNAR/JRAパッチに上書きされても発走時刻を維持 -->
+<script>
+(function(){
+  'use strict';
+  if(window.__THEKEIBA_RACE_START_TIME_ALWAYS_VISIBLE_231__) return;
+  window.__THEKEIBA_RACE_START_TIME_ALWAYS_VISIBLE_231__ = true;
+
+  const VERSION231 = 'v5.18.231 RACE START TIME ALWAYS VISIBLE + WORKER RACECARD';
+  const cache231 = new Map();
+  let seq231 = 0;
+  let debounce231 = null;
+
+  function $(id){ return document.getElementById(id); }
+  function norm231(v){
+    try{ if(typeof normalizeRaceStartTime231 === 'function') return normalizeRaceStartTime231(v); }catch(e){}
+    const m=String(v||'').match(/([01]?\d|2[0-3]):([0-5]\d)/);
+    return m?`${String(Number(m[1])).padStart(2,'0')}:${m[2]}`:'';
+  }
+  function rid231(opt){
+    return String(opt?.dataset?.raceId || ((opt?.value||'').match(/race_id=(\d{10,14})/)||[])[1] || '');
+  }
+  function kind231(rid){
+    const k=$('pickKind')?.value;
+    if(k==='JRA'||k==='NAR') return k;
+    return /^(0[1-9]|10)$/.test(String(rid||'').slice(4,6))?'JRA':'NAR';
+  }
+  function setVersion231(){
+    try{
+      window.APP_VERSION=VERSION231;
+      const v=document.querySelector('.header .ver');
+      const bridge=!!(v&&/🌉/.test(v.textContent||''));
+      if(v) v.textContent=VERSION231+(bridge?' 🌉':'');
+      document.title='The競馬 EV分析 '+VERSION231;
+    }catch(e){}
+  }
+  function extractJsonTime231(j){
+    const vals=[
+      j?.race?.start_time,j?.race?.startTime,j?.race?.post_time,j?.race?.postTime,j?.race?.time,j?.race?.start,j?.race?.start_at,j?.race?.startAt,
+      j?.start_time,j?.startTime,j?.post_time,j?.postTime,j?.time,j?.discovered_post_time
+    ];
+    for(const v of vals){ const t=norm231(v); if(t) return t; }
+    try{
+      const raw=JSON.stringify(j);
+      const m=raw.match(/([01]?\d|2[0-3]):([0-5]\d)\s*発走/);
+      if(m) return `${String(Number(m[1])).padStart(2,'0')}:${m[2]}`;
+    }catch(e){}
+    return '';
+  }
+  function existingTime231(opt){
+    let t=norm231(opt?.dataset?.postTime || opt?.dataset?.startTime || '');
+    if(t) return t;
+    const m=String(opt?.textContent||'').match(/([01]?\d|2[0-3]):([0-5]\d)\s*発走/);
+    return m?`${String(Number(m[1])).padStart(2,'0')}:${m[2]}`:'';
+  }
+  function applyDisplay231(opt, tm){
+    tm=norm231(tm); if(!opt||!tm) return false;
+    const rid=rid231(opt); if(!rid) return false;
+    const sel=$('raceSelect');
+    const selected=sel?.selectedOptions?.[0];
+    if(selected && rid231(selected)!==rid) return false;
+
+    opt.dataset.postTime=tm;
+    opt.dataset.startTime=tm;
+    const no=Number(opt.dataset.raceNo || rid.slice(-2) || 0);
+    if(!opt.dataset.raceNo && no) opt.dataset.raceNo=String(no);
+
+    let txt=String(opt.textContent||'').replace(/\s+([01]?\d|2[0-3]):[0-5]\d\s*発走/g,'');
+    if(no){
+      const re=new RegExp(`(${no}R)(?!\\d)`);
+      if(re.test(txt)) txt=txt.replace(re,`$1 ${tm}発走`);
+      else txt=`${no}R ${tm}発走 ${txt}`.trim();
+    }else if(!txt.includes(`${tm}発走`)) txt=`${tm}発走 ${txt}`.trim();
+    if(opt.textContent!==txt) opt.textContent=txt;
+
+    const nm=String(opt.dataset.raceName || window.currentRaceName || '').trim();
+    const box=$('raceTitleBox');
+    if(box){
+      box.style.display='block';
+      box.textContent=`選択中: ${no?no+'R ':''}${tm}発走${nm?' '+nm:''}${rid?' / '+rid:''}`;
+    }
+    try{
+      window.currentRaceStartTime=tm;
+      window.__raceStartTime230=tm;
+      window.__raceStartTime231=tm;
+    }catch(e){}
+    cache231.set(rid,tm);
+    return true;
+  }
+
+  async function fromWorker231(rid, kind){
+    const base=String((window.settings&&settings.proxyUrl)||'').trim().replace(/\/+$/,'');
+    if(!base) return '';
+    const ctl=new AbortController();
+    const timer=setTimeout(()=>ctl.abort(),6000);
+    try{
+      const r=await fetch(`${base}/racecard?race_id=${encodeURIComponent(rid)}&kind=${encodeURIComponent(kind)}&_=${Date.now()}`,{cache:'no-store',signal:ctl.signal,headers:{Accept:'application/json'}});
+      const t=await r.text();
+      let j=null; try{j=JSON.parse(t);}catch(e){}
+      if(r.ok&&j) return extractJsonTime231(j);
+    }catch(e){} finally{clearTimeout(timer);}
+    return '';
+  }
+  async function fromPage231(opt,rid){
+    try{
+      const url=String(opt?.value || $('raceUrl')?.value || '');
+      if(!url || typeof fetchHtmlViaProxy!=='function') return '';
+      const html=await fetchHtmlViaProxy(url);
+      const doc=new DOMParser().parseFromString(String(html||''),'text/html');
+      if(typeof extractRaceStartTimeFromDoc231==='function') return extractRaceStartTimeFromDoc231(doc, Number(rid.slice(-2)||0)) || '';
+      const text=String(doc.body?.textContent||'');
+      const m=text.match(/([01]?\d|2[0-3]):([0-5]\d)\s*発走/);
+      return m?`${String(Number(m[1])).padStart(2,'0')}:${m[2]}`:'';
+    }catch(e){ return ''; }
+  }
+  async function ensureSelected231(){
+    const sel=$('raceSelect'); const opt=sel?.selectedOptions?.[0]; if(!opt) return;
+    const rid=rid231(opt); if(!rid) return;
+    const my=++seq231;
+    let tm=existingTime231(opt) || cache231.get(rid) || '';
+    if(tm){ applyDisplay231(opt,tm); return; }
+    tm=await fromWorker231(rid,kind231(rid));
+    if(my!==seq231 || rid231($('raceSelect')?.selectedOptions?.[0])!==rid) return;
+    if(!tm) tm=await fromPage231(opt,rid);
+    if(my!==seq231 || rid231($('raceSelect')?.selectedOptions?.[0])!==rid) return;
+    if(tm) applyDisplay231(opt,tm);
+  }
+  function schedule231(){
+    clearTimeout(debounce231);
+    debounce231=setTimeout(()=>ensureSelected231().catch(()=>{}),80);
+  }
+
+  // どの世代のapplySelectedRaceUrlが最後に残っていても、その後に発走時刻を復元。
+  const prevApply231=window.applySelectedRaceUrl || (typeof applySelectedRaceUrl==='function'?applySelectedRaceUrl:null);
+  const wrappedApply231=function(){
+    const r=prevApply231?prevApply231.apply(this,arguments):undefined;
+    schedule231();
+    return r;
+  };
+  window.applySelectedRaceUrl=wrappedApply231;
+  try{ applySelectedRaceUrl=wrappedApply231; }catch(e){}
+
+  // レース一覧取得経路がNAR Cron/公式/JRAのどれでも、描画後に選択中レースを補完。
+  const prevList231=window.loadRaceList || (typeof loadRaceList==='function'?loadRaceList:null);
+  if(prevList231){
+    const wrappedList231=async function(){
+      const r=await prevList231.apply(this,arguments);
+      schedule231();
+      return r;
+    };
+    window.loadRaceList=wrappedList231;
+    try{ loadRaceList=wrappedList231; }catch(e){}
+  }
+
+  // loadActive側が内部関数で直接レース選択肢を書き換える経路にも対応。
+  const sel=$('raceSelect');
+  if(sel && typeof MutationObserver!=='undefined'){
+    let lastSig='';
+    new MutationObserver(()=>{
+      const o=sel.selectedOptions?.[0];
+      const sig=rid231(o)+'|'+String(o?.dataset?.postTime||'')+'|'+String(o?.textContent||'');
+      if(sig===lastSig) return;
+      lastSig=sig; schedule231();
+    }).observe(sel,{childList:true,subtree:true});
+  }
+  try{ sel?.addEventListener('change',schedule231); }catch(e){}
+
+  setVersion231();
+  [0,250,1000,3000,8000,16000,30000].forEach(ms=>setTimeout(()=>{setVersion231();schedule231();},ms));
 })();
 </script>
 

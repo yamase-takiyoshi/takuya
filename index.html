@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.227 RACE CARD FIRST + ASYNC ODDS</title>
+<title>The競馬 EV分析 v5.18.228 TIMELINE HORSE FALLBACK + ASYNC ODDS</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.227 RACE CARD FIRST + ASYNC ODDS</span>
+    <span class="ver">v5.18.228 TIMELINE HORSE FALLBACK + ASYNC ODDS</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -18713,7 +18713,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.18.227 RACE CARD FIRST + ASYNC ODDS';
+  const VERSION202 = 'v5.18.228 TIMELINE HORSE FALLBACK + ASYNC ODDS';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
@@ -21203,7 +21203,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   if(window.__V518216_LIVE_COMMENTARY__) return;
   window.__V518216_LIVE_COMMENTARY__ = true;
 
-  const VERSION215 = 'v5.18.227 RACE CARD FIRST + ASYNC ODDS';
+  const VERSION215 = 'v5.18.228 TIMELINE HORSE FALLBACK + ASYNC ODDS';
   const DB_NAME215 = 'thekeiba-odds-timeline-v1';
   const STORE215 = 'captures';
   const TYPES215 = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
@@ -21657,7 +21657,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 <script>
 (function(){
   'use strict';
-  const VERSION219='v5.18.227 RACE CARD FIRST + ASYNC ODDS';
+  const VERSION219='v5.18.228 TIMELINE HORSE FALLBACK + ASYNC ODDS';
   const CFG_KEY219='thekeiba_timeline_cloud_v219';
   const CFG_GLOBAL_KEY219='thekeiba_timeline_cloud_global';
   const DEFAULT_WORKER_URL219='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
@@ -21881,7 +21881,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION227 = 'v5.18.227 RACE CARD FIRST + ASYNC ODDS';
+  const VERSION227 = 'v5.18.228 TIMELINE HORSE FALLBACK + ASYNC ODDS';
   let oddsJobSeq227 = 0;
 
   function el227(id){ return document.getElementById(id); }
@@ -22178,6 +22178,200 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     }
   }
 
+  // v5.18.228 TimelineHorseFallback:
+  // 右側「時系列オッズ」で既に見えている馬名を、同一race_idのIndexedDB/常時Worker履歴から
+  // 左側「出走馬データ」へ安全に復元する。出馬表HTMLがAkamai等で取得不能でも馬名を空欄にしない。
+  const TL_DB228 = 'thekeiba-odds-timeline-v1';
+  const TL_STORE228 = 'captures';
+  const TL_DEFAULT_WORKER228 = 'https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
+
+  function usableHorseName228(v){
+    const s = String(v || '').replace(/[\s　]+/g,'').trim();
+    return !!s && !/^サンプル[A-ZＡ-Ｚ0-9]*$/i.test(s) && !/^sample[A-Z0-9]*$/i.test(s);
+  }
+
+  function timelineCfg228(){
+    let a={}, b={};
+    try{ a = JSON.parse(localStorage.getItem('thekeiba_timeline_cloud_v219') || '{}') || {}; }catch(e){}
+    try{ b = JSON.parse(localStorage.getItem('thekeiba_timeline_cloud_global') || '{}') || {}; }catch(e){}
+    const c = {...a, ...b};
+    return {
+      workerUrl:String(c.workerUrl || TL_DEFAULT_WORKER228).trim() || TL_DEFAULT_WORKER228,
+      token:String(c.token || '')
+    };
+  }
+
+  function readTimelineIdb228(raceId){
+    return new Promise((resolve) => {
+      if(!window.indexedDB){ resolve([]); return; }
+      let done=false;
+      const finish=(v)=>{ if(done) return; done=true; resolve(Array.isArray(v)?v:[]); };
+      let req;
+      try{ req=indexedDB.open(TL_DB228,1); }catch(e){ finish([]); return; }
+      const timer=setTimeout(()=>finish([]),2500);
+      req.onerror=()=>{ clearTimeout(timer); finish([]); };
+      req.onupgradeneeded=()=>{};
+      req.onsuccess=()=>{
+        const db=req.result;
+        try{
+          if(!db.objectStoreNames.contains(TL_STORE228)){ db.close(); clearTimeout(timer); finish([]); return; }
+          const tx=db.transaction(TL_STORE228,'readonly');
+          const st=tx.objectStore(TL_STORE228);
+          let q;
+          if(st.indexNames.contains('race_id')) q=st.index('race_id').getAll(IDBKeyRange.only(String(raceId)));
+          else q=st.getAll();
+          let rows=[];
+          q.onsuccess=()=>{
+            rows=(q.result||[]).filter(r=>String(r?.race_id||'')===String(raceId));
+          };
+          q.onerror=()=>{};
+          tx.oncomplete=()=>{ try{db.close();}catch(e){} clearTimeout(timer); finish(rows); };
+          tx.onerror=()=>{ try{db.close();}catch(e){} clearTimeout(timer); finish(rows); };
+          tx.onabort=()=>{ try{db.close();}catch(e){} clearTimeout(timer); finish(rows); };
+        }catch(e){ try{db.close();}catch(_){} clearTimeout(timer); finish([]); }
+      };
+    });
+  }
+
+  async function readTimelineWorker228(raceId){
+    const cfg=timelineCfg228();
+    if(!cfg.workerUrl) return [];
+    const base=cfg.workerUrl.replace(/\/$/,'');
+    const headers={}; if(cfg.token) headers['X-Timeline-Token']=cfg.token;
+    const ctl=(typeof AbortController==='function')?new AbortController():null;
+    const timer=setTimeout(()=>{ try{ctl?.abort();}catch(e){} },6500);
+    try{
+      const r=await fetch(`${base}/timeline/history?race_id=${encodeURIComponent(raceId)}&since=0&limit=5000`,{
+        cache:'no-store',headers,signal:ctl?ctl.signal:undefined
+      });
+      if(!r.ok) return [];
+      const j=await r.json();
+      return Array.isArray(j?.captures)?j.captures:[];
+    }catch(e){ return []; }
+    finally{ clearTimeout(timer); }
+  }
+
+  function horseNo228(v){
+    const n=Number(v);
+    return Number.isInteger(n)&&n>=1&&n<=99?n:0;
+  }
+
+  function odds228(v){
+    const n=Number(v);
+    return Number.isFinite(n)&&n>=1&&n<=9999?n:0;
+  }
+
+  function extractTimelineHorses228(rows){
+    rows=(Array.isArray(rows)?rows:[]).slice().sort((a,b)=>Number(a?.captured_ms||0)-Number(b?.captured_ms||0));
+    if(!rows.length) return [];
+    const meta=new Map(), latestOdds=new Map();
+
+    // 新しい履歴から馬名・枠・人気を補完。既に取れた正しい値は古い値で上書きしない。
+    for(let i=rows.length-1;i>=0;i--){
+      const rec=rows[i]||{};
+      const lists=[];
+      if(Array.isArray(rec.horses)) lists.push(rec.horses);
+      if(Array.isArray(rec.runners)) lists.push(rec.runners);
+      if(Array.isArray(rec.entries)) lists.push(rec.entries);
+      for(const list of lists){
+        for(const h of list){
+          const no=horseNo228(h?.num ?? h?.horse_no ?? h?.number ?? h?.umaban);
+          if(!no) continue;
+          const prev=meta.get(no)||{num:no,name:'',frame:0,pop:0,odds:0};
+          const nm=String(h?.name ?? h?.horse_name ?? h?.horseName ?? '').trim();
+          if(!prev.name && usableHorseName228(nm)) prev.name=nm;
+          const fr=Number(h?.frame ?? h?.frame_no ?? h?.waku ?? 0);
+          if(!prev.frame && fr>=1&&fr<=8) prev.frame=fr;
+          const pp=Number(h?.pop ?? h?.popularity ?? h?.rank ?? 0);
+          if(!prev.pop && pp>=1&&pp<=99) prev.pop=pp;
+          const od=odds228(h?.odds ?? h?.win_odds ?? 0);
+          if(!prev.odds && od) prev.odds=od;
+          meta.set(no,prev);
+        }
+      }
+
+      // 時系列本体の単勝市場。右側グラフに出ている最新値を左側へも使える。
+      const wins=Array.isArray(rec?.markets?.['単勝']) ? rec.markets['単勝'] : [];
+      for(const x of wins){
+        const key=String(x?.combination ?? x?.horse_no ?? x?.num ?? '').split(/[-－]/)[0];
+        const no=horseNo228(key); if(!no) continue;
+        const od=odds228(x?.odds ?? x?.odds_min ?? x?.value);
+        if(od && !latestOdds.has(no)) latestOdds.set(no,od);
+        const nm=String(x?.name ?? x?.horse_name ?? '').trim();
+        if(usableHorseName228(nm)){
+          const prev=meta.get(no)||{num:no,name:'',frame:0,pop:0,odds:0};
+          if(!prev.name) prev.name=nm;
+          meta.set(no,prev);
+        }
+      }
+
+      // Worker世代差を吸収：win_odds / snapshot.win_odds 形式も拾う。
+      const alt=[rec?.win_odds,rec?.snapshot?.win_odds,rec?.snapshot?.horses,rec?.snapshot?.runners];
+      for(const list of alt){
+        if(!Array.isArray(list)) continue;
+        for(const h of list){
+          const no=horseNo228(h?.num ?? h?.horse_no ?? h?.number ?? h?.umaban); if(!no) continue;
+          const prev=meta.get(no)||{num:no,name:'',frame:0,pop:0,odds:0};
+          const nm=String(h?.name ?? h?.horse_name ?? h?.horseName ?? '').trim();
+          if(!prev.name && usableHorseName228(nm)) prev.name=nm;
+          const fr=Number(h?.frame ?? h?.frame_no ?? h?.waku ?? 0); if(!prev.frame && fr>=1&&fr<=8) prev.frame=fr;
+          const pp=Number(h?.pop ?? h?.popularity ?? h?.rank ?? 0); if(!prev.pop && pp>=1&&pp<=99) prev.pop=pp;
+          const od=odds228(h?.odds ?? h?.win_odds ?? h?.value ?? 0); if(od && !latestOdds.has(no)) latestOdds.set(no,od);
+          meta.set(no,prev);
+        }
+      }
+    }
+
+    const nums=new Set([...meta.keys(),...latestOdds.keys()]);
+    let out=[...nums].sort((a,b)=>a-b).map(no=>{
+      const h=meta.get(no)||{num:no,name:'',frame:0,pop:0,odds:0};
+      return {num:no,name:String(h.name||''),frame:Number(h.frame||0),odds:Number(latestOdds.get(no)||h.odds||0),pop:Number(h.pop||0)};
+    });
+
+    // 馬名が2頭以上確認できた場合だけ採用。race_id一致だけで番号列を捏造しない。
+    if(out.filter(h=>usableHorseName228(h.name)).length<2) return [];
+
+    // 人気が欠けている時は「最新単勝オッズ昇順」からのみ補完する。
+    const ranked=out.filter(h=>Number(h.odds)>=1).slice().sort((a,b)=>Number(a.odds)-Number(b.odds)||a.num-b.num);
+    const rankMap=new Map(ranked.map((h,i)=>[h.num,i+1]));
+    out=out.map(h=>({...h,pop:(Number(h.pop)>=1?Number(h.pop):(rankMap.get(h.num)||0))}));
+    return out;
+  }
+
+  async function timelineHorseFallback228(raceId, allowWorker=true){
+    let rows=await readTimelineIdb228(raceId);
+    let hs=extractTimelineHorses228(rows);
+    if(hs.length>=2) return {horses:hs,source:'IndexedDB',points:rows.length};
+    if(allowWorker){
+      const remote=await readTimelineWorker228(raceId);
+      hs=extractTimelineHorses228(remote);
+      if(hs.length>=2) return {horses:hs,source:'常時Worker',points:remote.length};
+    }
+    return null;
+  }
+
+  function applyTimelineFallback228(fb,raceId){
+    if(!fb || !Array.isArray(fb.horses) || fb.horses.length<2) return false;
+    horses=fb.horses.map(h=>({...h,provisionalOdds:false,timelineFallback:true}));
+    currentRaceId=String(raceId);
+    try{
+      window.__horseDataRaceId=String(raceId);
+      window.__horseDataUpdatedAt=Date.now();
+      window.__raceCardRendered226=true;
+      window.__raceCardRendered227=true;
+      window.__raceCardTimelineFallback228=true;
+    }catch(e){}
+    renderHorseRows();
+    try{ renderManualFinishPicker(); }catch(e){}
+    try{ window.syncOddsTimelineHorseNames202?.(); }catch(e){}
+    const box=el227('raceTitleBox');
+    if(box){
+      box.style.display='block';
+      if(!String(box.textContent||'').trim()) box.textContent=currentRaceName?`選択中: ${currentRaceName}`:`選択中: race_id ${raceId}`;
+    }
+    return true;
+  }
+
   async function fetchRace227(){
     const rawUrl = String(el227('raceUrl')?.value || '').trim();
     if(!rawUrl){ alert('URLを入力してください。'); return; }
@@ -22207,6 +22401,18 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     oddsStatus227('', '');
 
     const myJob = ++oddsJobSeq227;
+
+    // v5.18.228: 右側時系列に馬名が既にある場合、まずIndexedDBから先行表示。
+    // ネットの出馬表取得はその後も続け、成功すれば正式データで上書きする。
+    let timelinePre228 = null;
+    try{
+      timelinePre228 = await timelineHorseFallback228(raceId, false);
+      if(timelinePre228 && applyTimelineFallback228(timelinePre228, raceId)){
+        const oc228 = horses.filter(h=>Number(h.odds)>=1).length;
+        cardStatus227(`📚 時系列履歴から馬名 ${horses.length}頭を先行表示しました（${esc227(timelinePre228.source)} / ${timelinePre228.points}点）。正式出馬表も並行取得中…`, 'ok');
+        oddsStatus227(oc228 ? `📈 時系列の最新単勝オッズ ${oc228}件も先行反映しました。` : '📈 オッズは正式取得を継続しています。', '');
+      }
+    }catch(e){}
 
     try{
       const card = await fetchRaceCard227(kind, raceId, rawUrl);
@@ -22258,9 +22464,19 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       }catch(e){}
 
     }catch(e){
-      console.error('[v5.18.227 fetchRace]', e);
-      cardStatus227(`❌ 出馬表取得失敗: ${esc227(e.message || e)}<br><span style="font-size:11px;color:var(--muted)">オッズ取得とは分離されています。まず出馬表経路（Worker/Bridge）を確認してください。</span>`, 'err');
-      oddsStatus227('', '');
+      console.error('[v5.18.228 fetchRace]', e);
+      // 出馬表HTMLが取れなくても、右側時系列の同一race_idに馬名が保存済みなら左側を復元する。
+      let fb228 = timelinePre228;
+      try{ if(!fb228) fb228 = await timelineHorseFallback228(raceId, true); }catch(_){}
+      if(fb228 && applyTimelineFallback228(fb228, raceId)){
+        const oc228 = horses.filter(h=>Number(h.odds)>=1).length;
+        const pc228 = horses.filter(h=>Number(h.pop)>=1).length;
+        cardStatus227(`✅ 出馬表ページは取得できませんでしたが、右側の時系列履歴から ${horses.length}頭の馬名を復元しました（${esc227(fb228.source)} / ${fb228.points}点）。`, 'ok');
+        oddsStatus227(`📈 単勝オッズ ${oc228}件 / 人気 ${pc228}件を時系列履歴から反映。EV計算に進めます。`, 'ok');
+      }else{
+        cardStatus227(`❌ 出馬表取得失敗: ${esc227(e.message || e)}<br><span style="font-size:11px;color:var(--muted)">時系列履歴にもこのrace_idの馬名が無かったため復元できませんでした。</span>`, 'err');
+        oddsStatus227('', '');
+      }
     }finally{
       if(progress) progress.classList.remove('show');
     }
@@ -22271,6 +22487,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   window.fetchRace227 = fetchRace227;
   window.refreshOdds227 = refreshOdds227;
   window.__THEKEIBA_RACECARD_FIRST_227__ = true;
+  window.__THEKEIBA_TIMELINE_HORSE_FALLBACK_228__ = true;
 
   setVersion227();
   [0, 250, 1000, 3000, 8000, 16000].forEach(ms => setTimeout(setVersion227, ms));

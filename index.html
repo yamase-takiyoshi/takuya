@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.232 出馬表修復＋発走時刻</title>
+<title>The競馬 EV分析 v5.18.233 出馬表取得修復＋発走時刻</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.232 出馬表修復＋発走時刻</span>
+    <span class="ver">v5.18.233 出馬表取得修復＋発走時刻</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -18764,7 +18764,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.18.232 出馬表修復＋発走時刻';
+  const VERSION202 = 'v5.18.233 出馬表取得修復＋発走時刻';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
@@ -21254,7 +21254,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   if(window.__V518216_LIVE_COMMENTARY__) return;
   window.__V518216_LIVE_COMMENTARY__ = true;
 
-  const VERSION215 = 'v5.18.232 出馬表修復＋発走時刻';
+  const VERSION215 = 'v5.18.233 出馬表取得修復＋発走時刻';
   const DB_NAME215 = 'thekeiba-odds-timeline-v1';
   const STORE215 = 'captures';
   const TYPES215 = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
@@ -21708,7 +21708,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 <script>
 (function(){
   'use strict';
-  const VERSION219='v5.18.232 出馬表修復＋発走時刻';
+  const VERSION219='v5.18.233 出馬表取得修復＋発走時刻';
   const CFG_KEY219='thekeiba_timeline_cloud_v219';
   const CFG_GLOBAL_KEY219='thekeiba_timeline_cloud_global';
   const DEFAULT_WORKER_URL219='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
@@ -21932,7 +21932,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION227 = 'v5.18.232 出馬表修復＋発走時刻';
+  const VERSION227 = 'v5.18.233 出馬表取得修復＋発走時刻';
   let oddsJobSeq227 = 0;
 
   function el227(id){ return document.getElementById(id); }
@@ -22577,7 +22577,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   if(window.__THEKEIBA_232__) return;
   window.__THEKEIBA_232__ = true;
 
-  const VERSION = 'v5.18.232 出馬表修復＋発走時刻';
+  const VERSION = 'v5.18.233 出馬表取得修復＋発走時刻';
   const JRA_VENUE_NAMES = {'01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京','06':'中山','07':'中京','08':'京都','09':'阪神','10':'小倉',
     '30':'門別','35':'盛岡','36':'水沢','42':'浦和','43':'船橋','44':'大井','45':'川崎','46':'金沢','47':'笠松','48':'名古屋','50':'園田','51':'姫路','54':'高知','55':'佐賀','65':'帯広'};
   const $ = id => document.getElementById(id);
@@ -23214,37 +23214,78 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     return s.length < 500 || /Access Denied|Reference\s*#|Pardon Our Interruption|Just a moment|bm-verify/i.test(s);
   }
 
+  // Worker の type=shutuba が汎用ページを返す版でも、元URLを直指定して取得する。
+  // 直指定は fetchHtmlViaProxy のキャッシュと type= への変換を通さない。
+  async function fetchCardDirect233(url){
+    const base = String(settings.proxyUrl || '').trim().replace(/\/+$/, '');
+    if(!base) throw new Error('Worker URLが未設定です');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12000);
+    try{
+      const endpoint = new URL(base);
+      endpoint.searchParams.set('url', url);
+      endpoint.searchParams.set('_', String(Date.now()));
+      const response = await fetch(endpoint.href, {cache:'no-store', signal:controller.signal});
+      if(!response.ok) throw new Error(`Worker直指定 HTTP ${response.status}`);
+      return await response.text();
+    }finally{ clearTimeout(timer); }
+  }
+
+  function validCard233(html, url, path){
+    if(!html || blocked(html)) return null;
+    const p = parseCard(html, url);
+    const hs = p.horses.filter(h => Number.isInteger(Number(h.num)) && Number(h.num) >= 1 &&
+      Number(h.num) <= 18 && String(h.name || '').trim());
+    if(hs.length < 2 || new Set(hs.map(h => Number(h.num))).size !== hs.length) return null;
+    return {url, doc:p.doc, horses:hs, path};
+  }
+
   async function fetchCard(kind, rid, raw){
-    let lastErr = null;
     const urls = cardUrls(kind, rid, raw);
+    const failures = [];
+    // まず通常の Worker/Userscript 経路を試す。
     for(const url of urls){
       try{
-        const html = await getHtmlStrict(url, 20000);
-        if(!html || blocked(html)){ lastErr = new Error('空/拒否ページ'); continue; }
-        const p = parseCard(html, url);
-        if(p.horses.length >= 2) return { url, doc:p.doc, horses:p.horses, path: window.__fetchPath || '' };
-        lastErr = new Error('ページは取得できましたが出走馬表を解析できませんでした');
-      }catch(e){ lastErr = e; }
+        const html = await getHtmlStrict(url, 16000);
+        const card = validCard233(html, url, window.__fetchPath || 'worker');
+        if(card) return card;
+        failures.push('通常取得:出走馬表なし');
+      }catch(e){ failures.push('通常取得:' + (e.message || e)); }
+    }
+    // 同じ race_id の出馬表のみ直指定。別レースを誤表示しない。
+    for(const url of urls){
+      try{
+        const html = await fetchCardDirect233(url);
+        const card = validCard233(html, url, 'worker-url');
+        if(card){ try{ await putRaceHtmlCache(url, html); }catch(e){} return card; }
+        failures.push('Worker直指定:出走馬表なし');
+      }catch(e){ failures.push('Worker直指定:' + (e.message || e)); }
     }
     if(kind === 'NAR' && typeof narRescueFetch217 === 'function'){
       try{
         const r = await withTimeout(narRescueFetch217(rid, false), 25000);
-        if(r && Array.isArray(r.horses) && r.horses.length >= 2) return { url:r.url, doc:r.doc, horses:r.horses, path:'nar-rescue' };
-      }catch(e){ lastErr = e; }
+        if(r && Array.isArray(r.horses) && r.horses.length >= 2)
+          return {url:r.url, doc:r.doc, horses:r.horses, path:'nar-rescue'};
+        if(r?.log) failures.push('NAR再取得:' + r.log);
+      }catch(e){ failures.push('NAR再取得:' + (e.message || e)); }
     }
+    // 出馬表が公開されていない確定レースだけ、結果ページを参照する。
     const extra = [
       kind === 'NAR' ? `https://nar.netkeiba.com/race/result.html?race_id=${rid}&rf=race_submenu` : `https://race.netkeiba.com/race/result.html?race_id=${rid}&rf=race_submenu`,
       `https://db.netkeiba.com/race/${rid}/`
     ];
     for(const url of extra){
-      try{
-        const html = await getHtmlStrict(url, 20000);
-        if(!html || blocked(html)) continue;
-        const p = parseCard(html, url);
-        if(p.horses.length >= 2) return { url, doc:p.doc, horses:p.horses, path: /db\./.test(url) ? 'db-fallback' : 'result-fallback' };
-      }catch(e){ lastErr = e; }
+      for(const [path, get] of [
+        ['result-fallback', () => getHtmlStrict(url, 16000)],
+        ['result-worker-url', () => fetchCardDirect233(url)]
+      ]){
+        try{
+          const card = validCard233(await get(), url, path);
+          if(card) return card;
+        }catch(e){ failures.push(path + ':' + (e.message || e)); }
+      }
     }
-    throw lastErr || new Error('出馬表を取得できませんでした');
+    throw new Error('出馬表を取得できませんでした。' + failures.slice(-5).join(' / '));
   }
 
   async function getHtmlStrict(url, ms){
@@ -23319,6 +23360,12 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       urlEl.value = `https://race.netkeiba.com/race/shutuba.html?race_id=${rid}&rf=race_submenu`;
     }
     const my = ++job;
+    if(String(window.__horseDataRaceId || '') !== rid){
+      horses = [];
+      window.__horseDataRaceId = '';
+      window.__raceCardRendered226 = false;
+      window.renderHorseRows();
+    }
     try{ window.__oddsJob232 = my; }catch(e){}
     const progress = $('fetchProgress'), msg = $('fetchMsg'), btn = $('fetchBtn');
     if(progress) progress.classList.add('show');

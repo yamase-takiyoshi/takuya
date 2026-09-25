@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.228 TIMELINE HORSE FALLBACK + ASYNC ODDS</title>
+<title>The競馬 EV分析 v5.18.229 WORKER RACECARD JSON FIRST + ASYNC ODDS</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.228 TIMELINE HORSE FALLBACK + ASYNC ODDS</span>
+    <span class="ver">v5.18.229 WORKER RACECARD JSON FIRST + ASYNC ODDS</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -21881,7 +21881,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION227 = 'v5.18.228 TIMELINE HORSE FALLBACK + ASYNC ODDS';
+  const VERSION227 = 'v5.18.229 WORKER RACECARD JSON FIRST + ASYNC ODDS';
   let oddsJobSeq227 = 0;
 
   function el227(id){ return document.getElementById(id); }
@@ -21981,8 +21981,98 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     return { doc, horses: Array.isArray(hs) ? hs : [] };
   }
 
+  function proxyBase229(){
+    try{
+      return String((window.settings && settings.proxyUrl) || '').trim().replace(/\/+$/,'');
+    }catch(e){
+      return '';
+    }
+  }
+
+  function normalizeWorkerHorse229(x){
+    const num = Number(x?.num ?? x?.horse_no ?? x?.number ?? x?.umaban ?? 0);
+    const name = String(x?.name ?? x?.horse_name ?? x?.horseName ?? '').trim();
+    const frame = Number(x?.frame ?? x?.frame_no ?? x?.waku ?? 0);
+    const odds = Number(x?.odds ?? x?.win_odds ?? 0);
+    const pop = Number(x?.pop ?? x?.popularity ?? x?.rank ?? 0);
+    return {
+      num: Number.isFinite(num) ? num : 0,
+      name,
+      frame: Number.isFinite(frame) && frame >= 1 && frame <= 8 ? frame : 0,
+      odds: Number.isFinite(odds) && odds >= 1 ? odds : 0,
+      pop: Number.isFinite(pop) && pop >= 1 ? pop : 0,
+      jockey: String(x?.jockey || ''),
+      weight: Number(x?.weight || 0) || 0,
+      sexAge: String(x?.sex_age ?? x?.sexAge ?? ''),
+      scratched: !!x?.scratched,
+      workerRaceCard: true
+    };
+  }
+
+  async function workerRaceCard229(kind, raceId){
+    const base = proxyBase229();
+    if(!base) throw new Error('Worker URL未設定');
+
+    // v6.1.2 Workerの専用API。HTMLを何本も直列取得せず、
+    // Worker側で NAR公式 / netkeiba を並行取得して、馬番・馬名だけ先にJSONで返す。
+    const url = `${base}/racecard?race_id=${encodeURIComponent(raceId)}&kind=${encodeURIComponent(kind)}&_=${Date.now()}`;
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 7500);
+    let res, j;
+    try{
+      res = await fetch(url, {
+        method:'GET',
+        cache:'no-store',
+        signal:ctl.signal,
+        headers:{'Accept':'application/json'}
+      });
+      const txt = await res.text();
+      try{ j = JSON.parse(txt); }catch(e){
+        throw new Error(`Worker /racecard がJSONを返しませんでした (HTTP ${res.status})`);
+      }
+      if(!res.ok || !j?.ok){
+        const msg = j?.error || `HTTP ${res.status}`;
+        throw new Error(`Worker /racecard: ${msg}`);
+      }
+    }catch(e){
+      if(e?.name === 'AbortError') throw new Error('Worker /racecard が7.5秒でタイムアウトしました');
+      throw e;
+    }finally{
+      clearTimeout(timer);
+    }
+
+    const hs = (Array.isArray(j.horses) ? j.horses : [])
+      .map(normalizeWorkerHorse229)
+      .filter(x => x.num >= 1 && x.num <= 30 && x.name);
+
+    const uniq = [];
+    const seen = new Set();
+    hs.sort((a,b)=>a.num-b.num).forEach(x => {
+      if(!seen.has(x.num)){ seen.add(x.num); uniq.push(x); }
+    });
+    if(uniq.length < 2) throw new Error(`Worker /racecard の出走馬が${uniq.length}頭でした`);
+
+    // 既存処理はdocを要求するため空DOMを渡す。オッズは後段の非同期処理で別取得する。
+    const doc = new DOMParser().parseFromString('<!doctype html><html><body></body></html>', 'text/html');
+    const source = String(j.source || 'worker-racecard');
+    const venue = String(j?.race?.venue_name || '');
+    const raceName = String(j?.race?.name || '').trim();
+
+    return {
+      url: String(j.source_url || j.final_url || ''),
+      html:'',
+      doc,
+      horses:uniq,
+      raceName,
+      venue,
+      source,
+      path:`worker-racecard-json:${source}`,
+      workerJson:j
+    };
+  }
+
   async function bridgeCard227(url){
-    // 出馬表だけは住宅IPブリッジを最優先。v5.18.166 の「Worker先行」をここだけ回避する。
+    // v5.18.229: 専用Worker /racecard が失敗した場合だけ住宅IPブリッジを使う。
     if(typeof fetchViaBridge !== 'function') return null;
     if(typeof window.__narBridgeFetch !== 'function' || window.__bridgeAbsent === true) return null;
     try{
@@ -21999,13 +22089,23 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     const urls = canonicalCardUrls227(kind, raceId, rawUrl);
     let lastErr = null;
 
-    // NAR/JRAとも、Userscriptが使える時は出馬表のみ先に住宅IPで取得する。
+    // v5.18.229: まず専用Worker /racecard JSON APIを1回だけ呼ぶ。
+    // NARはWorker側で地方競馬公式を最優先するため、nar.netkeibaのAkamai遮断に依存しない。
+    try{
+      const hit = await workerRaceCard229(kind, raceId);
+      if(hit && Array.isArray(hit.horses) && hit.horses.length >= 2) return hit;
+    }catch(e){
+      lastErr = e;
+      try{ dbgAppend(`⚠️ Worker /racecard: ${e.message || e}`); }catch(_){}
+    }
+
+    // 専用APIが未Deploy/失敗した時だけ住宅IPブリッジへフォールバック。
     for(const url of urls){
       const hit = await bridgeCard227(url);
       if(hit) return hit;
     }
 
-    // 次に既存のWorker/キャッシュ経路。ただし「出馬表/結果」以外は一切試さない。
+    // さらに既存のWorker/キャッシュ経路。ただし「出馬表/結果」以外は一切試さない。
     for(const url of urls){
       try{
         const html = await fetchHtmlViaProxy(url);
@@ -22396,8 +22496,8 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     const progress = el227('fetchProgress');
     const msg = el227('fetchMsg');
     if(progress) progress.classList.add('show');
-    if(msg) msg.textContent = '出馬表を最優先で取得中...';
-    cardStatus227(`🐎 出馬表を最優先で取得中… ${esc227(raceId)}`, '');
+    if(msg) msg.textContent = 'Worker経由で出馬表を取得中...';
+    cardStatus227(`🐎 Worker /racecard から出馬表を最優先で取得中… ${esc227(raceId)}`, '');
     oddsStatus227('', '');
 
     const myJob = ++oddsJobSeq227;
@@ -22420,10 +22520,14 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 
       horses = card.horses;
       currentRaceId = raceId;
-      try{
-        const t = parseRaceTitleFromDoc(card.doc);
-        if(t) currentRaceName = t;
-      }catch(e){}
+      if(card.raceName){
+        currentRaceName = card.raceName;
+      }else{
+        try{
+          const t = parseRaceTitleFromDoc(card.doc);
+          if(t) currentRaceName = t;
+        }catch(e){}
+      }
 
       try{
         window.__horseDataRaceId = String(raceId);
@@ -22488,6 +22592,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   window.refreshOdds227 = refreshOdds227;
   window.__THEKEIBA_RACECARD_FIRST_227__ = true;
   window.__THEKEIBA_TIMELINE_HORSE_FALLBACK_228__ = true;
+  window.__THEKEIBA_WORKER_RACECARD_JSON_FIRST_229__ = true;
 
   setVersion227();
   [0, 250, 1000, 3000, 8000, 16000].forEach(ms => setTimeout(setVersion227, ms));

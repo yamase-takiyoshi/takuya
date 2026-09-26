@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.245 Worker5秒履歴完全表示</title>
+<title>The競馬 EV分析 v5.18.246 接続復旧・Worker5秒履歴</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.245 Worker5秒履歴完全表示</span>
+    <span class="ver">v5.18.246 接続復旧・Worker5秒履歴</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -780,6 +780,100 @@ body.right-analysis-active #rightAnalysisPane{
     loading="lazy" allow="clipboard-read; clipboard-write"></iframe>
 </aside>
 
+<script id="connection-recovery246">
+/* v5.18.246: bounded connections; data proxy and timeline collector stay independent. */
+(function(){
+  'use strict';
+  const esc = s => String(s ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const pendingBridge = new Map();
+  let testing = null;
+  window.withDeadline246 = function(task, ms, onTimeout){
+    let timer;
+    const timeout = new Promise((_,reject)=>{
+      timer=setTimeout(()=>{ try{onTimeout?.();}catch(e){} reject(new Error('通信がタイムアウトしました。再試行できます。')); },ms);
+    });
+    return Promise.race([Promise.resolve().then(task),timeout]).finally(()=>clearTimeout(timer));
+  };
+  window.fetchText246 = async function(url, options={}, ms=8000){
+    const ctl=new AbortController();
+    return window.withDeadline246(async()=>{
+      const res=await fetch(url,{cache:'no-store',...options,signal:ctl.signal});
+      const text=await res.text();
+      return {status:res.status,ok:res.ok,text};
+    },ms,()=>ctl.abort());
+  };
+  window.usablePayload246 = function(text){
+    const s=String(text||'').trim();
+    if(!s || /<title[^>]*>\s*(?:Access Denied|Just a moment)|don't have permission to access|errors\.edgesuite\.net|cf-chl-|Pardon Our Interruption/i.test(s)) return false;
+    if(/^[\[{]/.test(s)){
+      try{const j=JSON.parse(s);return !!j && j.ok!==false && !j.error && !/^(?:NG|ERROR)$/i.test(String(j.status||''));}catch(e){return false;}
+    }
+    return /<(?:html|table|tr|li|a)(?:\s|>)/i.test(s);
+  };
+  window.bridgeText246 = function(url){
+    const key=String(url||'');
+    if(pendingBridge.has(key)) return pendingBridge.get(key);
+    const job=(async()=>{
+      if(typeof window.__narBridgeFetch!=='function' || (window.__bridgeAbsent===true && !window.__NAR_BRIDGE_READY__)) throw new Error('Bridge未接続');
+      const r=await window.withDeadline246(()=>window.__narBridgeFetch(key),8500);
+      if(!(Number(r?.status)>=200 && Number(r?.status)<300) || !window.usablePayload246(r?.text)) throw new Error('Bridge: HTTP '+(r?.status||'ERR')+' / 有効な本文なし');
+      window.__NAR_BRIDGE_READY__=true;window.__bridgeAbsent=false;window.__bridgeCooldownUntil=0;
+      window.__fetchPath='bridge';window.__bridgeLastError='';
+      return {status:Number(r.status),ok:true,text:String(r.text),path:'Bridge'};
+    })();
+    pendingBridge.set(key,job);
+    job.finally(()=>{if(pendingBridge.get(key)===job)pendingBridge.delete(key);}).catch(()=>{});
+    return job;
+  };
+  function listUrl(){
+    const kind=document.getElementById('pickKind')?.value==='NAR'?'NAR':'JRA';
+    const date=(document.getElementById('pickDate')?.value||'').replace(/-/g,'');
+    if(!/^\d{8}$/.test(date)) throw new Error('馬データで日付を選択してください。');
+    return {kind,url:kind==='NAR'?`https://nar.netkeiba.com/top/race_list.html?kaisai_date=${date}&rf=race_list`:`https://race.netkeiba.com/top/race_list_sub.html?kaisai_date=${date}&current_group=10${date}`};
+  }
+  window.openTimelineSettings246=function(){
+    document.querySelector('[data-tab="settings"]')?.click();
+    document.getElementById('timelineCloudCard219')?.scrollIntoView({block:'start',behavior:'smooth'});
+  };
+  window.testProxy246=function(){
+    if(testing) return testing;
+    testing=(async()=>{
+      const box=document.getElementById('proxyStatus');
+      const buttons=[...document.querySelectorAll('button[onclick="testProxy()"]')];
+      buttons.forEach(b=>b.disabled=true);
+      if(box)box.innerHTML='<div class="url-status" role="status">🔄 レース取得と5秒履歴の接続を確認中…</div>';
+      try{
+        const input=document.getElementById('proxyUrl');
+        const base=String(input?.value||'').trim();
+        let proxyError='';
+        try{const u=new URL(base);if(!/^https?:$/.test(u.protocol)||u.username||u.password)throw 0;}catch(e){proxyError='Workers URLを確認してください';}
+        if(!proxyError && typeof saveProxy==='function') saveProxy();
+        const target=listUrl();
+        // A connection check has no collection/start side effects and does not use an unrelated historical race.
+        const worker=async()=>{
+          if(proxyError)throw new Error(proxyError);
+          const u=new URL(base);u.searchParams.set('url',target.url);
+          const r=await window.fetchText246(u.href,{},8000);
+          return {...r,ok:r.ok&&window.usablePayload246(r.text)};
+        };
+        const results=await Promise.allSettled([worker(),window.bridgeText246(target.url),window.timelineCloudProbe246?window.timelineCloudProbe246():Promise.reject(new Error('初期化待ち'))]);
+        const result=(i)=>results[i].status==='fulfilled'?results[i].value:{ok:false,status:'ERR',error:String(results[i].reason?.message||results[i].reason)};
+        const w=result(0),b=result(1),t=result(2);
+        const available=w.ok||b.ok;
+        const summary=available?`✅ ${target.kind}の開催一覧を取得できました（${b.ok?'Bridge':'Worker'}経由）。`:'⚠️ レース取得の接続を確認できませんでした。';
+        const row=(label,r)=>`<div style="margin-top:5px;color:${r.ok?'var(--green)':'var(--yellow)'}">${esc(label)}：${r.ok?'接続OK':r.status==='ERR'?'応答を確認できません':'HTTP '+esc(r.status)}${r.error?' — '+esc(r.error):''}${r.note?' / '+esc(r.note):''}</div>`;
+        if(box)box.innerHTML=`<div class="url-status ${available?'ok':'err'}" role="status">${summary}</div><div class="url-status" style="line-height:1.65">${row('レース取得Worker',w)}${row('Bridge（'+target.kind+'開催一覧）',b)}${row('常時時系列Worker（5秒履歴）',t)}${!w.ok?'<div style="margin-top:8px">Workerへの通信失敗だけでは、URL間違い・CORS・接続障害の区別はできません。'+(b.ok?'レースデータはBridge経由で取得を続けられます。':'URLと接続状況を確認し、再試行してください。')+'</div>':''}<div style="margin-top:8px">5秒履歴は常時時系列Workerから読み込みます。Bridgeの成功だけでは、サーバーに保存された履歴は確認できません。</div><button class="btn-sm" style="margin-top:8px" type="button" onclick="openTimelineSettings246()">☁️ 5秒履歴の設定を開く</button></div>`;
+        if(b.ok && typeof putRaceHtmlCache==='function') await putRaceHtmlCache(target.url,b.text);
+        return {worker:w,bridge:b,timeline:t};
+      }catch(e){if(box)box.innerHTML='<div class="url-status err">'+esc(e?.message||e)+'</div>';return {ok:false};}
+      finally{buttons.forEach(b=>b.disabled=false);}
+    })();
+    testing.finally(()=>{testing=null;}).catch(()=>{});
+    return testing;
+  };
+})();
+
+</script>
 <script>
 // ============================================================
 // The競馬 EV分析 HTML版 v5.15.3
@@ -4564,7 +4658,7 @@ async function fetchViaBridge(url){
   // 'ready' 未受信かつ、過去に応答ゼロ(=Userscript不在)と判定済みならスキップ
   if(!window.__NAR_BRIDGE_READY__ && window.__bridgeAbsent === true){ window.__bridgeLastError = 'ブリッジ未検出'; return null; }
   try{
-    const r = await window.__narBridgeFetch(url);
+    const r = await window.bridgeText246(url);
     // 何らかの応答が返った時点で Userscript は存在する → 🌉 を立てる（IP/クッキーで弾かれてもブリッジ扱い）
     if(r && (r.status || r.text)) markBridgeReady87();
     if(r && r.status >= 200 && r.status < 300 && r.text){ window.__bridgeLastError = ''; window.__fetchPath = 'bridge'; return r.text; }
@@ -13876,53 +13970,8 @@ if(typeof setAppVersionLabel === 'function') setAppVersionLabel();
     };
   }
 
-  const prevTest158 = window.testProxy;
-  window.testProxy = async function(){
-    const url = document.getElementById('proxyUrl')?.value.trim();
-    if(!url){ alert('Workers URLを入力してください。'); return; }
-    if(window.settings) window.settings.proxyUrl = url;
-    try{ if(typeof saveSettings === 'function') saveSettings(); }catch(e){}
-    const status = document.getElementById('proxyStatus');
-    if(status) status.innerHTML = '<div class="url-status">🔄 テスト中（Worker + 地方競馬公式PC + ブリッジ確認）...</div>';
-    const base = url.replace(/\/$/, '');
-    const ymd = (typeof todayYmd==='function' ? todayYmd() : '').replace(/-/g,'');
-    const pickDate = document.getElementById('pickDate')?.value || (typeof todayYmd==='function' ? todayYmd() : '');
-    const probe = async (reqUrl)=>{
-      try{
-        const res = await fetch(reqUrl, { cache:'no-store' });
-        let txt=''; try{ txt = await res.text(); }catch(e){}
-        let j=null; try{ j=JSON.parse(txt); }catch(e){}
-        const ok = res.ok && /<(html|table|tr|li|a\s)/i.test(txt) && !blocked158(txt);
-        return { status:String(res.status), ok, len:txt.length, upstreamStatus:j&&j.upstreamStatus, err:j&&(j.error||j.message) };
-      }catch(e){ return { status:'ERR', ok:false, len:0, err:(e&&e.message)||String(e) }; }
-    };
-    const jraList = `https://race.netkeiba.com/top/race_list_sub.html?kaisai_date=${ymd}&current_group=10${ymd}`;
-    const narList = `https://nar.netkeiba.com/top/race_list.html?kaisai_date=${ymd}&rf=race_list`;
-    const official = officialPcUrl158(pickDate, '30');
-    const a = await probe(`${base}?url=${encodeURIComponent(jraList)}`);
-    const b = await probe(`${base}?url=${encodeURIComponent(narList)}`);
-    const c = await probe(`${base}?type=shutuba&kind=JRA&race_id=202605020911`);
-    const d = await probe(`${base}?url=${encodeURIComponent(official)}`);
-    let bridge = { status:'未検出', ok:false, len:0, err:'Userscriptブリッジ未検出' };
-    if(typeof window.__narBridgeFetch === 'function' && window.__bridgeAbsent !== true){
-      try{
-        const r = await window.__narBridgeFetch(narList);
-        const txt = (r && r.text) || '';
-        bridge = { status:String(r ? r.status : '0'), ok:(r && String(r.status)==='200' && /<(html|table|tr|li|a\s)/i.test(txt)), len:txt.length, err:(r&&r.error)||'' };
-      }catch(e){ bridge = { status:'ERR', ok:false, len:0, err:(e&&e.message)||String(e) }; }
-    }
-    const row = (label, r)=>`<div style="font-family:monospace;font-size:11px;opacity:.88">${label}: HTTP ${esc158(r.status)}${r.upstreamStatus?(' / upstream '+esc158(r.upstreamStatus)):''}${r.ok?' ✅':''}${r.err?(' '+esc158(r.err)):''}</div>`;
-    let cls='ok', verdict='🟢 Worker応答あり。';
-    if(d.ok) verdict += ' 地方競馬公式PCも取得OKです。NAR開催判定に使えます。';
-    else verdict += ' 地方競馬公式PCが取得失敗中です。この場合は「開催なし」ではなく「取得失敗」と表示します。';
-    if(![a,b,c,d].some(x=>x.status!=='ERR')){ cls='err'; verdict='🔴 Workerに到達できません。URL・Deploy状態を確認してください。'; }
-    else if(!d.ok && !bridge.ok){ cls='err'; }
-    if(status){
-      status.innerHTML = `<div class="url-status ${cls}">${verdict}`
-        + `<div style="margin-top:6px;">${row('url=（JRA一覧）',a)}${row('url=（NAR一覧）',b)}${row('type/race_id（JRA）',c)}${row('公式PC（門別RaceList）',d)}${row('ブリッジ（NAR/住宅IP）',bridge)}</div>`
-        + `<div style="margin-top:6px;font-family:monospace;font-size:11px;opacity:.9">${esc158(window.APP_VERSION)}確認: 502/ERRは開催なし扱いにしません</div></div>`;
-    }
-  };
+  // v246: independent connection checks with bounded waits.
+  window.testProxy = function(){ return window.testProxy246(); };
 
   window.copyWorkerCode = function(){
     const code = `// The競馬 EV分析 Cloudflare Worker v4 (NAR official PC + nar.sp + detailed errors)
@@ -14966,6 +15015,16 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
     const candidates = narCandidates166(u);
     let lastErr = null;
+    if(window.__NAR_BRIDGE_READY__ && typeof window.bridgeText246==='function'){
+      try{
+        const cached=await getRaceHtmlCache(u);
+        if(cached){window.__fetchPath='cache';return cached;}
+        const r=await window.bridgeText246(u);
+        await putRaceHtmlCache(u,r.text);
+        window.__fetchPath='bridge';
+        return r.text;
+      }catch(e){lastErr=e;}
+    }
 
     // 1) NARはまずWorker/従来ルートを優先。
     //    Workerが通る日はこの経路だけで完結し、ブリッジは使わない。
@@ -17873,8 +17932,8 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   }
 
   async function fetchJson(url){
-    const r=await fetch(url,{cache:'no-store',headers:snapshotHeaders()});
-    let j=null; try{ j=await r.json(); }catch(e){}
+    const r=await window.fetchText246(url,{headers:snapshotHeaders()},6000);
+    let j=null;try{j=JSON.parse(r.text);}catch(e){}
     if(!r.ok || !j || j.ok===false){
       const msg=(j&&(j.error||j.message))||`HTTP ${r.status}`;
       throw new Error(msg);
@@ -17918,6 +17977,19 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     };
   }
 
+  async function narListFromBridge246(date,code=''){
+    if(!window.__NAR_BRIDGE_READY__)throw new Error('Bridge未接続');
+    const target=raceListUrl('NAR',date,code);
+    const result=await window.bridgeText246(target);
+    const codes=parseNarOfficialVenueCodesFromList(result.text,date).filter(c=>nameByNet.has(c));
+    const races=parseRaceIdsFromList(result.text,'NAR',code,date)
+      .filter(r=>/^\d{12}$/.test(r.raceId)&&raceIdMatchesSelectedDate('NAR',r.raceId,date)&&nameByNet.has(r.venueCode)&&r.raceNo>=1&&r.raceNo<=12)
+      .map(r=>({...r,postTime:r.startTime||r.postTime||'',venueName:venueName(r.venueCode),source:'Bridge'}));
+    if(!codes.length&&!races.length)throw new Error('選択日の開催一覧を解析できません');
+    await putRaceHtmlCache(target,result.text);
+    return {codes:[...new Set([...codes,...races.map(r=>r.venueCode)])],races};
+  }
+
   async function narRacesFromCron(date, forceToday=false){
     const rows=await readManifest(date,forceToday);
     const out=[];
@@ -17947,12 +18019,12 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 
   function renderVenues(found){
     const el=$('pickVenue'); if(!el) return;
-    el.innerHTML=found.length?found.map(v=>`<option value="${esc(v.code)}">${esc(v.name)}（${v.races.length}R）</option>`).join(''):'<option value="">開催なし</option>';
+    el.innerHTML=found.length?found.map(v=>`<option value="${esc(v.code)}">${esc(v.name)}${v.races.length?'（'+v.races.length+'R）':''}</option>`).join(''):'<option value="">開催なし</option>';
     const setNar=$('setNar');
     if(setNar){ try{ setNar.value='1'; if(typeof saveSettings==='function') saveSettings(); }catch(e){} }
   }
 
-  function renderRaces(rows,date,code){
+  function renderRaces(rows,date,code,source=rows[0]?.source||'Cloudflare Cron'){
     const sel=$('raceSelect'), urlIn=$('raceUrl'), box=$('raceTitleBox'), status=$('urlStatus');
     if(!sel) return;
     const vn=venueName(code);
@@ -17970,7 +18042,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       try{ currentRaceId=window.currentRaceId; currentRaceName=window.currentRaceName; }catch(e){}
       if(box){box.style.display='block';box.textContent=o.textContent||'';}
     }
-    if(status) status.innerHTML=`<div class="url-status ok">✅ ${esc(dashed(date))} ${esc(vn)} ${rows.length}R：Cloudflare Cron → 地方競馬公式から取得<br><span style="font-size:11px;opacity:.85">NARはJRA race_list_subを使用しません / ${esc(VERSION)}</span></div>`;
+    if(status) status.innerHTML=`<div class="url-status ok">✅ ${esc(dashed(date))} ${esc(vn)} ${rows.length}R：${esc(source)}経由で取得<br><span style="font-size:11px;opacity:.85">NARはJRA race_list_subを使用しません / ${esc(VERSION)}</span></div>`;
   }
 
   const prevActive=window.loadActiveVenuesForDate;
@@ -17983,6 +18055,18 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     const status=$('urlStatus');
     const raceSel=$('raceSelect'); if(raceSel) raceSel.innerHTML='<option value="">NAR開催場を確認中...</option>';
     if(status) status.innerHTML=`<div class="url-status">☁️ ${esc(date)} NAR：Cloudflare Cronの開催情報を確認中...</div>`;
+    if(window.__NAR_BRIDGE_READY__){
+      try{
+        const result=await narListFromBridge246(date);
+        if(($('pickKind')?.value||'')!=='NAR'||$('pickDate')?.value!==date)return [];
+        groupByVenue(result.races,date);
+        const found=result.codes.map(code=>({code,name:venueName(code),races:result.races.filter(r=>r.venueCode===code)}));
+        renderVenues(found);
+        if(status)status.innerHTML=`<div class="url-status ok">✅ ${esc(date)} のNAR開催場をBridgeで取得：${found.map(v=>esc(v.name)).join('、')}</div>`;
+        setTimeout(()=>{if($('pickKind')?.value==='NAR'&&$('pickDate')?.value===date)loadList196().catch(()=>{});},40);
+        return found;
+      }catch(e){console.warn('[246] Bridge開催一覧',e.message);}
+    }
     try{
       let rows=await narRacesFromCron(date,false);
       if(!rows.length && dashed(date)===jstToday()) rows=await narRacesFromCron(date,true);
@@ -18010,6 +18094,14 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     if(!code || !nameByNet.has(code)){ if(status) status.innerHTML='<div class="url-status">開催場を選択してください</div>'; return; }
     const ck=compact(date)+'-'+code;
     let rows=cache[ck]||[];
+    if(!rows.length&&window.__NAR_BRIDGE_READY__){
+      try{
+        const result=await narListFromBridge246(date,code);
+        if($('pickKind')?.value!=='NAR'||$('pickDate')?.value!==date||$('pickVenue')?.value!==code)return [];
+        groupByVenue(result.races,date);rows=cache[ck]||[];
+        if(rows.length){renderRaces(rows,date,code,'Bridge');return rows;}
+      }catch(e){console.warn('[246] Bridgeレース一覧',e.message);}
+    }
     try{
       if(!rows.length){
         let all=await narRacesFromCron(date,false);
@@ -18775,7 +18867,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.18.245 Worker5秒履歴完全表示';
+  const VERSION202 = 'v5.18.246 接続復旧・Worker5秒履歴';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
@@ -20205,7 +20297,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
     $('oddsTsWorkerFull245')?.addEventListener('click',async()=>{
       setStatus202('☁️ Workerの5秒履歴を先頭から再読込中…','wait');
       try{
-        if(typeof window.timelineCloudFullSync219==='function'){ const target245=String($('oddsTsRaceArchive')?.value||activeRid||currentRaceId202()||''); await window.timelineCloudFullSync219(false,target245); }
+        if(typeof window.timelineCloudFullSync219==='function'){ const target245=String($('oddsTsRaceArchive')?.value||activeRid||currentRaceId202()||''); const result246=await window.timelineCloudFullSync219(false,target245); if(result246?.ok)setStatus202(`☁️ Worker履歴 ${result246.imported}点読込 / 保存 ${result246.total}点`,'ok');else setStatus202('⚠️ レースを選択してください','err'); }
         else throw new Error('常時時系列Worker同期機能の初期化待ちです。数秒後にもう一度押してください。');
       }catch(e){ setStatus202('⚠️ Worker全履歴読込: '+String(e?.message||e),'err'); }
     });
@@ -21363,7 +21455,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
   if(window.__V518216_LIVE_COMMENTARY__) return;
   window.__V518216_LIVE_COMMENTARY__ = true;
 
-  const VERSION215 = 'v5.18.245 Worker5秒履歴完全表示';
+  const VERSION215 = 'v5.18.246 接続復旧・Worker5秒履歴';
   const DB_NAME215 = 'thekeiba-odds-timeline-v1';
   const STORE215 = 'captures';
   const TYPES215 = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
@@ -21818,14 +21910,17 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
 <script>
 (function(){
   'use strict';
-  const VERSION219='v5.18.245 Worker5秒履歴完全表示';
+  const VERSION219='v5.18.246 接続復旧・Worker5秒履歴';
   const CFG_KEY219='thekeiba_timeline_cloud_v219';
   const CFG_GLOBAL_KEY219='thekeiba_timeline_cloud_global';
   const DEFAULT_WORKER_URL219='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
   const DB_NAME219='thekeiba-odds-timeline-v1';
   const STORE219='captures';
-  let syncTimer219=null, busy219=false;
+  let syncTimer219=null, raceTimer219=null;
+  const syncJobs219=new Map(), workerCursor219=new Map();
   const fullSyncedRaces219=new Set();
+  const apiPrefixes219=new Map();
+  const syncKey219=(rid)=>base219()+'|'+cfg219().token+'|'+rid;
   const $219=id=>document.getElementById(id);
   const esc219=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   function cfg219(){
@@ -21833,7 +21928,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
     try{legacy=JSON.parse(localStorage.getItem(CFG_KEY219)||'{}')||{};}catch(e){}
     try{global=JSON.parse(localStorage.getItem(CFG_GLOBAL_KEY219)||'{}')||{};}catch(e){}
     const c={...legacy,...global};
-    const workerUrl=String(c.workerUrl||DEFAULT_WORKER_URL219).trim()||DEFAULT_WORKER_URL219;
+    const workerUrl=String(c.workerUrl||DEFAULT_WORKER_URL219).trim().replace(/\/+$/,'')||DEFAULT_WORKER_URL219;
     return {workerUrl,token:String(c.token||''),autoRegister:c.autoRegister!==false,autoSync:c.autoSync!==false};
   }
   function saveCfg219(p={}){
@@ -21847,7 +21942,6 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
   function persistWorkerUrl219(raw){
     const v=String(raw||'').trim()||DEFAULT_WORKER_URL219;
     const saved=saveCfg219({workerUrl:v});
-    const el=$219('timelineCloudUrl219'); if(el&&el.value!==saved.workerUrl)el.value=saved.workerUrl;
     return saved.workerUrl;
   }
   function setVersion219(){
@@ -21912,8 +22006,26 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
   }
   async function fetch219(path,opt={}){
     const base=base219();if(!base)throw new Error('常時時系列Worker URLが未設定です');
-    const r=await fetch(base+path,{cache:'no-store',...opt});let j=null;try{j=await r.json();}catch(e){}
-    if(!r.ok||!j||j.ok===false)throw new Error((j&&(j.error||j.message))||`HTTP ${r.status}`);return j;
+    let parsed;try{parsed=new URL(base);}catch(e){throw new Error('常時時系列Worker URLを確認してください');}
+    if(!/^https?:$/.test(parsed.protocol)||parsed.username||parsed.password)throw new Error('常時時系列Worker URLを確認してください');
+    const isRead=!opt.method||opt.method==='GET';
+    const compatible=isRead && /^\/timeline\/(?:history|status)(?:\?|$)/.test(path);
+    const prefix=apiPrefixes219.has(base)?apiPrefixes219.get(base):'/timeline';
+    const paths=compatible?[path.replace(/^\/timeline/,prefix),path.replace(/^\/timeline/,prefix? '':'/timeline')]:[path];
+    for(let i=0;i<paths.length;i++){
+      let r;
+      try{r=await window.fetchText246(base+paths[i],opt,/\/history(?:\?|$)/.test(path)?12000:8000);}
+      catch(e){throw new Error('常時時系列Workerに接続できません。'+String(e?.message||e)+'（レース取得Bridgeとは別の接続です）');}
+      let j=null;try{j=JSON.parse(r.text);}catch(e){}
+      if(compatible && i===0 && [404,405].includes(r.status))continue;
+      if(!r.ok||!j||typeof j!=='object'||j.ok===false){
+        const detail=(j&&(j.error||j.message))||(!r.ok?'HTTP '+r.status:'JSON履歴APIではない応答');
+        throw new Error('常時時系列Worker: '+detail);
+      }
+      if(compatible)apiPrefixes219.set(base,paths[i].startsWith('/timeline/')?'/timeline':'');
+      return j;
+    }
+    throw new Error('常時時系列Workerの履歴APIが見つかりません');
   }
   function dbOpen219(){return new Promise((resolve,reject)=>{const req=indexedDB.open(DB_NAME219,1);req.onupgradeneeded=()=>{const db=req.result;let st;if(!db.objectStoreNames.contains(STORE219))st=db.createObjectStore(STORE219,{keyPath:'id'});else st=req.transaction.objectStore(STORE219);if(!st.indexNames.contains('race_id'))st.createIndex('race_id','race_id',{unique:false});if(!st.indexNames.contains('captured_ms'))st.createIndex('captured_ms','captured_ms',{unique:false});};req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error||new Error('IndexedDB open failed'));});}
   function idbClosing219(e){return String(e?.name||'')==='InvalidStateError'||String(e?.name||'')==='AbortError'||/connection is closing|connection.*closed|database.*closed/i.test(String(e?.message||e||''));}
@@ -21950,12 +22062,16 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
   function normalizeWorkerCapture219(raw,rid){
     if(!raw||typeof raw!=='object') return null;
     const raceId=String(raw.race_id||raw.raceId||rid||'');
+    if(rid && raceId!==String(rid))return null;
     let ms=Number(raw.captured_ms||raw.capturedMs||raw.ts_ms||raw.timestamp_ms||raw.time_ms||0);
     if(!(ms>0)){
       const t=raw.captured_at||raw.capturedAt||raw.timestamp||raw.time||raw.at;
-      const p=t?Date.parse(t):NaN; if(Number.isFinite(p)) ms=p;
+      const numeric=Number(t);
+      const p=Number.isFinite(numeric)&&numeric>0?numeric:(t?Date.parse(t):NaN);
+      if(Number.isFinite(p))ms=p;
     }
-    if(!/^\d{10,14}$/.test(raceId)||!(ms>0)) return null;
+    if(ms>0&&ms<1e11)ms*=1000;
+    if(!/^\d{10,14}$/.test(raceId)||!Number.isFinite(ms)||ms<=0||ms>8.64e15) return null;
     const markets=raw.markets||raw.odds||raw.market_data||raw.marketData||{};
     const rec={...raw};
     rec.schema=rec.schema||'thekeiba-odds-timeline-v1';
@@ -21967,7 +22083,8 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
     rec.horses=Array.isArray(rec.horses)?rec.horses:[];
     rec.markets=(markets&&typeof markets==='object')?markets:{};
     // Workerがidを返さない版でも5秒点を失わないよう、race_id+時刻から安定IDを生成。
-    rec.id=String(rec.id||`${raceId}:${ms}`);
+    rec.id=`${raceId}:${ms}`;
+    rec.source='worker';
     return rec;
   }
   async function putMany219(rows,rid=''){
@@ -21977,33 +22094,28 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
     return normalized.length;
   }
   function extractWorkerRows219(j){
-    if(!j||typeof j!=='object') return [];
-    const candidates=[j.captures,j.history,j.records,j.rows,j.items,j.data?.captures,j.data?.history,j.data?.records,j.data?.rows,j.data?.items];
-    for(const a of candidates) if(Array.isArray(a)) return a;
-    return [];
+    if(Array.isArray(j))return j;
+    if(!j||typeof j!=='object')throw new Error('履歴応答が空です');
+    const candidates=[j.captures,j.history,j.records,j.rows,j.items,j.data,j.data?.captures,j.data?.history,j.data?.records,j.data?.rows,j.data?.items];
+    for(const a of candidates)if(Array.isArray(a))return a;
+    throw new Error('履歴配列がない応答です。常時時系列Worker URLを確認してください');
   }
-  async function fetchHistoryPages219(rid,since=0,full=false){
-    const all=[];
-    let cursor=Math.max(0,Number(since)||0);
+  async function fetchHistoryPages219(rid,since=0){
+    const all=new Map();let cursor=Math.max(0,Number(since)||0);
     const limit=5000;
     for(let page=0;page<12;page++){
-      const j=await fetch219(`/timeline/history?race_id=${encodeURIComponent(rid)}&since=${encodeURIComponent(cursor)}&limit=${limit}`,{headers:headers219(false)});
+      const j=await fetch219(`/timeline/history?race_id=${encodeURIComponent(rid)}&since=${cursor}&limit=${limit}`,{headers:headers219(false)});
       const rows=extractWorkerRows219(j);
-      if(!rows.length) break;
-      all.push(...rows);
-      let maxMs=cursor;
-      rows.forEach(r=>{
-        const n=normalizeWorkerCapture219(r,rid);
-        if(n&&n.captured_ms>maxMs) maxMs=n.captured_ms;
-      });
-      // since が包含条件のWorkerでも同一点を繰り返さない。
-      if(!(maxMs>=cursor)) break;
-      const next=maxMs+1;
-      if(next<=cursor) break;
-      cursor=next;
-      if(rows.length<limit) break;
+      if(!rows.length)return [...all.values()];
+      const normalized=rows.map(r=>normalizeWorkerCapture219(r,rid)).filter(Boolean);
+      if(!normalized.length)throw new Error('履歴のレースIDまたは記録時刻を確認できません');
+      let maxMs=cursor-1;
+      for(const n of normalized){all.set(n.id,n);maxMs=Math.max(maxMs,n.captured_ms);}
+      // Short pages are not proof of completion: workers may enforce a lower page cap.
+      if(maxMs<cursor)return [...all.values()];
+      cursor=maxMs+1;
     }
-    return all;
+    throw new Error('履歴のページ数が上限に達しました。同期未完了のため再試行してください');
   }
   async function startCurrent219(silent=false){
     const rid=currentRid219();if(!/^\d{10,14}$/.test(rid)){if(!silent)status219('⚠️ レースを選択してください','err');return null;}
@@ -22020,42 +22132,71 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
     status219(`☁️ ${rid} 常時収集ON（発走+10分（終了目安+5分）で完全停止・固定 / デバイス0台）`,'ok');return j;
   }
   async function syncCurrent219(silent=false,forceFull=false,ridOverride=''){
-    if(busy219)return;const rid=String(ridOverride||currentRid219());if(!/^\d{10,14}$/.test(rid)||!base219())return;
-    busy219=true;
-    try{
-      const statusP=cacheStatus219(rid);
-      // v5.18.245: 最初の同期は必ずsince=0からバックフィル。
-      // ローカルに“新しい2点だけ”ある状態でも、その間にWorkerが持つ5秒点を取りこぼさない。
-      const needFull=forceFull||!fullSyncedRaces219.has(rid);
-      const since=needFull?0:Math.max(0,(await lastMs219(rid))+1);
-      const rows=await fetchHistoryPages219(rid,since,needFull);
-      const n=await putMany219(rows,rid);
-      if(needFull) fullSyncedRaces219.add(rid);
-      await statusP;
-      try{await window.reloadOddsTimelineRace202?.(rid);}catch(e){}
-      try{window.refreshOddsRaceArchive?.();}catch(e){}
-      let total=0; try{ total=(await (async()=>{let a=[];await idbRun219('readonly',(st,tx,reject)=>{const q=st.index('race_id').getAll(IDBKeyRange.only(String(rid)));q.onsuccess=()=>{a=q.result||[];};q.onerror=()=>reject(q.error||new Error('count read failed'));});return a;})()).length; }catch(e){}
-      if(n){
-        status219(`☁️ Worker${needFull?'全':'差分'}履歴を同期：${n}点読込 / 表示候補 ${total}点 / ${rid}`,'ok');
-      }else if(!silent){
-        status219(`☁️ Worker${needFull?'全':'差分'}履歴同期済み：追加0点 / 表示候補 ${total}点 / ${rid}`,'ok');
-      }
-      return {ok:true,race_id:rid,full:needFull,imported:n,total};
-    }catch(e){if(!silent)status219('⚠️ 常時時系列同期: '+String(e?.message||e),'err'); throw e;}
-    finally{busy219=false;}
+    const rid=String(ridOverride||currentRid219());
+    if(!/^\d{10,14}$/.test(rid)){
+      if(!silent)status219('⚠️ レースを選択してからWorker履歴を読み込んでください','err');
+      return {ok:false,reason:'NO_RACE'};
+    }
+    const key=syncKey219(rid),existing=syncJobs219.get(key);
+    if(existing){
+      if(forceFull&&!existing.full){try{await existing.promise;}catch(e){}return syncCurrent219(silent,true,rid);}
+      return existing.promise;
+    }
+    const needFull=forceFull||!fullSyncedRaces219.has(key);
+    if(!silent)status219(`☁️ ${rid} Worker${needFull?'全':'差分'}履歴を読み込み中…`);
+    const job=(async()=>{
+      try{
+        // Use the collector cursor; a newer local capture must not hide older Worker records.
+        const since=needFull?0:Math.max(0,(workerCursor219.get(key)||0)-30000);
+        const rows=await fetchHistoryPages219(rid,since);
+        if(key!==syncKey219(rid))throw new Error('接続先が変更されたため、もう一度同期してください');
+        const n=await putMany219(rows,rid);
+        if(needFull)fullSyncedRaces219.add(key);
+        if(rows.length)workerCursor219.set(key,Math.max(workerCursor219.get(key)||0,...rows.map(r=>r.captured_ms)));
+        let total=0;
+        await idbRun219('readonly',(st,tx,reject)=>{
+          const q=st.index('race_id').count(IDBKeyRange.only(rid));
+          q.onsuccess=()=>{total=q.result||0;};q.onerror=()=>reject(q.error||new Error('履歴件数を取得できません'));
+        });
+        // Do not switch the visible chart back if the user selected another race during fetch.
+        const shown=String($219('oddsTsRaceArchive')?.value||currentRid219()||'');
+        if(shown===rid){try{await window.reloadOddsTimelineRace202?.(rid);}catch(e){}}
+        try{window.refreshOddsRaceArchive?.();}catch(e){}
+        // Metadata is helpful but may not block a successful history import.
+        cacheStatus219(rid);
+        if(needFull&&!n){
+          status219(`☁️ ${rid} Worker保存履歴は0点です。端末内 ${total}点。常時収集の対象と開始状況を確認してください。`);
+        }else{
+          status219(`☁️ ${rid} Worker${needFull?'全':'差分'}履歴 ${n}点読込 / 保存 ${total}点`,'ok');
+        }
+        return {ok:true,race_id:rid,full:needFull,imported:n,total};
+      }catch(e){status219('⚠️ 履歴同期失敗（保存済み履歴は保持）：'+String(e?.message||e),'err');throw e;}
+      finally{syncJobs219.delete(key);}
+    })();
+    syncJobs219.set(key,{promise:job,full:needFull});
+    return job;
   }
   async function fullSyncCurrent219(silent=false,ridOverride=''){
-    const rid=String(ridOverride||currentRid219());
-    if(/^\d{10,14}$/.test(rid)) fullSyncedRaces219.delete(rid);
-    return syncCurrent219(silent,true,rid);
+    return syncCurrent219(silent,true,ridOverride);
   }
-  async function health219(){try{const j=await fetch219('/health',{headers:headers219(false)});status219(`✅ 常時Worker接続OK：${j.version||'online'} / 5秒DO=${j.durable_object?'ON':'確認要'}`,'ok');return j;}catch(e){status219('❌ 常時Worker接続失敗：'+String(e?.message||e),'err');return null;}}
+  async function probe219(){
+    const j=await fetch219('/health',{headers:headers219(false)});
+    if(!(j.durable_object===true || /AlwaysOnTimeline|Always.On.Timeline|timeline.*collector/i.test(String(j.version||j.service||'')))){
+      throw new Error('5秒履歴用Workerを確認できません。プロキシ用URLと区別してください');
+    }
+    return {ok:true,status:200,note:String(j.version||'常時時系列Worker'),data:j};
+  }
+  async function health219(){
+    try{const r=await probe219();status219('✅ 常時時系列Worker接続OK：'+r.note+' / 履歴件数はレース選択後に確認します','ok');return r.data;}
+    catch(e){status219('⚠️ 常時時系列Worker接続未確認：'+String(e?.message||e),'err');return null;}
+  }
+  window.timelineCloudProbe246=probe219;
   async function discover219(){try{const j=await fetch219('/timeline/discover',{headers:headers219(false)});status219(`☁️ 自動探索：manifest ${j.manifest_races||0}R / 対象 ${j.eligible||0}R / 起動 ${j.started||0}R`,'ok');return j;}catch(e){status219('⚠️ 自動探索失敗：'+String(e?.message||e),'err');}}
   function installUi219(){
     const settingsTab=$219('tab-settings');
     if(settingsTab&&!$219('timelineCloudCard219')){
       const c=cfg219(),card=document.createElement('div');card.className='card';card.id='timelineCloudCard219';card.innerHTML=`
-        <div class="section-header"><h2>☁️ 常時時系列オッズ（デバイス0台）</h2><span class="nar-badge">v5.18.245</span></div>
+        <div class="section-header"><h2>☁️ 常時時系列オッズ（デバイス0台）</h2><span class="nar-badge">v5.18.246</span></div>
         <div style="font-size:11px;color:var(--muted);line-height:1.65;margin-bottom:10px">Durable Object Workerがサーバー側で時系列オッズを継続収集します。別デバイス未接続・iPad/PCを閉じた状態でも継続し、次回起動時にIndexedDBへ同期します。発走+10分（終了目安+5分）に達したらWorker・端末の5秒収集をそのレースについて終了し、その時点の時系列を完成形として固定します。以後は新しい点を追加せず、後から同じグラフを閲覧できます。3分前・発走・+10分の基準線も固定表示します。</div>
         <div class="field"><label>常時時系列Worker URL</label><input id="timelineCloudUrl219" type="url" value="${esc219(c.workerUrl)}" placeholder="https://the-keiba-timeline-collector.xxxxx.workers.dev"></div>
         <div class="field"><label>Token（Workerに設定した場合のみ）</label><input id="timelineCloudToken219" type="password" value="${esc219(c.token)}" autocomplete="off"></div>
@@ -22065,15 +22206,15 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
         <div id="timelineCloudStatus219" style="margin-top:8px"></div>`;
       settingsTab.appendChild(card);
       const urlInput219=$219('timelineCloudUrl219');
-      urlInput219.addEventListener('input',e=>persistWorkerUrl219(e.target.value));
+      // Save completed URLs on change/blur; do not rewrite the field while typing.
       urlInput219.addEventListener('change',e=>persistWorkerUrl219(e.target.value));
       urlInput219.addEventListener('blur',e=>persistWorkerUrl219(e.target.value));
       $219('timelineCloudToken219').addEventListener('change',e=>saveCfg219({token:String(e.target.value||'')}));
       $219('timelineCloudAutoReg219').addEventListener('change',e=>saveCfg219({autoRegister:!!e.target.checked}));
       $219('timelineCloudAutoSync219').addEventListener('change',e=>saveCfg219({autoSync:!!e.target.checked}));
       $219('timelineCloudHealth219').onclick=health219;$219('timelineCloudStart219').onclick=()=>startCurrent219(false).catch(e=>status219('❌ '+e.message,'err'));
-      $219('timelineCloudSync219').onclick=()=>syncCurrent219(false);
-      $219('timelineCloudFullSync245').onclick=()=>fullSyncCurrent219(false);
+      $219('timelineCloudSync219').onclick=()=>syncCurrent219(false).catch(()=>{});
+      $219('timelineCloudFullSync245').onclick=()=>fullSyncCurrent219(false).catch(()=>{});
       $219('timelineCloudDiscover219').onclick=discover219;
     }
     const pane=$219('rightOddsTimelinePane');
@@ -22082,9 +22223,16 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
     }
   }
   function onRace219(){
-    setTimeout(async()=>{if(!base219())return;const c=cfg219();if(c.autoRegister)try{await startCurrent219(true);}catch(e){}if(c.autoSync)syncCurrent219(true);},700);
+    clearTimeout(raceTimer219);
+    raceTimer219=setTimeout(()=>{
+      if(!base219())return;
+      const c=cfg219();
+      // Reading existing history does not depend on a successful registration request.
+      if(c.autoSync)syncCurrent219(true).catch(()=>{});
+      if(c.autoRegister)startCurrent219(true).catch(e=>{if(!c.autoSync)status219('⚠️ 常時収集を開始できません：'+String(e?.message||e),'err');});
+    },700);
   }
-  function startTimer219(){if(syncTimer219)clearInterval(syncTimer219);syncTimer219=setInterval(()=>{const c=cfg219();if(c.autoSync&&base219()&&!document.hidden)syncCurrent219(true);},15000);}
+  function startTimer219(){if(syncTimer219)clearInterval(syncTimer219);syncTimer219=setInterval(()=>{const c=cfg219();if(c.autoSync&&base219()&&!document.hidden)syncCurrent219(true).catch(()=>{});},15000);}
   function boot219(){
     saveCfg219({workerUrl:cfg219().workerUrl});
     installUi219();setVersion219();startTimer219();
@@ -22092,18 +22240,18 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
     window.addEventListener('thekeiba-timeline-race-loaded',e=>{
       const rid=String(e?.detail?.race_id||'');
       if(base219()&&/^\d{10,14}$/.test(rid)){
-        cacheStatus219(rid);
-        if(rid===currentRid219()&&cfg219().autoSync) setTimeout(()=>syncCurrent219(true),80);
+        // Reload after an import emits this same event. Do not form a sync -> reload -> sync loop.
+        if(!syncJobs219.has(syncKey219(rid))&&cfg219().autoSync)syncCurrent219(true,false,rid).catch(()=>{});
       }
     });
-    document.addEventListener('visibilitychange',()=>{if(!document.hidden){installUi219();setVersion219();syncCurrent219(true);}});
-    if(base219()){health219().then(()=>{onRace219();});}
+    document.addEventListener('visibilitychange',()=>{if(!document.hidden){installUi219();setVersion219();syncCurrent219(true).catch(()=>{});}});
+    if(base219()){onRace219();}
   }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot219,{once:true});else boot219();
   [300,1200,3000,7000,15000,30000,60000].forEach(ms=>setTimeout(()=>{installUi219();setVersion219();},ms));
 
   window.timelineCloudStart219=()=>startCurrent219(false);
-  window.timelineCloudSync219=(silent=false)=>syncCurrent219(!!silent,false);
+  window.timelineCloudSync219=(silent=false)=>syncCurrent219(!!silent,false).catch(e=>({ok:false,error:String(e?.message||e)}));
   window.timelineCloudFullSync219=(silent=false,rid='')=>fullSyncCurrent219(!!silent,rid);
   window.timelineCloudHealth219=health219;window.timelineCloudDiscover219=discover219;
 })();
@@ -22116,7 +22264,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
 (function(){
   'use strict';
 
-  const VERSION227 = 'v5.18.245 Worker5秒履歴完全表示';
+  const VERSION227 = 'v5.18.246 接続復旧・Worker5秒履歴';
   let oddsJobSeq227 = 0;
 
   function el227(id){ return document.getElementById(id); }
@@ -22762,7 +22910,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
   if(window.__THEKEIBA_232__) return;
   window.__THEKEIBA_232__ = true;
 
-  const VERSION = 'v5.18.245 Worker5秒履歴完全表示';
+  const VERSION = 'v5.18.246 接続復旧・Worker5秒履歴';
   const JRA_VENUE_NAMES = {'01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京','06':'中山','07':'中京','08':'京都','09':'阪神','10':'小倉',
     '30':'門別','35':'盛岡','36':'水沢','42':'浦和','43':'船橋','44':'大井','45':'川崎','46':'金沢','47':'笠松','48':'名古屋','50':'園田','51':'姫路','54':'高知','55':'佐賀','65':'帯広'};
   const $ = id => document.getElementById(id);
@@ -23515,6 +23663,14 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
   async function fetchCard(kind, rid, raw){
     const urls = cardUrls(kind, rid, raw);
     const failures = [];
+    if(window.__NAR_BRIDGE_READY__ && typeof window.bridgeText246==='function'){
+      try{
+        const url=urls[0];
+        const r=await window.bridgeText246(url);
+        const card=validCard233(r.text,url,'Bridge');
+        if(card){try{await putRaceHtmlCache(url,r.text);}catch(e){}return card;}
+      }catch(e){failures.push('Bridge出馬表:'+(e.message||e));}
+    }
     try{ return await fetchCardJson235(kind, rid); }
     catch(e){ failures.push('Worker出馬表JSON:' + (e.message || e)); }
     // JSONが失敗した時だけ従来のWorker/Userscript HTML経路を試す。
@@ -23633,7 +23789,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
       alert('レースを選択するか、race_id付きURLを入力してください。');
       return;
     }
-    if(typeof settings !== 'undefined' && !settings.proxyUrl){
+    if(typeof settings !== 'undefined' && !settings.proxyUrl && !window.__NAR_BRIDGE_READY__){
       alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。');
       return;
     }

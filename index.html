@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.248 取得ボタン復帰・オッズ鮮度修正</title>
+<title>The競馬 EV分析 v5.18.249 オッズ経路自動切替・鮮度診断</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.248 取得ボタン復帰・オッズ鮮度修正</span>
+    <span class="ver">v5.18.249 オッズ経路自動切替・鮮度診断</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -18869,7 +18869,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.18.248 取得ボタン復帰・オッズ鮮度修正';
+  const VERSION202 = 'v5.18.249 オッズ経路自動切替・鮮度診断';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
@@ -19384,7 +19384,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
   const endpoint=nar?'https://nar.netkeiba.com/api/api_get_nar_odds.html':'https://race.netkeiba.com/api/api_get_jra_odds.html';
   const markets={},diagnostics={};
   const sources=[];
-  let officialAt='';
+  let officialAt='',apiStatus='',updateCount='';
   let cursor=0,done=0;
   async function run(){
     while(cursor<TICKET_DEFS243.length){
@@ -19400,6 +19400,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
           const j=typeof raw==='string'?JSON.parse(String(raw).trim()):raw;
           const oa=String(j?.data?.official_datetime??j?.official_datetime??'').trim();
           if(oa && (!officialAt || oa>officialAt)) officialAt=oa;
+          if(def.id===1){ apiStatus=String(j?.status??''); updateCount=String(j?.update_count??j?.data?.update_count??''); }
         }catch(_){}
         if(rows.length){markets[def.name]=rows;sources.push(baseUrl);}
         diagnostics[def.name]={state:rows.length?'ok':'empty',count:rows.length,message:rows.length?'':'有効なオッズなし（未発売・売止等）'};
@@ -19412,7 +19413,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
   await Promise.all([run(),run(),run()]);
   const ordered={};
   for(const def of TICKET_DEFS243) if(markets[def.name]) ordered[def.name]=markets[def.name];
-  return {markets:ordered,diagnostics,source:sources.sort().join(' | '),market_count:Object.keys(ordered).length,official_at:officialAt};
+  return {markets:ordered,diagnostics,source:sources.sort().join(' | '),market_count:Object.keys(ordered).length,official_at:officialAt,api_status:apiStatus,update_count:updateCount};
 }
 
   function renderMarketStatus243(diagnostics={},done=8){
@@ -19426,12 +19427,16 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
       }).join('');
   }
 
+  // v5.18.249: 取得経路。'auto'=従来（Bridge優先→Worker）、'worker'=Bridge/端末キャッシュを通さずWorkerへ直指定。
+  // 同じ値が続いたら自動で経路を切り替え、どちらが新しい値を返すかを実測する。
+  let transport249='auto';
   async function fetchMarkets202(kind,rid,expected){
     // All eight API requests are scheduled even when win odds have succeeded.
     // Reuse the existing JSON-capable transport, with its communication timeout.
     renderMarketStatus243({},0);
+    const mode=transport249;
     const got=await fetchAllTickets243(kind,rid,async url=>{
-      const raw=await fetchHtmlViaProxy(url);
+      const raw = mode==='worker' ? await fetchPreserveUrl202(url,12000) : await fetchHtmlViaProxy(url);
       if(!/^\s*[{[]/.test(String(raw||''))) throw new Error('JSON以外の応答（未公開・接続拒否等）');
       return raw;
     },(done,diagnostics)=>{
@@ -19439,7 +19444,9 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
     });
     const maps=newMarkets202();
     for(const [type,rows] of Object.entries(got.markets)) rows.forEach(r=>maps[type].set(r.combination,r.odds));
-    return {markets:maps,packed:got.markets,diagnostics:got.diagnostics,source:got.source,official_at:got.official_at||''};
+    const path=mode==='worker'?'Worker直指定':(window.__fetchPath==='bridge'?'Bridge':(window.__fetchPath==='worker'?'Worker':String(window.__fetchPath||'自動')));
+    return {markets:maps,packed:got.markets,diagnostics:got.diagnostics,source:got.source,official_at:got.official_at||'',
+      api_status:got.api_status||'',update_count:got.update_count||'',transport:path};
   }
 
   async function capture202(force=false){
@@ -19484,7 +19491,8 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
         source:got.source || '',
         horses:expected.map(h=>({num:Number(h.num),name:String(h.name||''),pop:Number(h.pop||0),frame:Number(h.frame||0),odds:Number(h.odds||0)})),
         markets:packed, market_status:got.diagnostics,
-        official_at:got.official_at||''
+        official_at:got.official_at||'', api_status:got.api_status||'', update_count:got.update_count||'',
+        transport:got.transport||''
       };
       await dbPut202(rec);
       history.push(rec);
@@ -19504,6 +19512,20 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
       for(let i=history.length-1;i>0;i--){
         if(JSON.stringify(history[i].markets)===JSON.stringify(history[i-1].markets)) sameRun247++; else break;
       }
+      // v5.18.249: 同一値が6回（約30秒以上）続くたびに経路を切替（Bridge優先⇔Worker直指定）。
+      if(unchanged202 && sameRun247>0 && sameRun247%6===0) transport249 = transport249==='auto' ? 'worker' : 'auto';
+      try{
+        const d=$('oddsTsDiag249');
+        if(d){
+          const oa=String(got.official_at||'').replace(/^\d{4}-\d{2}-\d{2}\s*/,'')||'応答に無し';
+          const st=got.api_status?` / API status: ${got.api_status}`:'';
+          const uc=got.update_count?` / update_count: ${got.update_count}`:'';
+          const warn=sameRun247>=12
+            ? `<br><b style="color:#fbbf24">⚠️ ${sameRun247+1}回連続で全券種が同一。Bridge・Worker直指定の両経路で変化なし。公式発表時刻が止まっていれば netkeiba 側の更新停止、進んでいれば取得処理の問題です。</b>`
+            : (!unchanged202?'<br><span style="color:#86efac">✅ 前回から値が変化しました</span>':'');
+          d.innerHTML=`経路: ${esc(got.transport||'-')}（次回: ${transport249==='worker'?'Worker直指定':'Bridge優先'}） / 公式発表: ${esc(oa)}${esc(st)}${esc(uc)} / 同一連続: ${unchanged202?sameRun247+1:0}回${warn}`;
+        }
+      }catch(_){}
       const officialText247=got.official_at?` / 公式発表 ${String(got.official_at).replace(/^\d{4}-\d{2}-\d{2}\s*/,'')}`:'';
       const unchangedText202=unchanged202
         ? (sameRun247>=24 ? ` / ⚠️ ${Math.round(sameRun247*5/60)}分以上全券種が同一（取得元キャッシュの可能性）` : ' / 変化なしも5秒点として保存')
@@ -20276,6 +20298,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
           <button class="btn-sm" id="oddsTsCsv" type="button">CSV</button>
         </div>
         <div id="oddsTsStatus" class="odds-ts-status wait">レースを選択してください。</div>
+        <div id="oddsTsDiag249" style="font-size:11px;line-height:1.6;margin:4px 0;color:#cbd5e1">経路診断: 取得待ち</div>
         <details id="oddsTsMarkets243" style="font-size:11px;line-height:1.6;margin:6px 0"><summary>全券種取得状況（8券種）</summary>「全8券種取得」で確認します。</details>
         <div class="odds-ts-metric-note">想定確率＝現行EVモデル / 市場確率＝1÷実オッズ / EV＝想定確率×実オッズ / 乖離＝想定確率−市場確率 / 複勝・ワイドのグラフはオッズ下限（上下限を保存） / 「表示」は選択指標に連動</div>
         <div class="odds-ts-metric-note" style="color:#8bd9ae">v5.18.222: 最新値を右端に固定し、更新ごとに履歴が左へ流れます。グラフの左半分をタップすると過去へ15分、右半分をタップすると新しい時刻へ15分移動します。左右ドラッグでも移動でき、追従を一時停止します。「▶ 最新へ」でLIVEへ復帰します。</div>
@@ -21475,7 +21498,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
   if(window.__V518216_LIVE_COMMENTARY__) return;
   window.__V518216_LIVE_COMMENTARY__ = true;
 
-  const VERSION215 = 'v5.18.248 取得ボタン復帰・オッズ鮮度修正';
+  const VERSION215 = 'v5.18.249 オッズ経路自動切替・鮮度診断';
   const DB_NAME215 = 'thekeiba-odds-timeline-v1';
   const STORE215 = 'captures';
   const TYPES215 = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
@@ -21930,7 +21953,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
 <script>
 (function(){
   'use strict';
-  const VERSION219='v5.18.248 取得ボタン復帰・オッズ鮮度修正';
+  const VERSION219='v5.18.249 オッズ経路自動切替・鮮度診断';
   const CFG_KEY219='thekeiba_timeline_cloud_v219';
   const CFG_GLOBAL_KEY219='thekeiba_timeline_cloud_global';
   const DEFAULT_WORKER_URL219='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
@@ -22216,7 +22239,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
     const settingsTab=$219('tab-settings');
     if(settingsTab&&!$219('timelineCloudCard219')){
       const c=cfg219(),card=document.createElement('div');card.className='card';card.id='timelineCloudCard219';card.innerHTML=`
-        <div class="section-header"><h2>☁️ 常時時系列オッズ（デバイス0台）</h2><span class="nar-badge">v5.18.248</span></div>
+        <div class="section-header"><h2>☁️ 常時時系列オッズ（デバイス0台）</h2><span class="nar-badge">v5.18.249</span></div>
         <div style="font-size:11px;color:var(--muted);line-height:1.65;margin-bottom:10px">Durable Object Workerがサーバー側で時系列オッズを継続収集します。別デバイス未接続・iPad/PCを閉じた状態でも継続し、次回起動時にIndexedDBへ同期します。発走+10分（終了目安+5分）に達したらWorker・端末の5秒収集をそのレースについて終了し、その時点の時系列を完成形として固定します。以後は新しい点を追加せず、後から同じグラフを閲覧できます。3分前・発走・+10分の基準線も固定表示します。</div>
         <div class="field"><label>常時時系列Worker URL</label><input id="timelineCloudUrl219" type="url" value="${esc219(c.workerUrl)}" placeholder="https://the-keiba-timeline-collector.xxxxx.workers.dev"></div>
         <div class="field"><label>Token（Workerに設定した場合のみ）</label><input id="timelineCloudToken219" type="password" value="${esc219(c.token)}" autocomplete="off"></div>
@@ -22284,7 +22307,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
 (function(){
   'use strict';
 
-  const VERSION227 = 'v5.18.248 取得ボタン復帰・オッズ鮮度修正';
+  const VERSION227 = 'v5.18.249 オッズ経路自動切替・鮮度診断';
   let oddsJobSeq227 = 0;
 
   function el227(id){ return document.getElementById(id); }
@@ -22930,7 +22953,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
   if(window.__THEKEIBA_232__) return;
   window.__THEKEIBA_232__ = true;
 
-  const VERSION = 'v5.18.248 取得ボタン復帰・オッズ鮮度修正';
+  const VERSION = 'v5.18.249 オッズ経路自動切替・鮮度診断';
   const JRA_VENUE_NAMES = {'01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京','06':'中山','07':'中京','08':'京都','09':'阪神','10':'小倉',
     '30':'門別','35':'盛岡','36':'水沢','42':'浦和','43':'船橋','44':'大井','45':'川崎','46':'金沢','47':'笠松','48':'名古屋','50':'園田','51':'姫路','54':'高知','55':'佐賀','65':'帯広'};
   const $ = id => document.getElementById(id);

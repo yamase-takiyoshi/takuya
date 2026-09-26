@@ -31,7 +31,7 @@
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.255 Bridge出馬表SP優先</title>
+<title>The競馬 EV分析 v5.18.256 Bridge出馬表経路修正</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -287,7 +287,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.255 Bridge出馬表SP優先</span>
+    <span class="ver">v5.18.256 Bridge出馬表経路修正</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -844,7 +844,7 @@ body.right-analysis-active #rightAnalysisPane{
     try{
       const u=new URL(target);
       ['_','rf','_ts'].forEach(k=>u.searchParams.delete(k));
-      if(/^\/race\/shutuba\.html$/.test(u.pathname)) u.hostname=u.hostname.replace('.sp.netkeiba.com','.netkeiba.com');
+      // v256: PC/SP are distinct requests; never share their pending response.
       u.searchParams.sort();key=u.href;
     }catch(e){}
     if(pendingBridge.has(key)) return pendingBridge.get(key);
@@ -19038,7 +19038,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.18.255 Bridge出馬表SP優先';
+  const VERSION202 = 'v5.18.256 Bridge出馬表経路修正';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
@@ -21723,7 +21723,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   if(window.__V518216_LIVE_COMMENTARY__) return;
   window.__V518216_LIVE_COMMENTARY__ = true;
 
-  const VERSION215 = 'v5.18.255 Bridge出馬表SP優先';
+  const VERSION215 = 'v5.18.256 Bridge出馬表経路修正';
   const DB_NAME215 = 'thekeiba-odds-timeline-v1';
   const STORE215 = 'captures';
   const TYPES215 = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
@@ -22178,7 +22178,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
 <script>
 (function(){
   'use strict';
-  const VERSION219='v5.18.255 Bridge出馬表SP優先';
+  const VERSION219='v5.18.256 Bridge出馬表経路修正';
   const CFG_KEY219='thekeiba_timeline_cloud_v219';
   const CFG_GLOBAL_KEY219='thekeiba_timeline_cloud_global';
   const DEFAULT_WORKER_URL219='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
@@ -22562,7 +22562,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
 (function(){
   'use strict';
 
-  const VERSION227 = 'v5.18.255 Bridge出馬表SP優先';
+  const VERSION227 = 'v5.18.256 Bridge出馬表経路修正';
   let oddsJobSeq227 = 0;
 
   function el227(id){ return document.getElementById(id); }
@@ -23206,7 +23206,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   if(window.__THEKEIBA_232__) return;
   window.__THEKEIBA_232__ = true;
 
-  const VERSION = 'v5.18.255 Bridge出馬表SP優先';
+  const VERSION = 'v5.18.256 Bridge出馬表経路修正';
   const JRA_VENUE_NAMES = {'01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京','06':'中山','07':'中京','08':'京都','09':'阪神','10':'小倉',
     '30':'門別','35':'盛岡','36':'水沢','42':'浦和','43':'船橋','44':'大井','45':'川崎','46':'金沢','47':'笠松','48':'名古屋','50':'園田','51':'姫路','54':'高知','55':'佐賀','65':'帯広'};
   const $ = id => document.getElementById(id);
@@ -23631,7 +23631,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     }
     // JRA出馬表の静的オッズ/人気は信用しない（JSで後から描画される列）
     const pageUrl = String(url || '');
-    if(/race(\.sp)?\.netkeiba\.com\/race\/shutuba/i.test(pageUrl)){
+    if(/race(\.sp)?\.netkeiba\.com\/race\/shutuba/i.test(pageUrl) || /^https:\/\/race\.sp\.netkeiba\.com\//i.test(pageUrl) && /[?&]pid=shutuba(?:&|$)/.test(pageUrl)){
       out.forEach(h => { h.odds = 0; h.pop = 0; });
     }
     lastParseMeta.scratched = scratched.map(h => ({ num:h.num, name:h.name }));
@@ -23970,12 +23970,18 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   async function fetchCard(kind, rid, raw){
     const urls = cardUrls(kind, rid, raw);
     const failures = [];
-    // v5.18.255: Bridge(iOS Userscripts)はRefererを送れないため、PC版出馬表は常にHTTP 400。
-    // SP版(race.sp / nar.sp)を先に試し、PC版は最後の保険にする。1本目の失敗で打ち切らない。
-    const bridgeUrls = [
+    // v256: try JRA's query-form mobile page as a distinct route.
+    // HTTP 400 alone cannot identify the cause (headers/cookies/server/Bridge).
+    const bridgeUrls = [...new Set([
+      ...(kind === 'JRA' ? [`https://race.sp.netkeiba.com/?pid=shutuba&race_id=${rid}`] : []),
       ...urls.filter(u => /\/\/(?:race|nar)\.sp\.netkeiba\.com\//.test(u)),
       ...urls.filter(u => !/\/\/(?:race|nar)\.sp\.netkeiba\.com\//.test(u))
-    ];
+    ].map(value => {
+      const u = new URL(value);
+      ['rf','_','_ts'].forEach(k => u.searchParams.delete(k));
+      u.searchParams.sort();
+      return u.href;
+    }))];
     async function bridgeCard255(){
       const errs=[];
       for(const url of bridgeUrls){
@@ -23983,7 +23989,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
           const r=await window.bridgeText246(url);
           const finalRid=ridOf(r.finalUrl);
           if(finalRid && finalRid!==rid){ errs.push('別レースへ転送'); continue; }
-          const card=validCard233(r.text,url,'Bridge'+(/\.sp\.netkeiba/.test(url)?' SP':' PC'));
+          const card=validCard233(r.text,r.finalUrl || url,'Bridge'+(/\.sp\.netkeiba/.test(url)?' SP':' PC'));
           if(!card){ errs.push((/\.sp\./.test(url)?'SP':'PC')+':出走馬表なし('+r.text.length+'字)'); continue; }
           window.__raceCards254=window.__raceCards254 || new Map();
           window.__raceCards254.set(rid,card);
@@ -24123,7 +24129,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
       alert('レースを選択するか、race_id付きURLを入力してください。');
       return;
     }
-    if(typeof settings !== 'undefined' && !settings.proxyUrl && !window.__NAR_BRIDGE_READY__){
+    if(!window.bridgeOnly252() && typeof settings !== 'undefined' && !settings.proxyUrl && !window.__NAR_BRIDGE_READY__){
       alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。');
       return;
     }

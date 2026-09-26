@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.248 Worker枠節約</title>
+<title>The競馬 EV分析 v5.18.251 完全5秒履歴</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.248 Worker枠節約</span>
+    <span class="ver">v5.18.251 完全5秒履歴</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -781,7 +781,7 @@ body.right-analysis-active #rightAnalysisPane{
 </aside>
 
 <script id="connection-recovery246">
-/* v5.18.246: bounded connections; data proxy and timeline collector stay independent. */
+/* v5.18.247: bounded connections; data proxy and timeline collector stay independent. */
 (function(){
   'use strict';
   const esc = s => String(s ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -4688,8 +4688,6 @@ function normalizeRaceHtmlCacheKey(url){
   try{
     const u = new URL(String(url || ''));
     u.hash = '';
-    // v5.18.247: キャッシュバスター(_=時刻)はキャッシュキーから除外。
-    u.searchParams.delete('_');
     return u.href;
   }catch(e){
     return String(url || '').trim();
@@ -18864,12 +18862,115 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 })();
 </script>
 
+<script id="live-odds-transport247">
+/* v5.18.247: live odds transport. Observation time is never used as publication time. */
+(function(){
+  'use strict';
+  let seq=0;
+  const apiPattern=/^https:\/\/(?:race|nar)\.netkeiba\.com\/api\/api_get_(?:jra|nar)_odds\.html(?:\?|$)/i;
+  function parseSourceTime(value){
+    if(value==null || typeof value==='object') return {ms:null,label:''};
+    const raw=String(value).trim();
+    if(!raw) return {ms:null,label:''};
+    let ms=NaN;
+    if(/^\d{10}$/.test(raw)) ms=Number(raw)*1000;
+    else if(/^\d{13}$/.test(raw)) ms=Number(raw);
+    else if(/^\d{14}$/.test(raw)){
+      ms=Date.parse(raw.replace(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/,'$1-$2-$3T$4:$5:$6+09:00'));
+    }else if(/^\d{4}[-/]\d{2}[-/]\d{2}[ T]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?$/.test(raw)){
+      let iso=raw.replace(/\//g,'-').replace(' ','T');
+      if(!/(?:Z|[+-]\d{2}:?\d{2})$/.test(iso)) iso+='+09:00';
+      ms=Date.parse(iso);
+    }else if(/^(?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/.test(raw)){
+      // A clock without a date is useful to show, but cannot prove data age.
+      return {ms:null,label:raw};
+    }else return {ms:null,label:''};
+    return Number.isFinite(ms)&&ms>0?{ms,label:raw}:{ms:null,label:''};
+  }
+  function sourceTime(payload,type){
+    const keys=['odds_update_time','odds_update_datetime','odds_time','odds_timestamp','update_time','update_datetime','updateTime','last_updated'];
+    for(const obj of [payload?.data,payload]){
+      if(!obj || typeof obj!=='object') continue;
+      for(const key of keys){
+        let value=obj[key];
+        if(value && typeof value==='object') value=value[String(type)];
+        const time=parseSourceTime(value);
+        if(time.label) return time;
+      }
+    }
+    return {ms:null,label:''};
+  }
+  function validate(text,url){
+    let json;
+    try{json=JSON.parse(String(text||''));}catch(e){throw new Error('オッズAPIがJSONを返しませんでした');}
+    if(!json || typeof json!=='object' || json.ok===false || json.error || /^(?:NG|ERROR)$/i.test(String(json.status||'')))
+      throw new Error('オッズAPIが取得失敗を返しました');
+    const expected=new URL(url).searchParams.get('race_id');
+    const actual=json?.data?.race_id??json?.race_id;
+    if(actual!=null && String(actual)!==expected) throw new Error('別レースのオッズ応答を破棄しました');
+    return json;
+  }
+  async function fetchLive(url){
+    if(!apiPattern.test(String(url))) throw new Error('対応するオッズAPI URLではありません');
+    const target=new URL(url);
+    // The nonce must reach the upstream URL as well as the proxy URL.
+    const nonce=String(Date.now())+'-'+(++seq);
+    target.searchParams.set('_',nonce);
+    const errors=[];
+    const bridge=async()=>{
+      if(typeof window.bridgeText246!=='function' || !window.__NAR_BRIDGE_READY__ && window.__bridgeAbsent===true)
+        throw new Error('Bridge未接続');
+      const r=await window.bridgeText246(target.href);
+      return {text:r.text,path:'Bridge'};
+    };
+    const worker=async()=>{
+      let base='';
+      try{base=String(settings?.proxyUrl||'').trim();}catch(e){}
+      if(!base) throw new Error('取得Worker URL未設定');
+      const u=new URL(base);
+      if(!/^https?:$/.test(u.protocol) || u.username || u.password) throw new Error('取得Worker URLを確認してください');
+      u.searchParams.set('url',target.href);
+      u.searchParams.set('_',nonce);
+      const r=await window.fetchText246(u.href,{cache:'no-store'},6500);
+      if(!r.ok) throw new Error('取得Worker HTTP '+r.status);
+      return {text:r.text,path:'Worker'};
+    };
+    const routes=window.__NAR_BRIDGE_READY__?[bridge,worker]:[worker,bridge];
+    for(const route of routes){
+      try{
+        const r=await route();
+        const json=validate(r.text,target.href);
+        const time=sourceTime(json,target.searchParams.get('type'));
+        window.__fetchPath=r.path==='Bridge'?'bridge':'worker';
+        return {...r,json,fetched_ms:Date.now(),source_updated_ms:time.ms,source_time_label:time.label};
+      }catch(e){errors.push(String(e?.message||e));}
+    }
+    throw new Error(errors.join(' / '));
+  }
+  function diff(previous,current){
+    if(!Array.isArray(previous) || !previous.length) return null;
+    const values=rows=>new Map(rows.map(r=>[String(r.combination),
+      [Number(r.odds),Number(r.odds_min??r.odds),Number(r.odds_max??r.odds)].join('|')]));
+    const before=values(previous),after=values(current||[]);
+    let count=0;
+    for(const key of new Set([...before.keys(),...after.keys()])) if(before.get(key)!==after.get(key)) count++;
+    return count;
+  }
+  function older(incoming,previous){
+    const a=Number(incoming?.source_updated_ms), b=Number(previous?.source_updated_ms);
+    return a>0 && b>0 && a<b;
+  }
+  window.liveOdds247={isApi:url=>apiPattern.test(String(url)),fetch:fetchLive,sourceTime,parseSourceTime,diff,older};
+})();
+
+</script>
+
 <!-- v5.18.202 OddsTimeline5s -->
 <script>
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.18.248 Worker枠節約';
+  const VERSION202 = 'v5.18.251 完全5秒履歴';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
@@ -18914,6 +19015,67 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       document.title = 'The競馬 EV分析 ' + VERSION202;
     }catch(e){}
   }
+
+  // Keep per-market receipts separate from the periodic sampling clock.
+  const lastDiagnostics247=new Map();
+  function receiptTime247(ms){
+    return ms>0?new Date(ms).toLocaleTimeString('ja-JP',{timeZone:'Asia/Tokyo',hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'}):'未記録';
+  }
+  function previousMarket247(type){
+    for(let i=history.length-1;i>=0;i--) if(history[i]?.markets?.[type]?.length) return history[i];
+    return null;
+  }
+  function renderFreshness247(){
+    const el=$('oddsTsFresh247'); if(!el) return;
+    const type=$('oddsTsMarket')?.value||'単勝';
+    const record=previousMarket247(type);
+    const saved=record?.market_status?.[type];
+    const attempt=lastDiagnostics247.get(activeRid)?.[type];
+    const failed=attempt?.state==='error'||attempt?.state==='empty';
+    const info=attempt?.state==='ok'?attempt:saved;
+    if(!record && !attempt){el.textContent=type+'：再取得待ち';el.className='odds-ts-status wait';return;}
+    const fetched=Number(info?.fetched_ms||0);
+    const source=info?.source_time_label||'応答に記載なし';
+    const age=fetched>0?Math.max(0,Math.floor((Date.now()-fetched)/1000)):null;
+    const changed=info?.changed_count;
+    const state=failed?'⚠️ 再取得失敗':fetched?'受信成功':'保存履歴';
+    const changes=changed==null?'値の変化：比較開始前':`前回比 ${changed}点変化`;
+    const sourceMs=Number(info?.source_updated_ms||0);
+    const sourceAge=sourceMs>0?Math.max(0,Math.floor((Date.now()-sourceMs)/1000)):null;
+    const sourceAgeLabel=sourceAge!=null?`（${sourceAge}秒前）`:'';
+    const stopped=timelineCollectionState221(activeRid).stopped;
+    const auto=$('oddsTsAuto')?.checked;
+    const delayed=!stopped && auto && age!=null && age>30;
+    const publicationWaiting=!!info?.same_source_time;
+    const lowerOnly=type==='複勝'||type==='ワイド';
+    const note=failed?' / '+String(attempt.message||'取得できませんでした'):
+      delayed?' / 受信が遅れています':publicationWaiting?' / 配信時刻は前回と同じ':changed===0?' / 再取得した値は前回と同じ':'';
+    el.textContent=`${type}｜${state}｜受信 ${receiptTime247(fetched)}${age!=null?'（'+age+'秒前）':''}｜配信元表示 ${source}${sourceAgeLabel}｜${changes}${note}`+
+      (lowerOnly?' / グラフは下限値':'')+
+      (stopped?' / 収集終了':!auto?' / 自動取得OFF':'');
+    el.className='odds-ts-status '+(failed?'err':delayed||publicationWaiting||sourceAge>120?'wait':fetched?'ok':'wait');
+  }
+  function syncLeftOdds247(rid,rows,info){
+    if(rid!==currentRaceId202() || String(window.__horseDataRaceId||'')!==rid || !Array.isArray(rows) || !rows.length) return;
+    const byNo=new Map(rows.map(r=>[Number(r.combination),r]));
+    try{
+      if(typeof horses==='undefined' || !Array.isArray(horses)) return;
+      let count=0;
+      horses=horses.map(h=>{
+        const row=byNo.get(Number(h.num));
+        if(!row || !(Number(row.odds)>=1)) return h;
+        count++;
+        return {...h,odds:Number(row.odds),pop:Number(row.popularity)>0?Number(row.popularity):Number(h.pop||0)};
+      });
+      if(!count) return;
+      window.renderHorseRows?.();
+      window.__leftVerifiedOdds239={rid,fetched_ms:info.fetched_ms,source:info.path,
+        rows:rows.map(r=>({num:Number(r.combination),odds:Number(r.odds)}))};
+      const el=$('oddsStatus227');
+      if(el){el.textContent=`✅ 単勝オッズ ${count}/${horses.length}頭を自動反映 / 受信 ${receiptTime247(info.fetched_ms)} / 配信元表示 ${info.source_time_label||'応答に記載なし'}`;}
+    }catch(e){console.warn('[247] left odds sync',e);}
+  }
+
 
   function currentRaceId202(){
     try{ if(typeof currentRaceId !== 'undefined' && currentRaceId) return String(currentRaceId); }catch(e){}
@@ -19378,35 +19540,27 @@ function parseTicketJson243(raw,def,rid){
   return [...byKey.values()].sort((a,b)=>a.odds-b.odds||a.combination.localeCompare(b.combination,'ja',{numeric:true}));
 }
 
-// v5.18.247: netkeiba JSONの公式オッズ発表時刻（あれば）を取り出す。
-function officialTime247(raw){
-  try{
-    const j=typeof raw==='string'?JSON.parse(raw.trim()):raw;
-    const d=j?.data||{};
-    const v=d.official_datetime??j?.official_datetime??d.update_time??d.updated_at??d.official_time??'';
-    return String(v||'').trim();
-  }catch(e){ return ''; }
-}
-
-async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
+async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred=''){
   if(!/^\d{12}$/.test(String(rid))) throw new Error('race_idは12桁で指定してください');
   const nar=kind==='NAR';
-  let official='';
   const endpoint=nar?'https://nar.netkeiba.com/api/api_get_nar_odds.html':'https://race.netkeiba.com/api/api_get_jra_odds.html';
   const markets={},diagnostics={};
   const sources=[];
+  const priority=def=>def.name===preferred?0:def.name==='単勝'?1:2;
+  const order=TICKET_DEFS243.slice().sort((a,b)=>priority(a)-priority(b));
   let cursor=0,done=0;
   async function run(){
-    while(cursor<TICKET_DEFS243.length){
-      const def=TICKET_DEFS243[cursor++];
-      // v5.18.247: 毎回URLを変えて、Bridge/Safari/CDNのキャッシュから古い応答が返るのを防ぐ。
-      const url=`${endpoint}?race_id=${rid}&type=${def.id}&action=init&_=${Date.now()}`;
+    while(cursor<order.length){
+      const def=order[cursor++];
+      const url=`${endpoint}?race_id=${rid}&type=${def.id}&action=init`;
       try{
-        const raw=await fetchText(url);
-        if(def.id===1){ const ot=officialTime247(raw); if(ot) official=ot; }
-        const rows=parseTicketJson243(raw,def,rid);
+        const receipt=await fetchText(url);
+        const rows=parseTicketJson243(receipt.text,def,rid);
         if(rows.length){markets[def.name]=rows;sources.push(url);}
-        diagnostics[def.name]={state:rows.length?'ok':'empty',count:rows.length,message:rows.length?'':'有効なオッズなし（未発売・売止等）'};
+        diagnostics[def.name]={state:rows.length?'ok':'empty',count:rows.length,
+          message:rows.length?'':'有効なオッズなし（未発売・売止等）',
+          fetched_ms:receipt.fetched_ms,source_updated_ms:receipt.source_updated_ms,
+          source_time_label:receipt.source_time_label,path:receipt.path};
       }catch(e){diagnostics[def.name]={state:'error',count:0,message:String(e?.message||e).slice(0,180)};}
       done++;
       try{onProgress(done,diagnostics);}catch(_){}
@@ -19416,7 +19570,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
   await Promise.all([run(),run(),run()]);
   const ordered={};
   for(const def of TICKET_DEFS243) if(markets[def.name]) ordered[def.name]=markets[def.name];
-  return {markets:ordered,diagnostics,source:sources.map(u=>u.replace(/&_=\d+/,'')).sort().join(' | '),market_count:Object.keys(ordered).length,official};
+  return {markets:ordered,diagnostics,source:sources.sort().join(' | '),market_count:Object.keys(ordered).length};
 }
 
   function renderMarketStatus243(diagnostics={},done=8){
@@ -19426,24 +19580,38 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
       MARKET_TYPES.map(t=>{
         const d=diagnostics[t];
         const label=d?.count>0?`${d.count}点`:(!d?'取得待ち':d.message||'未取得');
-        return `<div style="padding:2px 0;color:${d?.count>0?'#86efac':'#cbd5e1'}">${esc(t)}：${esc(label)}</div>`;
+        const timing=d?.fetched_ms?` / 受信 ${receiptTime247(d.fetched_ms)} / 配信元表示 ${d.source_time_label||'応答に記載なし'}`:'';
+        return `<div style="padding:2px 0;color:${d?.count>0?'#86efac':'#cbd5e1'}">${esc(t)}：${esc(label+timing)}</div>`;
       }).join('');
   }
 
-  async function fetchMarkets202(kind,rid,expected){
-    // All eight API requests are scheduled even when win odds have succeeded.
-    // Reuse the existing JSON-capable transport, with its communication timeout.
+  async function fetchMarkets202(kind,rid,expected,preferred=''){
+    // Live requests bypass the ordinary page cache. Same-value responses are still valid observations.
     renderMarketStatus243({},0);
-    const got=await fetchAllTickets243(kind,rid,async url=>{
-      const raw=await fetchHtmlViaProxy(url);
-      if(!/^\s*[{[]/.test(String(raw||''))) throw new Error('JSON以外の応答（未公開・接続拒否等）');
-      return raw;
-    },(done,diagnostics)=>{
+    const got=await fetchAllTickets243(kind,rid,url=>window.liveOdds247.fetch(url),(done,diagnostics)=>{
       if(activeRid===rid && currentRaceId202()===rid) renderMarketStatus243(diagnostics,done);
-    });
+    },preferred);
+    if(activeRid===rid && currentRaceId202()===rid){
+      for(const type of MARKET_TYPES){
+        const d=got.diagnostics[type],rows=got.markets[type];
+        if(!rows?.length || !d) continue;
+        const previous=previousMarket247(type),prev=previous?.market_status?.[type];
+        if(window.liveOdds247.older(d,prev)){
+          delete got.markets[type];
+          got.diagnostics[type]={...d,state:'error',count:0,message:'配信時刻が古い応答を破棄（既存履歴を保持）'};
+          continue;
+        }
+        d.changed_count=window.liveOdds247.diff(previous?.markets?.[type],rows);
+        d.same_source_time=!!(d.source_time_label && prev?.source_time_label===d.source_time_label);
+      }
+      lastDiagnostics247.set(rid,got.diagnostics);
+      renderMarketStatus243(got.diagnostics,8);
+      renderFreshness247();
+      if(got.markets['単勝']?.length) syncLeftOdds247(rid,got.markets['単勝'],got.diagnostics['単勝']);
+    }
     const maps=newMarkets202();
     for(const [type,rows] of Object.entries(got.markets)) rows.forEach(r=>maps[type].set(r.combination,r.odds));
-    return {markets:maps,packed:got.markets,diagnostics:got.diagnostics,source:got.source,official:got.official||''};
+    return {markets:maps,packed:got.markets,diagnostics:got.diagnostics,source:got.source};
   }
 
   async function capture202(force=false){
@@ -19472,13 +19640,12 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
       const missingMarkets=MARKET_TYPES.filter(t=>!packed[t]?.length);
       const total=Object.values(packed).reduce((s,a)=>s+a.length,0);
       if(!total) throw new Error('全8券種を確認しましたが、有効なオッズを取得できませんでした。券種別の取得状況を確認してください。');
-      const previous=history.length?history[history.length-1]:null;
-      const unchanged202=!!(previous && JSON.stringify(previous.markets)===JSON.stringify(packed));
-      // v5.18.247: 何秒間まったく同じ値が続いているか（=取得元が古い値を返していないか）を記録。
-      const unchangedSince247=unchanged202 ? Number(previous.unchanged_since_ms||previous.captured_ms||0) : 0;
-      // v5.18.245: 5秒間隔の“時系列”を忠実に残すため、値が変わらなくても1点として保存する。
-      // これにより横軸上で実際の5秒サンプリング密度をそのまま表示できる。
+      const successful=Object.values(got.diagnostics).filter(d=>d.state==='ok' && d.count>0);
+      const unchanged202=successful.length>0 && successful.every(d=>d.changed_count===0);
+      // Successful network observations keep their real time, including unchanged prices.
+      // Failed markets are absent; stale saved values are never stamped as new observations.
       const now=Date.now();
+      const currentHorses247=expectedHorses202();
       const rec={
         schema:'thekeiba-odds-timeline-v1',
         id:`${rid}:${now}`,
@@ -19488,11 +19655,9 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
         captured_ms:now,
         captured_at:new Date(now).toISOString(),
         source:got.source || '',
-        horses:expected.map(h=>({num:Number(h.num),name:String(h.name||''),pop:Number(h.pop||0),frame:Number(h.frame||0),odds:Number(h.odds||0)})),
-        markets:packed, market_status:got.diagnostics,
-        official_at:String(got.official||''),
-        unchanged:unchanged202,
-        unchanged_since_ms:unchanged202?unchangedSince247:Date.now()
+        collector_origin:'browser',verified_network:true,
+        horses:currentHorses247.map(h=>({num:Number(h.num),name:String(h.name||''),pop:Number(h.pop||0),frame:Number(h.frame||0),odds:Number(h.odds||0)})),
+        markets:packed, market_status:got.diagnostics
       };
       await dbPut202(rec);
       history.push(rec);
@@ -19507,17 +19672,12 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
       const srcText202 = String(got.source||'').includes('worker-direct-no-device') ? '☁️ Worker直結（デバイス不要）'
         : (window.__fetchPath==='bridge' ? '🌉 デバイスBridge' : (String(got.source||'').includes('worker') ? '☁️ Worker' : '🌐 自動取得'));
       const suffix=missingMarkets.length?' / 未取得：'+missingMarkets.join('・'):'';
-      const staleSec247=unchanged202&&unchangedSince247?Math.round((now-unchangedSince247)/1000):0;
-      const officialText247=got.official?` / 公式発表 ${String(got.official).replace(/^\d{4}-\d{2}-\d{2}\s*/,'')}`:'';
-      const unchangedText202=!unchanged202?officialText247
-        :(staleSec247>=60
-          ? ` / ⚠️ ${staleSec247}秒間 全券種まったく同じ値（取得元が古い値を返している可能性）${officialText247}`
-          : ` / 変化なし（前回と同値）${officialText247}`);
-      setStatus202(`${missingMarkets.length||staleSec247>=60?'⚠️':'✅'} ${new Date(now).toLocaleTimeString('ja-JP')} 保存 ${8-missingMarkets.length}/8券種　${counts}${suffix}${unchangedText202}`,missingMarkets.length||staleSec247>=60?'wait':'ok');
+      const unchangedText202=unchanged202?' / 再取得成功・値は前回と同じ':'';
+      setStatus202(`${missingMarkets.length?'⚠️':'✅'} ${new Date(now).toLocaleTimeString('ja-JP')} 保存 ${8-missingMarkets.length}/8券種　${counts}${suffix}${unchangedText202}`,missingMarkets.length?'wait':'ok');
     }catch(e){
       lastError=String(e?.message||e);
       if(rid===currentRaceId202() && rid===activeRid) setStatus202(`⚠️ ${lastError}`,'err');
-    }finally{ captureBusy=false; }
+    }finally{ captureBusy=false; renderFreshness247(); }
   }
 
   async function loadRaceContext202(rid){
@@ -19999,6 +20159,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
   }
 
   function draw202(){
+    renderFreshness247();
     const canvas=$('oddsTsCanvas'); if(!canvas) return;
     syncMetricUi202();
     const parent=canvas.parentElement; const cssW=Math.max(320,parent?.clientWidth||600); const cssH=360; const dpr=Math.max(1,window.devicePixelRatio||1);
@@ -20021,7 +20182,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
     const latestBtn202=$('oddsTsLatest');
     if(latestBtn202){
       latestBtn202.classList.toggle('active',!!graph.follow);
-      latestBtn202.textContent=graph.follow ? '● LIVE' : '▶ 最新へ';
+      latestBtn202.textContent=graph.follow ? '● 最新へ追従' : '▶ 最新へ';
       latestBtn202.title=graph.follow ? '最新時刻を右端に追従中' : '最新時刻へ戻る';
     }
     const vals=[];
@@ -20039,9 +20200,6 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
     if(mode==='edge'){ y0=Math.min(y0,0); y1=Math.max(y1,0); }
     if(y0===y1){ const bump=Math.max(.05,Math.abs(y0)*.08||.05); y0-=bump; y1+=bump; }
     const pad=(y1-y0)*.08; y0-=pad; y1+=pad;
-    // v5.18.247: オッズは1.0倍未満にならないので、軸がマイナスに伸びないよう下限を固定。
-    if(mode==='odds') y0=Math.max(y0,transform(1));
-    if(mode==='modelP'||mode==='marketP') y0=Math.max(y0,0);
     const xOf=t=>L + (t1===t0?W/2:(t-t0)/(t1-t0)*W);
     const yOf=v=>T+H-(transform(v)-y0)/(y1-y0)*H;
 
@@ -20068,7 +20226,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
     ctx.font='10px -apple-system,BlinkMacSystemFont,sans-serif'; ctx.textBaseline='top';
     ctx.textAlign='left'; ctx.fillStyle='#64748b'; ctx.fillText('← 過去',L,T+H+26);
     ctx.textAlign='right'; ctx.fillStyle=graph.follow&&!graph.capped?'#86efac':'#94a3b8';
-    ctx.fillText(graph.capped?'確定 →':(graph.follow?'● LIVE 最新 →':'最新 →'),L+W,T+H+26);
+    ctx.fillText(graph.capped?'確定 →':(graph.follow?'● 追従 最新 →':'最新 →'),L+W,T+H+26);
     if(graph.follow&&!graph.capped){
       ctx.strokeStyle='rgba(0,230,118,.45)'; ctx.lineWidth=1.2; ctx.setLineDash([3,3]);
       ctx.beginPath(); ctx.moveTo(L+W,T); ctx.lineTo(L+W,T+H); ctx.stroke(); ctx.setLineDash([]);
@@ -20092,10 +20250,11 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
     items.forEach((it,idx)=>{
       ctx.strokeStyle=PALETTE[idx%PALETTE.length]; ctx.lineWidth=2; ctx.beginPath(); let started=false;
       graphRows.forEach(r=>{
-        const v=metricValue202(r,it.market,it.key,mode); if(!Number.isFinite(v)||(mode==='odds'&&v<=0)) return;
+        const v=metricValue202(r,it.market,it.key,mode);
+        if(!Number.isFinite(v)||(mode==='odds'&&v<=0)){started=false;return;}
         const x=xOf(r.captured_ms), y=yOf(v); if(!started){ctx.moveTo(x,y); started=true;} else ctx.lineTo(x,y);
       });
-      if(started) ctx.stroke();
+      ctx.stroke();
       if(graphRows.length<=60){
         ctx.fillStyle=PALETTE[idx%PALETTE.length];
         graphRows.forEach(r=>{ const v=metricValue202(r,it.market,it.key,mode); if(!Number.isFinite(v)||(mode==='odds'&&v<=0))return; const x=xOf(r.captured_ms),y=yOf(v); ctx.beginPath();ctx.arc(x,y,2.2,0,Math.PI*2);ctx.fill(); });
@@ -20133,7 +20292,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
       const first=graphRows[0]?.captured_ms,last=graphRows[graphRows.length-1]?.captured_ms;
       const scope=cross?'全券種横断':market;
       const cap=graph.capped?' / 🏁 発走+10分（終了目安+5分）で固定済':(Number.isFinite(graph.endMs)?' / 発走+10分（終了目安+5分）で自動停止':'');
-      const view=Number.isFinite(graph.viewSpan)?` / ${Math.round(graph.viewSpan/60000)}分窓${graph.follow?' LIVE':''}`:' / 全期間';
+      const view=Number.isFinite(graph.viewSpan)?` / ${Math.round(graph.viewSpan/60000)}分窓${graph.follow?' 追従':''}`:' / 全期間';
       meta.textContent=graphRows.length?`${graphRows.length}点 / ${new Date(first).toLocaleTimeString('ja-JP')}〜${new Date(last).toLocaleTimeString('ja-JP')} / ${scope} ${metricLabel202(mode)}${view}${cap}`:'0点';
     }
   }
@@ -20163,6 +20322,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
   function startPoll202(){
     if(pollTimer) clearInterval(pollTimer);
     pollTimer=setInterval(()=>{
+      renderFreshness247();
       const current=currentRaceId202();
       // v5.18.218: 「時系列」画面を閉じても、5秒自動がONならブラウザ前面中は収集を継続。
       // デバイス未接続時は fetchMarkets202 が Worker直結へ自動フォールバックする。
@@ -20267,8 +20427,8 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
           </select></label>
           <label>表示<select id="oddsTsCombo"><option value="__ALL__">全馬を表示</option></select></label>
           <label>買い目1点<select id="oddsTsSinglePoint"><option value="">券種を選択</option></select></label>
-          <label class="odds-ts-check"><input type="checkbox" id="oddsTsAuto" checked>5秒自動（Worker補完）</label>
-          <label class="odds-ts-check"><input type="checkbox" id="oddsTsLog" checked>対数</label>
+          <label class="odds-ts-check"><input type="checkbox" id="oddsTsAuto" checked>5秒ごとに再取得</label>
+          <label class="odds-ts-check"><input type="checkbox" id="oddsTsLog">対数</label>
           <label>表示幅<select id="oddsTsWindow">
             <option value="300000">直近5分</option>
             <option value="600000">直近10分</option>
@@ -20284,9 +20444,11 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
           <button class="btn-sm" id="oddsTsCsv" type="button">CSV</button>
         </div>
         <div id="oddsTsStatus" class="odds-ts-status wait">レースを選択してください。</div>
+        <div id="oddsTsFresh247" class="odds-ts-status wait" role="status">オッズの再取得待ち</div>
+        <div class="odds-ts-metric-note">5秒ごとに再取得を試行（通信中は重複実行しません）。記録件数と値が変化した点数は別です。配信元が同じ値を返す間は横線になります。</div>
         <details id="oddsTsMarkets243" style="font-size:11px;line-height:1.6;margin:6px 0"><summary>全券種取得状況（8券種）</summary>「全8券種取得」で確認します。</details>
         <div class="odds-ts-metric-note">想定確率＝現行EVモデル / 市場確率＝1÷実オッズ / EV＝想定確率×実オッズ / 乖離＝想定確率−市場確率 / 複勝・ワイドのグラフはオッズ下限（上下限を保存） / 「表示」は選択指標に連動</div>
-        <div class="odds-ts-metric-note" style="color:#8bd9ae">v5.18.222: 最新値を右端に固定し、更新ごとに履歴が左へ流れます。グラフの左半分をタップすると過去へ15分、右半分をタップすると新しい時刻へ15分移動します。左右ドラッグでも移動でき、追従を一時停止します。「▶ 最新へ」でLIVEへ復帰します。</div>
+        <div class="odds-ts-metric-note" style="color:#8bd9ae">v5.18.222: 最新値を右端に固定し、更新ごとに履歴が左へ流れます。グラフの左半分をタップすると過去へ15分、右半分をタップすると新しい時刻へ15分移動します。左右ドラッグでも移動でき、追従を一時停止します。「▶ 最新へ」で最新時刻への追従を再開します。</div>
       </div>
       <div class="odds-ts-chart-wrap"><canvas id="oddsTsCanvas"></canvas></div>
       <div class="odds-ts-foot"><span id="oddsTsMeta">0点</span><span>デバイス未接続→Worker直結 / 履歴はIndexedDB保存</span></div>
@@ -20325,7 +20487,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
     $('oddsTsWorkerFull245')?.addEventListener('click',async()=>{
       setStatus202('☁️ Workerの5秒履歴を先頭から再読込中…','wait');
       try{
-        if(typeof window.timelineCloudFullSync219==='function'){ const target245=String($('oddsTsRaceArchive')?.value||activeRid||currentRaceId202()||''); const result246=await window.timelineCloudFullSync219(false,target245); if(result246?.ok)setStatus202(`☁️ Worker履歴 ${result246.imported}点読込 / 保存 ${result246.total}点`,'ok');else setStatus202('⚠️ レースを選択してください','err'); }
+        if(typeof window.timelineCloudFullSync219==='function'){ const target245=String($('oddsTsRaceArchive')?.value||activeRid||currentRaceId202()||''); const result246=await window.timelineCloudFullSync219(false,target245); if(result246?.ok)setStatus202(`☁️ Worker履歴 ${result246.worker_rows??result246.imported}点取得 / Worker保存 ${result246.worker_count??'確認中'}点 / 端末保存 ${result246.total}点`,(result246.worker_count===0?'wait':'ok'));else setStatus202('⚠️ レースを選択してください','err'); }
         else throw new Error('常時時系列Worker同期機能の初期化待ちです。数秒後にもう一度押してください。');
       }catch(e){ setStatus202('⚠️ Worker全履歴読込: '+String(e?.message||e),'err'); }
     });
@@ -21483,7 +21645,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
   if(window.__V518216_LIVE_COMMENTARY__) return;
   window.__V518216_LIVE_COMMENTARY__ = true;
 
-  const VERSION215 = 'v5.18.248 Worker枠節約';
+  const VERSION215 = 'v5.18.251 完全5秒履歴';
   const DB_NAME215 = 'thekeiba-odds-timeline-v1';
   const STORE215 = 'captures';
   const TYPES215 = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
@@ -21938,7 +22100,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
 <script>
 (function(){
   'use strict';
-  const VERSION219='v5.18.248 Worker枠節約';
+  const VERSION219='v5.18.251 完全5秒履歴';
   const CFG_KEY219='thekeiba_timeline_cloud_v219';
   const CFG_GLOBAL_KEY219='thekeiba_timeline_cloud_global';
   const DEFAULT_WORKER_URL219='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
@@ -22112,7 +22274,9 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
     rec.markets=(markets&&typeof markets==='object')?markets:{};
     // Workerがidを返さない版でも5秒点を失わないよう、race_id+時刻から安定IDを生成。
     rec.id=`${raceId}:${ms}`;
+    rec.source_url=rec.source_url||String(rec.source||'');
     rec.source='worker';
+    rec.collector_origin='worker';
     return rec;
   }
   async function putMany219(rows,rid=''){
@@ -22134,14 +22298,15 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
     for(let page=0;page<12;page++){
       const j=await fetch219(`/timeline/history?race_id=${encodeURIComponent(rid)}&since=${cursor}&limit=${limit}`,{headers:headers219(false)});
       const rows=extractWorkerRows219(j);
-      if(!rows.length)return [...all.values()];
+      if(!rows.length)return [...all.values()].sort((a,b)=>a.captured_ms-b.captured_ms);
       const normalized=rows.map(r=>normalizeWorkerCapture219(r,rid)).filter(Boolean);
       if(!normalized.length)throw new Error('履歴のレースIDまたは記録時刻を確認できません');
       let maxMs=cursor-1;
       for(const n of normalized){all.set(n.id,n);maxMs=Math.max(maxMs,n.captured_ms);}
-      // Short pages are not proof of completion: workers may enforce a lower page cap.
-      if(maxMs<cursor)return [...all.values()];
-      cursor=maxMs+1;
+      if(maxMs<cursor)return [...all.values()].sort((a,b)=>a.captured_ms-b.captured_ms);
+      // v6.1.5は1ページ最大1000点を明示してhas_moreを返す。旧Workerは空ページまで継続する。
+      if(j && j.has_more===false)return [...all.values()].sort((a,b)=>a.captured_ms-b.captured_ms);
+      cursor=Number(j?.next_since)>maxMs?Number(j.next_since):maxMs+1;
     }
     throw new Error('履歴のページ数が上限に達しました。同期未完了のため再試行してください');
   }
@@ -22174,7 +22339,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
     if(!silent)status219(`☁️ ${rid} Worker${needFull?'全':'差分'}履歴を読み込み中…`);
     const job=(async()=>{
       try{
-        // Use the collector cursor; a newer local capture must not hide older Worker records.
+        const workerBefore=await cacheStatus219(rid);
         const since=needFull?0:Math.max(0,(workerCursor219.get(key)||0)-30000);
         const rows=await fetchHistoryPages219(rid,since);
         if(key!==syncKey219(rid))throw new Error('接続先が変更されたため、もう一度同期してください');
@@ -22186,25 +22351,26 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
           const q=st.index('race_id').count(IDBKeyRange.only(rid));
           q.onsuccess=()=>{total=q.result||0;};q.onerror=()=>reject(q.error||new Error('履歴件数を取得できません'));
         });
-        // Do not switch the visible chart back if the user selected another race during fetch.
+        const workerAfter=await cacheStatus219(rid);
+        const workerInfo=workerAfter||workerBefore||{};
+        const workerCount=Number(workerInfo.count||0);
+        const meta=workerInfo.meta||{};
+        const workerLast=Number(meta.last_capture_ms||workerCursor219.get(key)||0);
+        if(workerLast>0)workerCursor219.set(key,Math.max(workerCursor219.get(key)||0,workerLast));
         const shown=String($219('oddsTsRaceArchive')?.value||currentRid219()||'');
         if(shown===rid){try{await window.reloadOddsTimelineRace202?.(rid);}catch(e){}}
         try{window.refreshOddsRaceArchive?.();}catch(e){}
-        // Metadata is helpful but may not block a successful history import.
-        const st247=await cacheStatus219(rid);
-        const doCount247=Number(st247?.count||0), doErr247=String(st247?.meta?.last_error||'').trim();
-        const doLast247=Number(st247?.meta?.last_capture_ms||0);
-        const doStale247=st247?.meta?.active && (!doLast247 || Date.now()-doLast247>60000);
-        if(doErr247 && (doCount247===0 || doStale247)){
-          // v5.18.247: Worker側が取れていない理由をそのまま表示（0点の原因を隠さない）。
-          status219(`⚠️ ${rid} Worker側の収集が止まっています（Worker保存 ${doCount247}点 / 端末内 ${total}点）：${doErr247.slice(0,160)}`,'err');
-          return {ok:true,race_id:rid,full:needFull,imported:n,total,workerDown:true};
-        }else if(needFull&&!n){
-          status219(`☁️ ${rid} Worker保存履歴は0点です。端末内 ${total}点。常時収集の対象と開始状況を確認してください。`);
+        const at=workerLast?new Date(workerLast).toLocaleTimeString('ja-JP',{timeZone:'Asia/Tokyo',hour12:false}):'未記録';
+        const active=meta.active===true?'収集中':meta.active===false?'停止':'状態未確認';
+        const types=Number(meta.last_market_types||0);
+        const err=String(meta.last_error||'').trim();
+        if(workerCount===0 && !rows.length){
+          const detail=err?` / Workerエラー: ${err}`:` / ${active}`;
+          status219(`⚠️ ${rid} Worker保存 0点${detail} / 端末内 ${total}点`,'err');
         }else{
-          status219(`☁️ ${rid} Worker${needFull?'全':'差分'}履歴 ${n}点読込 / 保存 ${total}点${st247?` / Worker保存 ${doCount247}点`:''}`,'ok');
+          status219(`☁️ ${rid} Worker${needFull?'全':'差分'} ${rows.length}点取得 / Worker保存 ${workerCount}点 / 最終 ${at} / ${active}${types?` / ${types}/8券種`:''} / 端末内 ${total}点${err?` / 直近エラー: ${err}`:''}`,err?'wait':'ok');
         }
-        return {ok:true,race_id:rid,full:needFull,imported:n,total};
+        return {ok:true,race_id:rid,full:needFull,imported:n,worker_rows:rows.length,worker_count:workerCount,total,worker_meta:meta};
       }catch(e){status219('⚠️ 履歴同期失敗（保存済み履歴は保持）：'+String(e?.message||e),'err');throw e;}
       finally{syncJobs219.delete(key);}
     })();
@@ -22212,7 +22378,12 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
     return job;
   }
   async function fullSyncCurrent219(silent=false,ridOverride=''){
-    return syncCurrent219(silent,true,ridOverride);
+    const rid=String(ridOverride||currentRid219());
+    // 現在選択中のレースなら、読み込み前に常時収集を必ず有効化する。過去レースは再開しない。
+    if(!ridOverride || rid===String(currentRid219())){
+      try{await startCurrent219(true);}catch(e){}
+    }
+    return syncCurrent219(silent,true,rid);
   }
   async function probe219(){
     const j=await fetch219('/health',{headers:headers219(false)});
@@ -22231,8 +22402,8 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
     const settingsTab=$219('tab-settings');
     if(settingsTab&&!$219('timelineCloudCard219')){
       const c=cfg219(),card=document.createElement('div');card.className='card';card.id='timelineCloudCard219';card.innerHTML=`
-        <div class="section-header"><h2>☁️ 常時時系列オッズ（デバイス0台）</h2><span class="nar-badge">v5.18.248</span></div>
-        <div style="font-size:11px;color:var(--muted);line-height:1.65;margin-bottom:10px">Durable Object Workerがサーバー側で時系列オッズを継続収集します。別デバイス未接続・iPad/PCを閉じた状態でも継続し、次回起動時にIndexedDBへ同期します。発走+10分（終了目安+5分）に達したらWorker・端末の5秒収集をそのレースについて終了し、その時点の時系列を完成形として固定します。以後は新しい点を追加せず、後から同じグラフを閲覧できます。3分前・発走・+10分の基準線も固定表示します。</div>
+        <div class="section-header"><h2>☁️ 常時時系列オッズ（デバイス0台）</h2><span class="nar-badge">v5.18.251</span></div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.65;margin-bottom:10px">Durable Object Workerがサーバー側で全8券種を5秒基準で継続収集します。別デバイス未接続・iPad/PCを閉じた状態でも継続し、次回起動時にWorker全履歴をIndexedDBへ復元します。発走+10分（終了目安+5分）に達したらWorker・端末の5秒収集をそのレースについて終了し、その時点の時系列を完成形として固定します。以後は新しい点を追加せず、後から同じグラフを閲覧できます。3分前・発走・+10分の基準線も固定表示します。</div>
         <div class="field"><label>常時時系列Worker URL</label><input id="timelineCloudUrl219" type="url" value="${esc219(c.workerUrl)}" placeholder="https://the-keiba-timeline-collector.xxxxx.workers.dev"></div>
         <div class="field"><label>Token（Workerに設定した場合のみ）</label><input id="timelineCloudToken219" type="password" value="${esc219(c.token)}" autocomplete="off"></div>
         <label style="display:flex;gap:8px;align-items:center;font-size:12px;margin:7px 0"><input id="timelineCloudAutoReg219" type="checkbox" ${c.autoRegister?'checked':''}> レース選択時に常時収集を自動開始</label>
@@ -22259,21 +22430,26 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
   }
   function onRace219(){
     clearTimeout(raceTimer219);
-    raceTimer219=setTimeout(()=>{
+    raceTimer219=setTimeout(async()=>{
       if(!base219())return;
-      const c=cfg219();
-      // Reading existing history does not depend on a successful registration request.
-      if(c.autoSync)syncCurrent219(true).catch(()=>{});
-      if(c.autoRegister)startCurrent219(true).catch(e=>{if(!c.autoSync)status219('⚠️ 常時収集を開始できません：'+String(e?.message||e),'err');});
-    },700);
+      const c=cfg219(),rid=currentRid219();
+      if(!/^\d{10,14}$/.test(rid))return;
+      // 先にWorkerを起動し、その後に保存済み全履歴を同期。初回記録は数秒後でも15秒同期で自動追従する。
+      if(c.autoRegister){
+        try{await startCurrent219(true);}catch(e){if(!c.autoSync)status219('⚠️ 常時収集を開始できません：'+String(e?.message||e),'err');}
+      }
+      if(c.autoSync){
+        try{await syncCurrent219(true,true,rid);}catch(e){}
+        setTimeout(()=>{ if(cfg219().autoSync&&base219())syncCurrent219(true,false,rid).catch(()=>{}); },7000);
+      }
+    },500);
   }
-  function startTimer219(){if(syncTimer219)clearInterval(syncTimer219);syncTimer219=setInterval(()=>{const c=cfg219();if(!(c.autoSync&&base219()&&!document.hidden))return;
-    // v5.18.248: Workerが失敗/停止中は同期間隔を15秒→最大2分へ延ばし、Cloudflareの1日リクエスト枠を守る。
-    if(Date.now()<syncNextAt219)return;
-    syncCurrent219(true).then(r=>{syncFail219=r?.workerDown?Math.min(syncFail219+1,3):0;},()=>{syncFail219=Math.min(syncFail219+1,3);})
-      .finally(()=>{syncNextAt219=Date.now()+(syncFail219?15000*Math.pow(2,syncFail219):0);});
-  },15000);}
-  let syncNextAt219=0,syncFail219=0;
+  function startTimer219(){
+    if(syncTimer219)clearInterval(syncTimer219);
+    syncTimer219=setInterval(()=>{
+      const c=cfg219();if(c.autoSync&&base219()&&!document.hidden)syncCurrent219(true).catch(()=>{});
+    },15000);
+  }
   function boot219(){
     saveCfg219({workerUrl:cfg219().workerUrl});
     installUi219();setVersion219();startTimer219();
@@ -22285,7 +22461,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
         if(!syncJobs219.has(syncKey219(rid))&&cfg219().autoSync)syncCurrent219(true,false,rid).catch(()=>{});
       }
     });
-    document.addEventListener('visibilitychange',()=>{if(!document.hidden){installUi219();setVersion219();syncCurrent219(true).catch(()=>{});}});
+    document.addEventListener('visibilitychange',()=>{if(!document.hidden){installUi219();setVersion219();const c=cfg219();if(c.autoRegister)startCurrent219(true).catch(()=>{});if(c.autoSync)syncCurrent219(true).catch(()=>{});}});
     if(base219()){onRace219();}
   }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot219,{once:true});else boot219();
@@ -22305,7 +22481,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
 (function(){
   'use strict';
 
-  const VERSION227 = 'v5.18.248 Worker枠節約';
+  const VERSION227 = 'v5.18.251 完全5秒履歴';
   let oddsJobSeq227 = 0;
 
   function el227(id){ return document.getElementById(id); }
@@ -22951,7 +23127,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
   if(window.__THEKEIBA_232__) return;
   window.__THEKEIBA_232__ = true;
 
-  const VERSION = 'v5.18.248 Worker枠節約';
+  const VERSION = 'v5.18.251 完全5秒履歴';
   const JRA_VENUE_NAMES = {'01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京','06':'中山','07':'中京','08':'京都','09':'阪神','10':'小倉',
     '30':'門別','35':'盛岡','36':'水沢','42':'浦和','43':'船橋','44':'大井','45':'川崎','46':'金沢','47':'笠松','48':'名古屋','50':'園田','51':'姫路','54':'高知','55':'佐賀','65':'帯広'};
   const $ = id => document.getElementById(id);
@@ -23809,7 +23985,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
       const oc = horses.filter(h => Number(h.odds) >= 1).length;
       const src = /OddsTanFuku/.test(usedUrl) ? '地方競馬公式' : (/api_get/.test(usedUrl) ? 'API' : (usedUrl ? 'オッズページ' : '確定結果'));
       const at = new Date().toLocaleTimeString('ja-JP', { hour:'2-digit', minute:'2-digit' });
-      oddsStatus(`✅ 単勝オッズ ${oc}/${horses.length}頭を反映（${esc(src)}・${esc(at)}時点）`, 'ok');
+      oddsStatus(`✅ 単勝オッズ ${oc}/${horses.length}頭を反映（${esc(src)}・受信 ${esc(at)}）`, 'ok');
       if(oc>=2){
         window.__leftVerifiedOdds239={rid:String(rid),fetched_ms:Date.now(),source:src,
           rows:horses.filter(h=>Number(h.odds)>=1).map(h=>({num:Number(h.num),odds:Number(h.odds)}))};
@@ -23962,5 +24138,18 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
 })();
 </script>
 
+<script id="live-odds-route247">
+(function(){
+  'use strict';
+  const previous=window.fetchHtmlViaProxy;
+  if(typeof previous!=='function') return;
+  const live=async function(url){
+    if(window.liveOdds247.isApi(url)) return (await window.liveOdds247.fetch(url)).text;
+    return previous.apply(this,arguments);
+  };
+  window.fetchHtmlViaProxy=live;
+  try{fetchHtmlViaProxy=live;}catch(e){}
+})();
+</script>
 </body>
 </html>

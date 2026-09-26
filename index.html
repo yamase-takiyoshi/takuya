@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.246 接続復旧・Worker5秒履歴</title>
+<title>The競馬 EV分析 v5.18.247 オッズ鮮度修正・Worker5秒履歴</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +259,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.246 接続復旧・Worker5秒履歴</span>
+    <span class="ver">v5.18.247 オッズ鮮度修正・Worker5秒履歴</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -4705,6 +4705,8 @@ function raceHtmlLooksFinalResult(text){
 function raceHtmlCachePolicy(url, text){
   const u = String(url || '');
   // 変動が激しい情報は短く、確定後に変わらない情報は長く保存。
+  // v5.18.247: 時系列用のキャッシュ回避URL(_nc=)は保存しない（毎回新URLでIndexedDBが膨らむため）。
+  if(/[?&]_nc=\d/.test(u)) return { ttl:0, label:'ライブオッズ(非保存)' };
   if(/OddsTanFuku|api_get_(?:jra|nar)_odds/i.test(u)) return { ttl:4*1000, label:'ライブオッズ' };
   if(/\/odds(?:\/|\?|\/index\.html)/i.test(u)) return { ttl:10*1000, label:'オッズ' };
   if(/db\.netkeiba\.com\/race\/\d+/i.test(u)) return { ttl:30*24*60*60*1000, label:'確定DB結果' };
@@ -18867,7 +18869,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.18.246 接続復旧・Worker5秒履歴';
+  const VERSION202 = 'v5.18.247 オッズ鮮度修正・Worker5秒履歴';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
@@ -19382,15 +19384,24 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
   const endpoint=nar?'https://nar.netkeiba.com/api/api_get_nar_odds.html':'https://race.netkeiba.com/api/api_get_jra_odds.html';
   const markets={},diagnostics={};
   const sources=[];
+  let officialAt='';
   let cursor=0,done=0;
   async function run(){
     while(cursor<TICKET_DEFS243.length){
       const def=TICKET_DEFS243[cursor++];
-      const url=`${endpoint}?race_id=${rid}&type=${def.id}&action=init`;
+      const baseUrl=`${endpoint}?race_id=${rid}&type=${def.id}&action=init`;
+      // v5.18.247: 同一URLだとWorker/Cloudflare/netkeiba CDNのキャッシュが返り続け、
+      // 5秒ごとに同じオッズが保存される（横一直線）ため、毎回ユニークなURLにする。
+      const url=`${baseUrl}&_nc=${Date.now()}${Math.floor(Math.random()*1000)}`;
       try{
         const raw=await fetchText(url);
         const rows=parseTicketJson243(raw,def,rid);
-        if(rows.length){markets[def.name]=rows;sources.push(url);}
+        try{
+          const j=typeof raw==='string'?JSON.parse(String(raw).trim()):raw;
+          const oa=String(j?.data?.official_datetime??j?.official_datetime??'').trim();
+          if(oa && (!officialAt || oa>officialAt)) officialAt=oa;
+        }catch(_){}
+        if(rows.length){markets[def.name]=rows;sources.push(baseUrl);}
         diagnostics[def.name]={state:rows.length?'ok':'empty',count:rows.length,message:rows.length?'':'有効なオッズなし（未発売・売止等）'};
       }catch(e){diagnostics[def.name]={state:'error',count:0,message:String(e?.message||e).slice(0,180)};}
       done++;
@@ -19401,7 +19412,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
   await Promise.all([run(),run(),run()]);
   const ordered={};
   for(const def of TICKET_DEFS243) if(markets[def.name]) ordered[def.name]=markets[def.name];
-  return {markets:ordered,diagnostics,source:sources.sort().join(' | '),market_count:Object.keys(ordered).length};
+  return {markets:ordered,diagnostics,source:sources.sort().join(' | '),market_count:Object.keys(ordered).length,official_at:officialAt};
 }
 
   function renderMarketStatus243(diagnostics={},done=8){
@@ -19428,7 +19439,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
     });
     const maps=newMarkets202();
     for(const [type,rows] of Object.entries(got.markets)) rows.forEach(r=>maps[type].set(r.combination,r.odds));
-    return {markets:maps,packed:got.markets,diagnostics:got.diagnostics,source:got.source};
+    return {markets:maps,packed:got.markets,diagnostics:got.diagnostics,source:got.source,official_at:got.official_at||''};
   }
 
   async function capture202(force=false){
@@ -19472,7 +19483,8 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
         captured_at:new Date(now).toISOString(),
         source:got.source || '',
         horses:expected.map(h=>({num:Number(h.num),name:String(h.name||''),pop:Number(h.pop||0),frame:Number(h.frame||0),odds:Number(h.odds||0)})),
-        markets:packed, market_status:got.diagnostics
+        markets:packed, market_status:got.diagnostics,
+        official_at:got.official_at||''
       };
       await dbPut202(rec);
       history.push(rec);
@@ -19487,8 +19499,16 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
       const srcText202 = String(got.source||'').includes('worker-direct-no-device') ? '☁️ Worker直結（デバイス不要）'
         : (window.__fetchPath==='bridge' ? '🌉 デバイスBridge' : (String(got.source||'').includes('worker') ? '☁️ Worker' : '🌐 自動取得'));
       const suffix=missingMarkets.length?' / 未取得：'+missingMarkets.join('・'):'';
-      const unchangedText202=unchanged202?' / 変化なしも5秒点として保存':'';
-      setStatus202(`${missingMarkets.length?'⚠️':'✅'} ${new Date(now).toLocaleTimeString('ja-JP')} 保存 ${8-missingMarkets.length}/8券種　${counts}${suffix}${unchangedText202}`,missingMarkets.length?'wait':'ok');
+      // v5.18.247: 連続で全券種が完全一致なら「取得元が古い値を返している」可能性を表示。
+      let sameRun247=0;
+      for(let i=history.length-1;i>0;i--){
+        if(JSON.stringify(history[i].markets)===JSON.stringify(history[i-1].markets)) sameRun247++; else break;
+      }
+      const officialText247=got.official_at?` / 公式発表 ${String(got.official_at).replace(/^\d{4}-\d{2}-\d{2}\s*/,'')}`:'';
+      const unchangedText202=unchanged202
+        ? (sameRun247>=24 ? ` / ⚠️ ${Math.round(sameRun247*5/60)}分以上全券種が同一（取得元キャッシュの可能性）` : ' / 変化なしも5秒点として保存')
+        : '';
+      setStatus202(`${missingMarkets.length?'⚠️':'✅'} ${new Date(now).toLocaleTimeString('ja-JP')} 保存 ${8-missingMarkets.length}/8券種　${counts}${suffix}${officialText247}${unchangedText202}`,missingMarkets.length?'wait':'ok');
     }catch(e){
       lastError=String(e?.message||e);
       if(rid===currentRaceId202() && rid===activeRid) setStatus202(`⚠️ ${lastError}`,'err');
@@ -21455,7 +21475,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
   if(window.__V518216_LIVE_COMMENTARY__) return;
   window.__V518216_LIVE_COMMENTARY__ = true;
 
-  const VERSION215 = 'v5.18.246 接続復旧・Worker5秒履歴';
+  const VERSION215 = 'v5.18.247 オッズ鮮度修正・Worker5秒履歴';
   const DB_NAME215 = 'thekeiba-odds-timeline-v1';
   const STORE215 = 'captures';
   const TYPES215 = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
@@ -21910,7 +21930,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
 <script>
 (function(){
   'use strict';
-  const VERSION219='v5.18.246 接続復旧・Worker5秒履歴';
+  const VERSION219='v5.18.247 オッズ鮮度修正・Worker5秒履歴';
   const CFG_KEY219='thekeiba_timeline_cloud_v219';
   const CFG_GLOBAL_KEY219='thekeiba_timeline_cloud_global';
   const DEFAULT_WORKER_URL219='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
@@ -22196,7 +22216,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
     const settingsTab=$219('tab-settings');
     if(settingsTab&&!$219('timelineCloudCard219')){
       const c=cfg219(),card=document.createElement('div');card.className='card';card.id='timelineCloudCard219';card.innerHTML=`
-        <div class="section-header"><h2>☁️ 常時時系列オッズ（デバイス0台）</h2><span class="nar-badge">v5.18.246</span></div>
+        <div class="section-header"><h2>☁️ 常時時系列オッズ（デバイス0台）</h2><span class="nar-badge">v5.18.247</span></div>
         <div style="font-size:11px;color:var(--muted);line-height:1.65;margin-bottom:10px">Durable Object Workerがサーバー側で時系列オッズを継続収集します。別デバイス未接続・iPad/PCを閉じた状態でも継続し、次回起動時にIndexedDBへ同期します。発走+10分（終了目安+5分）に達したらWorker・端末の5秒収集をそのレースについて終了し、その時点の時系列を完成形として固定します。以後は新しい点を追加せず、後から同じグラフを閲覧できます。3分前・発走・+10分の基準線も固定表示します。</div>
         <div class="field"><label>常時時系列Worker URL</label><input id="timelineCloudUrl219" type="url" value="${esc219(c.workerUrl)}" placeholder="https://the-keiba-timeline-collector.xxxxx.workers.dev"></div>
         <div class="field"><label>Token（Workerに設定した場合のみ）</label><input id="timelineCloudToken219" type="password" value="${esc219(c.token)}" autocomplete="off"></div>
@@ -22264,7 +22284,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
 (function(){
   'use strict';
 
-  const VERSION227 = 'v5.18.246 接続復旧・Worker5秒履歴';
+  const VERSION227 = 'v5.18.247 オッズ鮮度修正・Worker5秒履歴';
   let oddsJobSeq227 = 0;
 
   function el227(id){ return document.getElementById(id); }
@@ -22910,7 +22930,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{}){
   if(window.__THEKEIBA_232__) return;
   window.__THEKEIBA_232__ = true;
 
-  const VERSION = 'v5.18.246 接続復旧・Worker5秒履歴';
+  const VERSION = 'v5.18.247 オッズ鮮度修正・Worker5秒履歴';
   const JRA_VENUE_NAMES = {'01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京','06':'中山','07':'中京','08':'京都','09':'阪神','10':'小倉',
     '30':'門別','35':'盛岡','36':'水沢','42':'浦和','43':'船橋','44':'大井','45':'川崎','46':'金沢','47':'笠松','48':'名古屋','50':'園田','51':'姫路','54':'高知','55':'佐賀','65':'帯広'};
   const $ = id => document.getElementById(id);

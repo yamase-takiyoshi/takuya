@@ -2,8 +2,36 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
+<script id="bridge-only-network252">
+// Installed before application startup: old timers cannot contact a Worker.
+(function(){
+  'use strict';
+  let only=true;
+  try{only=localStorage.getItem('thekeiba-bridge-only252')!=='off';}catch(e){}
+  window.bridgeOnly252=()=>only;
+  const nativeFetch=window.fetch.bind(window);
+  const sourceHosts=new Set(['race.netkeiba.com','race.sp.netkeiba.com','nar.netkeiba.com','nar.sp.netkeiba.com','db.netkeiba.com','netkeiba.com','www.netkeiba.com','keiba.go.jp','www.keiba.go.jp','www2.keiba.go.jp','sp.keiba.go.jp','jra.jp','www.jra.jp','sp.jra.jp']);
+  window.bridgeSource252=url=>{try{const u=new URL(url,location.href);return u.protocol==='https:'&&sourceHosts.has(u.hostname)&&!u.username&&!u.password;}catch(e){return false;}};
+  window.fetch=async function(input,init){
+    if(!only) return nativeFetch(input,init);
+    const u=new URL(typeof input==='string'||input instanceof URL?String(input):input.url,location.href);
+    const method=String(init?.method||input?.method||'GET').toUpperCase();
+    let target=u.href;
+    if(!window.bridgeSource252(target)&&u.searchParams.has('url')) target=u.searchParams.get('url');
+    if(method==='GET'&&window.bridgeSource252(target)){
+      if(typeof window.bridgeText246!=='function')throw new Error('Bridge準備中です。数秒後に再試行してください');
+      const r=await window.bridgeText246(target);
+      return new Response(r.text,{status:r.status,headers:{'Content-Type':/^\s*[\[{]/.test(r.text)?'application/json; charset=utf-8':'text/html; charset=utf-8'}});
+    }
+    // Only static assets on this application's origin may use native fetch.
+    if(u.origin===location.origin&&method==='GET'&&!u.search&&!/\.workers\.dev$/i.test(u.hostname)&&/\.(?:css|js|woff2?|png|jpg|jpeg|svg|ico)$/i.test(u.pathname)) return nativeFetch(input,init);
+    throw new Error('Bridge専用モード：Worker・外部APIへの通信はOFFです');
+  };
+})();
+</script>
+
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.251 完全5秒履歴</title>
+<title>The競馬 EV分析 v5.18.252 Bridge専用対応</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -259,7 +287,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.251 完全5秒履歴</span>
+    <span class="ver">v5.18.252 Bridge専用対応</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -815,7 +843,7 @@ body.right-analysis-active #rightAnalysisPane{
     if(pendingBridge.has(key)) return pendingBridge.get(key);
     const job=(async()=>{
       if(typeof window.__narBridgeFetch!=='function' || (window.__bridgeAbsent===true && !window.__NAR_BRIDGE_READY__)) throw new Error('Bridge未接続');
-      const r=await window.withDeadline246(()=>window.__narBridgeFetch(key),8500);
+      const r=await window.withDeadline246(()=>window.__narBridgeFetch(key),window.bridgeOnly252()?25000:8500);
       if(!(Number(r?.status)>=200 && Number(r?.status)<300) || !window.usablePayload246(r?.text)) throw new Error('Bridge: HTTP '+(r?.status||'ERR')+' / 有効な本文なし');
       window.__NAR_BRIDGE_READY__=true;window.__bridgeAbsent=false;window.__bridgeCooldownUntil=0;
       window.__fetchPath='bridge';window.__bridgeLastError='';
@@ -849,6 +877,11 @@ body.right-analysis-active #rightAnalysisPane{
         try{const u=new URL(base);if(!/^https?:$/.test(u.protocol)||u.username||u.password)throw 0;}catch(e){proxyError='Workers URLを確認してください';}
         if(!proxyError && typeof saveProxy==='function') saveProxy();
         const target=listUrl();
+        if(window.bridgeOnly252()){
+          const r=await window.bridgeText246(target.url);
+          if(box)box.textContent='✅ Bridge接続OK（'+target.kind+'）／Worker通信OFF';
+          return {bridge:r,worker:{skipped:true},timeline:{skipped:true}};
+        }
         // A connection check has no collection/start side effects and does not use an unrelated historical race.
         const worker=async()=>{
           if(proxyError)throw new Error(proxyError);
@@ -15015,7 +15048,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
 
     const candidates = narCandidates166(u);
     let lastErr = null;
-    if(window.__NAR_BRIDGE_READY__ && typeof window.bridgeText246==='function'){
+    if((window.bridgeOnly252()||window.__NAR_BRIDGE_READY__) && typeof window.bridgeText246==='function'){
       try{
         const cached=await getRaceHtmlCache(u);
         if(cached){window.__fetchPath='cache';return cached;}
@@ -17447,6 +17480,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   }
 
   function workerBase(){
+    if(window.bridgeOnly252()) return '';
     const c = config();
     let base = c.workerUrl;
     if(!base){
@@ -17942,10 +17976,12 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   }
 
   async function workerHealth(){
+    if(window.bridgeOnly252()) return null;
     try{ return await fetchJson(cronBase()+'/health'); }catch(e){ return null; }
   }
 
   async function readManifest(date, forceToday){
+    if(window.bridgeOnly252()) return [];
     const base=cronBase();
     if(forceToday && dashed(date)===jstToday()){
       try{ await fetchJson(base+'/cron-run?discover=1'); }catch(e){ console.warn('[NAR196] cron-run',e); }
@@ -18935,7 +18971,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       if(!r.ok) throw new Error('取得Worker HTTP '+r.status);
       return {text:r.text,path:'Worker'};
     };
-    const routes=window.__NAR_BRIDGE_READY__?[bridge,worker]:[worker,bridge];
+    const routes=window.bridgeOnly252()?[bridge]:(window.__NAR_BRIDGE_READY__?[bridge,worker]:[worker,bridge]);
     for(const route of routes){
       try{
         const r=await route();
@@ -18970,7 +19006,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.18.251 完全5秒履歴';
+  const VERSION202 = 'v5.18.252 Bridge専用対応';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
@@ -21645,7 +21681,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   if(window.__V518216_LIVE_COMMENTARY__) return;
   window.__V518216_LIVE_COMMENTARY__ = true;
 
-  const VERSION215 = 'v5.18.251 完全5秒履歴';
+  const VERSION215 = 'v5.18.252 Bridge専用対応';
   const DB_NAME215 = 'thekeiba-odds-timeline-v1';
   const STORE215 = 'captures';
   const TYPES215 = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
@@ -22100,7 +22136,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
 <script>
 (function(){
   'use strict';
-  const VERSION219='v5.18.251 完全5秒履歴';
+  const VERSION219='v5.18.252 Bridge専用対応';
   const CFG_KEY219='thekeiba_timeline_cloud_v219';
   const CFG_GLOBAL_KEY219='thekeiba_timeline_cloud_global';
   const DEFAULT_WORKER_URL219='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
@@ -22156,7 +22192,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   function label219(){return String($219('raceTitleBox')?.textContent||$219('raceSelect')?.selectedOptions?.[0]?.textContent||currentRid219()).trim();}
   function upstream219(){try{return String(settings?.proxyUrl||'').trim();}catch(e){return '';}}
   function headers219(json=false){const h={};if(json)h['Content-Type']='application/json';const t=cfg219().token;if(t)h['X-Timeline-Token']=t;return h;}
-  function base219(){return cfg219().workerUrl.replace(/\/$/,'');}
+  function base219(){return window.bridgeOnly252()?'':cfg219().workerUrl.replace(/\/$/,'');}
   const META_KEY220='thekeiba_timeline_meta_v220';
   function rememberMeta219(rid,meta){
     if(!rid||!meta)return;
@@ -22311,6 +22347,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     throw new Error('履歴のページ数が上限に達しました。同期未完了のため再試行してください');
   }
   async function startCurrent219(silent=false){
+    if(window.bridgeOnly252()) return {ok:false,skipped:true,reason:'bridge-only'};
     const rid=currentRid219();if(!/^\d{10,14}$/.test(rid)){if(!silent)status219('⚠️ レースを選択してください','err');return null;}
     const postMs=uiPostMs219(rid);
     let saved=null;try{const all=JSON.parse(localStorage.getItem(META_KEY220)||'{}')||{};saved=all[String(rid)]||null;}catch(e){}
@@ -22325,6 +22362,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     status219(`☁️ ${rid} 常時収集ON（発走+10分（終了目安+5分）で完全停止・固定 / デバイス0台）`,'ok');return j;
   }
   async function syncCurrent219(silent=false,forceFull=false,ridOverride=''){
+    if(window.bridgeOnly252()) return {ok:false,skipped:true,reason:'bridge-only'};
     const rid=String(ridOverride||currentRid219());
     if(!/^\d{10,14}$/.test(rid)){
       if(!silent)status219('⚠️ レースを選択してからWorker履歴を読み込んでください','err');
@@ -22378,6 +22416,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     return job;
   }
   async function fullSyncCurrent219(silent=false,ridOverride=''){
+    if(window.bridgeOnly252()) return {ok:false,skipped:true,reason:'bridge-only'};
     const rid=String(ridOverride||currentRid219());
     // 現在選択中のレースなら、読み込み前に常時収集を必ず有効化する。過去レースは再開しない。
     if(!ridOverride || rid===String(currentRid219())){
@@ -22402,7 +22441,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     const settingsTab=$219('tab-settings');
     if(settingsTab&&!$219('timelineCloudCard219')){
       const c=cfg219(),card=document.createElement('div');card.className='card';card.id='timelineCloudCard219';card.innerHTML=`
-        <div class="section-header"><h2>☁️ 常時時系列オッズ（デバイス0台）</h2><span class="nar-badge">v5.18.251</span></div>
+        <div class="section-header"><h2>☁️ 常時時系列オッズ（デバイス0台）</h2><span class="nar-badge">v5.18.252</span></div>
         <div style="font-size:11px;color:var(--muted);line-height:1.65;margin-bottom:10px">Durable Object Workerがサーバー側で全8券種を5秒基準で継続収集します。別デバイス未接続・iPad/PCを閉じた状態でも継続し、次回起動時にWorker全履歴をIndexedDBへ復元します。発走+10分（終了目安+5分）に達したらWorker・端末の5秒収集をそのレースについて終了し、その時点の時系列を完成形として固定します。以後は新しい点を追加せず、後から同じグラフを閲覧できます。3分前・発走・+10分の基準線も固定表示します。</div>
         <div class="field"><label>常時時系列Worker URL</label><input id="timelineCloudUrl219" type="url" value="${esc219(c.workerUrl)}" placeholder="https://the-keiba-timeline-collector.xxxxx.workers.dev"></div>
         <div class="field"><label>Token（Workerに設定した場合のみ）</label><input id="timelineCloudToken219" type="password" value="${esc219(c.token)}" autocomplete="off"></div>
@@ -22481,7 +22520,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
 (function(){
   'use strict';
 
-  const VERSION227 = 'v5.18.251 完全5秒履歴';
+  const VERSION227 = 'v5.18.252 Bridge専用対応';
   let oddsJobSeq227 = 0;
 
   function el227(id){ return document.getElementById(id); }
@@ -22835,6 +22874,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   }
 
   async function readTimelineWorker228(raceId){
+    if(window.bridgeOnly252()) return [];
     const cfg=timelineCfg228();
     if(!cfg.workerUrl) return [];
     const base=cfg.workerUrl.replace(/\/$/,'');
@@ -23127,7 +23167,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   if(window.__THEKEIBA_232__) return;
   window.__THEKEIBA_232__ = true;
 
-  const VERSION = 'v5.18.251 完全5秒履歴';
+  const VERSION = 'v5.18.252 Bridge専用対応';
   const JRA_VENUE_NAMES = {'01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京','06':'中山','07':'中京','08':'京都','09':'阪神','10':'小倉',
     '30':'門別','35':'盛岡','36':'水沢','42':'浦和','43':'船橋','44':'大井','45':'川崎','46':'金沢','47':'笠松','48':'名古屋','50':'園田','51':'姫路','54':'高知','55':'佐賀','65':'帯広'};
   const $ = id => document.getElementById(id);
@@ -23814,6 +23854,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   // v6.1.3 Worker の /racecard はHTMLパース済みの正式な馬名・馬番を返す。
   // HTML取得より先に試す。race_id不一致・重複馬番・空の馬名は表示しない。
   async function fetchCardJson235(kind, rid){
+    if(window.bridgeOnly252()) throw new Error('Bridge専用：Worker出馬表は使用しません');
     const base = String(settings.proxyUrl || '').trim().replace(/\/+$/, '');
     if(!base) throw new Error('Worker URLが未設定です');
     const endpoint = new URL(base);
@@ -23854,6 +23895,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   // Worker の type=shutuba が汎用ページを返す版でも、元URLを直指定して取得する。
   // 直指定は fetchHtmlViaProxy のキャッシュと type= への変換を通さない。
   async function fetchCardDirect233(url){
+    if(window.bridgeOnly252()) return (await window.bridgeText246(url)).text;
     const base = String(settings.proxyUrl || '').trim().replace(/\/+$/, '');
     if(!base) throw new Error('Worker URLが未設定です');
     const controller = new AbortController();
@@ -23880,7 +23922,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   async function fetchCard(kind, rid, raw){
     const urls = cardUrls(kind, rid, raw);
     const failures = [];
-    if(window.__NAR_BRIDGE_READY__ && typeof window.bridgeText246==='function'){
+    if((window.bridgeOnly252()||window.__NAR_BRIDGE_READY__) && typeof window.bridgeText246==='function'){
       try{
         const url=urls[0];
         const r=await window.bridgeText246(url);
@@ -24151,5 +24193,63 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   try{fetchHtmlViaProxy=live;}catch(e){}
 })();
 </script>
+<style>
+html.bridge-only252 #timelineCloudCard219,
+html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
+#bridgeModeBar252{padding:12px 18px;background:#112b32;border-bottom:1px solid #34d399;color:#d1fae5;font-size:13px;line-height:1.7;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+#bridgeModeBar252 select{background:#1e293b;color:white;border:1px solid #64748b;border-radius:6px;padding:7px;max-width:100%}
+#bridgeModeState252{flex:1;min-width:240px}
+</style>
+<script id="bridge-only-ui252">
+(function(){
+  'use strict';
+  const only=window.bridgeOnly252();
+  document.documentElement.classList.toggle('bridge-only252',only);
+  if(only){
+    const direct=async function(url){
+      if(!window.bridgeSource252(url))throw new Error('Bridgeが対応する取得先ではありません');
+      if(window.liveOdds247?.isApi(url))return (await window.liveOdds247.fetch(url)).text;
+      return (await window.bridgeText246(url)).text;
+    };
+    window.fetchHtmlViaProxy=direct;
+    try{fetchHtmlViaProxy=direct;}catch(e){}
+    const builder=url=>String(url);
+    window.buildWorkerRequestUrl=builder;
+    try{buildWorkerRequestUrl=builder;}catch(e){}
+  }
+  function install(){
+    if(!document.body)return;
+    if(!document.getElementById('bridgeModeBar252')){
+      const bar=document.createElement('div');bar.id='bridgeModeBar252';
+      bar.innerHTML='<b>v5.18.252</b><select id="bridgeModeSelect252" aria-label="取得モード"><option value="on">🌉 Bridge専用・Worker通信OFF</option><option value="off">☁️ 通常モード（Worker併用）</option></select><span id="bridgeModeState252"></span><button class="btn-sm" id="bridgeCheck252">Bridge接続確認</button>';
+      document.body.prepend(bar);
+      const sel=document.getElementById('bridgeModeSelect252');sel.value=only?'on':'off';
+      sel.onchange=()=>{try{localStorage.setItem('thekeiba-bridge-only252',sel.value);location.reload();}catch(e){sel.value=only?'on':'off';alert('設定を保存できません：'+e.message);}};
+      document.getElementById('bridgeCheck252').onclick=async function(){
+        this.disabled=true;
+        const status=document.getElementById('bridgeModeState252');
+        status.textContent='Bridge接続を確認中…';
+        try{
+          window.__bridgeAbsent=false;window.__bridgeCooldownUntil=0;
+          const url=document.getElementById('raceUrl')?.value;
+          if(!window.bridgeSource252(url))throw new Error('先にレースを選択してください');
+          await window.bridgeText246(url);
+          status.textContent='✅ Bridge接続OK／'+(only?'Worker通信OFF・端末内に保存':'通常モード');
+        }catch(e){status.textContent='⚠️ '+String(e.message||e)+'。SafariのBridgeを有効にして再読込してください';}
+        finally{this.disabled=false;}
+      };
+      document.getElementById('bridgeModeState252').textContent=only?'端末内に保存／Safariを前面に表示して使用／スリープ中の収集は不可':'Worker併用中（既存のURL設定を使用）';
+    }
+    if(only){
+      const strip=document.getElementById('oddsTsCloud219');
+      if(strip)strip.textContent='🌉 Bridge直接取得 → 端末内保存 ｜ Worker通信OFF ｜ 5秒基準・通信中は次の取得を待機';
+    }
+  }
+  install();
+  document.addEventListener('DOMContentLoaded',install,{once:true});
+  [200,1000,3000,8000].forEach(ms=>setTimeout(install,ms));
+})();
+</script>
+
 </body>
 </html>

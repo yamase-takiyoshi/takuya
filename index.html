@@ -31,7 +31,7 @@
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.20.4 Timeline Collector Fix</title>
+<title>The競馬 EV分析 v5.21.0 Prediction Core</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -25757,6 +25757,394 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
    Proto.resume=async function(p){const r=await oldResume.call(this,p);const post=Number(p?.race?.postMs||0);if(p?.raceId&&(p.date<(new Date(Date.now()+9*3600000).toISOString().slice(0,10))||post&&Date.now()>=post+120000))this.loadResult5202(p.id,false);return r;};
  }
 })();
+</script>
+
+
+
+<!-- v5.21.0 Prediction Core Overhaul -->
+<script id="predictionCore521">
+/* ============================================================
+   v5.21.0 Prediction Core Overhaul
+   - Coherent Plackett-Luce probabilities across all 8 ticket types
+   - Real/pre-close odds required for recommendations; estimated odds are research-only
+   - Stale/live odds guard and PRE_RACE_STRICT anti-lookahead guard
+   - Portfolio overlap / high-variance concentration guard
+   - Diagnostics + invariants for probability mass and recommendation quality
+   ============================================================ */
+(function(){
+  'use strict';
+  if(window.__THEKEIBA_PREDICT_CORE_521__) return;
+  window.__THEKEIBA_PREDICT_CORE_521__ = true;
+
+  const VERSION = 'v5.21.0 Prediction Core';
+  const TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
+  const UNORDERED = new Set(['枠連','ワイド','馬連','3連複']);
+  const HIGH_VAR = new Set(['馬単','3連複','3連単']);
+  const REAL_TTL_MS = 45000;
+
+  const prevGenerate = (typeof generateCandidates === 'function') ? generateCandidates : window.generateCandidates;
+  const prevSelect = (typeof selectByMode === 'function') ? selectByMode : window.selectByMode;
+  const prevBuild = (typeof buildTickets === 'function') ? buildTickets : window.buildTickets;
+  const prevRunPredict = (typeof runPredict === 'function') ? runPredict : window.runPredict;
+
+  function num(v,d=0){ const n=Number(v); return Number.isFinite(n)?n:d; }
+  function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
+  function raceIdNow(){ try{return String(currentRaceId||window.currentRaceId||'').replace(/\D/g,'');}catch(e){return String(window.currentRaceId||'').replace(/\D/g,'');} }
+  function currentDate(){ return String(document.getElementById('pickDate')?.value||''); }
+  function todayJst(){
+    try{return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());}
+    catch(e){return new Date(Date.now()+9*3600000).toISOString().slice(0,10);}
+  }
+  function validationMode(){ return String(document.getElementById('rsValidationMode')?.value||'FINAL_RESEARCH'); }
+  function canon(type, nums){
+    const a=(nums||[]).map(Number);
+    if(UNORDERED.has(type)) a.sort((x,y)=>x-y);
+    return `${type}:${a.join('-')}`;
+  }
+  function pairKey(a,b){ return a<b?`${a}-${b}`:`${b}-${a}`; }
+  function tripleKey(a,b,c){ return [a,b,c].sort((x,y)=>x-y).join('-'); }
+  function safeMapGet(map,key){ try{return map&&typeof map.get==='function'?map.get(key):undefined;}catch(e){return undefined;} }
+  function isRealSource(s){ return /^(?:real|real-win|preclose-real|live-real|snapshot-real)/.test(String(s||'')); }
+  function isPrecloseSource(s){ return /preclose|PRE_CLOSE/i.test(String(s||'')); }
+
+  function currentMarketPacks(){
+    const rid=raceIdNow(), out=[];
+    if(!rid) return out;
+    const pc=safeMapGet(window.__precloseAllMarketsCache,rid);
+    if(pc) out.push({pack:pc,kind:'preclose'});
+    const nr=safeMapGet(window.__narRealOddsCache,rid);
+    if(nr && nr!==pc) out.push({pack:nr,kind:'live'});
+    return out;
+  }
+
+  function packOdds(type,nums){
+    const key=canon(type,nums).slice(type.length+1);
+    const now=Date.now();
+    for(const x of currentMarketPacks()){
+      const m=x.pack?.markets?.[type];
+      const v=num(safeMapGet(m,key),0);
+      if(!(v>1)) continue;
+      const pre=x.kind==='preclose' || x.pack?.preclose || /PRE_CLOSE/i.test(String(x.pack?.source||''));
+      const ts=num(x.pack?.ts,0);
+      const stale=!pre && ts>0 && now-ts>REAL_TTL_MS;
+      return {odds:v,source:'real',verified:true,stale,ts,preclose:pre,provider:String(x.pack?.source||'')};
+    }
+    return null;
+  }
+
+  function modelHorseWeights(horses){
+    const hs=(horses||[]).filter(h=>num(h?.num)>0);
+    const n=hs.length;
+    const oddsRows=hs.filter(h=>num(h.odds)>1.01);
+    const oddsCoverage=n?oddsRows.length/n:0;
+    const popRows=hs.filter(h=>num(h.pop)>0 && num(h.pop)<=n);
+    const popCoverage=n?popRows.length/n:0;
+
+    const inv=new Map(); let invSum=0;
+    for(const h of oddsRows){ const v=1/num(h.odds); inv.set(num(h.num),v); invSum+=v; }
+    const rankRaw=Array.from({length:n},(_,i)=>1/Math.pow(i+1,1.08));
+    const rankSum=rankRaw.reduce((a,b)=>a+b,0)||1;
+
+    const rows=hs.map((h,idx)=>{
+      const no=num(h.num), pop=num(h.pop);
+      const fair=(invSum>0 && inv.has(no))?inv.get(no)/invSum:0;
+      const rank=(pop>=1&&pop<=n)?rankRaw[pop-1]/rankSum:rankRaw[Math.min(idx,n-1)]/rankSum;
+      let p;
+      if(oddsCoverage>=0.80 && fair>0){
+        // Market is the strongest prior. Popularity only nudges 7%; this suppresses self-generated false edges.
+        p=0.93*fair+0.07*rank;
+      }else if(fair>0){
+        p=0.80*fair+0.20*rank;
+      }else{
+        p=rank;
+      }
+      return {h,no,p,fair,rank};
+    });
+    let s=rows.reduce((a,r)=>a+r.p,0)||1;
+    rows.forEach(r=>r.p/=s);
+    return {rows,n,oddsCoverage,popCoverage,marketOverround:invSum};
+  }
+
+  function coherentProbabilities(horses){
+    const pack=modelHorseWeights(horses), rows=pack.rows, n=rows.length;
+    const byNo=new Map(rows.map(r=>[r.no,r]));
+    const win=new Map(), place=new Map(), exacta=new Map(), quinella=new Map(), wide=new Map(), trio=new Map(), trifecta=new Map(), frameQ=new Map();
+    rows.forEach(r=>{win.set(r.no,r.p);place.set(r.no,0);});
+
+    // Ordered top-2 distribution (sums to 1 for n>=2)
+    if(n>=2){
+      for(const a of rows){
+        const rem1=Math.max(1e-12,1-a.p);
+        for(const b of rows){ if(a.no===b.no) continue;
+          const p2=a.p*(b.p/rem1);
+          exacta.set(`${a.no}-${b.no}`,p2);
+          const qk=pairKey(a.no,b.no); quinella.set(qk,num(quinella.get(qk))+p2);
+        }
+      }
+    }
+
+    const slots=n>=8?3:Math.min(2,n);
+    if(slots===2){
+      for(const [k,p] of exacta){
+        const [a,b]=k.split('-').map(Number);
+        place.set(a,num(place.get(a))+p); place.set(b,num(place.get(b))+p);
+        wide.set(pairKey(a,b),num(wide.get(pairKey(a,b)))+p);
+      }
+    }
+
+    // Top-3 order probabilities are always needed for 3連複/3連単, even when 複勝/ワイド pay only top-2.
+    if(n>=3){
+      for(const a of rows){
+        const rem1=Math.max(1e-12,1-a.p);
+        for(const b of rows){ if(b.no===a.no) continue;
+          const p2=a.p*(b.p/rem1);
+          const rem2=Math.max(1e-12,1-a.p-b.p);
+          for(const c of rows){ if(c.no===a.no||c.no===b.no) continue;
+            const p3=p2*(c.p/rem2);
+            const ok=`${a.no}-${b.no}-${c.no}`;
+            trifecta.set(ok,p3);
+            const tk=tripleKey(a.no,b.no,c.no); trio.set(tk,num(trio.get(tk))+p3);
+            if(slots===3){
+              place.set(a.no,num(place.get(a.no))+p3); place.set(b.no,num(place.get(b.no))+p3); place.set(c.no,num(place.get(c.no))+p3);
+              const ab=pairKey(a.no,b.no), ac=pairKey(a.no,c.no), bc=pairKey(b.no,c.no);
+              wide.set(ab,num(wide.get(ab))+p3); wide.set(ac,num(wide.get(ac))+p3); wide.set(bc,num(wide.get(bc))+p3);
+            }
+          }
+        }
+      }
+    }
+
+    // 枠連 is aggregated from horse quinella probabilities. Same-frame combinations are retained when 2+ horses share a frame.
+    for(const [k,p] of quinella){
+      const [a,b]=k.split('-').map(Number);
+      const fa=num(byNo.get(a)?.h?.frame), fb=num(byNo.get(b)?.h?.frame);
+      if(!(fa>0&&fb>0)) continue;
+      const fk=pairKey(fa,fb); frameQ.set(fk,num(frameQ.get(fk))+p);
+    }
+
+    return {pack,win,place,exacta,quinella,wide,trio,trifecta,frameQ,slots};
+  }
+
+  function priorMapFrom(made){
+    const m=new Map();
+    for(const r of (made?.recs||[])) m.set(canon(r.type,r.nums),r);
+    return m;
+  }
+
+  function resolveOdds(type,nums,horses,prior){
+    const fromPack=packOdds(type,nums);
+    if(fromPack) return fromPack;
+    if(type==='単勝'){
+      const h=(horses||[]).find(x=>num(x.num)===num(nums?.[0]));
+      if(num(h?.odds)>1.01) return {odds:num(h.odds),source:'real-win',verified:true,stale:false,ts:Date.now(),preclose:false,provider:'horse-card'};
+    }
+    if(prior && num(prior.odds)>1.01 && isRealSource(prior.oddsSource)){
+      return {odds:num(prior.odds),source:String(prior.oddsSource),verified:true,stale:false,ts:Date.now(),preclose:!!prior.precloseVerified||isPrecloseSource(prior.oddsSource),provider:'existing-real'};
+    }
+    return {odds:Math.max(1.01,num(prior?.odds,1.01)),source:'estimated',verified:false,stale:false,ts:0,preclose:false,provider:'model-estimate'};
+  }
+
+  function antiLookaheadAllowed(oddsInfo){
+    if(validationMode()!=='PRE_RACE_STRICT') return true;
+    const d=currentDate(), past=/^\d{4}-\d{2}-\d{2}$/.test(d) && d<todayJst();
+    if(!past) return true;
+    return !!oddsInfo?.preclose || isPrecloseSource(oddsInfo?.source) || isPrecloseSource(oddsInfo?.provider);
+  }
+
+  function qualityLabel(base,od){
+    let q=0;
+    if(base.oddsCoverage>=0.95) q+=2; else if(base.oddsCoverage>=0.75) q+=1;
+    if(base.popCoverage>=0.80) q+=1;
+    if(od.verified&&!od.stale) q+=2;
+    if(od.preclose || isPrecloseSource(od.source) || isPrecloseSource(od.provider)) q+=1;
+    return q>=5?'A':q>=3?'B':q>=2?'C':'D';
+  }
+
+  function makeRec(type,nums,p,oddsInfo,prior,base){
+    const prob=clamp(num(p),0.0000001,0.9999999), odds=Math.max(1.01,num(oddsInfo.odds,1.01));
+    const ev=prob*odds;
+    const kelly=Math.max(0,((odds-1)*prob-(1-prob))/Math.max(0.01,odds-1));
+    const allowed=!!(oddsInfo.verified && !oddsInfo.stale && antiLookaheadAllowed(oddsInfo));
+    return {
+      ...(prior||{}), type, nums:nums.map(Number), p:prob, odds, ev, kelly,
+      marketP:1/odds, edgePP:(prob-1/odds)*100,
+      unit:num(settings?.unit,100)||100, amount:num(settings?.unit,100)||100, stake:num(settings?.unit,100)||100,
+      expectedReturn:ev*(num(settings?.unit,100)||100),
+      oddsSource:oddsInfo.source, oddsVerified:!!oddsInfo.verified, oddsStale:!!oddsInfo.stale, precloseVerified:!!oddsInfo.preclose,
+      recommendationEligible:allowed, researchOnly:!allowed,
+      modelQuality:qualityLabel(base,oddsInfo), modelVersion:'PL-COHERENT-v5.21.0',
+      oddsProvider:oddsInfo.provider||'', oddsCapturedMs:num(oddsInfo.ts,0)
+    };
+  }
+
+  function rebuildCandidates(allHorses, priorMade){
+    const cp=coherentProbabilities(allHorses), prior=priorMapFrom(priorMade), recs=[];
+    const base=cp.pack;
+    function add(type,nums,p){
+      const pr=prior.get(canon(type,nums));
+      const oi=resolveOdds(type,nums,allHorses,pr);
+      recs.push(makeRec(type,nums,p,oi,pr,base));
+    }
+    for(const [no,p] of cp.win) add('単勝',[no],p);
+    for(const [no,p] of cp.place) add('複勝',[no],p);
+    for(const [k,p] of cp.frameQ) add('枠連',k.split('-').map(Number),p);
+    for(const [k,p] of cp.wide) add('ワイド',k.split('-').map(Number),p);
+    for(const [k,p] of cp.quinella) add('馬連',k.split('-').map(Number),p);
+    for(const [k,p] of cp.exacta) add('馬単',k.split('-').map(Number),p);
+    for(const [k,p] of cp.trio) add('3連複',k.split('-').map(Number),p);
+    for(const [k,p] of cp.trifecta) add('3連単',k.split('-').map(Number),p);
+
+    const rated=base.rows.map(r=>({...(r.h||{}),winP:r.p,placeP:num(cp.place.get(r.no)),renP:0})).sort((a,b)=>b.winP-a.winP);
+    const diag=diagnostics(cp,recs);
+    try{window.__prediction521={diag,recs,rated,ts:Date.now(),raceId:raceIdNow()};}catch(e){}
+    return {recs,rated};
+  }
+
+  function diagnostics(cp,recs){
+    const sum=m=>[...m.values()].reduce((a,b)=>a+num(b),0);
+    const sums={
+      win:sum(cp.win), place:sum(cp.place), exacta:sum(cp.exacta), quinella:sum(cp.quinella),
+      wide:sum(cp.wide), trio:sum(cp.trio), trifecta:sum(cp.trifecta), frameQ:sum(cp.frameQ)
+    };
+    const expectedWide=cp.slots>=2 ? (cp.slots*(cp.slots-1))/2 : 0;
+    const eps=1e-7;
+    const invariants={
+      win:Math.abs(sums.win-1)<eps,
+      place:Math.abs(sums.place-cp.slots)<1e-6,
+      exacta:cp.pack.n<2 || Math.abs(sums.exacta-1)<1e-6,
+      quinella:cp.pack.n<2 || Math.abs(sums.quinella-1)<1e-6,
+      wide:cp.pack.n<2 || Math.abs(sums.wide-expectedWide)<1e-6,
+      trio:cp.pack.n<3 || Math.abs(sums.trio-1)<1e-6,
+      trifecta:cp.pack.n<3 || Math.abs(sums.trifecta-1)<1e-6,
+      frameQ:cp.pack.n<2 || Math.abs(sums.frameQ-1)<1e-6
+    };
+    const real=recs.filter(r=>r.oddsVerified).length, eligible=recs.filter(r=>r.recommendationEligible).length;
+    const stale=recs.filter(r=>r.oddsStale).length, estimated=recs.length-real;
+    return {sums,invariants,allInvariant:Object.values(invariants).every(Boolean),real,eligible,stale,estimated,total:recs.length,
+      oddsCoverage:cp.pack.oddsCoverage,popCoverage:cp.pack.popCoverage,overround:cp.pack.marketOverround,slots:cp.slots,
+      validationMode:validationMode(),date:currentDate(),today:todayJst()};
+  }
+
+  function overlap(a,b){
+    const A=new Set((a.nums||[]).map(Number)),B=new Set((b.nums||[]).map(Number));
+    let inter=0; for(const x of A) if(B.has(x)) inter++;
+    return inter/Math.max(1,new Set([...A,...B]).size);
+  }
+  function sameSet(a,b){ return [...(a.nums||[])].sort((x,y)=>x-y).join('-')===[...(b.nums||[])].sort((x,y)=>x-y).join('-'); }
+
+  function portfolioGuard(candidates,max){
+    const out=[], horseUse=new Map(), setUse=new Map();
+    const highCap=Math.max(1,Math.ceil(max*0.35)); let highUsed=0;
+    const perHorseCap=Math.max(1,Math.ceil(max*0.60));
+    for(const r of candidates){
+      if(out.length>=max) break;
+      if(!r?.recommendationEligible) continue;
+      if(HIGH_VAR.has(r.type) && highUsed>=highCap) continue;
+      const sk=[...(r.nums||[])].sort((a,b)=>a-b).join('-');
+      if(num(setUse.get(sk))>=2) continue;
+      if((r.nums||[]).some(n=>num(horseUse.get(Number(n)))>=perHorseCap)) continue;
+      const tooSimilar=out.some(x=>sameSet(x,r) && overlap(x,r)>=0.99 && num(r.ev)<num(x.ev)+0.08);
+      if(tooSimilar) continue;
+      out.push(r);
+      if(HIGH_VAR.has(r.type)) highUsed++;
+      setUse.set(sk,num(setUse.get(sk))+1);
+      for(const n of (r.nums||[])) horseUse.set(Number(n),num(horseUse.get(Number(n)))+1);
+    }
+    return out;
+  }
+
+  function strictSelect(recs,mode,max){
+    const verified=(recs||[]).filter(r=>r?.recommendationEligible===true);
+    let pool;
+    try{
+      if(typeof prevSelect==='function') pool=prevSelect(verified,mode,Math.max(max*4,max));
+      else pool=verified.filter(r=>num(r.ev)>=1.00).sort((a,b)=>num(b.ev)-num(a.ev)||num(b.p)-num(a.p));
+    }catch(e){
+      pool=verified.filter(r=>num(r.ev)>=1.00).sort((a,b)=>num(b.ev)-num(a.ev)||num(b.p)-num(a.p));
+    }
+    return portfolioGuard(pool,max);
+  }
+
+  const newGenerate=function(allHorses){
+    let priorMade=null;
+    try{ priorMade=typeof prevGenerate==='function'?prevGenerate.apply(this,arguments):null; }catch(e){ priorMade=null; }
+    // Preserve the dedicated strict-edge mode, which has its own market-shrinkage audit logic.
+    try{ if(String(settings?.mode||'')==='edge29' && priorMade?.recs?.length) return priorMade; }catch(e){}
+    return rebuildCandidates(allHorses,priorMade||{recs:[]});
+  };
+  window.generateCandidates=newGenerate; try{generateCandidates=newGenerate;}catch(e){}
+
+  const newBuild=function(recs){
+    const mode=String(settings?.mode||'balance');
+    if(mode==='edge29' && typeof prevBuild==='function') return prevBuild.apply(this,arguments);
+    const unit=Math.max(100,num(settings?.unit,100)||100);
+    const budget=Math.max(0,num(settings?.budget,500));
+    const configuredMax=Math.max(0,Math.floor(num(settings?.maxTickets,5)));
+    if(budget<unit || configuredMax<1) return [];
+    const max=Math.min(configuredMax,Math.floor(budget/unit));
+    let picked=strictSelect(recs,mode,max);
+    picked=picked.slice(0,max).map(r=>({...r,amount:unit,stake:unit}));
+    return picked;
+  };
+  window.buildTickets=newBuild; try{buildTickets=newBuild;}catch(e){}
+
+  function installAuditCard(){
+    if(document.getElementById('predictAudit521')) return;
+    const result=document.getElementById('tab-result');
+    if(!result) return;
+    const first=result.querySelector('.card');
+    const card=document.createElement('div');
+    card.className='card'; card.id='predictAudit521';
+    card.style.borderColor='rgba(52,211,153,.28)';
+    card.innerHTML=`<h2>🧠 予想ロジック監査 <span style="font-size:10px;color:var(--muted)">${VERSION}</span></h2><div id="predictAuditBody521" style="font-size:11px;line-height:1.65;color:var(--muted)">EV計算後に監査結果を表示します。</div>`;
+    if(first) result.insertBefore(card,first); else result.appendChild(card);
+  }
+  function renderAudit(){
+    installAuditCard();
+    const el=document.getElementById('predictAuditBody521'), d=window.__prediction521?.diag;
+    if(!el||!d) return;
+    const ok=d.allInvariant?'✅ 整合':'⚠️ 要確認';
+    const strict=d.validationMode==='PRE_RACE_STRICT';
+    const past=d.date&&d.today&&d.date<d.today;
+    el.innerHTML=`
+      <div><b style="color:${d.allInvariant?'var(--green)':'var(--yellow)'}">${ok}</b>：勝率・馬連/馬単・3連複/3連単・複勝/ワイドを同一の着順確率モデルから算出。</div>
+      <div>実オッズ確認 <b>${d.real}/${d.total}</b>候補 ／ 推奨可能 <b style="color:var(--green)">${d.eligible}</b> ／ 推定オッズのみ <b>${d.estimated}</b> ／ stale <b>${d.stale}</b></div>
+      <div>単勝オッズ網羅率 ${(d.oddsCoverage*100).toFixed(0)}% ／ 人気網羅率 ${(d.popCoverage*100).toFixed(0)}% ／ 単勝overround ${d.overround?d.overround.toFixed(3):'-'}</div>
+      <div>${strict?'PRE_RACE_STRICT':'FINAL_RESEARCH'}${strict&&past?'：過去レースは締切前スナップショット実オッズだけを推奨対象':'：現在/研究データ'}。推定オッズ候補は比較表示だけで、買い目には採用しません。</div>`;
+  }
+
+  if(typeof prevRunPredict==='function'){
+    const wrappedRun=function(){ const r=prevRunPredict.apply(this,arguments); setTimeout(renderAudit,0); return r; };
+    window.runPredict=wrappedRun; try{runPredict=wrappedRun;}catch(e){}
+  }
+
+  // Keep multi-metric displays aware of the new source labels.
+  function patchSourceLabels(){
+    document.querySelectorAll('#edgeTopBody213 .edge-source-est').forEach(()=>{});
+  }
+
+  function markVersion(){
+    try{
+      window.APP_VERSION=VERSION;
+      const v=document.querySelector('.ver');
+      if(v){const bridge=/🌉/.test(v.textContent||'');v.textContent=VERSION+(bridge?' 🌉':'');}
+      document.title='The競馬 EV分析 '+VERSION;
+    }catch(e){}
+  }
+  function boot(){ installAuditCard(); renderAudit(); patchSourceLabels(); markVersion(); }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',boot,{once:true}); else boot();
+  [300,1200,3500,8000,15000,26000].forEach(ms=>setTimeout(markVersion,ms));
+
+  window.__THEKEIBA_PREDICT_CORE_521_API__={
+    version:VERSION,
+    coherentProbabilities,
+    diagnostics:()=>window.__prediction521?.diag||null,
+    recommendations:()=>{try{return Array.isArray(lastTickets)?lastTickets.slice():[];}catch(e){return[];}},
+    candidates:()=>{try{return Array.isArray(lastRecs)?lastRecs.slice():[];}catch(e){return[];}},
+    rerenderAudit:renderAudit
+  };
+})();
+
 </script>
 
 </body>

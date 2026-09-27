@@ -12,10 +12,26 @@
   const nativeFetch=window.fetch.bind(window);
   const sourceHosts=new Set(['race.netkeiba.com','race.sp.netkeiba.com','nar.netkeiba.com','nar.sp.netkeiba.com','db.netkeiba.com','netkeiba.com','www.netkeiba.com','keiba.go.jp','www.keiba.go.jp','www2.keiba.go.jp','sp.keiba.go.jp','jra.jp','www.jra.jp','sp.jra.jp']);
   window.bridgeSource252=url=>{try{const u=new URL(url,location.href);return u.protocol==='https:'&&sourceHosts.has(u.hostname)&&!u.username&&!u.password;}catch(e){return false;}};
+  // Device-off PRE_CLOSE_3MIN snapshots are server-side evidence, not an upstream race-data fallback.
+  // Keep Bridge-only for race sources, but allow only the configured snapshot Cron Worker endpoints.
+  window.bridgeSnapshotWorker252=url=>{
+    try{
+      const u=new URL(url,location.href);
+      if(u.protocol!=='https:'||u.username||u.password) return false;
+      const hosts=new Set(['abc.nitta-katsuhiko.workers.dev']);
+      try{
+        const c=JSON.parse(localStorage.getItem('thekeiba_preclose3m_cfg_v1')||'{}')||{};
+        if(c.workerUrl) hosts.add(new URL(String(c.workerUrl),location.href).hostname);
+      }catch(e){}
+      try{if(window.__THEKEIBA_CRON_WORKER_URL__)hosts.add(new URL(String(window.__THEKEIBA_CRON_WORKER_URL__),location.href).hostname);}catch(e){}
+      return hosts.has(u.hostname)&&['/preclose-snapshot','/cron-status','/health','/timeline/discover','/timeline/start','/timeline/stop','/timeline/status','/timeline/history'].includes(u.pathname);
+    }catch(e){return false;}
+  };
   window.fetch=async function(input,init){
     if(!only) return nativeFetch(input,init);
     const u=new URL(typeof input==='string'||input instanceof URL?String(input):input.url,location.href);
     const method=String(init?.method||input?.method||'GET').toUpperCase();
+    if((method==='GET'||method==='POST')&&window.bridgeSnapshotWorker252(u.href)) return nativeFetch(input,init);
     let target=u.href;
     if(!window.bridgeSource252(target)&&u.searchParams.has('url')) target=u.searchParams.get('url');
     if(method==='GET'&&window.bridgeSource252(target)){
@@ -17621,9 +17637,10 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
   }
 
   function workerBase(){
-    if(window.bridgeOnly252()) return '';
     const c = config();
-    let base = c.workerUrl;
+    // Snapshot storage/retrieval is allowed in Bridge-only mode; race-source Worker traffic stays blocked.
+    let base = String(c.workerUrl || window.__THEKEIBA_CRON_WORKER_URL__ || '').trim();
+    if(!base && window.bridgeOnly252()) base = 'https://abc.nitta-katsuhiko.workers.dev';
     if(!base){
       try{ base = String((typeof settings !== 'undefined' && settings.proxyUrl) || '').trim(); }catch(e){}
     }
@@ -22510,7 +22527,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   const VERSION219='v5.20.3 Pane Result Isolation';
   const CFG_KEY219='thekeiba_timeline_cloud_v219';
   const CFG_GLOBAL_KEY219='thekeiba_timeline_cloud_global';
-  const DEFAULT_WORKER_URL219='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
+  const DEFAULT_WORKER_URL219='https://abc.nitta-katsuhiko.workers.dev';
   const DB_NAME219='thekeiba-odds-timeline-v1';
   const STORE219='captures';
   let syncTimer219=null, raceTimer219=null;
@@ -22563,7 +22580,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   function label219(){return String($219('raceTitleBox')?.textContent||$219('raceSelect')?.selectedOptions?.[0]?.textContent||currentRid219()).trim();}
   function upstream219(){try{return String(settings?.proxyUrl||'').trim();}catch(e){return '';}}
   function headers219(json=false){const h={};if(json)h['Content-Type']='application/json';const t=cfg219().token;if(t)h['X-Timeline-Token']=t;return h;}
-  function base219(){return window.bridgeOnly252()?'':cfg219().workerUrl.replace(/\/$/,'');}
+  function base219(){return cfg219().workerUrl.replace(/\/$/,'');}
   const META_KEY220='thekeiba_timeline_meta_v220';
   function rememberMeta219(rid,meta){
     if(!rid||!meta)return;
@@ -22718,7 +22735,6 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     throw new Error('履歴のページ数が上限に達しました。同期未完了のため再試行してください');
   }
   async function startCurrent219(silent=false){
-    if(window.bridgeOnly252()) return {ok:false,skipped:true,reason:'bridge-only'};
     const rid=currentRid219();if(!/^\d{10,14}$/.test(rid)){if(!silent)status219('⚠️ レースを選択してください','err');return null;}
     const postMs=uiPostMs219(rid);
     let saved=null;try{const all=JSON.parse(localStorage.getItem(META_KEY220)||'{}')||{};saved=all[String(rid)]||null;}catch(e){}
@@ -22733,7 +22749,6 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     status219(`☁️ ${rid} 常時収集ON（発走+10分（終了目安+5分）で完全停止・固定 / デバイス0台）`,'ok');return j;
   }
   async function syncCurrent219(silent=false,forceFull=false,ridOverride=''){
-    if(window.bridgeOnly252()) return {ok:false,skipped:true,reason:'bridge-only'};
     const rid=String(ridOverride||currentRid219());
     if(!/^\d{10,14}$/.test(rid)){
       if(!silent)status219('⚠️ レースを選択してからWorker履歴を読み込んでください','err');
@@ -22787,7 +22802,6 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     return job;
   }
   async function fullSyncCurrent219(silent=false,ridOverride=''){
-    if(window.bridgeOnly252()) return {ok:false,skipped:true,reason:'bridge-only'};
     const rid=String(ridOverride||currentRid219());
     // 現在選択中のレースなら、読み込み前に常時収集を必ず有効化する。過去レースは再開しない。
     if(!ridOverride || rid===String(currentRid219())){
@@ -23242,7 +23256,6 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   }
 
   async function readTimelineWorker228(raceId){
-    if(window.bridgeOnly252()) return [];
     const cfg=timelineCfg228();
     if(!cfg.workerUrl) return [];
     const base=cfg.workerUrl.replace(/\/$/,'');
@@ -25748,6 +25761,87 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
    const oldResume=Proto.resume;
    Proto.resume=async function(p){const r=await oldResume.call(this,p);const post=Number(p?.race?.postMs||0);if(p?.raceId&&(p.date<(new Date(Date.now()+9*3600000).toISOString().slice(0,10))||post&&Date.now()>=post+120000))this.loadResult5202(p.id,false);return r;};
  }
+})();
+</script>
+
+
+<!-- v5.20.5 DeviceOff All8 Unified Audit -->
+<script>
+(function(){
+  'use strict';
+  if(window.__DEVICE_OFF_PRECLOSE_EV_5205__) return;
+  window.__DEVICE_OFF_PRECLOSE_EV_5205__=true;
+  const VERSION='v5.20.5 DeviceOff All8 Unified';
+  const $=id=>document.getElementById(id);
+  function raceIdNow(){
+    try{
+      const a=String((typeof currentRaceId!=='undefined'&&currentRaceId)||window.currentRaceId||'').replace(/\D/g,''); if(a.length===12)return a;
+      const s=$('raceSelect'),b=String(s?.selectedOptions?.[0]?.dataset?.raceId||s?.value||'').match(/\d{12}/); if(b)return b[0];
+      const c=String($('raceUrl')?.value||'').match(/race_id=(\d{12})/); return c?c[1]:'';
+    }catch(e){return '';}
+  }
+  function keyNums(type,nums){
+    const a=(nums||[]).map(Number).filter(n=>n>0);
+    if(['枠連','馬連','ワイド','3連複'].includes(type))a.sort((x,y)=>x-y);
+    return a.join('-');
+  }
+  function recalc(r,odds){
+    const p=Math.max(.0001,Math.min(.9999,Number(r?.p||0)));
+    const o=Math.max(1.01,Number(odds||0));
+    const ev=p*o,marketP=1/o;
+    const kelly=Math.max(0,((o-1)*p-(1-p))/Math.max(.01,o-1));
+    return {...r,odds:o,ev,marketP,edgePP:(p-marketP)*100,kelly,
+      expectedReturn:ev*Number(r?.unit||100),oddsSource:'real',
+      oddsSnapshotType:'PRE_CLOSE_3MIN',precloseOddsSource:true};
+  }
+  function snapshotPack(){
+    const rid=raceIdNow(),cache=window.__precloseAllMarketsCache;
+    if(!rid||!cache||typeof cache.get!=='function')return null;
+    const p=cache.get(rid); return p&&p.preclose?p:null;
+  }
+  function wrapGenerator(){
+    const prev=window.generateCandidates || (typeof generateCandidates==='function'?generateCandidates:null);
+    if(typeof prev!=='function'||prev.__deviceOffPreclose5204)return false;
+    const wrapped=function(allHorses){
+      const made=prev.apply(this,arguments),pack=snapshotPack();
+      if(!pack||!made||!Array.isArray(made.recs))return made;
+      made.recs=made.recs.map(r=>{
+        const m=pack.markets?.[r.type];
+        const od=Number(m&&typeof m.get==='function'?m.get(keyNums(r.type,r.nums)):0);
+        return od>=1?recalc(r,od):r;
+      });
+      made.precloseAllMarketsApplied=true; made.precloseCapturedAt=pack.captured_at||'';
+      return made;
+    };
+    wrapped.__deviceOffPreclose5204=true; window.generateCandidates=wrapped; try{generateCandidates=wrapped;}catch(e){}
+    return true;
+  }
+  function decorateUi(){
+    try{
+      const opt=$('rsValidationMode')?.querySelector('option[value="PRE_RACE_STRICT"]');
+      if(opt)opt.textContent='PRE-RACE監査（締切3分前EV・端末OFF保存対応）';
+      const note=$('rsValidationNote');
+      if(note&&!note.querySelector('[data-deviceoff5204]')){
+        const d=document.createElement('div');d.dataset.deviceoff5204='1';d.style.marginTop='7px';d.style.color='var(--green)';
+        d.innerHTML='<b>端末OFF完全自動：</b> abc統合WorkerのCron + Durable Objectが、端末を起動しなくてもJRA/NARを自動発見し、5秒履歴と <b>PRE_CLOSE_3MIN</b> 全8券種を保存します。後からその時点の実オッズでEVを再計算して仮購入します。スナップショット無し・時刻未検証は監査ROIから除外します。';
+        note.appendChild(d);
+      }
+      const run=$('rsRunBtn');
+      if(run&&run.parentElement&&!$('rsPrecloseRun5204')){
+        const b=document.createElement('button');b.type='button';b.id='rsPrecloseRun5204';b.className='btn-sm';b.textContent='⏱️ 締切3分前EVで実行';
+        b.addEventListener('click',()=>{
+          const sel=$('rsValidationMode'); if(sel){sel.value='PRE_RACE_STRICT';window.__rsValidationMode='PRE_RACE_STRICT';sel.dispatchEvent(new Event('change',{bubbles:true}));}
+          if(typeof window.runRangeVenueSimulation==='function')window.runRangeVenueSimulation(); else if(typeof runRangeVenueSimulation==='function')runRangeVenueSimulation();
+        });
+        run.parentElement.insertBefore(b,run.nextSibling);
+      }
+      const v=document.querySelector('.header .ver');if(v&&!/v5\.20\.5/.test(v.textContent||''))v.textContent=VERSION+(/🌉/.test(v.textContent||'')?' 🌉':'');
+      document.title='The競馬 EV分析 '+VERSION;
+    }catch(e){console.warn('[DeviceOffAll8Unified]',e);}
+  }
+  function boot(){wrapGenerator();decorateUi();}
+  [0,300,1200,3000,7000].forEach(ms=>setTimeout(boot,ms));
+  window.useDeviceOffPrecloseSimulation5205=function(){decorateUi();$('rsPrecloseRun5204')?.click();};
 })();
 </script>
 

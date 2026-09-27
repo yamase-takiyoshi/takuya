@@ -31,7 +31,7 @@
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.260 VenueMulti Swipe</title>
+<title>The競馬 EV分析 v5.18.261 JRA-NAR SideBySide</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -375,7 +375,7 @@ html.ms258-timeline-embedded .odds-ts-foot{padding:3px 6px!important}
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.260 VenueMulti Swipe</span>
+    <span class="ver">v5.18.261 JRA-NAR SideBySide</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -24700,6 +24700,8 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
   let venueOffset=0;
   let venueList=[];
   let baseState=null;
+  let mixedJN=false;
+  let normalSnapshot=null;
   const slotState=[null,null,null,null];
   const frameLoaded=[false,false,false,false];
 
@@ -24868,7 +24870,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
           const kind=d.getElementById('pickKind');
           const venue=d.getElementById('pickVenue');
           if(date && state.date) date.value=state.date;
-          if(kind && state.kind) kind.value=state.kind;
+          if(kind && state.kind){ kind.value=state.kind; try{kind.dispatchEvent(new Event('change',{bubbles:true}));}catch(e){} }
           try{ w.renderVenueOptions(); }catch(e){}
           if(venue && state.venue){
             if(![...venue.options].some(o=>o.value===state.venue) && typeof w.loadActiveVenuesForDate==='function'){
@@ -24912,13 +24914,21 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
   }
 
   function visibleSlots(){
+    if(mixedJN) return [0,1];
     const assigned=new Set(assignedSlots());
     if(mode===4) return [0,1,2,3].filter(i=>assigned.has(i));
     if(mode===2) return [pairStart,pairStart+1].filter(i=>assigned.has(i));
     return assigned.has(active)?[active]:(assigned.size?[Math.min(...assigned)]:[]);
   }
 
-  function venueAtSlot(i){ return venueList[venueOffset+i]||null; }
+  function venueAtSlot(i){
+    if(mixedJN){
+      if(i===0) return {code:slotState[0]?.venue||'',name:'JRA'};
+      if(i===1) return {code:slotState[1]?.venue||'',name:'NAR'};
+      return null;
+    }
+    return venueList[venueOffset+i]||null;
+  }
 
   function updateCellLabel(i){
     const venueEl=$('ms258Venue'+i), raceEl=$('ms258Race'+i);
@@ -24934,7 +24944,17 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
           scrollLeft:Number(live.scrollLeft||prev.scrollLeft||0)};
       }
     }
-    if(venueEl) venueEl.textContent=v?.name||s?.venueLabel||'未設定';
+    if(venueEl){
+      if(mixedJN){
+        const k=i===0?'JRA':'NAR';
+        const vn=String(s?.venueLabel||'').replace(/（\d+R）/g,'').trim();
+        venueEl.textContent=vn && vn!==k ? `${k}｜${vn}` : k;
+        venueEl.style.color=i===0?'#93c5fd':'#f9a8d4';
+      }else{
+        venueEl.textContent=v?.name||s?.venueLabel||'未設定';
+        venueEl.style.color='#a7f3d0';
+      }
+    }
     if(raceEl){
       const no=Number(s?.raceNo||1);
       const label=String(s?.raceLabel||'').replace(/^選択中:\s*/,'');
@@ -24952,15 +24972,59 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       if(show) mount(i); else unmount(i);
       updateCellLabel(i);
     }
-    ['1','2','4'].forEach(n=>$('ms258Mode'+n)?.classList.toggle('active',Number(n)===mode));
+    ['1','2','4'].forEach(n=>$('ms258Mode'+n)?.classList.toggle('active',!mixedJN && Number(n)===mode));
+    $('ms258JraNar')?.classList.toggle('active',mixedJN);
     const st=$('ms258Status');
     if(st){
-      const names=[0,1,2,3].map(venueAtSlot).filter(Boolean).map(v=>v.name);
-      st.textContent=names.length?names.join('・'):'開催場なし';
+      if(mixedJN){
+        const l=slotState[0]?.venueLabel||'JRA';
+        const r=slotState[1]?.venueLabel||'NAR';
+        st.textContent=`左 JRA ${l&&l!=='JRA'?'('+l+')':''} ｜ 右 NAR ${r&&r!=='NAR'?'('+r+')':''}`;
+      }else{
+        const names=[0,1,2,3].map(venueAtSlot).filter(Boolean).map(v=>v.name);
+        st.textContent=names.length?names.join('・'):'開催場なし';
+      }
     }
   }
 
+  function saveNormalSnapshot(){
+    normalSnapshot={
+      venueList:venueList.map(v=>({...v})), venueOffset, active, pairStart, mode,
+      slots:slotState.map(s=>s?{...s}:null)
+    };
+  }
+
+  function restoreNormalSnapshot(targetMode){
+    if(!normalSnapshot) return;
+    for(let i=0;i<4;i++) unmount(i);
+    mixedJN=false;
+    venueList=normalSnapshot.venueList.map(v=>({...v}));
+    venueOffset=normalSnapshot.venueOffset;
+    active=normalSnapshot.active;
+    pairStart=normalSnapshot.pairStart;
+    mode=targetMode||normalSnapshot.mode||4;
+    for(let i=0;i<4;i++) slotState[i]=normalSnapshot.slots[i]?{...normalSnapshot.slots[i]}:null;
+    render();
+  }
+
+  function enterMixedJN(){
+    if(mixedJN) return;
+    saveNormalSnapshot();
+    for(let i=0;i<4;i++) unmount(i);
+    const ref=baseState||captureParent()||{};
+    const common={
+      ...ref, raceUrl:'', raceLabel:'', raceIndex:0,
+      raceNo:Number(ref.raceNo||1), timelineCombo:'', scrollTop:0, scrollLeft:0
+    };
+    slotState[0]={...common,kind:'JRA',venue:ref.kind==='JRA'?(ref.venue||''):'',venueLabel:ref.kind==='JRA'?(ref.venueLabel||'JRA'):'JRA'};
+    slotState[1]={...common,kind:'NAR',venue:ref.kind==='NAR'?(ref.venue||''):'',venueLabel:ref.kind==='NAR'?(ref.venueLabel||'NAR'):'NAR'};
+    slotState[2]=null; slotState[3]=null;
+    mixedJN=true; mode=2; active=0; pairStart=0; venueOffset=0;
+    render();
+  }
+
   function setMode(n,focus){
+    if(mixedJN){ restoreNormalSnapshot(n); return; }
     if([0,1,2,3].includes(focus)) active=focus;
     if(n===2 && [0,1,2,3].includes(focus)) pairStart=focus>=2?2:0;
     mode=n; render();
@@ -25032,6 +25096,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
   }
 
   function nextVenuePage(){
+    if(mixedJN) return;
     if(venueList.length<=4) return;
     for(let i=0;i<4;i++) unmount(i);
     venueOffset += 4;
@@ -25053,12 +25118,14 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     assignVenuePage();
     mode=venueList.length>=3?4:(venueList.length===2?2:1);
     render();
+    // v5.18.261: 起動時は左JRA・右NARの同時2画面を既定にする。
+    enterMixedJN();
   }
 
   function close(){
     if(!opened) return;
     for(let i=0;i<4;i++) unmount(i);
-    opened=false; $('multiWorkspace258')?.classList.remove('open');
+    opened=false; mixedJN=false; normalSnapshot=null; $('multiWorkspace258')?.classList.remove('open');
     document.documentElement.style.overflow='';
     try{ if(parentRightWasOpen && typeof window.setRightAnalysisPanel==='function') window.setRightAnalysisPanel(true); }catch(e){}
   }
@@ -25069,6 +25136,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     ws.innerHTML=`
       <div class="ms258-toolbar">
         <span class="ms258-title">🏟️ 開催場別 時系列 <small style="font-weight:600;color:#94a3b8">各画面スワイプ可</small></span>
+        <button id="ms258JraNar" type="button" title="左にJRA、右にNARを同時表示">JRA｜NAR</button>
         <button id="ms258Mode1" type="button">1画面</button>
         <button id="ms258Mode2" type="button">▥ 2分割</button>
         <button id="ms258Mode4" type="button">▦ 4分割</button>
@@ -25095,6 +25163,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       </div>`;
     document.body.appendChild(ws);
 
+    $('ms258JraNar').onclick=()=>{ if(!mixedJN) enterMixedJN(); };
     $('ms258Mode1').onclick=()=>setMode(1,active);
     $('ms258Mode2').onclick=()=>setMode(2,active);
     $('ms258Mode4').onclick=()=>setMode(4,active);
@@ -25110,7 +25179,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     if(anchor?.parentNode && !$('multiScreenBtn258')){
       const b=document.createElement('button');
       b.id='multiScreenBtn258'; b.className='btn-sm right-analysis-toggle'; b.type='button';
-      b.textContent='🏟️ 開催場別'; b.title='開催場ごとに時系列オッズを1・2・4画面で同時監視'; b.onclick=open;
+      b.textContent='JRA｜NAR 同時'; b.title='左JRA・右NARを同時表示。1・2・4画面の開催場別表示にも切替可能'; b.onclick=open;
       anchor.parentNode.insertBefore(b,anchor);
     }
     setInterval(()=>{if(opened) visibleSlots().forEach(updateCellLabel);},1500);
@@ -25120,6 +25189,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
   window.closeMultiScreen258=close;
   window.setMultiScreenMode258=setMode;
   window.nextMultiScreen258=nextPair;
+  window.openJraNarSideBySide261=()=>{ if(!opened) open(); else if(!mixedJN) enterMixedJN(); };
 
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',build,{once:true}); else build();
 })();

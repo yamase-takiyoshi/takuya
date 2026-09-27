@@ -31,7 +31,7 @@
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.261 JraNarDual</title>
+<title>The競馬 EV分析 v5.18.260 VenueMulti Swipe</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -345,9 +345,18 @@ html.ms258-timeline-embedded .odds-ts-controls{gap:4px!important}
 html.ms258-timeline-embedded .odds-ts-controls label{font-size:8px!important}
 html.ms258-timeline-embedded .odds-ts-controls select{min-width:76px!important;max-width:150px!important;padding:4px 5px!important;font-size:9px!important}
 html.ms258-timeline-embedded #oddsTsRaceArchive{min-width:155px!important;max-width:240px!important}
-html.ms258-timeline-embedded .odds-ts-chart-wrap{padding:5px 5px 0!important;flex:1!important;min-height:130px!important}
-html.ms258-timeline-embedded .odds-ts-chart-wrap canvas{height:100%!important;min-height:130px!important}
-html.ms258-timeline-embedded .odds-ts-legend{max-height:118px!important;padding:4px 6px 7px!important}
+html.ms258-timeline-embedded .odds-ts-chart-wrap{padding:5px 5px 0!important;flex:none!important;min-height:220px!important}
+html.ms258-timeline-embedded .odds-ts-chart-wrap canvas{height:220px!important;min-height:220px!important;touch-action:pan-y!important}
+/* v5.18.260 VenueMulti Swipe: 4画面それぞれを独立スワイプ */
+html.ms258-timeline-embedded #rightOddsTimelinePane{
+  display:block!important;flex:1!important;min-height:0!important;overflow:auto!important;
+  -webkit-overflow-scrolling:touch!important;overscroll-behavior:contain!important;
+  touch-action:pan-x pan-y!important;scrollbar-gutter:stable;
+}
+html.ms258-timeline-embedded .odds-ts-toolbar{position:relative;z-index:1}
+html.ms258-timeline-embedded .odds-ts-legend{
+  max-height:none!important;min-height:150px!important;overflow:visible!important;padding:4px 6px 18px!important
+}
 html.ms258-timeline-embedded .odds-ts-foot{padding:3px 6px!important}
 @media(max-width:900px){
   .ms258-toolbar{gap:5px;padding:5px 6px}
@@ -366,7 +375,7 @@ html.ms258-timeline-embedded .odds-ts-foot{padding:3px 6px!important}
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.260 VenueMulti</span>
+    <span class="ver">v5.18.260 VenueMulti Swipe</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -24726,7 +24735,9 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
         timelineMetric:d.getElementById('oddsTsMetric')?.value||'odds',
         timelineCombo:d.getElementById('oddsTsCombo')?.value||'',
         timelineWindow:d.getElementById('oddsTsWindow')?.value||'3600000',
-        timelineAuto:!!d.getElementById('oddsTsAuto')?.checked
+        timelineAuto:!!d.getElementById('oddsTsAuto')?.checked,
+        scrollTop:Number(d.getElementById('rightOddsTimelinePane')?.scrollTop||0),
+        scrollLeft:Number(d.getElementById('rightOddsTimelinePane')?.scrollLeft||0)
       };
     }catch(e){ return null; }
   }
@@ -24799,6 +24810,24 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     }catch(e){}
   }
 
+  function restoreSlotScroll(w,state){
+    const top=Number(state?.scrollTop||0), left=Number(state?.scrollLeft||0);
+    let tries=0;
+    const apply=()=>{
+      tries++;
+      try{
+        const pane=w.document.getElementById('rightOddsTimelinePane');
+        if(pane){
+          pane.scrollTo({top,left,behavior:'auto'});
+          if(tries<5) setTimeout(apply,80);
+          return;
+        }
+      }catch(e){}
+      if(tries<12) setTimeout(apply,100);
+    };
+    setTimeout(apply,60);
+  }
+
   async function fetchSelectedRace(i,w,state){
     try{
       const d=w.document;
@@ -24821,7 +24850,8 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       setTimeout(()=>setSelect(w,'oddsTsCombo',state.timelineCombo||''),250);
       const au=d.getElementById('oddsTsAuto');
       if(au && typeof state.timelineAuto==='boolean') au.checked=state.timelineAuto;
-      const live=capture(w); if(live) slotState[i]={...state,...live,venueLabel:state.venueLabel||live.venueLabel};
+      restoreSlotScroll(w,state);
+      const live=capture(w); if(live) slotState[i]={...state,...live,scrollTop:Number(state.scrollTop||0),scrollLeft:Number(state.scrollLeft||0),venueLabel:state.venueLabel||live.venueLabel};
       updateCellLabel(i);
     }catch(e){
       const r=$('ms258Race'+i); if(r) r.textContent='読込失敗: '+String(e.message||e);
@@ -24895,7 +24925,15 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     const v=venueAtSlot(i);
     let s=slotState[i];
     const f=$('ms258Frame'+i);
-    if(frameLoaded[i] && f?.contentWindow){ const live=capture(f.contentWindow); if(live) s=slotState[i]={...(s||{}),...live}; }
+    if(frameLoaded[i] && f?.contentWindow){
+      const live=capture(f.contentWindow);
+      if(live){
+        const prev=s||{};
+        s=slotState[i]={...prev,...live,
+          scrollTop:Number(live.scrollTop||prev.scrollTop||0),
+          scrollLeft:Number(live.scrollLeft||prev.scrollLeft||0)};
+      }
+    }
     if(venueEl) venueEl.textContent=v?.name||s?.venueLabel||'未設定';
     if(raceEl){
       const no=Number(s?.raceNo||1);
@@ -25030,7 +25068,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     const ws=document.createElement('div'); ws.id='multiWorkspace258';
     ws.innerHTML=`
       <div class="ms258-toolbar">
-        <span class="ms258-title">🏟️ 開催場別 時系列</span>
+        <span class="ms258-title">🏟️ 開催場別 時系列 <small style="font-weight:600;color:#94a3b8">各画面スワイプ可</small></span>
         <button id="ms258Mode1" type="button">1画面</button>
         <button id="ms258Mode2" type="button">▥ 2分割</button>
         <button id="ms258Mode4" type="button">▦ 4分割</button>
@@ -25083,235 +25121,6 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
   window.setMultiScreenMode258=setMode;
   window.nextMultiScreen258=nextPair;
 
-  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',build,{once:true}); else build();
-})();
-</script>
-
-
-
-<style id="dual-kind261-style">
-#dualKindBtn261{white-space:nowrap}
-#dualWorkspace261{display:none;position:fixed;inset:0;z-index:100001;background:#07111d;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
-#dualWorkspace261.open{display:flex;flex-direction:column}
-.dk261-top{min-height:50px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:7px 10px;background:#0f1b2c;border-bottom:1px solid #334155;box-shadow:0 3px 18px rgba(0,0,0,.35)}
-.dk261-title{font-weight:800;white-space:nowrap}
-.dk261-top button{appearance:none;border:1px solid #3b4a62;background:#18263a;color:#e2e8f0;border-radius:8px;padding:7px 10px;font-weight:700;font-size:12px;cursor:pointer}
-.dk261-top button.dk261-close{margin-left:auto;background:#3a1b25;border-color:#713244}
-.dk261-status{font-size:11px;color:#94a3b8}
-.dk261-grid{flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:6px;background:#06101b}
-.dk261-pane{min-width:0;min-height:0;border:1px solid #334155;border-radius:10px;overflow:hidden;background:#0f172a;display:flex;flex-direction:column}
-.dk261-bar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:6px 8px;background:#142238;border-bottom:1px solid #334155;font-size:11px}
-.dk261-bar .kind{font-size:12px;font-weight:800;color:#a7f3d0;min-width:40px}
-.dk261-bar .race{flex:1;min-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#94a3b8}
-.dk261-bar button{border:1px solid #3b4a62;background:#1d2c43;color:#e2e8f0;border-radius:6px;padding:3px 6px;font-size:10px;white-space:nowrap}
-.dk261-frame{border:0;width:100%;height:100%;flex:1;min-height:0;background:#07111d}
-@media(max-width:900px){.dk261-grid{grid-template-columns:1fr}.dk261-top{gap:5px;padding:5px 6px}.dk261-top button{padding:6px 7px;font-size:11px}.dk261-status{display:none}}
-</style>
-
-<script id="dual-kind261">
-(function(){
-  'use strict';
-  if(window.__THEKEIBA_DUAL261__) return;
-  window.__THEKEIBA_DUAL261__=true;
-  const $=id=>document.getElementById(id);
-  let opened=false;
-  const frameReady=[false,false];
-  const state=[{kind:'JRA',date:''},{kind:'NAR',date:''}];
-  const labels=['左','右'];
-
-  function childUrl(slot){
-    const u=new URL(location.href);
-    u.searchParams.set('multiEmbedded','1');
-    u.searchParams.set('multiTimeline','1');
-    u.searchParams.set('dslot',String(slot));
-    u.hash='';
-    return u.href;
-  }
-  function parentState(){
-    return {
-      date: $('pickDate')?.value || new Date().toISOString().slice(0,10),
-      kind: $('pickKind')?.value || 'JRA',
-      raceNo: 1
-    };
-  }
-  function waitReady(i, cb, tries=120){
-    const f=$('dk261Frame'+i); if(!f?.contentWindow) return;
-    try{
-      const w=f.contentWindow;
-      if(w.document?.getElementById('pickDate') && typeof w.loadActiveVenuesForDate==='function') return cb(w);
-    }catch(e){}
-    if(tries>0) setTimeout(()=>waitReady(i,cb,tries-1),125);
-  }
-  function getVenueOptions(w){
-    try{
-      const sel=w.document.getElementById('pickVenue'); if(!sel) return [];
-      return Array.from(sel.options||[]).map(o=>({value:String(o.value||''),text:String(o.textContent||'').replace(/（\d+R）/g,'').trim()})).filter(x=>x.value && !/開催なし|取得できません|選択/.test(x.text));
-    }catch(e){ return []; }
-  }
-  function getRaceNo(w){
-    try{
-      const rs=w.document.getElementById('raceSelect');
-      const opt=rs?.selectedOptions?.[0];
-      const rid=String(opt?.dataset?.raceId||'');
-      if(rid) return Number(rid.slice(-2))||1;
-      const txt=String(opt?.textContent||'');
-      const m=txt.match(/(?:^|\s)(\d{1,2})R(?:\s|$)/);
-      return m?Number(m[1]):1;
-    }catch(e){ return 1; }
-  }
-  function setSelect(w,id,val){
-    try{
-      const el=w.document.getElementById(id); if(!el||val==null||val==='') return false;
-      if([...el.options].some(o=>o.value===val)){ el.value=val; el.dispatchEvent(new Event('change',{bubbles:true})); return true; }
-    }catch(e){}
-    return false;
-  }
-  function updateLabel(i){
-    const f=$('dk261Frame'+i); const raceEl=$('dk261Race'+i); const venueEl=$('dk261Venue'+i);
-    if(!f?.contentWindow || !frameReady[i]) return;
-    try{
-      const w=f.contentWindow,d=w.document;
-      const kind=d.getElementById('pickKind')?.value||state[i].kind;
-      const venueText=String(d.getElementById('pickVenue')?.selectedOptions?.[0]?.textContent||'').replace(/（\d+R）/g,'').trim()||kind;
-      const raceText=String(d.getElementById('raceTitleBox')?.textContent||d.getElementById('raceSelect')?.selectedOptions?.[0]?.textContent||'').trim() || (getRaceNo(w)+'R');
-      venueEl.textContent=venueText;
-      raceEl.textContent=raceText.replace(/^選択中:\s*/,'');
-      state[i].kind=kind; state[i].venue=String(d.getElementById('pickVenue')?.value||''); state[i].raceNo=getRaceNo(w); state[i].date=d.getElementById('pickDate')?.value||state[i].date;
-    }catch(e){}
-  }
-  async function bootFrame(i){
-    return new Promise(resolve=>{
-      waitReady(i,w=>{(async()=>{
-        try{
-          const base=parentState();
-          const d=w.document;
-          const kind=state[i].kind;
-          const date=state[i].date||base.date;
-          d.getElementById('pickDate').value=date;
-          d.getElementById('pickKind').value=kind;
-          try{ w.renderVenueOptions(); }catch(e){}
-          await w.loadActiveVenuesForDate();
-          let venues=getVenueOptions(w);
-          let wanted=state[i].venue;
-          if(!wanted || !venues.some(v=>v.value===wanted)) wanted=(kind===base.kind ? ($('pickVenue')?.value||'') : '') || (venues[0]?.value||'');
-          if(wanted) setSelect(w,'pickVenue',wanted);
-          await w.loadRaceList();
-          const rs=d.getElementById('raceSelect');
-          if(rs && rs.options.length){
-            const rn=Number(state[i].raceNo||base.raceNo||1);
-            const idx=Array.from(rs.options).findIndex(o=>Number(String(o.dataset?.raceId||'').slice(-2))===rn || new RegExp('(?:^|\\s)'+rn+'R(?:\\s|$)').test(String(o.textContent||'')));
-            if(idx>=0) rs.selectedIndex=idx;
-            if(typeof w.applySelectedRaceUrl==='function') w.applySelectedRaceUrl();
-            if(typeof w.fetchRace==='function') await w.fetchRace();
-          }
-          if(typeof w.setRightAnalysisPanel==='function') w.setRightAnalysisPanel(true);
-          if(typeof w.showOddsTimeline==='function') w.showOddsTimeline();
-          frameReady[i]=true;
-          updateLabel(i);
-        }catch(e){
-          const raceEl=$('dk261Race'+i); if(raceEl) raceEl.textContent='読込失敗: '+String(e.message||e);
-        }
-        resolve();
-      })();});
-    });
-  }
-  function mount(i){
-    const f=$('dk261Frame'+i); if(!f) return;
-    frameReady[i]=false;
-    f.onload=()=>{ if(f.src==='about:blank') return; bootFrame(i); };
-    f.src=childUrl(i);
-  }
-  function unmount(i){ const f=$('dk261Frame'+i); if(f) try{f.src='about:blank';}catch(e){} frameReady[i]=false; }
-  async function changeVenue(i,delta){
-    const f=$('dk261Frame'+i); if(!f?.contentWindow || !frameReady[i]) return;
-    try{
-      const w=f.contentWindow; const opts=getVenueOptions(w); if(!opts.length) return;
-      let idx=Math.max(0,opts.findIndex(v=>v.value===state[i].venue));
-      idx=(idx+delta+opts.length)%opts.length;
-      state[i].venue=opts[idx].value;
-      state[i].raceNo=1;
-      await bootFrame(i);
-    }catch(e){}
-  }
-  async function changeRace(i,delta){
-    const f=$('dk261Frame'+i); if(!f?.contentWindow || !frameReady[i]) return;
-    try{
-      const w=f.contentWindow,d=w.document; const rs=d.getElementById('raceSelect'); if(!rs||!rs.options.length) return;
-      const ni=Math.max(0,Math.min(rs.options.length-1,rs.selectedIndex+delta)); if(ni===rs.selectedIndex) return;
-      rs.selectedIndex=ni; if(typeof w.applySelectedRaceUrl==='function') w.applySelectedRaceUrl();
-      if(typeof w.fetchRace==='function') await w.fetchRace();
-      if(typeof w.setRightAnalysisPanel==='function') w.setRightAnalysisPanel(true);
-      if(typeof w.showOddsTimeline==='function') w.showOddsTimeline();
-      updateLabel(i);
-    }catch(e){}
-  }
-  async function syncRaceNo(){
-    const source = state[0].raceNo || state[1].raceNo || 1;
-    for(let i=0;i<2;i++){
-      const f=$('dk261Frame'+i); if(!f?.contentWindow || !frameReady[i]) continue;
-      try{
-        const w=f.contentWindow,d=w.document; const rs=d.getElementById('raceSelect'); if(!rs||!rs.options.length) continue;
-        const idx=Array.from(rs.options).findIndex(o=>Number(String(o.dataset?.raceId||'').slice(-2))===source || new RegExp('(?:^|\\s)'+source+'R(?:\\s|$)').test(String(o.textContent||'')));
-        if(idx<0) continue; rs.selectedIndex=idx;
-        if(typeof w.applySelectedRaceUrl==='function') w.applySelectedRaceUrl();
-        if(typeof w.fetchRace==='function') await w.fetchRace();
-        if(typeof w.setRightAnalysisPanel==='function') w.setRightAnalysisPanel(true);
-        if(typeof w.showOddsTimeline==='function') w.showOddsTimeline();
-        updateLabel(i);
-      }catch(e){}
-    }
-  }
-  async function open(){
-    if(opened) return; opened=true;
-    $('dualWorkspace261')?.classList.add('open'); document.documentElement.style.overflow='hidden';
-    const base=parentState();
-    state[0]={kind:'JRA',date:base.date,raceNo:base.kind==='JRA'?(Number(($('raceSelect')?.selectedOptions?.[0]?.dataset?.raceId||'').slice(-2))||1):1};
-    state[1]={kind:'NAR',date:base.date,raceNo:base.kind==='NAR'?(Number(($('raceSelect')?.selectedOptions?.[0]?.dataset?.raceId||'').slice(-2))||1):1};
-    mount(0); mount(1);
-    const st=$('dk261Status'); if(st) st.textContent='左JRA / 右NAR を準備中…';
-  }
-  function close(){ if(!opened) return; opened=false; unmount(0); unmount(1); $('dualWorkspace261')?.classList.remove('open'); document.documentElement.style.overflow=''; }
-  function build(){
-    if($('dualWorkspace261')) return;
-    const ws=document.createElement('div'); ws.id='dualWorkspace261';
-    ws.innerHTML=`
-      <div class="dk261-top">
-        <span class="dk261-title">↔ JRA / NAR 同時表示</span>
-        <button id="dk261SyncR" type="button">🔗 同じR</button>
-        <span id="dk261Status" class="dk261-status">左JRA / 右NAR</span>
-        <button id="dk261Close" class="dk261-close" type="button">× 閉じる</button>
-      </div>
-      <div class="dk261-grid">
-        ${[0,1].map(i=>`
-        <section class="dk261-pane">
-          <div class="dk261-bar">
-            <b class="kind">${i===0?'JRA':'NAR'}</b>
-            <button type="button" data-vprev="${i}">◀場</button>
-            <button type="button" data-vnext="${i}">場▶</button>
-            <span id="dk261Venue${i}" style="color:#a7f3d0;min-width:56px">開催場</span>
-            <span class="race" id="dk261Race${i}">レース読込中…</span>
-            <button type="button" data-rprev="${i}">◀R</button>
-            <button type="button" data-rnext="${i}">R▶</button>
-          </div>
-          <iframe class="dk261-frame" id="dk261Frame${i}" src="about:blank" title="${i===0?'JRA':'NAR'}時系列" loading="eager" allow="clipboard-read; clipboard-write"></iframe>
-        </section>`).join('')}
-      </div>`;
-    document.body.appendChild(ws);
-    $('dk261Close').onclick=close; $('dk261SyncR').onclick=syncRaceNo;
-    ws.querySelectorAll('[data-vprev]').forEach(b=>b.onclick=()=>changeVenue(Number(b.dataset.vprev),-1));
-    ws.querySelectorAll('[data-vnext]').forEach(b=>b.onclick=()=>changeVenue(Number(b.dataset.vnext),1));
-    ws.querySelectorAll('[data-rprev]').forEach(b=>b.onclick=()=>changeRace(Number(b.dataset.rprev),-1));
-    ws.querySelectorAll('[data-rnext]').forEach(b=>b.onclick=()=>changeRace(Number(b.dataset.rnext),1));
-    const anchor=$('multiScreenBtn258') || $('rightAnalysisBtn');
-    if(anchor?.parentNode && !$('dualKindBtn261')){
-      const b=document.createElement('button');
-      b.id='dualKindBtn261'; b.className='btn-sm right-analysis-toggle'; b.type='button';
-      b.textContent='↔ JRA/NAR'; b.title='左にJRA、右にNARを同時表示'; b.onclick=open;
-      anchor.parentNode.insertBefore(b,anchor.nextSibling);
-    }
-    setInterval(()=>{ if(opened){ updateLabel(0); updateLabel(1); } },1500);
-  }
-  window.openDualKind261=open;
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',build,{once:true}); else build();
 })();
 </script>

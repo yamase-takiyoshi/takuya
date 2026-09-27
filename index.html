@@ -31,7 +31,7 @@
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.260 JRA複勝補完・Workerエラー整合</title>
+<title>The競馬 EV分析 v5.18.261 発走時刻一本化・Worker終了整合</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -287,7 +287,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.260 JRA複勝補完・Workerエラー整合</span>
+    <span class="ver">v5.18.261 発走時刻一本化・Worker終了整合</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -5459,7 +5459,7 @@ async function loadRaceList(){
       const startTime = String(r.startTime || '').trim();
       const timeLabel = startTime ? ` ${startTime}発走` : '';
       const label = `${dateLabel} ${venueName(kind, venueCode)} ${labelName}${timeLabel} / ${r.raceId}`;
-      return `<option value="${url}" data-race-id="${r.raceId}" data-race-name="${escapeHtml(safeName)}" data-start-time="${escapeHtml(startTime)}">${escapeHtml(label)}</option>`;
+      return `<option value="${url}" data-race-id="${r.raceId}" data-race-name="${escapeHtml(safeName)}" data-start-time="${escapeHtml(startTime)}" data-post-time="${escapeHtml(startTime)}">${escapeHtml(label)}</option>`;
     }).join('');
 
     applySelectedRaceUrl();
@@ -5480,7 +5480,7 @@ function applySelectedRaceUrl(){
 
   const opt = raceSelect.options[raceSelect.selectedIndex];
   const raceId = opt?.dataset?.raceId || '';
-  const startTime = opt?.dataset?.startTime || '';
+  const startTime = opt?.dataset?.startTime || opt?.dataset?.postTime || '';
 
   if(raceId){
     // ここで必ずJRA/NAR別にURLを再生成し、前回のURL残留を完全に防ぐ。
@@ -5489,7 +5489,7 @@ function applySelectedRaceUrl(){
     raceUrl.value = shutubaUrl(kind, raceId);
     currentRaceName = opt?.dataset?.raceName || opt?.textContent || '';
     currentRaceId = raceId;
-    try{ window.currentRaceStartTime = startTime || ''; }catch(e){}
+    try{ if(opt && startTime){ opt.dataset.startTime=startTime; opt.dataset.postTime=startTime; } window.currentRaceStartTime = startTime || ''; }catch(e){}
     if(box){
       box.style.display = currentRaceName ? 'block' : 'none';
       box.textContent = raceId ? `選択中: ${currentRaceName}${startTime ? ` / ${startTime}発走` : ''} / ${raceId}` : '';
@@ -18095,7 +18095,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       const url=`https://nar.sp.netkeiba.com/race/shutuba.html?race_id=${r.raceId}`;
       const tm=r.postTime?` ${r.postTime}発走`:'';
       const label=`${dashed(date)} ${vn} ${r.raceNo}R${tm} ${r.raceName} / ${r.raceId}`;
-      return `<option value="${esc(url)}" data-race-id="${esc(r.raceId)}" data-race-no="${r.raceNo}" data-race-name="${esc(r.raceName)}" data-post-time="${esc(r.postTime)}" data-cutoff-time="${esc(r.cutoffTime)}" data-target-at="${esc(r.targetAt)}">${esc(label)}</option>`;
+      return `<option value="${esc(url)}" data-race-id="${esc(r.raceId)}" data-race-no="${r.raceNo}" data-race-name="${esc(r.raceName)}" data-start-time="${esc(r.postTime)}" data-post-time="${esc(r.postTime)}" data-cutoff-time="${esc(r.cutoffTime)}" data-target-at="${esc(r.targetAt)}">${esc(label)}</option>`;
     }).join('');
     const o=sel.options[0];
     if(o){
@@ -19038,7 +19038,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.18.260 JRA複勝補完・Workerエラー整合';
+  const VERSION202 = 'v5.18.261 発走時刻一本化・Worker終了整合';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
@@ -20148,7 +20148,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
       const opt=sel?.selectedOptions?.[0];
       const optRid=String(opt?.dataset?.raceId||'');
       if(opt && (!rid || optRid===String(rid))){
-        const hhmm=String(opt.dataset.postTime||'').trim();
+        const hhmm=String(opt.dataset.startTime||opt.dataset.postTime||window.currentRaceStartTime||'').trim();
         const date=String($('pickDate')?.value||'').trim();
         if(/^\d{4}-\d{2}-\d{2}$/.test(date) && /^\d{1,2}:\d{2}$/.test(hhmm)){
           const [h,m]=hhmm.split(':').map(Number);
@@ -20178,8 +20178,9 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   function timelineBaseWindow202(){
     const rid=String(activeRid||currentRaceId202()||'');
     const meta=savedTimelineMeta202(rid);
-    let endMs=Number(meta?.end_at_ms||0);
-    let postMs=Number(meta?.post_ms||0);
+    const uiPost=uiPostMs202(rid);
+    let postMs=Number.isFinite(uiPost)?uiPost:Number(meta?.post_ms||0);
+    let endMs=Number.isFinite(uiPost)?uiPost+POST_GRAPH_TAIL_MS202:Number(meta?.end_at_ms||0);
     if(!(postMs>0) && endMs>0) postMs=endMs-POST_GRAPH_TAIL_MS202;
     if(!(postMs>0)) postMs=uiPostMs202(rid);
     if(!(endMs>0) && postMs>0) endMs=postMs+POST_GRAPH_TAIL_MS202;
@@ -20253,8 +20254,9 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   function timelineCollectionState221(rid=currentRaceId202()){
     rid=String(rid||activeRid||'');
     const meta=savedTimelineMeta202(rid);
-    let endMs=Number(meta?.end_at_ms||0);
-    let postMs=Number(meta?.post_ms||0);
+    const uiPost=uiPostMs202(rid);
+    let postMs=Number.isFinite(uiPost)?uiPost:Number(meta?.post_ms||0);
+    let endMs=Number.isFinite(uiPost)?uiPost+POST_GRAPH_TAIL_MS202:Number(meta?.end_at_ms||0);
     if(!(postMs>0) && endMs>0) postMs=endMs-POST_GRAPH_TAIL_MS202;
     if(!(postMs>0)) postMs=uiPostMs202(rid);
     if(!(endMs>0) && postMs>0) endMs=postMs+POST_GRAPH_TAIL_MS202;
@@ -21767,7 +21769,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   if(window.__V518216_LIVE_COMMENTARY__) return;
   window.__V518216_LIVE_COMMENTARY__ = true;
 
-  const VERSION215 = 'v5.18.260 JRA複勝補完・Workerエラー整合';
+  const VERSION215 = 'v5.18.261 発走時刻一本化・Worker終了整合';
   const DB_NAME215 = 'thekeiba-odds-timeline-v1';
   const STORE215 = 'captures';
   const TYPES215 = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
@@ -22222,7 +22224,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
 <script>
 (function(){
   'use strict';
-  const VERSION219='v5.18.260 JRA複勝補完・Workerエラー整合';
+  const VERSION219='v5.18.261 発走時刻一本化・Worker終了整合';
   const CFG_KEY219='thekeiba_timeline_cloud_v219';
   const CFG_GLOBAL_KEY219='thekeiba_timeline_cloud_global';
   const DEFAULT_WORKER_URL219='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
@@ -22291,7 +22293,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   function uiPostMs219(rid){
     try{
       const opt=$219('raceSelect')?.selectedOptions?.[0], optRid=String(opt?.dataset?.raceId||'');
-      const date=String($219('pickDate')?.value||''), hhmm=String(opt?.dataset?.postTime||'');
+      const date=String($219('pickDate')?.value||''), hhmm=String(opt?.dataset?.startTime||opt?.dataset?.postTime||window.currentRaceStartTime||'');
       if(opt && (!rid||optRid===String(rid)) && /^\d{4}-\d{2}-\d{2}$/.test(date) && /^\d{1,2}:\d{2}$/.test(hhmm)){
         const [h,m]=hhmm.split(':').map(Number);
         const ms=new Date(`${date}T${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:00+09:00`).getTime();
@@ -22436,16 +22438,30 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     if(window.bridgeOnly252()) return {ok:false,skipped:true,reason:'bridge-only'};
     const rid=currentRid219();if(!/^\d{10,14}$/.test(rid)){if(!silent)status219('⚠️ レースを選択してください','err');return null;}
     const postMs=uiPostMs219(rid);
+    const authoritative=Number.isFinite(postMs);
+    const opt=$219('raceSelect')?.selectedOptions?.[0];
+    const postTime=String(opt?.dataset?.startTime||opt?.dataset?.postTime||window.currentRaceStartTime||'').trim();
+    if(opt && postTime){ try{opt.dataset.startTime=postTime;opt.dataset.postTime=postTime;}catch(e){} }
     let saved=null;try{const all=JSON.parse(localStorage.getItem(META_KEY220)||'{}')||{};saved=all[String(rid)]||null;}catch(e){}
-    const endAt=Number(saved?.end_at_ms||0)>0?Number(saved.end_at_ms):(Number.isFinite(postMs)?postMs+10*60*1000:Date.now()+3*60*60*1000);
-    if(endAt>0 && Date.now()>=endAt){
-      if(!silent)status219(`🏁 ${rid} は発走+10分（終了目安+5分）で収集終了・固定済みです。再開しません。`,'ok');
-      return {ok:true,skipped:true,reason:'POST_PLUS_10M_FIXED',race_id:rid,end_at_ms:endAt};
-    }
+    // v5.18.261: 画面で確認できた発走時刻を最優先。古いWorkerのend_at_msで延長しない。
+    const endAt=authoritative ? postMs+10*60*1000 : (Number(saved?.end_at_ms||0)>0?Number(saved.end_at_ms):Date.now()+3*60*60*1000);
     const body={race_id:rid,kind:kind219(rid),race_label:label219(),upstream_proxy:upstream219(),interval_ms:5000,end_at_ms:endAt};
+    if(authoritative){ body.post_ms=postMs; body.post_time=postTime; body.authoritative_timing=true; }
+    // 正しい終了時刻を既に過ぎていても /start を1回送り、Worker側の誤った時刻を訂正して停止状態へ固定する。
+    if(endAt>0 && Date.now()>=endAt){
+      let j=null;
+      if(authoritative){
+        try{
+          j=await fetch219('/timeline/start',{method:'POST',headers:headers219(true),body:JSON.stringify(body)});
+          if(j?.meta) rememberMeta219(rid,j.meta);
+        }catch(e){ if(!silent)status219('⚠️ 発走時刻のWorker訂正に失敗：'+String(e?.message||e),'err'); }
+      }
+      if(!silent)status219(`🏁 ${rid} は正しい発走時刻基準の+10分で収集終了・固定済みです。再開しません。`,'ok');
+      return j||{ok:true,skipped:true,reason:'POST_PLUS_10M_FIXED',race_id:rid,end_at_ms:endAt,post_ms:postMs};
+    }
     const j=await fetch219('/timeline/start',{method:'POST',headers:headers219(true),body:JSON.stringify(body)});
-    if(j?.meta){ if(Number.isFinite(postMs))j.meta.post_ms=postMs; rememberMeta219(rid,j.meta); }
-    status219(`☁️ ${rid} 常時収集ON（発走+10分（終了目安+5分）で完全停止・固定 / デバイス0台）`,'ok');return j;
+    if(j?.meta){ if(authoritative){j.meta.post_ms=postMs;j.meta.end_at_ms=endAt;j.meta.post_time=postTime;j.meta.timing_source='ui';} rememberMeta219(rid,j.meta); }
+    status219(`☁️ ${rid} 常時収集ON（${postTime?postTime+'発走 / ':''}発走+10分で完全停止・固定 / デバイス0台）`,'ok');return j;
   }
   async function syncCurrent219(silent=false,forceFull=false,ridOverride=''){
     if(window.bridgeOnly252()) return {ok:false,skipped:true,reason:'bridge-only'};
@@ -22531,7 +22547,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     const settingsTab=$219('tab-settings');
     if(settingsTab&&!$219('timelineCloudCard219')){
       const c=cfg219(),card=document.createElement('div');card.className='card';card.id='timelineCloudCard219';card.innerHTML=`
-        <div class="section-header"><h2>☁️ 常時時系列オッズ（デバイス0台）</h2><span class="nar-badge">v5.18.260</span></div>
+        <div class="section-header"><h2>☁️ 常時時系列オッズ（デバイス0台）</h2><span class="nar-badge">v5.18.261</span></div>
         <div style="font-size:11px;color:var(--muted);line-height:1.65;margin-bottom:10px">Durable Object Workerがサーバー側で全8券種を5秒基準で継続収集します。別デバイス未接続・iPad/PCを閉じた状態でも継続し、次回起動時にWorker全履歴をIndexedDBへ復元します。発走+10分（終了目安+5分）に達したらWorker・端末の5秒収集をそのレースについて終了し、その時点の時系列を完成形として固定します。以後は新しい点を追加せず、後から同じグラフを閲覧できます。3分前・発走・+10分の基準線も固定表示します。</div>
         <div class="field"><label>常時時系列Worker URL</label><input id="timelineCloudUrl219" type="url" value="${esc219(c.workerUrl)}" placeholder="https://the-keiba-timeline-collector.xxxxx.workers.dev"></div>
         <div class="field"><label>Token（Workerに設定した場合のみ）</label><input id="timelineCloudToken219" type="password" value="${esc219(c.token)}" autocomplete="off"></div>
@@ -22610,7 +22626,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
 (function(){
   'use strict';
 
-  const VERSION227 = 'v5.18.260 JRA複勝補完・Workerエラー整合';
+  const VERSION227 = 'v5.18.261 発走時刻一本化・Worker終了整合';
   let oddsJobSeq227 = 0;
 
   function el227(id){ return document.getElementById(id); }
@@ -23254,7 +23270,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   if(window.__THEKEIBA_232__) return;
   window.__THEKEIBA_232__ = true;
 
-  const VERSION = 'v5.18.260 JRA複勝補完・Workerエラー整合';
+  const VERSION = 'v5.18.261 発走時刻一本化・Worker終了整合';
   const JRA_VENUE_NAMES = {'01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京','06':'中山','07':'中京','08':'京都','09':'阪神','10':'小倉',
     '30':'門別','35':'盛岡','36':'水沢','42':'浦和','43':'船橋','44':'大井','45':'川崎','46':'金沢','47':'笠松','48':'名古屋','50':'園田','51':'姫路','54':'高知','55':'佐賀','65':'帯広'};
   const $ = id => document.getElementById(id);
@@ -23411,7 +23427,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
         o.dataset.raceId = rid;
         let tm = o.dataset.startTime || o.dataset.postTime || startTimes.get(rid) || '';
         tm = timeFromText(tm, true) || '';
-        if(tm){ o.dataset.startTime = tm; remember(rid, tm); }
+        if(tm){ o.dataset.startTime = tm; o.dataset.postTime = tm; remember(rid, tm); }
         const info = listInfo.get(rid);
         if(info && info.title && (!o.dataset.raceName || /^\d{1,2}R$/.test(o.dataset.raceName) || /日目/.test(o.dataset.raceName))){
           o.dataset.raceName = info.title;
@@ -24349,7 +24365,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     if(!document.body)return;
     if(!document.getElementById('bridgeModeBar252')){
       const bar=document.createElement('div');bar.id='bridgeModeBar252';
-      bar.innerHTML='<b>v5.18.260</b><select id="bridgeModeSelect252" aria-label="取得モード"><option value="on">🌉 Bridge専用・Worker通信OFF</option><option value="off">☁️ 通常モード（Worker併用）</option></select><span id="bridgeModeState252"></span><button class="btn-sm" id="bridgeCheck252">Bridge接続確認</button>';
+      bar.innerHTML='<b>v5.18.261</b><select id="bridgeModeSelect252" aria-label="取得モード"><option value="on">🌉 Bridge専用・Worker通信OFF</option><option value="off">☁️ 通常モード（Worker併用）</option></select><span id="bridgeModeState252"></span><button class="btn-sm" id="bridgeCheck252">Bridge接続確認</button>';
       document.getElementById('tab-horses').prepend(bar);
       const sel=document.getElementById('bridgeModeSelect252');sel.value=only?'on':'off';
       sel.onchange=()=>{try{localStorage.setItem('thekeiba-bridge-only252',sel.value);location.reload();}catch(e){sel.value=only?'on':'off';alert('設定を保存できません：'+e.message);}};
@@ -24546,7 +24562,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
   'use strict';
   if(window.__V518257_RACE_CONTEXT_GUARD__) return;
   window.__V518257_RACE_CONTEXT_GUARD__ = true;
-  const VERSION257='v5.18.260 JRA複勝補完・Workerエラー整合';
+  const VERSION257='v5.18.261 発走時刻一本化・Worker終了整合';
   const $=id=>document.getElementById(id);
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -24555,7 +24571,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       window.APP_VERSION=VERSION257;
       const v=document.querySelector('.ver'); if(v && v.textContent!==VERSION257) v.textContent=VERSION257;
       document.title='The競馬 EV分析 '+VERSION257;
-      const b=$('bridgeModeBar252')?.querySelector('b'); if(b && b.textContent!=='v5.18.260') b.textContent='v5.18.260';
+      const b=$('bridgeModeBar252')?.querySelector('b'); if(b && b.textContent!=='v5.18.261') b.textContent='v5.18.261';
     }catch(e){}
   }
 
@@ -24761,5 +24777,17 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
 
 
 <!-- v5.18.260: JRA複勝をtype=1/type=2の両経路から馬番キーで補完し、成功後の古いWorkerエラー表示を抑止 -->
+
+<!-- v5.18.261 StartTimeAuthority verification marker -->
+<script>
+(function(){
+  const V='v5.18.261 発走時刻一本化・Worker終了整合';
+  function mark(){
+    try{window.APP_VERSION=V;const v=document.querySelector('.ver');if(v){const bridge=/🌉/.test(v.textContent||'');v.textContent=V+(bridge?' 🌉':'');}document.title='The競馬 EV分析 '+V;}catch(e){}
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mark,{once:true});else mark();
+  [250,1000,3000,8000,15000].forEach(ms=>setTimeout(mark,ms));
+})();
+</script>
 </body>
 </html>

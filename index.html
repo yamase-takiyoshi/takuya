@@ -31,7 +31,7 @@
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.258 MultiScreen</title>
+<title>The競馬 EV分析 v5.18.260 VenueMulti</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -327,6 +327,28 @@ html.ms258-embedded .header h1{font-size:14px}
 html.ms258-embedded .main{max-width:none;padding:8px}
 html.ms258-embedded #multiScreenBtn258{display:none!important}
 html.ms258-embedded .ver{font-size:9px}
+/* v5.18.259: iframeを時系列オッズ専用モニターとして全面化 */
+html.ms258-timeline-embedded body{overflow:hidden!important;background:#07111d!important}
+html.ms258-timeline-embedded .header,
+html.ms258-timeline-embedded .main{display:none!important}
+html.ms258-timeline-embedded body.right-analysis-active #rightAnalysisPane,
+html.ms258-timeline-embedded #rightAnalysisPane{
+  display:flex!important;position:fixed!important;inset:0!important;width:100%!important;height:100%!important;
+  border-left:0!important;box-shadow:none!important;z-index:9999!important;flex-direction:column!important;background:#07111d!important
+}
+html.ms258-timeline-embedded .right-analysis-bar{height:38px;min-height:38px;padding:4px 7px}
+html.ms258-timeline-embedded .right-analysis-title b{font-size:11px}
+html.ms258-timeline-embedded .right-analysis-title span{display:none}
+html.ms258-timeline-embedded .right-analysis-actions .btn-sm{padding:4px 6px;font-size:9px}
+html.ms258-timeline-embedded .odds-ts-toolbar{padding:6px!important}
+html.ms258-timeline-embedded .odds-ts-controls{gap:4px!important}
+html.ms258-timeline-embedded .odds-ts-controls label{font-size:8px!important}
+html.ms258-timeline-embedded .odds-ts-controls select{min-width:76px!important;max-width:150px!important;padding:4px 5px!important;font-size:9px!important}
+html.ms258-timeline-embedded #oddsTsRaceArchive{min-width:155px!important;max-width:240px!important}
+html.ms258-timeline-embedded .odds-ts-chart-wrap{padding:5px 5px 0!important;flex:1!important;min-height:130px!important}
+html.ms258-timeline-embedded .odds-ts-chart-wrap canvas{height:100%!important;min-height:130px!important}
+html.ms258-timeline-embedded .odds-ts-legend{max-height:118px!important;padding:4px 6px 7px!important}
+html.ms258-timeline-embedded .odds-ts-foot{padding:3px 6px!important}
 @media(max-width:900px){
   .ms258-toolbar{gap:5px;padding:5px 6px}
   .ms258-toolbar button{padding:6px 7px;font-size:11px}
@@ -344,7 +366,7 @@ html.ms258-embedded .ver{font-size:9px}
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.258 MultiScreen</span>
+    <span class="ver">v5.18.260 VenueMulti</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -24633,55 +24655,78 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
 
   const qs=new URLSearchParams(location.search);
   const embedded=qs.get('multiEmbedded')==='1';
+  const timelineOnly=qs.get('multiTimeline')==='1';
   const slotParam=Math.max(0,Math.min(3,Number(qs.get('mslot')||0)));
   const SLOT_NAMES=['A','B','C','D'];
 
   if(embedded){
     document.documentElement.classList.add('ms258-embedded');
-    // The userscript is @noframes. Mark the child as Bridge-capable because
-    // bridgeText246() delegates to the top page in v5.18.258.
-    try{
-      window.__NAR_BRIDGE_READY__=true;
-      window.__bridgeAbsent=false;
-    }catch(e){}
-    const mark=()=>{
-      try{
-        const h=document.querySelector('.header h1');
-        if(h && !h.querySelector('.ms258-slotbadge')){
-          const s=document.createElement('span');
-          s.className='ms258-slotbadge';
-          s.style.cssText='margin-left:8px;padding:2px 6px;border-radius:999px;background:#064e3b;color:#a7f3d0;font-size:10px;vertical-align:middle';
-          s.textContent='画面'+SLOT_NAMES[slotParam];
-          h.appendChild(s);
-        }
-      }catch(e){}
+    if(timelineOnly) document.documentElement.classList.add('ms258-timeline-embedded');
+    try{ window.__NAR_BRIDGE_READY__=true; window.__bridgeAbsent=false; }catch(e){}
+    const bootTimeline=()=>{
+      if(!timelineOnly) return;
+      let tries=0;
+      const go=()=>{
+        tries++;
+        try{
+          if(typeof window.setRightAnalysisPanel==='function' && typeof window.showOddsTimeline==='function' && document.getElementById('rightOddsTimelinePane')){
+            window.setRightAnalysisPanel(true);
+            window.showOddsTimeline();
+            return;
+          }
+        }catch(e){}
+        if(tries<180) setTimeout(go,125);
+      };
+      go();
     };
-    if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',mark,{once:true}); else mark();
+    if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',bootTimeline,{once:true}); else bootTimeline();
     return;
   }
 
-  let mode=1;
+  let mode=4;
   let active=0;
   let pairStart=0;
   let opened=false;
   let parentRightWasOpen=false;
+  let venueOffset=0;
+  let venueList=[];
+  let baseState=null;
   const slotState=[null,null,null,null];
   const frameLoaded=[false,false,false,false];
 
   const $=id=>document.getElementById(id);
-  const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  function raceNoFromDoc(d){
+    try{
+      const s=d.getElementById('raceSelect');
+      const opt=s?.selectedOptions?.[0];
+      const rid=String(opt?.dataset?.raceId||'');
+      if(rid) return Number(rid.slice(-2))||1;
+      const txt=String(opt?.textContent||d.getElementById('raceTitleBox')?.textContent||'');
+      const m=txt.match(/(?:^|\s)(\d{1,2})R(?:\s|$)/);
+      return m?Number(m[1]):1;
+    }catch(e){return 1;}
+  }
 
   function capture(win){
     try{
       const d=win.document;
+      const venue=d.getElementById('pickVenue');
+      const raceSel=d.getElementById('raceSelect');
       return {
         date:d.getElementById('pickDate')?.value||'',
         kind:d.getElementById('pickKind')?.value||'JRA',
-        venue:d.getElementById('pickVenue')?.value||'',
+        venue:venue?.value||'',
+        venueLabel:String(venue?.selectedOptions?.[0]?.textContent||'').replace(/（\d+R）/g,'').trim(),
         raceUrl:d.getElementById('raceUrl')?.value||'',
         raceLabel:d.getElementById('raceTitleBox')?.textContent?.trim()||'',
-        scrollY:Number(win.scrollY||0),
-        rightOpen:!!d.body?.classList?.contains('right-analysis-active')
+        raceNo:raceNoFromDoc(d),
+        raceIndex:Math.max(0,raceSel?.selectedIndex||0),
+        timelineMarket:d.getElementById('oddsTsMarket')?.value||'単勝',
+        timelineMetric:d.getElementById('oddsTsMetric')?.value||'odds',
+        timelineCombo:d.getElementById('oddsTsCombo')?.value||'',
+        timelineWindow:d.getElementById('oddsTsWindow')?.value||'3600000',
+        timelineAuto:!!d.getElementById('oddsTsAuto')?.checked
       };
     }catch(e){ return null; }
   }
@@ -24689,11 +24734,33 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
   function captureParent(){
     const s=capture(window)||{};
     if(!s.raceLabel){
-      const r=$('raceSelect');
-      const o=r?.options?.[r.selectedIndex];
+      const r=$('raceSelect'); const o=r?.options?.[r.selectedIndex];
       s.raceLabel=(o?.textContent||'').trim();
     }
     return s;
+  }
+
+  function parentVenues(){
+    const sel=$('pickVenue');
+    if(!sel) return [];
+    const seen=new Set(), rows=[];
+    Array.from(sel.options||[]).forEach(o=>{
+      const code=String(o.value||'').trim();
+      let name=String(o.textContent||'').replace(/（\d+R）/g,'').trim();
+      if(!code || seen.has(code) || /開催なし|取得できません|選択/.test(name)) return;
+      seen.add(code); rows.push({code,name:name||code});
+    });
+    return rows;
+  }
+
+  async function ensureVenues(){
+    let rows=parentVenues();
+    if(!rows.length && typeof window.loadActiveVenuesForDate==='function'){
+      try{ await window.loadActiveVenuesForDate(); }catch(e){}
+      rows=parentVenues();
+    }
+    venueList=rows;
+    return rows;
   }
 
   function snapshotSlot(i){
@@ -24707,12 +24774,13 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
   function childUrl(i){
     const u=new URL(location.href);
     u.searchParams.set('multiEmbedded','1');
+    u.searchParams.set('multiTimeline','1');
     u.searchParams.set('mslot',String(i));
     u.hash='';
     return u.href;
   }
 
-  function waitReady(i, cb, tries=80){
+  function waitReady(i, cb, tries=100){
     const f=$('ms258Frame'+i);
     if(!f?.contentWindow) return;
     const w=f.contentWindow;
@@ -24724,47 +24792,74 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     if(tries>0) setTimeout(()=>waitReady(i,cb,tries-1),125);
   }
 
-  function applyState(i, state, autoFetch){
+  function setSelect(w,id,val){
+    try{
+      const el=w.document.getElementById(id); if(!el||val==null||val==='') return;
+      if([...el.options].some(o=>o.value===val)){el.value=val;el.dispatchEvent(new Event('change',{bubbles:true}));}
+    }catch(e){}
+  }
+
+  async function fetchSelectedRace(i,w,state){
+    try{
+      const d=w.document;
+      const rs=d.getElementById('raceSelect');
+      if(!rs || !rs.options.length) return;
+      let idx=0;
+      const wanted=Number(state.raceNo||1);
+      if(wanted>0){
+        const found=Array.from(rs.options).findIndex(o=>Number(String(o.dataset?.raceId||'').slice(-2))===wanted || new RegExp('(?:^|\\s)'+wanted+'R(?:\\s|$)').test(String(o.textContent||'')));
+        if(found>=0) idx=found;
+      }
+      rs.selectedIndex=Math.min(Math.max(0,idx),rs.options.length-1);
+      if(typeof w.applySelectedRaceUrl==='function') w.applySelectedRaceUrl();
+      if(typeof w.fetchRace==='function') await w.fetchRace();
+      if(typeof w.setRightAnalysisPanel==='function') w.setRightAnalysisPanel(true);
+      if(typeof w.showOddsTimeline==='function') w.showOddsTimeline();
+      setSelect(w,'oddsTsMarket',state.timelineMarket||'単勝');
+      setSelect(w,'oddsTsMetric',state.timelineMetric||'odds');
+      setSelect(w,'oddsTsWindow',state.timelineWindow||'3600000');
+      setTimeout(()=>setSelect(w,'oddsTsCombo',state.timelineCombo||''),250);
+      const au=d.getElementById('oddsTsAuto');
+      if(au && typeof state.timelineAuto==='boolean') au.checked=state.timelineAuto;
+      const live=capture(w); if(live) slotState[i]={...state,...live,venueLabel:state.venueLabel||live.venueLabel};
+      updateCellLabel(i);
+    }catch(e){
+      const r=$('ms258Race'+i); if(r) r.textContent='読込失敗: '+String(e.message||e);
+    }
+  }
+
+  function applyState(i,state,autoFetch){
     if(!state) return;
     waitReady(i,w=>{
-      try{
-        const d=w.document;
-        const date=d.getElementById('pickDate');
-        const kind=d.getElementById('pickKind');
-        const venue=d.getElementById('pickVenue');
-        const url=d.getElementById('raceUrl');
-        if(date && state.date) date.value=state.date;
-        if(kind && state.kind) kind.value=state.kind;
-        try{ w.renderVenueOptions(); }catch(e){}
-        if(venue && state.venue) venue.value=state.venue;
-        if(url && state.raceUrl) url.value=state.raceUrl;
-        if(state.raceLabel){
-          const box=d.getElementById('raceTitleBox');
-          if(box){box.style.display='block';box.textContent=state.raceLabel;}
+      (async()=>{
+        try{
+          const d=w.document;
+          const date=d.getElementById('pickDate');
+          const kind=d.getElementById('pickKind');
+          const venue=d.getElementById('pickVenue');
+          if(date && state.date) date.value=state.date;
+          if(kind && state.kind) kind.value=state.kind;
+          try{ w.renderVenueOptions(); }catch(e){}
+          if(venue && state.venue){
+            if(![...venue.options].some(o=>o.value===state.venue) && typeof w.loadActiveVenuesForDate==='function'){
+              try{ await w.loadActiveVenuesForDate(); }catch(e){}
+            }
+            venue.value=state.venue;
+          }
+          if(!autoFetch) return;
+          if(typeof w.loadRaceList==='function') await w.loadRaceList();
+          await fetchSelectedRace(i,w,state);
+        }catch(e){
+          const r=$('ms258Race'+i); if(r) r.textContent='読込失敗';
         }
-        setTimeout(()=>{try{w.scrollTo(0,state.scrollY||0);}catch(e){}},400);
-        if(state.raceUrl && autoFetch && typeof w.fetchRace==='function'){
-          setTimeout(async()=>{
-            try{
-              await w.fetchRace();
-              if(state.rightOpen){
-                setTimeout(()=>{try{
-                  if(typeof w.setRightAnalysisPanel==='function') w.setRightAnalysisPanel(true);
-                  else if(typeof w.toggleRightAnalysisPanel==='function' && !w.document.body.classList.contains('right-analysis-active')) w.toggleRightAnalysisPanel();
-                }catch(e){}},600);
-              }
-            }catch(e){}
-          },500);
-        }
-      }catch(e){}
+      })();
     });
   }
 
   function mount(i){
     const f=$('ms258Frame'+i);
     if(!f || f.dataset.mounted==='1') return;
-    f.dataset.mounted='1';
-    frameLoaded[i]=false;
+    f.dataset.mounted='1'; frameLoaded[i]=false;
     f.onload=()=>{
       if(f.src==='about:blank') return;
       frameLoaded[i]=true;
@@ -24777,38 +24872,44 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
   function unmount(i){
     const f=$('ms258Frame'+i);
     if(!f || f.dataset.mounted!=='1') return;
-    snapshotSlot(i);
-    frameLoaded[i]=false;
-    f.dataset.mounted='0';
+    snapshotSlot(i); frameLoaded[i]=false; f.dataset.mounted='0';
     try{f.src='about:blank';}catch(e){}
   }
 
-  function visibleSlots(){
-    if(mode===4) return [0,1,2,3];
-    if(mode===2) return [pairStart,pairStart+1];
-    return [active];
+  function assignedSlots(){
+    const count=Math.min(4,Math.max(0,venueList.length-venueOffset));
+    return Array.from({length:count},(_,i)=>i);
   }
 
+  function visibleSlots(){
+    const assigned=new Set(assignedSlots());
+    if(mode===4) return [0,1,2,3].filter(i=>assigned.has(i));
+    if(mode===2) return [pairStart,pairStart+1].filter(i=>assigned.has(i));
+    return assigned.has(active)?[active]:(assigned.size?[Math.min(...assigned)]:[]);
+  }
+
+  function venueAtSlot(i){ return venueList[venueOffset+i]||null; }
+
   function updateCellLabel(i){
-    const el=$('ms258Race'+i);
-    if(!el)return;
+    const venueEl=$('ms258Venue'+i), raceEl=$('ms258Race'+i);
+    const v=venueAtSlot(i);
     let s=slotState[i];
     const f=$('ms258Frame'+i);
-    if(frameLoaded[i] && f?.contentWindow){
-      const live=capture(f.contentWindow);
-      if(live) s=live;
+    if(frameLoaded[i] && f?.contentWindow){ const live=capture(f.contentWindow); if(live) s=slotState[i]={...(s||{}),...live}; }
+    if(venueEl) venueEl.textContent=v?.name||s?.venueLabel||'未設定';
+    if(raceEl){
+      const no=Number(s?.raceNo||1);
+      const label=String(s?.raceLabel||'').replace(/^選択中:\s*/,'');
+      raceEl.textContent=label ? label.replace(/\s*\/\s*\d{10,14}.*/, '') : (s?.raceUrl?`${no}R`:'レース読込中…');
     }
-    const name=(s?.raceLabel||'').replace(/^選択中:\s*/,'');
-    el.textContent=name || (s?.raceUrl ? s.raceUrl.match(/race_id=(\d{10,14})/)?.[1]||'レース設定済み' : 'レース未選択');
   }
 
   function render(){
     const vis=new Set(visibleSlots());
-    const grid=$('multiGrid258');
-    grid.className='mode'+mode;
+    const grid=$('multiGrid258'); if(grid) grid.className='mode'+mode;
     for(let i=0;i<4;i++){
-      const cell=$('ms258Cell'+i);
-      const show=vis.has(i);
+      const cell=$('ms258Cell'+i), v=venueAtSlot(i);
+      const show=vis.has(i)&&!!v;
       cell?.classList.toggle('hidden',!show);
       if(show) mount(i); else unmount(i);
       updateCellLabel(i);
@@ -24816,87 +24917,141 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     ['1','2','4'].forEach(n=>$('ms258Mode'+n)?.classList.toggle('active',Number(n)===mode));
     const st=$('ms258Status');
     if(st){
-      st.textContent=mode===1 ? `画面${SLOT_NAMES[active]}を表示中` :
-        mode===2 ? `画面${SLOT_NAMES[pairStart]}＋${SLOT_NAMES[pairStart+1]}を同時表示` :
-        'A〜Dの4画面を同時表示';
+      const names=[0,1,2,3].map(venueAtSlot).filter(Boolean).map(v=>v.name);
+      st.textContent=names.length?names.join('・'):'開催場なし';
     }
   }
 
-  function setMode(n, focus){
+  function setMode(n,focus){
     if([0,1,2,3].includes(focus)) active=focus;
     if(n===2 && [0,1,2,3].includes(focus)) pairStart=focus>=2?2:0;
-    mode=n;
+    mode=n; render();
+  }
+
+  function nextPair(){
+    if(mode===1){ active=(active+1)%Math.max(1,Math.min(4,venueList.length-venueOffset)); }
+    else if(mode===2){ pairStart=pairStart===0?2:0; if(!venueAtSlot(pairStart)) pairStart=0; }
+    else { active=0; mode=1; }
     render();
   }
 
-  function next(){
-    if(mode===1){active=(active+1)%4;}
-    else if(mode===2){pairStart=pairStart===0?2:0;}
-    else {active=(active+1)%4;mode=1;}
-    render();
-  }
-
-  function copyParentTo(i){
-    const s=captureParent();
-    if(!s) return;
-    s.scrollY=0;
-    slotState[i]=s;
+  async function changeRace(i,delta){
     const f=$('ms258Frame'+i);
-    if(f?.dataset.mounted==='1' && frameLoaded[i]) applyState(i,s,true);
-    updateCellLabel(i);
+    if(!f || !frameLoaded[i] || !f.contentWindow) return;
+    const w=f.contentWindow;
+    try{
+      const rs=w.document.getElementById('raceSelect'); if(!rs||!rs.options.length) return;
+      const ni=Math.max(0,Math.min(rs.options.length-1,rs.selectedIndex+delta));
+      if(ni===rs.selectedIndex) return;
+      rs.selectedIndex=ni;
+      if(typeof w.applySelectedRaceUrl==='function') w.applySelectedRaceUrl();
+      const s=capture(w)||slotState[i]||{}; s.raceNo=raceNoFromDoc(w.document); slotState[i]=s;
+      const r=$('ms258Race'+i); if(r) r.textContent='レース取得中…';
+      if(typeof w.fetchRace==='function') await w.fetchRace();
+      if(typeof w.setRightAnalysisPanel==='function') w.setRightAnalysisPanel(true);
+      if(typeof w.showOddsTimeline==='function') w.showOddsTimeline();
+      const live=capture(w); if(live) slotState[i]={...slotState[i],...live};
+      updateCellLabel(i);
+    }catch(e){}
   }
 
-  function open(){
+  async function syncRaceNo(){
+    const src=slotState[active]||slotState[0];
+    const raceNo=Number(src?.raceNo||1);
+    for(const i of assignedSlots()){
+      const f=$('ms258Frame'+i);
+      if(!f || !frameLoaded[i] || !f.contentWindow) continue;
+      const w=f.contentWindow;
+      try{
+        const rs=w.document.getElementById('raceSelect'); if(!rs||!rs.options.length) continue;
+        const found=Array.from(rs.options).findIndex(o=>Number(String(o.dataset?.raceId||'').slice(-2))===raceNo || new RegExp('(?:^|\\s)'+raceNo+'R(?:\\s|$)').test(String(o.textContent||'')));
+        if(found<0) continue;
+        rs.selectedIndex=found; if(typeof w.applySelectedRaceUrl==='function') w.applySelectedRaceUrl();
+        if(typeof w.fetchRace==='function') await w.fetchRace();
+        if(typeof w.setRightAnalysisPanel==='function') w.setRightAnalysisPanel(true);
+        if(typeof w.showOddsTimeline==='function') w.showOddsTimeline();
+        const live=capture(w); if(live) slotState[i]={...slotState[i],...live};
+        updateCellLabel(i);
+      }catch(e){}
+    }
+  }
+
+  function assignVenuePage(){
+    const ref=baseState||captureParent()||{};
+    for(let i=0;i<4;i++){
+      const v=venueAtSlot(i);
+      if(!v){slotState[i]=null;continue;}
+      const old=slotState[i];
+      slotState[i]={
+        ...ref, venue:v.code, venueLabel:v.name, raceUrl:'', raceLabel:'',
+        raceNo:Number(ref.raceNo||1), raceIndex:0,
+        timelineMarket:(old?.timelineMarket||ref.timelineMarket||'単勝'),
+        timelineMetric:(old?.timelineMetric||ref.timelineMetric||'odds'),
+        timelineCombo:'', timelineWindow:(old?.timelineWindow||ref.timelineWindow||'3600000'),
+        timelineAuto:typeof old?.timelineAuto==='boolean'?old.timelineAuto:ref.timelineAuto
+      };
+    }
+  }
+
+  function nextVenuePage(){
+    if(venueList.length<=4) return;
+    for(let i=0;i<4;i++) unmount(i);
+    venueOffset += 4;
+    if(venueOffset>=venueList.length) venueOffset=0;
+    active=0; pairStart=0; assignVenuePage(); render();
+  }
+
+  async function open(){
     if(opened) return;
     opened=true;
-    const ws=$('multiWorkspace258');
-    ws?.classList.add('open');
+    const ws=$('multiWorkspace258'); ws?.classList.add('open');
     document.documentElement.style.overflow='hidden';
     parentRightWasOpen=document.body.classList.contains('right-analysis-active');
-    try{
-      if(parentRightWasOpen && typeof window.setRightAnalysisPanel==='function') window.setRightAnalysisPanel(false);
-    }catch(e){}
-    // Start A with the race that is currently open on the parent screen.
-    if(!slotState[0]) slotState[0]=captureParent();
+    try{ if(parentRightWasOpen && typeof window.setRightAnalysisPanel==='function') window.setRightAnalysisPanel(false); }catch(e){}
+    baseState=captureParent()||{};
+    const st=$('ms258Status'); if(st) st.textContent='開催場を確認中…';
+    await ensureVenues();
+    venueOffset=0; active=0; pairStart=0;
+    assignVenuePage();
+    mode=venueList.length>=3?4:(venueList.length===2?2:1);
     render();
   }
 
   function close(){
     if(!opened) return;
     for(let i=0;i<4;i++) unmount(i);
-    opened=false;
-    $('multiWorkspace258')?.classList.remove('open');
+    opened=false; $('multiWorkspace258')?.classList.remove('open');
     document.documentElement.style.overflow='';
-    try{
-      if(parentRightWasOpen && typeof window.setRightAnalysisPanel==='function') window.setRightAnalysisPanel(true);
-    }catch(e){}
+    try{ if(parentRightWasOpen && typeof window.setRightAnalysisPanel==='function') window.setRightAnalysisPanel(true); }catch(e){}
   }
 
   function build(){
     if($('multiWorkspace258')) return;
-    const ws=document.createElement('div');
-    ws.id='multiWorkspace258';
+    const ws=document.createElement('div'); ws.id='multiWorkspace258';
     ws.innerHTML=`
       <div class="ms258-toolbar">
-        <span class="ms258-title">🖥 マルチスクリーン</span>
+        <span class="ms258-title">🏟️ 開催場別 時系列</span>
         <button id="ms258Mode1" type="button">1画面</button>
         <button id="ms258Mode2" type="button">▥ 2分割</button>
         <button id="ms258Mode4" type="button">▦ 4分割</button>
-        <button id="ms258Next" type="button">⇄ 切替</button>
+        <button id="ms258Next" type="button">⇄ 画面</button>
+        <button id="ms258SyncR" type="button">🔗 同じR</button>
+        <button id="ms258NextVenue" type="button">🏟️ 開催場切替</button>
         <span id="ms258Status" class="ms258-status"></span>
         <button id="ms258Close" class="ms258-close" type="button">× 閉じる</button>
       </div>
-      <div id="multiGrid258" class="mode1">
+      <div id="multiGrid258" class="mode4">
         ${[0,1,2,3].map(i=>`
           <section class="ms258-cell" id="ms258Cell${i}">
-            <div class="ms258-cellbar">
-              <b>画面${SLOT_NAMES[i]}</b>
-              <span class="race" id="ms258Race${i}">レース未選択</span>
-              <button type="button" data-copy="${i}" title="親画面の現在レースをこの画面へコピー">←現在</button>
-              <button type="button" data-focus="${i}" title="この画面だけを大きく表示">⛶</button>
+            <div class="ms258-cellbar" style="height:auto;min-height:40px;flex-wrap:wrap">
+              <b id="ms258Venue${i}" style="color:#a7f3d0;min-width:48px">開催場</b>
+              <span class="race" id="ms258Race${i}">レース読込中…</span>
+              <button type="button" data-prev-race="${i}" title="前のレース">◀R</button>
+              <button type="button" data-next-race="${i}" title="次のレース">R▶</button>
+              <button type="button" data-focus="${i}" title="この開催場だけを大きく表示">⛶</button>
             </div>
             <iframe class="ms258-frame" id="ms258Frame${i}" src="about:blank"
-              title="The競馬 マルチ画面${SLOT_NAMES[i]}" loading="eager"
+              title="The競馬 開催場別時系列${SLOT_NAMES[i]}" loading="eager"
               allow="clipboard-read; clipboard-write"></iframe>
           </section>`).join('')}
       </div>`;
@@ -24905,27 +25060,28 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     $('ms258Mode1').onclick=()=>setMode(1,active);
     $('ms258Mode2').onclick=()=>setMode(2,active);
     $('ms258Mode4').onclick=()=>setMode(4,active);
-    $('ms258Next').onclick=next;
+    $('ms258Next').onclick=nextPair;
+    $('ms258SyncR').onclick=syncRaceNo;
+    $('ms258NextVenue').onclick=nextVenuePage;
     $('ms258Close').onclick=close;
-    ws.querySelectorAll('[data-copy]').forEach(b=>b.onclick=()=>copyParentTo(Number(b.dataset.copy)));
-    ws.querySelectorAll('[data-focus]').forEach(b=>b.onclick=()=>setMode(1,Number(b.dataset.focus)));
+    ws.querySelectorAll('[data-prev-race]').forEach(b=>b.onclick=()=>changeRace(Number(b.dataset.prevRace),-1));
+    ws.querySelectorAll('[data-next-race]').forEach(b=>b.onclick=()=>changeRace(Number(b.dataset.nextRace),1));
+    ws.querySelectorAll('[data-focus]').forEach(b=>b.onclick=()=>{active=Number(b.dataset.focus);setMode(1,active);});
 
     const anchor=$('rightAnalysisBtn');
     if(anchor?.parentNode && !$('multiScreenBtn258')){
       const b=document.createElement('button');
-      b.id='multiScreenBtn258';b.className='btn-sm right-analysis-toggle';b.type='button';
-      b.textContent='🖥 マルチ';b.title='1画面／2分割／4分割／切替';
-      b.onclick=open;
+      b.id='multiScreenBtn258'; b.className='btn-sm right-analysis-toggle'; b.type='button';
+      b.textContent='🏟️ 開催場別'; b.title='開催場ごとに時系列オッズを1・2・4画面で同時監視'; b.onclick=open;
       anchor.parentNode.insertBefore(b,anchor);
     }
-    // Keep labels fresh while workspace is open.
     setInterval(()=>{if(opened) visibleSlots().forEach(updateCellLabel);},1500);
   }
 
   window.openMultiScreen258=open;
   window.closeMultiScreen258=close;
   window.setMultiScreenMode258=setMode;
-  window.nextMultiScreen258=next;
+  window.nextMultiScreen258=nextPair;
 
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',build,{once:true}); else build();
 })();

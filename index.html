@@ -31,7 +31,7 @@
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.18.259 NAR一覧データ取得修正・JRA/NAR混在防止</title>
+<title>The競馬 EV分析 v5.18.260 JRA複勝補完・Workerエラー整合</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -287,7 +287,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.18.259 NAR一覧データ取得修正・JRA/NAR混在防止</span>
+    <span class="ver">v5.18.260 JRA複勝補完・Workerエラー整合</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -19038,7 +19038,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.18.259 NAR一覧データ取得修正・JRA/NAR混在防止';
+  const VERSION202 = 'v5.18.260 JRA複勝補完・Workerエラー整合';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
@@ -19612,6 +19612,21 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   const endpoint=nar?'https://nar.netkeiba.com/api/api_get_nar_odds.html':'https://race.netkeiba.com/api/api_get_jra_odds.html';
   const markets={},diagnostics={};
   const sources=[];
+  const placeDef=TICKET_DEFS243.find(d=>d.name==='複勝');
+  const mergeRows=(type,rows)=>{
+    if(!Array.isArray(rows)||!rows.length) return markets[type]||[];
+    const m=new Map((markets[type]||[]).map(r=>[String(r.combination),r]));
+    rows.forEach(r=>{if(r&&r.combination)m.set(String(r.combination),r);});
+    markets[type]=[...m.values()].sort((a,b)=>a.odds-b.odds||a.combination.localeCompare(b.combination,'ja',{numeric:true}));
+    return markets[type];
+  };
+  const diagOk=(type,receipt,message='')=>{
+    const rows=markets[type]||[];
+    diagnostics[type]={state:rows.length?'ok':'empty',count:rows.length,
+      message:rows.length?message:'有効なオッズなし（未発売・売止等）',
+      fetched_ms:receipt?.fetched_ms,source_updated_ms:receipt?.source_updated_ms,
+      source_time_label:receipt?.source_time_label,path:receipt?.path};
+  };
   const priority=def=>def.name===preferred?0:def.name==='単勝'?1:2;
   const order=TICKET_DEFS243.slice().sort((a,b)=>priority(a)-priority(b));
   let cursor=0,done=0;
@@ -19622,21 +19637,50 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
       try{
         const receipt=await fetchText(url);
         const rows=parseTicketJson243(receipt.text,def,rid);
-        if(rows.length){markets[def.name]=rows;sources.push(url);}
-        diagnostics[def.name]={state:rows.length?'ok':'empty',count:rows.length,
-          message:rows.length?'':'有効なオッズなし（未発売・売止等）',
-          fetched_ms:receipt.fetched_ms,source_updated_ms:receipt.source_updated_ms,
-          source_time_label:receipt.source_time_label,path:receipt.path};
-      }catch(e){diagnostics[def.name]={state:'error',count:0,message:String(e?.message||e).slice(0,180)};}
+        if(rows.length){mergeRows(def.name,rows);sources.push(url);}
+        diagOk(def.name,receipt);
+
+        // JRAのtype=1応答には data.odds["1"]（単勝）だけでなく
+        // data.odds["2"]（複勝）も同梱される場合がある。
+        // type=2が一時的に15頭など部分応答でも、type=1側と馬番キーで合流して欠落を補う。
+        if(!nar && def.id===1 && placeDef){
+          try{
+            const placeRows=parseTicketJson243(receipt.text,placeDef,rid);
+            if(placeRows.length){
+              mergeRows('複勝',placeRows);
+              diagOk('複勝',receipt,'type=1同梱データで補完');
+            }
+          }catch(_){ /* type=1に複勝が無い応答も正常 */ }
+        }
+      }catch(e){
+        const existing=(markets[def.name]||[]).length;
+        if(existing){
+          diagnostics[def.name]={...(diagnostics[def.name]||{}),state:'ok',count:existing,
+            message:`別経路の取得値を保持（${String(e?.message||e).slice(0,120)}）`};
+        }else{
+          diagnostics[def.name]={state:'error',count:0,message:String(e?.message||e).slice(0,180)};
+        }
+      }
       done++;
       try{onProgress(done,diagnostics);}catch(_){}
     }
   }
   // One batch per race. A slow/failed ticket never prevents the other seven.
   await Promise.all([run(),run(),run()]);
+
+  // 並列取得の終了順で診断件数が巻き戻らないよう、最終マージ後の件数を正本にする。
+  for(const def of TICKET_DEFS243){
+    const n=(markets[def.name]||[]).length;
+    if(n){diagnostics[def.name]={...(diagnostics[def.name]||{}),state:'ok',count:n};}
+  }
+  const winN=(markets['単勝']||[]).length,placeN=(markets['複勝']||[]).length;
+  if(!nar && winN>0 && placeN>0 && placeN<winN){
+    diagnostics['複勝']={...(diagnostics['複勝']||{}),state:'ok',count:placeN,
+      message:`配信元の有効複勝 ${placeN}/${winN}頭（欠落値は捏造せず次回再取得で補完）`};
+  }
   const ordered={};
-  for(const def of TICKET_DEFS243) if(markets[def.name]) ordered[def.name]=markets[def.name];
-  return {markets:ordered,diagnostics,source:sources.sort().join(' | '),market_count:Object.keys(ordered).length};
+  for(const def of TICKET_DEFS243) if(markets[def.name]?.length) ordered[def.name]=markets[def.name];
+  return {markets:ordered,diagnostics,source:[...new Set(sources)].sort().join(' | '),market_count:Object.keys(ordered).length};
 }
 
   function renderMarketStatus243(diagnostics={},done=8){
@@ -21723,7 +21767,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   if(window.__V518216_LIVE_COMMENTARY__) return;
   window.__V518216_LIVE_COMMENTARY__ = true;
 
-  const VERSION215 = 'v5.18.259 NAR一覧データ取得修正・JRA/NAR混在防止';
+  const VERSION215 = 'v5.18.260 JRA複勝補完・Workerエラー整合';
   const DB_NAME215 = 'thekeiba-odds-timeline-v1';
   const STORE215 = 'captures';
   const TYPES215 = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
@@ -22178,7 +22222,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
 <script>
 (function(){
   'use strict';
-  const VERSION219='v5.18.259 NAR一覧データ取得修正・JRA/NAR混在防止';
+  const VERSION219='v5.18.260 JRA複勝補完・Workerエラー整合';
   const CFG_KEY219='thekeiba_timeline_cloud_v219';
   const CFG_GLOBAL_KEY219='thekeiba_timeline_cloud_global';
   const DEFAULT_WORKER_URL219='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
@@ -22443,7 +22487,11 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
         const at=workerLast?new Date(workerLast).toLocaleTimeString('ja-JP',{timeZone:'Asia/Tokyo',hour12:false}):'未記録';
         const active=meta.active===true?'収集中':meta.active===false?'停止':'状態未確認';
         const types=Number(meta.last_market_types||0);
-        const err=String(meta.last_error||'').trim();
+        const rawErr=String(meta.last_error||'').trim();
+        const errAt=Date.parse(String(meta.last_error_at||''))||0;
+        const captureAt=Number(meta.last_capture_ms||workerLast||0);
+        // 成功取得がエラーより新しければ、過去のlast_errorは画面に残さない。
+        const err=(rawErr && !(errAt>0 && captureAt>errAt)) ? rawErr : '';
         if(workerCount===0 && !rows.length){
           const detail=err?` / Workerエラー: ${err}`:` / ${active}`;
           status219(`⚠️ ${rid} Worker保存 0点${detail} / 端末内 ${total}点`,'err');
@@ -22483,7 +22531,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     const settingsTab=$219('tab-settings');
     if(settingsTab&&!$219('timelineCloudCard219')){
       const c=cfg219(),card=document.createElement('div');card.className='card';card.id='timelineCloudCard219';card.innerHTML=`
-        <div class="section-header"><h2>☁️ 常時時系列オッズ（デバイス0台）</h2><span class="nar-badge">v5.18.259</span></div>
+        <div class="section-header"><h2>☁️ 常時時系列オッズ（デバイス0台）</h2><span class="nar-badge">v5.18.260</span></div>
         <div style="font-size:11px;color:var(--muted);line-height:1.65;margin-bottom:10px">Durable Object Workerがサーバー側で全8券種を5秒基準で継続収集します。別デバイス未接続・iPad/PCを閉じた状態でも継続し、次回起動時にWorker全履歴をIndexedDBへ復元します。発走+10分（終了目安+5分）に達したらWorker・端末の5秒収集をそのレースについて終了し、その時点の時系列を完成形として固定します。以後は新しい点を追加せず、後から同じグラフを閲覧できます。3分前・発走・+10分の基準線も固定表示します。</div>
         <div class="field"><label>常時時系列Worker URL</label><input id="timelineCloudUrl219" type="url" value="${esc219(c.workerUrl)}" placeholder="https://the-keiba-timeline-collector.xxxxx.workers.dev"></div>
         <div class="field"><label>Token（Workerに設定した場合のみ）</label><input id="timelineCloudToken219" type="password" value="${esc219(c.token)}" autocomplete="off"></div>
@@ -22562,7 +22610,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
 (function(){
   'use strict';
 
-  const VERSION227 = 'v5.18.259 NAR一覧データ取得修正・JRA/NAR混在防止';
+  const VERSION227 = 'v5.18.260 JRA複勝補完・Workerエラー整合';
   let oddsJobSeq227 = 0;
 
   function el227(id){ return document.getElementById(id); }
@@ -23206,7 +23254,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   if(window.__THEKEIBA_232__) return;
   window.__THEKEIBA_232__ = true;
 
-  const VERSION = 'v5.18.259 NAR一覧データ取得修正・JRA/NAR混在防止';
+  const VERSION = 'v5.18.260 JRA複勝補完・Workerエラー整合';
   const JRA_VENUE_NAMES = {'01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京','06':'中山','07':'中京','08':'京都','09':'阪神','10':'小倉',
     '30':'門別','35':'盛岡','36':'水沢','42':'浦和','43':'船橋','44':'大井','45':'川崎','46':'金沢','47':'笠松','48':'名古屋','50':'園田','51':'姫路','54':'高知','55':'佐賀','65':'帯広'};
   const $ = id => document.getElementById(id);
@@ -24301,7 +24349,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     if(!document.body)return;
     if(!document.getElementById('bridgeModeBar252')){
       const bar=document.createElement('div');bar.id='bridgeModeBar252';
-      bar.innerHTML='<b>v5.18.259</b><select id="bridgeModeSelect252" aria-label="取得モード"><option value="on">🌉 Bridge専用・Worker通信OFF</option><option value="off">☁️ 通常モード（Worker併用）</option></select><span id="bridgeModeState252"></span><button class="btn-sm" id="bridgeCheck252">Bridge接続確認</button>';
+      bar.innerHTML='<b>v5.18.260</b><select id="bridgeModeSelect252" aria-label="取得モード"><option value="on">🌉 Bridge専用・Worker通信OFF</option><option value="off">☁️ 通常モード（Worker併用）</option></select><span id="bridgeModeState252"></span><button class="btn-sm" id="bridgeCheck252">Bridge接続確認</button>';
       document.getElementById('tab-horses').prepend(bar);
       const sel=document.getElementById('bridgeModeSelect252');sel.value=only?'on':'off';
       sel.onchange=()=>{try{localStorage.setItem('thekeiba-bridge-only252',sel.value);location.reload();}catch(e){sel.value=only?'on':'off';alert('設定を保存できません：'+e.message);}};
@@ -24486,7 +24534,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
 
 
 <!-- ============================================================
-     v5.18.259 JRA/NAR Race Context Mix Guard
+     v5.18.260 JRA/NAR Race Context Mix Guard
      ・日付/JRA-NAR/開催場変更時に旧レースの馬・オッズ・推奨を即時クリア
      ・右側時系列の active race を未選択へ戻し、保存履歴の先頭自動選択を見た目上中立化
      ・レース選択/取得時に JRA/NAR と race_id の不一致を拒否
@@ -24498,7 +24546,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
   'use strict';
   if(window.__V518257_RACE_CONTEXT_GUARD__) return;
   window.__V518257_RACE_CONTEXT_GUARD__ = true;
-  const VERSION257='v5.18.259 NAR一覧データ取得修正・JRA/NAR混在防止';
+  const VERSION257='v5.18.260 JRA複勝補完・Workerエラー整合';
   const $=id=>document.getElementById(id);
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -24507,7 +24555,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       window.APP_VERSION=VERSION257;
       const v=document.querySelector('.ver'); if(v && v.textContent!==VERSION257) v.textContent=VERSION257;
       document.title='The競馬 EV分析 '+VERSION257;
-      const b=$('bridgeModeBar252')?.querySelector('b'); if(b && b.textContent!=='v5.18.259') b.textContent='v5.18.259';
+      const b=$('bridgeModeBar252')?.querySelector('b'); if(b && b.textContent!=='v5.18.260') b.textContent='v5.18.260';
     }catch(e){}
   }
 
@@ -24707,9 +24755,11 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     const v=document.querySelector('.ver');
     if(v) new MutationObserver(mark257).observe(v,{childList:true,characterData:true,subtree:true});
   }catch(e){}
-  console.log('[v5.18.259] JRA/NAR race context mix guard ready');
+  console.log('[v5.18.260] JRA/NAR race context mix guard ready');
 })();
 </script>
 
+
+<!-- v5.18.260: JRA複勝をtype=1/type=2の両経路から馬番キーで補完し、成功後の古いWorkerエラー表示を抑止 -->
 </body>
 </html>

@@ -363,6 +363,29 @@ body.right-analysis-active #rightAnalysisPane{
 @media(max-width:700px){.finish5-grid5202{grid-template-columns:repeat(5,minmax(52px,1fr));overflow-x:auto}.payout-grid5202{grid-template-columns:1fr}}
 </style>
 
+<style id="cross-market-ranking5216">
+.msv2-rank-summary{font-size:12px;font-weight:700;color:#d9f99d;margin:10px 0 4px;line-height:1.6}
+.msv2-rank-status{font-size:10px;color:#9aadc5;line-height:1.6;margin-bottom:5px}
+.msv2-rank-scroll{overflow-x:auto;max-width:100%;border:1px solid #263549;border-radius:8px;margin:8px 0;-webkit-overflow-scrolling:touch}
+.msv2-rank-table{width:100%;border-collapse:collapse;font-size:11px;white-space:nowrap;text-align:right;font-variant-numeric:tabular-nums}
+.msv2-rank-table th,.msv2-rank-table td{padding:7px 8px;border-bottom:1px solid #263549}
+.msv2-rank-table th{background:#132338;color:#aebfd3;font-weight:600}
+.msv2-rank-table th:nth-child(2),.msv2-rank-table td:nth-child(2){text-align:left;min-width:128px}
+.msv2-rank-table button{display:flex;flex-direction:column;align-items:flex-start;width:100%;min-height:36px;font-size:11px;padding:3px 6px;background:transparent;border:1px solid transparent;text-align:left}
+.msv2-rank-table button small{font-size:10px;color:#7dd3fc;margin-bottom:2px}
+.msv2-rank-table button:hover,.msv2-rank-table button:focus-visible{border-color:#38bdf8}
+.msv2-rank-table .rank-focus{background:rgba(20,184,166,.09);color:#a7f3d0}
+.msv2-rank-table .is-selected{background:rgba(56,189,248,.13)}
+.msv2-rank-presets{display:flex;gap:5px;flex-wrap:wrap;margin:6px 0}
+.msv2-rank-presets button{font-size:11px;padding:7px 9px;min-height:34px}
+.msv2-rank-presets button[data-rank-metric]{border-color:#0e7490;background:#083344;color:#cffafe}
+.msv2-rank-help{font-size:10px;color:#9aadc5;line-height:1.7;margin:6px 0}
+.msv2-rank-help summary{cursor:pointer;color:#cbd5e1}
+.msv2 .rankClear[hidden]{display:none}
+.msv2 .msv2-chart-empty[hidden]{display:none}
+
+.msv2-gap-status{font-size:10px;color:#a7f3d0;line-height:1.6;padding:5px 8px;border-radius:5px;background:#102b32;margin-bottom:4px}.msv2-gap-status[data-gaps=yes]{color:#fde68a;background:#332a17}
+</style>
 </head>
 <body>
 
@@ -24781,7 +24804,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
 /* The競馬 MultiScreen v2 — pane-owned state; no child application documents. */
 (function () {
   'use strict';
-  const VERSION = 'v5.21.1 Independent Blend';
+  const VERSION = 'v5.21.6 Cross-Market Top10';
   const MARKETS = ['単勝','複勝','枠連','馬連','ワイド','馬単','3連複','3連単'];
   const VENUES = {
     JRA: {'01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京','06':'中山','07':'中京','08':'京都','09':'阪神','10':'小倉'},
@@ -24827,7 +24850,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       if(MODES.includes(Number(p.count)))out.profiles[key].count=Number(p.count);
       out.profiles[key].slots=out.profiles[key].slots.map((fallback,i)=>{
         const s=p.slots?.[i]||{},source=Object.hasOwn(VENUES,s.source)?s.source:fallback.source;
-        return {source,venue:Object.hasOwn(VENUES[source],s.venue)?s.venue:'',ticket:MARKETS.includes(s.ticket)?s.ticket:'単勝',auto:s.auto!==false};
+        return {source,venue:Object.hasOwn(VENUES[source],s.venue)?s.venue:'',ticket:TICKET_CHOICES.includes(s.ticket)?s.ticket:'単勝',auto:s.auto!==false};
       });
     }
     return out;
@@ -25059,15 +25082,23 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
   }
   function paneNums520(key){return String(key||'').split('-').map(Number).filter(n=>n>0);}
   function paneRated520(p,rec){
-    const wins=(rec?.markets?.['単勝']||[]).map(x=>({num:Number(x.combination),odds:Number(x.odds)})).filter(x=>x.num>0&&x.odds>1);
-    if(!wins.length)return new Map();
-    const meta=new Map((p.horses||[]).map(h=>[Number(h.num),h]));
+    if(!rec)return new Map();
+    let cache=paneRatedCache5216.get(p);
+    if(!cache||cache.horses!==p.horses||cache.raceId!==p.raceId||cache.history!==p.history){cache={horses:p.horses,raceId:p.raceId,history:p.history,records:new WeakMap()};paneRatedCache5216.set(p,cache);}
+    if(cache.records.has(rec))return cache.records.get(rec);
+    let modelRecord=rec;
+    if(!rec.markets?.['単勝']?.length){
+      for(let i=p.history.length-1;i>=0;i--){const r=p.history[i];if(r.captured_ms>rec.captured_ms)continue;if(rec.captured_ms-r.captured_ms>RANK_MAX_AGE)break;if(r.markets?.['単勝']?.length){modelRecord=r;break;}}
+    }
+    const wins=(modelRecord?.markets?.['単勝']||[]).map(x=>({num:Number(x.combination),odds:Number(x.odds)})).filter(x=>x.num>0&&x.odds>=1);
+    if(!wins.length){const empty=new Map();cache.records.set(rec,empty);return empty;}
+    const meta=new Map((modelRecord.horses?.length?modelRecord.horses:(p.horses||[]).map(h=>({num:h.num,frame:h.frame}))).map(h=>[Number(h.num),h]));
     const rank=new Map(wins.slice().sort((a,b)=>a.odds-b.odds).map((x,i)=>[x.num,i+1]));
     const n=Math.max(1,wins.length),takeback=p.source==='NAR'?.30:.225,over=wins.reduce((s,x)=>s+1/x.odds,0)||1/(1-takeback);
     const popRaw=Array.from({length:n},(_,i)=>1/Math.pow(i+1,1.08)),popSum=popRaw.reduce((a,b)=>a+b,0)||1;
     const raw=wins.map(x=>{const h=meta.get(x.num)||{};let pop=Number(h.pop||0);if(!(pop>=1&&pop<=n))pop=rank.get(x.num)||0;const po=(1/x.odds)/Math.max(over,1/(1-takeback));const pp=pop?(1/Math.pow(pop,1.08))/popSum:0;return {num:x.num,odds:x.odds,frame:Number(h.frame||0),raw:po&&pp?po*.8+pp*.2:(po||pp||1/n)};});
     const total=raw.reduce((s,x)=>s+x.raw,0)||1,placeMult=Math.min(3,2+n*.045),renMult=Math.min(2.4,1.6+n*.038),out=new Map();
-    raw.forEach(h=>{const winP=h.raw/total,rawPlace=winP*placeMult+.015,fav=Math.max(0,winP-.25)*.7,long=winP<.08?(.08-winP)*.8:0;out.set(h.num,{...h,winP,placeP:Math.min(.90,rawPlace*(1-fav)*(1-long)),renP:Math.min(.82,winP*renMult+.015)});});return out;
+    raw.forEach(h=>{const winP=h.raw/total,rawPlace=winP*placeMult+.015,fav=Math.max(0,winP-.25)*.7,long=winP<.08?(.08-winP)*.8:0;out.set(h.num,{...h,winP,placeP:Math.min(.90,rawPlace*(1-fav)*(1-long)),renP:Math.min(.82,winP*renMult+.015)});});cache.records.set(rec,out);return out;
   }
   function paneModelP520(p,rec,market,key){
     const rated=paneRated520(p,rec),ns=paneNums520(key);if(!rated.size||!ns.length)return NaN;
@@ -25079,12 +25110,51 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     if(market==='3連複')return Math.min(.16,hs[0].placeP*hs[1].placeP*hs[2].placeP*1.45);
     if(market==='3連単'){const trio=Math.min(.16,hs[0].placeP*hs[1].placeP*hs[2].placeP*1.45),s1=Math.max(.0001,hs[0].winP+hs[1].winP+hs[2].winP),s2=Math.max(.0001,hs[1].winP+hs[2].winP);return Math.max(.0001,trio*(hs[0].winP/s1)*(hs[1].winP/s2));}return NaN;
   }
-  function paneMetricValue520(p,rec,market,key,row){const o=Number(row?.odds);if(!(o>0))return NaN;if(p.metric==='odds')return o;if(p.metric==='marketP')return 100/o;const pr=paneModelP520(p,rec,market,key);if(!Number.isFinite(pr))return NaN;if(p.metric==='modelP')return pr*100;if(p.metric==='ev')return pr*o;if(p.metric==='kelly')return Math.max(0,(((o-1)*pr-(1-pr))/Math.max(.01,o-1))*100);if(p.metric==='edge')return (pr-1/o)*100;return o;}
-  function paneMetricLabel520(m){return m==='marketP'?'市場確率':m==='modelP'?'想定確率':m==='ev'?'EV':m==='kelly'?'Kelly':m==='edge'?'乖離':'オッズ';}
-  function paneMetricFmt520(v,m,axis=false){if(!Number.isFinite(v))return '-';if(m==='odds')return axis?v.toFixed(v<10?1:0):v.toFixed(1)+'倍';if(m==='marketP'||m==='modelP'||m==='kelly')return v.toFixed(v<10?2:1)+'%';if(m==='ev')return v.toFixed(2);if(m==='edge')return (v>=0?'+':'')+v.toFixed(2)+(axis?'':'pt');return String(v);}
+  // A market and its combination form one identity; e.g. 馬連|1-2 != 馬単|1-2.
+  const ALL_TICKETS='__ALL__', TICKET_CHOICES=[ALL_TICKETS,...MARKETS];
+  const RANK_MAX_AGE=30000, RANK_SIZES=[5,10,20];
+  const paneRatedCache5216=new WeakMap(), paneRowCache5216=new WeakMap();
+  const ticketLabel5216=t=>t===ALL_TICKETS?'全券種横断':t;
+  const betKey5216=(market,combination)=>market+'|'+combination;
+  function paneOdds5216(row){
+    const lo=Number(row?.odds_min),o=Number(row?.odds);
+    return Number.isFinite(lo)&&lo>=1?lo:(Number.isFinite(o)&&o>=1?o:NaN);
+  }
+  function paneRow5216(rec,market,key){
+    let cache=paneRowCache5216.get(rec);if(!cache){cache=new Map();paneRowCache5216.set(rec,cache);}
+    if(!cache.has(market))cache.set(market,new Map((rec.markets?.[market]||[]).map(r=>[r.combination,r])));
+    return cache.get(market).get(key);
+  }
+  function paneMetricValue520(p,rec,market,key,row){
+    const o=paneOdds5216(row);if(!Number.isFinite(o))return NaN;
+    if(p.metric==='odds')return o;if(p.metric==='marketP')return 100/o;
+    const pr=paneModelP520(p,rec,market,key);if(!Number.isFinite(pr)||pr<0||pr>1)return NaN;
+    if(p.metric==='modelP')return pr*100;if(p.metric==='ev')return pr*o;
+    if(p.metric==='kelly')return o>1?Math.max(0,(pr*o-1)/(o-1))*100:0;
+    if(p.metric==='edge')return (pr-1/o)*100;
+    if(p.metric==='edgePct')return (pr*o-1)*100;
+    return NaN;
+  }
+  function paneMetrics5216(p,rec,market,row){
+    const odds=paneOdds5216(row),pr=paneModelP520(p,rec,market,row.combination);
+    const valid=Number.isFinite(odds)&&Number.isFinite(pr)&&pr>=0&&pr<=1;
+    return {odds,marketP:Number.isFinite(odds)?100/odds:NaN,modelP:valid?pr*100:NaN,
+      ev:valid?pr*odds:NaN,edgePct:valid?(pr*odds-1)*100:NaN,
+      edge:valid?(pr-1/odds)*100:NaN,kelly:valid?(odds>1?Math.max(0,(pr*odds-1)/(odds-1))*100:0):NaN};
+  }
+  function paneMetricLabel520(m){return {odds:'オッズ',marketP:'市場確率 (1/オッズ)',modelP:'想定確率',ev:'EV',kelly:'Kelly',edge:'確率差 (pt)',edgePct:'乖離率 (%)'}[m]||m;}
+  function paneMetricFmt520(v,m,axis=false){
+    if(!Number.isFinite(v))return '—';
+    if(m==='odds')return axis?v.toFixed(v<10?1:0):v.toFixed(1)+'倍';
+    if(m==='marketP'||m==='modelP'||m==='kelly')return v.toFixed(Math.abs(v)<10?2:1)+'%';
+    if(m==='ev')return v.toFixed(2);
+    if(m==='edge'||m==='edgePct')return (v>=0?'+':'')+v.toFixed(2)+(m==='edge'?'pt':'%');
+    return String(v);
+  }
+
 
   function createPane(id,source,date,stored={}) {
-    return {id,source,date,venue:'',raceId:'',race:null,races:[],horses:[],ticket:'単勝',metric:'odds',selectedBet:'',
+    return {id,source,date,venue:'',raceId:'',race:null,races:[],horses:[],ticket:'単勝',metric:'odds',topN:10,autoRepair:true,repairStatus:'',lastHistoryAttempt:0,selectedBet:'',
       odds:[],history:[],diagnostics:{},transport:{list:'',card:'',odds:'',timeline:''},scrollTop:0,scrollLeft:0,windowMs:3600000,follow:true,viewEnd:0,log:false,auto:true,
       ...stored,id,source,date,revision:0,controller:null,listRevision:0,listController:null,busy:false,loading:false,timer:null,historyBusy:false,
       historyWarning:'',cardWarning:'',storageWarning:'',workerCursor:0,lastWorkerPoll:0,result5202:null,resultError5202:'',resultBusy5202:false,lastResultPoll5202:0,status:'開催を読み込んでください',tone:'',root:null,visible:false,initialized:false};
@@ -25097,18 +25167,18 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     }
     $(selector){return this.root.querySelector(selector);}
     save(){
-      try{localStorage.setItem(SETTINGS_KEY,JSON.stringify({mode:this.mode,active:this.active,panes:this.panes.map(p=>({source:p.source,date:p.date,venue:p.venue,preferredVenue:p.preferredVenue||'',raceId:p.raceId,ticket:p.ticket,metric:p.metric,selectedBet:p.selectedBet,windowMs:p.windowMs,log:p.log,auto:p.auto}))}));}catch(_){}
+      try{localStorage.setItem(SETTINGS_KEY,JSON.stringify({mode:this.mode,active:this.active,panes:this.panes.map(p=>({source:p.source,date:p.date,venue:p.venue,preferredVenue:p.preferredVenue||'',raceId:p.raceId,ticket:p.ticket,metric:p.metric,topN:p.topN,autoRepair:p.autoRepair,selectedBet:p.selectedBet,windowMs:p.windowMs,log:p.log,auto:p.auto}))}));}catch(_){}
     }
     build(){
       if(this.root)return;
       const saved=jsonSettings(SETTINGS_KEY),manualLayout=this.plan.manualDay===this.planDate||!this.plan.enabled;
       this.panes=['JRA','NAR','JRA','NAR','JRA','NAR'].map((source,id)=>{
         const s=saved.panes?.[id]||{},opts={};
-        for(const k of ['venue','preferredVenue','raceId','ticket','metric','selectedBet','windowMs','log','auto'])if(s[k]!=null)opts[k]=s[k];
+        for(const k of ['venue','preferredVenue','raceId','ticket','metric','topN','autoRepair','selectedBet','windowMs','log','auto'])if(s[k]!=null)opts[k]=s[k];
         const paneDate=manualLayout&&validDay(s.date)?s.date:this.planDate;
         if(s.date!==paneDate){opts.venue='';opts.raceId='';}
         const p=createPane(id,VENUES[s.source]?s.source:source,paneDate,opts);
-        if(!MARKETS.includes(p.ticket))p.ticket='単勝';if(p.metric==='implied')p.metric='marketP';if(!['odds','marketP','modelP','ev','kelly','edge'].includes(p.metric))p.metric='odds';return p;
+        if(!TICKET_CHOICES.includes(p.ticket))p.ticket='単勝';if(!RANK_SIZES.includes(p.topN))p.topN=10;if(p.metric==='implied')p.metric='marketP';if(!['odds','marketP','modelP','ev','kelly','edge','edgePct'].includes(p.metric))p.metric='odds';return p;
       });
       this.mode=MODES.includes(saved.mode)?saved.mode:2;this.active=Math.max(0,Math.min(5,Number(saved.active)||0));
       const root=document.createElement('div');root.id='multiWorkspaceV2';root.className='msv2';root.hidden=true;
@@ -25137,18 +25207,22 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
           <button class="loadRaces">開催を取得</button><label>開催場<select class="venueSelect"><option value="">未取得</option></select></label>
           <label class="msv2-race-field">レース<select class="raceSelect"><option value="">開催を取得してください</option></select></label>
         </div><div class="msv2-identity"></div><div class="msv2-fields">
-          <label>券種<select class="ticketSelect">${MARKETS.map(t=>`<option>${t}</option>`).join('')}</select></label>
-          <label>指標<select class="metricSelect"><option value="odds">オッズ</option><option value="marketP">市場確率</option><option value="modelP">想定確率</option><option value="ev">EV</option><option value="kelly">Kelly</option><option value="edge">乖離</option></select></label>
-          <label>買い目<select class="betSelect"><option value="">全買い目（上位12点）</option></select></label>
+          <label>券種<select class="ticketSelect">${TICKET_CHOICES.map(t=>`<option value="${t}">${ticketLabel5216(t)}</option>`).join('')}</select></label>
+          <label>指標<select class="metricSelect"><option value="odds">オッズ</option><option value="marketP">市場確率 (1/オッズ)</option><option value="modelP">想定確率</option><option value="ev">EV</option><option value="kelly">Kelly</option><option value="edgePct">乖離率 (%)</option><option value="edge">確率差 (pt)</option></select></label>
+          <label>点数<select class="rankSizeSelect"><option value="5">上位5点</option><option value="10">上位10点</option><option value="20">上位20点</option></select></label><label>買い目<select class="betSelect"><option value="">上位10点をまとめて表示</option></select></label>
           <label>表示期間<select class="windowSelect"><option value="900000">15分</option><option value="3600000">1時間</option><option value="10800000">3時間</option><option value="86400000">24時間</option></select></label>
-          <label class="msv2-check"><input class="autoCheck" type="checkbox">5秒ごと</label><label class="msv2-check"><input class="logCheck" type="checkbox">対数</label>
-        </div><div class="msv2-actions"><button class="refreshOdds">全8券種を取得</button><button class="refreshHistory">履歴を再読込</button><button class="latest">最新へ</button><button class="older">◀15分</button><button class="newer">15分▶</button><button class="exportJson">JSON保存…</button><button class="exportCsv">CSV保存…</button></div>
+          <label class="msv2-check"><input class="autoCheck" type="checkbox">5秒ごと</label><label class="msv2-check"><input class="repairCheck" type="checkbox">JSON自動補完</label><label class="msv2-check"><input class="logCheck" type="checkbox">対数</label>
+        </div><div class="msv2-actions"><button class="refreshOdds">全8券種を取得</button><button class="refreshHistory">JSONで欠測補完</button><button class="latest">最新へ</button><button class="older">◀15分</button><button class="newer">15分▶</button><button class="exportJson">JSON保存…</button><button class="exportCsv">CSV保存…</button></div>
         <div class="msv2-status" role="status" aria-live="polite"></div><div class="msv2-warnings"></div>
+        <div class="msv2-rank-presets"><button type="button" data-rank-metric="ev">全券種 EV上位10</button><button type="button" data-rank-metric="edgePct">乖離率上位10</button><button type="button" data-rank-metric="odds">オッズ上位10</button><button type="button" data-rank-metric="modelP">想定確率上位10</button><button type="button" data-rank-metric="marketP">市場確率上位10</button><button type="button" class="rankClear" hidden>上位表示へ戻す</button></div>
+        <div class="msv2-rank-summary"></div><div class="msv2-rank-status"></div><div class="msv2-gap-status" role="status"></div>
         <div class="msv2-chart"><canvas aria-label="このレースの時系列オッズ"></canvas><div class="msv2-chart-empty"></div></div>
         <div class="msv2-foot"></div><details class="msv2-diagnostics"><summary>券種別の取得状況</summary><div></div></details>
-        <div class="msv2-legend"></div><p class="msv2-note">受信した値だけを記録します。複勝・ワイドのグラフは下限値です。5秒は再取得の基準で、通信中は重複取得しません。横ドラッグで時刻移動・縦スワイプでこの画面をスクロールできます。</p></div>`;
+        <div class="msv2-rank-scroll" tabindex="0" aria-label="順位表・横スクロールできます"><table class="msv2-rank-table" aria-label="全券種対応の指標ランキング"></table></div>
+        <details class="msv2-rank-help"><summary>指標の意味・順位の基準</summary>オッズは低い順、その他は高い順です。市場確率＝1÷オッズ（損益分岐の確率・控除補正なし）。EV＝想定確率×オッズ。乖離率＝(EV−1)×100％。確率差＝(想定確率−市場確率)×100ポイント。EVと乖離率の順位は同じです。Kellyは負値を0にします。想定確率は既存の画面用簡易モデル（単勝オッズ・人気から計算）です。未取得・計算不能の値は順位に入れません。複勝・ワイドは下限オッズを使用します。表示時点で選んだ上位買い目の過去の推移を描画します。表の買い目を押すと1点に絞れます。</details>
+        <div class="msv2-legend"></div><p class="msv2-note">受信した値だけを記録します。複勝・ワイドのグラフは下限値です。5秒は再取得の基準で、通信中は重複取得しません。JSON自動補完は画面表示中の当日レースを15秒ごとに確認します。ブラウザ復帰時も保存履歴を重ねて読み直します。収集元にも存在しない値は作りません。横ドラッグで時刻移動・縦スワイプでこの画面をスクロールできます。</p></div>`;
       this.$('.msv2-grid').appendChild(root);const $=s=>root.querySelector(s);
-      $('.dateInput').value=p.date;$('.sourceSelect').value=p.source;$('.ticketSelect').value=p.ticket;$('.metricSelect').value=p.metric;
+      $('.dateInput').value=p.date;$('.sourceSelect').value=p.source;$('.ticketSelect').value=p.ticket;$('.metricSelect').value=p.metric;$('.rankSizeSelect').value=String(p.topN);$('.repairCheck').checked=p.autoRepair;
       $('.windowSelect').value=String(p.windowMs);$('.autoCheck').checked=p.auto;$('.logCheck').checked=p.log;$('.logCheck').disabled=p.metric!=='odds';
       root.addEventListener('pointerdown',()=>{this.active=p.id;this.markActive();},{passive:true});root.addEventListener('focusin',()=>{this.active=p.id;this.markActive();});
       $('.loadRaces').onclick=()=>this.loadRaces(p.id);
@@ -25159,8 +25233,13 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       $('.ticketSelect').onchange=()=>{this.markManual();p.ticket=$('.ticketSelect').value;p.selectedBet='';this.render(p);this.save();};
       $('.metricSelect').onchange=()=>{p.metric=$('.metricSelect').value;if(p.metric!=='odds'){p.log=false;$('.logCheck').checked=false;}$('.logCheck').disabled=p.metric!=='odds';this.render(p);this.save();};
       $('.betSelect').onchange=()=>{p.selectedBet=$('.betSelect').value;this.render(p);this.save();};
+      $('.rankSizeSelect').onchange=()=>{p.topN=Number($('.rankSizeSelect').value);p.selectedBet='';this.render(p);this.save();};
+      root.querySelectorAll('[data-rank-metric]').forEach(b=>b.onclick=()=>this.rankPreset5216(p,b.dataset.rankMetric));
+      $('.rankClear').onclick=()=>{p.selectedBet='';this.render(p);this.save();};
+      $('.msv2-rank-table').onclick=e=>{const b=e.target.closest('[data-rank-key]');if(!b)return;p.selectedBet=p.selectedBet===b.dataset.rankKey?'':b.dataset.rankKey;this.render(p);this.save();};
       $('.windowSelect').onchange=()=>{p.windowMs=Number($('.windowSelect').value);this.draw(p);this.save();};
       $('.logCheck').onchange=()=>{p.log=$('.logCheck').checked;this.draw(p);this.save();};
+      $('.repairCheck').onchange=()=>{p.autoRepair=$('.repairCheck').checked;this.render(p);this.schedule(p,250);this.save();};
       $('.autoCheck').onchange=()=>{this.markManual();p.auto=$('.autoCheck').checked;this.schedule(p);this.save();};
       $('.refreshOdds').onclick=()=>this.loadOdds(p.id);$('.refreshHistory').onclick=()=>this.loadHistory(p.id,true);
       $('.latest').onclick=()=>{p.follow=true;this.draw(p);};
@@ -25173,14 +25252,14 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       canvas.addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY,end:this.endTime(p),horizontal:false};});
       canvas.addEventListener('pointermove',e=>{if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;
         if(!drag.horizontal&&Math.abs(dx)>10&&Math.abs(dx)>Math.abs(dy)*1.3){drag.horizontal=true;canvas.setPointerCapture?.(e.pointerId);}
-        if(drag.horizontal){p.follow=false;p.viewEnd=drag.end-dx/Math.max(100,canvas.clientWidth-65)*p.windowMs;this.draw(p);}});
+        if(drag.horizontal){p.follow=false;p.viewEnd=drag.end-dx/Math.max(100,canvas.clientWidth-86)*p.windowMs;this.draw(p);}});
       const end=()=>{drag=null;};canvas.addEventListener('pointerup',end);canvas.addEventListener('pointercancel',end);
       this.render(p);
     }
     context(p){return {revision:p.revision,source:p.source,date:p.date,raceId:p.raceId,signal:p.controller?.signal};}
     valid(p,c){return p.revision===c.revision&&p.source===c.source&&p.date===c.date&&p.raceId===c.raceId&&!c.signal?.aborted;}
     cancel(p){p.controller?.abort();clearTimeout(p.timer);p.timer=null;p.revision++;p.controller=new AbortController();p.busy=false;p.historyBusy=false;}
-    clearRace(p){this.cancel(p);p.raceId='';p.race=null;p.history=[];p.horses=[];p.odds=[];p.diagnostics={};p.transport=p.transport||{list:'',card:'',odds:'',timeline:''};p.transport.card='';p.transport.odds='';p.transport.timeline='';p.selectedBet='';p.workerCursor=0;p.lastWorkerPoll=0;p.historyWarning='';p.cardWarning='';p.storageWarning='';p.follow=true;p.viewEnd=0;}
+    clearRace(p){this.cancel(p);p.raceId='';p.race=null;p.history=[];p.horses=[];p.odds=[];p.diagnostics={};p.transport=p.transport||{list:'',card:'',odds:'',timeline:''};p.transport.card='';p.transport.odds='';p.transport.timeline='';p.selectedBet='';p.workerCursor=0;p.lastWorkerPoll=0;p.lastHistoryAttempt=0;p.repairStatus='';p.historyWarning='';p.cardWarning='';p.storageWarning='';p.follow=true;p.viewEnd=0;}
     async configure(id,{source,date}={}){
       const p=this.panes[id];if(!p)return;if(source&&!VENUES[source])return;
       p.listController?.abort();p.listRevision++;this.clearRace(p);
@@ -25223,26 +25302,69 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     }
     merge(p,rows){
       const all=new Map(p.history.map(r=>[r.id,r]));
-      for(const raw of rows){const r=normalizeRecord(raw,p.source,p.raceId,p.date);if(r)all.set(r.id,r);}
+      for(const raw of rows){const r=normalizeRecord(raw,p.source,p.raceId,p.date);if(r){
+        const previous=all.get(r.id);
+        if(previous){
+          r.markets={...previous.markets,...r.markets};r.market_status={...previous.market_status,...r.market_status};
+          if(!r.horses.length)r.horses=previous.horses||[];
+          r.merge_origins=[...new Set([...(previous.merge_origins||[]),previous.collector_origin,r.collector_origin].filter(Boolean))];
+        }
+        all.set(r.id,r);
+      }}
       p.history=[...all.values()].sort((a,b)=>a.captured_ms-b.captured_ms).slice(-5000);
       if(!p.horses.length){const rec=[...p.history].reverse().find(r=>r.horses?.length);if(rec)p.horses=clone(rec.horses);}
     }
+    historyGaps5216(p,start=-Infinity,end=Infinity){
+      const previous=new Map(),gaps=[],markets=p.ticket===ALL_TICKETS?MARKETS:[p.ticket];
+      for(const rec of p.history){
+        if(rec.captured_ms>end)break;
+        for(const market of markets){
+          if(!rec.markets?.[market]?.length)continue;
+          const before=previous.get(market);
+          if(before!=null&&rec.captured_ms-before>RANK_MAX_AGE&&rec.captured_ms>=start)gaps.push({market,from:before,to:rec.captured_ms});
+          previous.set(market,rec.captured_ms);
+        }
+      }
+      return gaps;
+    }
+    repairSince5216(p,force=false){
+      if(force||!p.workerCursor)return 0;
+      // Re-read overlap because a late Worker record may predate the browser cursor.
+      const end=p.history.at(-1)?.captured_ms||Date.now(),floor=Math.max(0,end-1800000);
+      const gaps=this.historyGaps5216({...p,ticket:ALL_TICKETS},floor,end);
+      const first=gaps.length?Math.min(...gaps.map(g=>Math.max(floor,g.from))):end;
+      return Math.max(0,Math.min(p.workerCursor-15000,first-5000));
+    }
+    renderGaps5216(p,s){
+      const box=p.root.querySelector('.msv2-gap-status');if(!box)return;
+      const gaps=this.historyGaps5216(p,s.end-p.windowMs,s.end);
+      const intervals=new Set(gaps.map(g=>g.from+'|'+g.to));
+      const count=intervals.size;
+      box.textContent=(count?`欠測区間 ${count}（30秒超）。`:'表示期間に30秒超の記録の切れ目なし。')+
+        (p.autoRepair?'JSON自動補完 ON（15秒ごと／直近30分）':'JSON自動補完 OFF')+(p.repairStatus?' ／ '+p.repairStatus:'')+
+        (count?'。保存記録を取得できた部分から復元します。':'');
+      box.dataset.gaps=count?'yes':'no';
+    }
+
     async loadHistory(id,force=false){
-      const p=this.panes[id];if(!p?.raceId||p.historyBusy)return;p.historyBusy=true;const c=this.context(p),race=clone(p.race);
+      const p=this.panes[id];if(!p?.raceId||p.historyBusy)return;p.historyBusy=true;p.lastHistoryAttempt=Date.now();p.repairStatus='保存JSONを確認中…';const c=this.context(p),race=clone(p.race);
       try{
         const saved=await Promise.allSettled([this.store.read(c.source,c.raceId,c.date),this.legacyRead(c.raceId)]);
         if(!this.valid(p,c))return;
         saved.forEach(r=>{if(r.status==='fulfilled')this.merge(p,r.value);});
         if(saved[0].status==='rejected')p.storageWarning='端末への履歴保存が利用できません：'+saved[0].reason.message;
         this.render(p);
-        const got=await this.providers[c.source].getTimeline(race,{signal:c.signal,since:force?0:p.workerCursor});if(!this.valid(p,c))return;
+        const got=await this.providers[c.source].getTimeline(race,{signal:c.signal,since:this.repairSince5216(p,force)});if(!this.valid(p,c))return;
         p.transport.timeline=String(got.transport||(got.disabled?'端末履歴':'Timeline Worker'));
         const safe=(got.rows||[]).map(r=>normalizeRecord(r,c.source,c.raceId,c.date)).filter(Boolean);
         if(safe.length!==(got.rows||[]).length)throw new Error('別レースの履歴が含まれるため受理しません');
+        const known=new Set(p.history.map(r=>r.id)),added=safe.filter(r=>!known.has(r.id)).length;
         this.merge(p,safe);p.lastWorkerPoll=Date.now();p.historyWarning='';
-        if(safe.length){p.workerCursor=Math.max(p.workerCursor,...safe.map(r=>r.captured_ms+1));try{await this.store.write(c.source,c.raceId,c.date,safe);}catch(e){if(this.valid(p,c))p.storageWarning='履歴を保存できません：'+e.message;}}
+        p.repairStatus=got.disabled?'端末履歴のみ（Worker同期設定を確認）':`${clock(Date.now())} JSON確認・追加${added}時刻`;
+        const mergedById=new Map(p.history.map(r=>[r.id,r]));
+        if(safe.length){p.workerCursor=Math.max(p.workerCursor,...safe.map(r=>r.captured_ms+1));try{await this.store.write(c.source,c.raceId,c.date,safe.map(r=>mergedById.get(r.id)||r));}catch(e){if(this.valid(p,c))p.storageWarning='履歴を保存できません：'+e.message;}}
         if(this.valid(p,c)&&!p.busy){p.status=`保存履歴 ${p.history.length}点${got.disabled?'（端末内）':'（Worker同期済み）'}`;p.tone='';}
-      }catch(e){if(this.valid(p,c))p.historyWarning='履歴の読込：'+e.message;}
+      }catch(e){if(this.valid(p,c)){p.historyWarning='履歴の読込：'+e.message;p.repairStatus='JSON補完を再試行します';}}
       finally{if(this.valid(p,c)){p.historyBusy=false;this.render(p);}}
     }
     stopped(p){return p.race?.postMs>0&&Date.now()>=p.race.postMs+600000 || p.date<today();}
@@ -25251,7 +25373,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       if(this.stopped(p)){p.status='収集終了：過去日または発走10分後。保存済み履歴を表示します';p.tone='';this.render(p);return;}
       p.busy=true;const started=Date.now(),c=this.context(p),race=clone(p.race);p.status=c.source+' '+c.raceId+' のオッズを取得中…';p.tone='';this.render(p);
       try{
-        const got=await this.providers[c.source].getOdds(race,{signal:c.signal,horses:clone(p.horses),ticket:p.ticket,onProgress:(done,diagnostics)=>{
+        const got=await this.providers[c.source].getOdds(race,{signal:c.signal,horses:clone(p.horses),ticket:p.ticket===ALL_TICKETS?'単勝':p.ticket,onProgress:(done,diagnostics)=>{
           if(!this.valid(p,c))return;p.diagnostics=clone(diagnostics);p.status=`${c.source} オッズ取得中 ${done}/8券種`;this.renderStatus(p);
         }});
         if(!this.valid(p,c))return;
@@ -25269,16 +25391,24 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
         if(!rec)throw new Error('有効なオッズなし（未発売・売止・取得失敗等）。券種別の取得状況を確認してください');
         this.merge(p,[rec]);
         const count=Object.keys(rec.markets).length;p.status=`${clock(rec.captured_ms)} 受信・記録 ${count}/8券種 ／ ${p.history.length}点`;p.tone=count<8?'warn':'ok';
-        try{await this.store.write(c.source,c.raceId,c.date,[rec]);if(this.valid(p,c))p.storageWarning='';}catch(e){if(this.valid(p,c))p.storageWarning='端末に保存できません：'+e.message;}
+        try{await this.store.write(c.source,c.raceId,c.date,[p.history.find(r=>r.id===rec.id)||rec]);if(this.valid(p,c))p.storageWarning='';}catch(e){if(this.valid(p,c))p.storageWarning='端末に保存できません：'+e.message;}
       }catch(e){if(this.valid(p,c)){p.transport.odds=p.history.length?'保存履歴':'取得失敗';p.status='取得失敗：'+e.message+(p.history.length?' ／ 保存済み履歴を継続表示':'');p.tone='error';}}
       finally{if(this.valid(p,c)){p.busy=false;this.render(p);this.schedule(p,Math.max(0,5000-(Date.now()-started)));}}
     }
     schedule(p,delay=5000){
-      clearTimeout(p.timer);p.timer=null;if(!this.opened||!p.visible||!p.auto||!p.raceId||this.stopped(p)||document.hidden)return;
-      const revision=p.revision;p.timer=setTimeout(async()=>{p.timer=null;if(p.revision!==revision)return;
-        if(Date.now()-p.lastWorkerPoll>15000)this.loadHistory(p.id);
-        await this.loadOdds(p.id);
-      },Math.max(250,delay));
+      clearTimeout(p.timer);p.timer=null;
+      if(!this.opened||!p.visible||!p.raceId||document.hidden)return;
+      const collect=p.auto&&!this.stopped(p),repair=p.autoRepair&&p.date===today();
+      if(!collect&&!repair)return;
+      const revision=p.revision;
+      p.timer=setTimeout(async()=>{
+        p.timer=null;if(p.revision!==revision)return;const tickStart=Date.now();
+        const jobs=[];
+        if(repair&&Date.now()-p.lastHistoryAttempt>=15000)jobs.push(this.loadHistory(p.id));
+        if(collect)jobs.push(this.loadOdds(p.id));
+        await Promise.allSettled(jobs);
+        if(p.revision===revision)this.schedule(p,collect?Math.max(250,5000-(Date.now()-tickStart)):15000);
+      },Math.max(250,collect?delay:Math.min(delay,15000)));
     }
     renderSelectors(p){
       const venue=p.root.querySelector('.venueSelect'),race=p.root.querySelector('.raceSelect');
@@ -25286,8 +25416,64 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       venue.innerHTML='<option value="">開催場を選択</option>'+venues.map(v=>`<option value="${esc(v)}">${esc(VENUES[p.source][v])}</option>`).join('')||'<option value="">開催未取得</option>';venue.value=p.venue;
       race.innerHTML=p.races.filter(r=>r.venue===p.venue).map(r=>{const nm=clean(r.name);const showName=nm&&!new RegExp('^'+r.raceNo+'R$','i').test(nm)?nm:'';return `<option value="${esc(r.raceId)}">${r.raceNo}R${r.startTime?' '+esc(r.startTime):''}${showName?' '+esc(showName):''}</option>`;}).join('')||'<option value="">レース未選択</option>';race.value=p.raceId;
     }
-    latestRows(p){for(let i=p.history.length-1;i>=0;i--){const rows=p.history[i].markets[p.ticket];if(rows?.length)return {rows,record:p.history[i]};}return {rows:[],record:null};}
-    label(p,row){const h=p.horses.find(h=>String(h.num)===row.combination);return row.combination+((p.ticket==='単勝'||p.ticket==='複勝')&&h?.name?' '+h.name:'');}
+    rankSelection5216(p){
+      const end=this.endTime(p),size=RANK_SIZES.includes(p.topN)?p.topN:10;
+      const signature=[p.ticket,p.metric,size,end,p.selectedBet].join('/'),cached=p.rankCache5216;
+      if(cached&&cached.history===p.history&&cached.horses===p.horses&&cached.signature===signature)return cached.value;
+      const requested=p.ticket===ALL_TICKETS?MARKETS:[p.ticket],found=new Map();
+      for(let i=p.history.length-1;i>=0&&found.size<requested.length;i--){
+        const rec=p.history[i];if(rec.captured_ms>end)continue;
+        for(const market of requested)if(!found.has(market)&&rec.markets?.[market]?.length)found.set(market,rec);
+      }
+      const candidates=[],missing=[],stale=[],usable=[];let invalid=0;
+      for(const market of requested){
+        const rec=found.get(market);if(!rec){missing.push(market);continue;}
+        if(end-rec.captured_ms>RANK_MAX_AGE){stale.push(market);continue;}
+        usable.push(market);const seen=new Set();
+        for(const row of rec.markets[market]){
+          const key=betKey5216(market,row.combination);if(seen.has(key))continue;seen.add(key);
+          const metrics=paneMetrics5216(p,rec,market,row),value=metrics[p.metric];
+          if(!Number.isFinite(value)){invalid++;continue;}
+          candidates.push({key,market,row,record:rec,metrics,value});
+        }
+      }
+      const direction=p.metric==='odds'?1:-1;
+      candidates.sort((a,b)=>direction*(a.value-b.value)||MARKETS.indexOf(a.market)-MARKETS.indexOf(b.market)||a.row.combination.localeCompare(b.row.combination,'ja',{numeric:true}));
+      candidates.forEach((r,i)=>r.rank=i+1);
+      // Migrate a saved single-market selection without conflating different markets.
+      if(p.selectedBet&&!p.selectedBet.includes('|'))p.selectedBet=betKey5216(p.ticket,p.selectedBet);
+      const selected=candidates.find(r=>r.key===p.selectedBet);
+      if(p.selectedBet&&!selected)p.selectedBet='';
+      const ranked=candidates.slice(0,size),shown=selected?[selected]:ranked;
+      const value={end,size,candidates,ranked,shown,missing,stale,invalid,usable};
+      p.rankCache5216={history:p.history,horses:p.horses,signature:[p.ticket,p.metric,size,end,p.selectedBet].join('/'),value};
+      return value;
+    }
+    label(p,row,market=p.ticket){
+      const h=p.horses.find(h=>String(h.num)===row.combination);
+      return row.combination+((market==='単勝'||market==='複勝')&&h?.name?' '+h.name:'');
+    }
+    rankPreset5216(p,metric){
+      p.ticket=ALL_TICKETS;p.metric=metric;p.topN=10;p.selectedBet='';p.log=false;
+      p.root.querySelector('.ticketSelect').value=p.ticket;p.root.querySelector('.metricSelect').value=p.metric;
+      p.root.querySelector('.rankSizeSelect').value='10';p.root.querySelector('.logCheck').checked=false;p.root.querySelector('.logCheck').disabled=true;
+      this.markManual();this.render(p);this.save();
+    }
+    renderRanking5216(p,s){
+      const $=selector=>p.root.querySelector(selector),bets=$('.betSelect');
+      const options=`<option value="">上位${s.size}点をまとめて表示</option>`+s.candidates.map(r=>`<option value="${esc(r.key)}">${r.rank}. ${esc(r.market)} ${esc(this.label(p,r.row,r.market))}</option>`).join('');
+      if(bets.innerHTML!==options)bets.innerHTML=options;bets.value=p.selectedBet;
+      const color=r=>COLORS[(r.rank-1)%COLORS.length];
+      $('.msv2-legend').innerHTML=s.shown.map(r=>`<div><span style="color:${color(r)}">●</span><b>${r.rank}. ${esc(r.market)} ${esc(this.label(p,r.row,r.market))}</b><span>${esc(paneMetricFmt520(r.value,p.metric))}</span></div>`).join('');
+      const order=p.metric==='odds'?'低い順':'高い順';
+      $('.msv2-rank-summary').textContent=`${ticketLabel5216(p.ticket)}・${paneMetricLabel520(p.metric)} ${order}・上位${s.size}点（対象${s.candidates.length}点／取得${s.usable.length}/${p.ticket===ALL_TICKETS?8:1}券種）`;
+      const notes=[];if(s.missing.length)notes.push('未取得: '+s.missing.join('・'));if(s.stale.length)notes.push('時刻差30秒超で除外: '+s.stale.join('・'));if(s.invalid)notes.push('指標を計算できない '+s.invalid+'点を除外');
+      $('.msv2-rank-status').textContent=(s.end?'比較基準 '+clock(s.end)+'（日本時間）。':'')+'基準以前30秒以内の受信値を比較。'+notes.join(' ／ ');
+      $('.msv2-foot').textContent=`${p.history.length}記録 ／ ${ticketLabel5216(p.ticket)} ／ ${p.follow?'最新時点':'表示右端の時点'}の上位買い目を追跡 ／ 日本時間`;
+      const cols=[['odds','オッズ'],['marketP','市場確率'],['modelP','想定確率'],['ev','EV'],['edgePct','乖離率'],['edge','確率差'],['kelly','Kelly']];
+      $('.msv2-rank-table').innerHTML=`<thead><tr><th>順位</th><th>券種・買い目</th>${cols.map(([m,label])=>`<th class="${m===p.metric?'rank-focus':''}">${label}</th>`).join('')}<th>受信</th></tr></thead><tbody>`+(s.ranked.length?s.ranked.map(r=>`<tr class="${p.selectedBet===r.key?'is-selected':''}"><td><span style="color:${color(r)}">●</span> ${r.rank}</td><td><button type="button" data-rank-key="${esc(r.key)}" aria-pressed="${p.selectedBet===r.key}"><small>${esc(r.market)}</small>${esc(this.label(p,r.row,r.market))}</button></td>${cols.map(([m])=>`<td class="${m===p.metric?'rank-focus':''}">${esc(paneMetricFmt520(r.metrics[m],m))}</td>`).join('')}<td>${clock(r.record.captured_ms)}</td></tr>`).join(''):`<tr><td colspan="10">${p.raceId?'比較できるデータがありません。券種別の取得状況を確認してください。':'開催場とレースを選択してください。'}</td></tr>`)+`</tbody>`;
+      $('.rankClear').hidden=!p.selectedBet;
+    }
     renderStatus(p){
       const s=p.root.querySelector('.msv2-status');s.textContent=p.status;s.dataset.tone=p.tone;
       p.transport=p.transport||{list:'',card:'',odds:'',timeline:''};
@@ -25310,40 +25496,57 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       const timeEl=$('.msv2-starttime'),startTime=p.race?.startTime||'';
       if(timeEl){timeEl.textContent=startTime?`🕒 ${startTime}発走`:'🕒 発走 --:--';timeEl.className='msv2-starttime '+(startTime?'':'unknown');}
       $('.msv2-identity').textContent=p.race?`${p.source} ｜ ${p.date} ｜ ${VENUES[p.source][p.venue]} ${p.race.raceNo}R ｜ 発走時刻 ${startTime||'--:--'} ｜ ${p.raceId}`:p.source+' ｜ '+p.date+' ｜ レース未選択 ｜ 発走時刻 --:--';
-      const latest=this.latestRows(p);p.odds=clone(latest.rows);
-      const bets=$('.betSelect');bets.innerHTML='<option value="">全買い目（上位12点）</option>'+latest.rows.map(r=>`<option value="${esc(r.combination)}">${esc(this.label(p,r))}</option>`).join('');
-      if(p.selectedBet&&!latest.rows.some(r=>r.combination===p.selectedBet))p.selectedBet='';bets.value=p.selectedBet;
-      const list=p.selectedBet?latest.rows.filter(r=>r.combination===p.selectedBet):latest.rows.slice(0,12);
-      $('.msv2-legend').innerHTML=list.map((r,i)=>{const v=latest.record?paneMetricValue520(p,latest.record,p.ticket,r.combination,r):NaN;return `<div><span style="color:${COLORS[i%COLORS.length]}">●</span><b>${esc(this.label(p,r))}</b><span>${esc(paneMetricFmt520(v,p.metric))}</span></div>`;}).join('');
-      $('.msv2-foot').textContent=`${p.history.length}記録 ／ ${p.ticket} ${latest.rows.length}点${latest.record?' ／ この券種の受信 '+clock(latest.record.captured_ms):''} ／ 日本時間`;
       this.renderStatus(p);this.draw(p);
     }
     endTime(p){return p.follow?(p.history.at(-1)?.captured_ms||Date.now()):(p.viewEnd||Date.now());}
     pan(p,ms){p.viewEnd=this.endTime(p)+ms;p.follow=false;this.draw(p);}
     draw(p){
       const canvas=p.root.querySelector('canvas'),empty=p.root.querySelector('.msv2-chart-empty');
-      const latest=this.latestRows(p),rows=p.selectedBet?latest.rows.filter(r=>r.combination===p.selectedBet):latest.rows.slice(0,12);
-      empty.textContent=p.raceId?'このレース・券種の保存データはありません':'開催場とレースを選択してください';empty.hidden=rows.length>0;
+      const s=this.rankSelection5216(p),rows=s.shown;this.renderRanking5216(p,s);this.renderGaps5216(p,s);
+      empty.textContent=p.raceId?'この指標を比較できる保存データがありません':'開催場とレースを選択してください';empty.hidden=rows.length>0;
       const ctx=canvas.getContext('2d');if(!ctx)return;
       const w=Math.max(240,canvas.clientWidth||480),h=250,dpr=Math.min(2,window.devicePixelRatio||1);
       canvas.width=w*dpr;canvas.height=h*dpr;ctx.scale(dpr,dpr);ctx.clearRect(0,0,w,h);
-      const left=48,right=w-14,top=25,bottom=h-34,end=this.endTime(p),start=end-p.windowMs;
+      const left=72,right=w-14,top=25,bottom=h-34,end=s.end,start=end-p.windowMs;
       const trans=v=>(p.log&&p.metric==='odds')?Math.log10(v):v;
-      const points=rows.map(row=>p.history.flatMap(rec=>{if(rec.captured_ms<start||rec.captured_ms>end)return [];const r=rec.markets[p.ticket]?.find(x=>x.combination===row.combination);if(!r)return [];const v=paneMetricValue520(p,rec,p.ticket,row.combination,r);return Number.isFinite(v)?[{t:rec.captured_ms,v}]:[];}));
-      const vals=points.flat().map(x=>trans(x.v)).filter(Number.isFinite);let low,high;
-      if(!vals.length){low=0;high=1;}else if(p.log&&p.metric==='odds'){low=Math.floor(Math.min(...vals));high=Math.max(...vals);}else{low=Math.min(0,...vals);high=Math.max(...vals);const pad=Math.max(.05,(high-low)*.1);if(p.metric==='edge')low-=pad*.35;high+=pad;}
+      const records=p.history.filter(rec=>rec.captured_ms>=start&&rec.captured_ms<=end);
+      const points=rows.map(row=>records.flatMap(rec=>{
+        const r=paneRow5216(rec,row.market,row.row.combination);if(!r)return [];
+        const v=paneMetricValue520(p,rec,row.market,row.row.combination,r);
+        return Number.isFinite(v)?[{t:rec.captured_ms,v}]:[];
+      }));
+      let low=Infinity,high=-Infinity;
+      for(const line of points)for(const pt of line){const v=trans(pt.v);if(Number.isFinite(v)){low=Math.min(low,v);high=Math.max(high,v);}}
+      if(low===Infinity){low=0;high=1;}else if(p.log&&p.metric==='odds'){low=Math.floor(low);high=Math.max(high,low+.1);}else{
+        low=Math.min(0,low);high=Math.max(0,high);if(p.metric==='ev')high=Math.max(1,high);
+        const pad=Math.max(.05,(high-low)*.1);if(p.metric==='edge'||p.metric==='edgePct')low-=pad*.35;high+=pad;
+      }
       if(high===low)high=low+1;
       ctx.font='11px sans-serif';ctx.strokeStyle='#263549';ctx.fillStyle='#91a4ba';ctx.lineWidth=1;
-      for(let i=0;i<=4;i++){const y=top+(bottom-top)*i/4;ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(right,y);ctx.stroke();const tv=high-(high-low)*i/4;const v=(p.log&&p.metric==='odds')?10**tv:tv;ctx.fillText(paneMetricFmt520(v,p.metric,true),2,y+4);}
-      for(let i=0;i<=4;i++){const x=left+(right-left)*i/4;ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,bottom);ctx.stroke();const t=clock(start+p.windowMs*i/4).slice(0,5);ctx.fillText(t,Math.min(w-36,Math.max(0,x-15)),h-12);}
-      ctx.fillStyle='#d1e0ed';ctx.fillText(p.ticket+' '+paneMetricLabel520(p.metric)+(p.follow?' · 最新へ追従':''),left,14);
-      points.forEach((line,i)=>{ctx.strokeStyle=COLORS[i%COLORS.length];ctx.fillStyle=ctx.strokeStyle;ctx.lineWidth=1.7;ctx.beginPath();let previous=null;
+      for(let i=0;i<=4;i++){
+        const y=top+(bottom-top)*i/4;ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(right,y);ctx.stroke();
+        const tv=high-(high-low)*i/4,v=(p.log&&p.metric==='odds')?10**tv:tv;ctx.fillText(paneMetricFmt520(v,p.metric,true),2,y+4);
+      }
+      for(let i=0;i<=4;i++){
+        const x=left+(right-left)*i/4;ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,bottom);ctx.stroke();
+        ctx.fillText(clock(start+p.windowMs*i/4).slice(0,5),Math.min(w-36,Math.max(0,x-15)),h-12);
+      }
+      if(p.metric==='ev'||p.metric==='edge'||p.metric==='edgePct'){
+        const baseline=p.metric==='ev'?1:0,y=bottom-(baseline-low)/(high-low)*(bottom-top);
+        ctx.save();ctx.setLineDash([5,4]);ctx.strokeStyle='#cbd5e1';ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(right,y);ctx.stroke();ctx.restore();
+      }
+      ctx.fillStyle='#d1e0ed';ctx.fillText(ticketLabel5216(p.ticket)+' '+paneMetricLabel520(p.metric)+(p.follow?' · 最新':' · 表示右端時点'),left,14);
+      points.forEach((line,i)=>{
+        ctx.strokeStyle=COLORS[(rows[i].rank-1)%COLORS.length];ctx.fillStyle=ctx.strokeStyle;ctx.lineWidth=1.7;ctx.beginPath();let previous=null;
         for(const pt of line){const x=left+(pt.t-start)/p.windowMs*(right-left),y=bottom-(trans(pt.v)-low)/(high-low)*(bottom-top);
-          if(!previous||pt.t-previous.t>30000)ctx.moveTo(x,y);else ctx.lineTo(x,y);previous=pt;}
+          if(!previous||pt.t-previous.t>30000)ctx.moveTo(x,y);else ctx.lineTo(x,y);previous=pt;
+        }
         ctx.stroke();for(const pt of line){const x=left+(pt.t-start)/p.windowMs*(right-left),y=bottom-(trans(pt.v)-low)/(high-low)*(bottom-top);ctx.beginPath();ctx.arc(x,y,1.8,0,Math.PI*2);ctx.fill();}
       });
-      if(rows.length&&!points.some(a=>a.length)){empty.hidden=false;empty.textContent='この表示期間に記録がありません。「最新へ」で戻れます。';}
+      canvas.setAttribute('aria-label',`${ticketLabel5216(p.ticket)} ${paneMetricLabel520(p.metric)} 上位${s.size}点の時系列グラフ`);
+      if(rows.length&&!points.some(a=>a.length)){empty.hidden=false;empty.textContent='この表示期間に計算できる記録がありません。「最新へ」で戻れます。';}
     }
+
     stepRace(id,delta){const p=this.panes[id],rows=p.races.filter(r=>r.venue===p.venue),idx=rows.findIndex(r=>r.raceId===p.raceId);const next=rows[idx+delta];if(next)return this.selectRace(id,next.raceId);}
     async syncRaceNo(from=this.active){
       const src=this.panes[from],no=src?.race?.raceNo;if(!no)return;const jobs=[];
@@ -25516,7 +25719,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       container.innerHTML=profile.slots.slice(0,profile.count).map((s,i)=>`<div class="msv2-plan-slot" data-slot="${i}"><strong>画面 ${String.fromCharCode(65+i)}</strong><div class="msv2-plan-slot-fields">
         <label class="plan-field">区分<select class="slot-source"><option${s.source==='JRA'?' selected':''}>JRA</option><option${s.source==='NAR'?' selected':''}>NAR</option></select></label>
         <label class="plan-field">開催場<select class="slot-venue"><option value="">開催場を自動割当</option>${Object.entries(VENUES[s.source]).map(([id,name])=>`<option value="${id}"${s.venue===id?' selected':''}>${name}</option>`).join('')}</select></label>
-        <label class="plan-field">券種<select class="slot-ticket">${MARKETS.map(t=>`<option${s.ticket===t?' selected':''}>${t}</option>`).join('')}</select></label><label><input class="slot-auto" type="checkbox"${s.auto?' checked':''}>5秒ごと</label></div></div>`).join('');
+        <label class="plan-field">券種<select class="slot-ticket">${TICKET_CHOICES.map(t=>`<option value="${t}"${s.ticket===t?' selected':''}>${ticketLabel5216(t)}</option>`).join('')}</select></label><label><input class="slot-auto" type="checkbox"${s.auto?' checked':''}>5秒ごと</label></div></div>`).join('');
       container.querySelectorAll('[data-slot]').forEach(el=>{
         const i=Number(el.dataset.slot),slot=profile.slots[i];
         el.querySelector('.slot-source').onchange=e=>{slot.source=e.target.value;slot.venue='';this.renderPlanSlots();};
@@ -25547,13 +25750,13 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       if(entered===null){p.status='保存をキャンセルしました';p.tone='';this.renderStatus(p);return;}
       let base=safePart(entered.replace(/\.(json|csv)$/i,''))||defaultBase;
       const filename=base+'.'+ext;
-      const analysis=[];for(const rec of p.history)for(const [ticket,rows] of Object.entries(rec.markets||{}))for(const row of rows||[]){const vals={};for(const m of ['marketP','modelP','ev','kelly','edge'])vals[m]=paneMetricValue520({...p,metric:m},rec,ticket,row.combination,row);analysis.push({captured_at:rec.captured_at,ticket,combination:row.combination,odds:Number(row.odds),market_probability_pct:vals.marketP,model_probability_pct:vals.modelP,ev:vals.ev,kelly_pct:vals.kelly,edge_pp:vals.edge});}const pack={schema:'thekeiba-multiscreen-v2',exported_at:new Date().toISOString(),pane_id:p.id,pane:paneName,source:p.source,date:p.date,venue:p.venue,venue_name:venueName,race_id:p.raceId,race_no:raceNo||null,metric_definitions:{odds:'現在オッズ',market_probability_pct:'1/オッズ',model_probability_pct:'想定確率',ev:'想定確率×オッズ',kelly_pct:'Kelly基準（負値は0）',edge_pp:'想定確率-市場確率'},analysis,history:p.history};
+      const analysis=[];for(const rec of p.history)for(const [ticket,rows] of Object.entries(rec.markets||{}))for(const row of rows||[]){const vals=paneMetrics5216(p,rec,ticket,row);analysis.push({captured_at:rec.captured_at,ticket,combination:row.combination,odds:vals.odds,market_probability_pct:vals.marketP,model_probability_pct:vals.modelP,ev:vals.ev,kelly_pct:vals.kelly,edge_pp:vals.edge,edge_pct:vals.edgePct});}const pack={schema:'thekeiba-multiscreen-v2',exported_at:new Date().toISOString(),pane_id:p.id,pane:paneName,source:p.source,date:p.date,venue:p.venue,venue_name:venueName,race_id:p.raceId,race_no:raceNo||null,metric_definitions:{odds:'現在オッズ',market_probability_pct:'1/オッズ',model_probability_pct:'想定確率',ev:'想定確率×オッズ',kelly_pct:'Kelly基準（負値は0）',edge_pp:'(想定確率-1/オッズ)×100 pt',edge_pct:'(EV-1)×100 %'},gap_policy:{repair_source:'Worker JSON history',auto_repair:p.autoRepair,lookback_ms:1800000,gap_threshold_ms:RANK_MAX_AGE,interpolation:false},ranking_view:{ticket:p.ticket,metric:p.metric,top_n:p.topN,reference_ms:this.endTime(p),order:p.metric==='odds'?'ascending':'descending'},analysis,history:p.history};
       let body,mime;
       if(type==='json'){body=JSON.stringify(pack,null,2);mime='application/json';}
       else{
         const cell=x=>'"'+String(x??'').replace(/"/g,'""')+'"';
-        const lines=[['source','date','venue','venue_name','race_id','race_no','pane','captured_at','ticket','combination','odds','odds_min','odds_max','market_probability_pct','model_probability_pct','ev','kelly_pct','edge_pp']];
-        for(const r of p.history)for(const [ticket,rows] of Object.entries(r.markets||{}))for(const row of rows||[]){const vals={};for(const m of ['marketP','modelP','ev','kelly','edge'])vals[m]=paneMetricValue520({...p,metric:m},r,ticket,row.combination,row);lines.push([p.source,p.date,p.venue,venueName,p.raceId,raceNo||'',paneName,r.captured_at,ticket,row.combination,row.odds,row.odds_min??row.odds,row.odds_max??row.odds,vals.marketP,vals.modelP,vals.ev,vals.kelly,vals.edge]);}
+        const lines=[['source','date','venue','venue_name','race_id','race_no','pane','captured_at','ticket','combination','odds','odds_min','odds_max','market_probability_pct','model_probability_pct','ev','kelly_pct','edge_pp','edge_pct']];
+        for(const r of p.history)for(const [ticket,rows] of Object.entries(r.markets||{}))for(const row of rows||[]){const vals=paneMetrics5216(p,r,ticket,row);lines.push([p.source,p.date,p.venue,venueName,p.raceId,raceNo||'',paneName,r.captured_at,ticket,row.combination,vals.odds,row.odds_min??row.odds,row.odds_max??row.odds,vals.marketP,vals.modelP,vals.ev,vals.kelly,vals.edge,vals.edgePct]);}
         body='\ufeff'+lines.map(r=>r.map(cell).join(',')).join('\r\n');mime='text/csv;charset=utf-8';
       }
       const blob=new Blob([body],{type:mime});
@@ -25604,7 +25807,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     const anchor=document.getElementById('rightAnalysisBtn');if(!document.getElementById('multiScreenBtn258')){const b=document.createElement('button');b.id='multiScreenBtn258';b.type='button';b.className='btn-sm right-analysis-toggle';b.textContent='JRA｜NAR 1〜6画面・曜日設定';b.onclick=()=>workspace.open();if(anchor)anchor.before(b);else document.body.prepend(b);}
     const mark=()=>{document.title='The競馬 EV分析 '+VERSION;const v=document.querySelector('.ver');if(v)v.textContent=VERSION;window.APP_VERSION=VERSION;};mark();[1000,4000,10000].forEach(ms=>setTimeout(mark,ms));
   }
-  document.addEventListener('visibilitychange',()=>{if(workspace.opened){workspace.checkPlanDay();workspace.panes.filter(p=>p.visible).forEach(p=>workspace.schedule(p));}});
+  document.addEventListener('visibilitychange',()=>{if(workspace.opened){workspace.checkPlanDay();workspace.panes.filter(p=>p.visible).forEach(p=>{if(!document.hidden&&p.autoRepair)workspace.loadHistory(p.id);workspace.schedule(p,250);});}});
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
 })();
 
@@ -27231,11 +27434,13 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
 <script id="worker-hybrid-v5215-version-lock">
 (function(){
   'use strict';
-  const V='v5.21.5 All-Screen Worker Hybrid';
+  const V='v5.21.6 Cross-Market Top10';
   function mark(){
     try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;const el=document.querySelector('.ver');if(el)el.textContent=V+(window.__NAR_BRIDGE_READY__?' 🌉':'')+' ☁️';}catch(e){}
   }
   mark();[300,1200,5000,12000,30000,60000].forEach(ms=>setTimeout(mark,ms));
+  const versionLabel=document.querySelector('.ver');
+  if(versionLabel)new MutationObserver(()=>{if(!versionLabel.textContent.startsWith(V))mark();}).observe(versionLabel,{childList:true,characterData:true,subtree:true});
 })();
 </script>
 </body>

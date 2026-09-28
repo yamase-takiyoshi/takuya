@@ -40,7 +40,7 @@
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.21.4 Archive JSON + Graph Analysis</title>
+<title>The競馬 EV分析 v5.21.9 Full Payout + Wide3</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -396,7 +396,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.21.4 Archive JSON + Graph Analysis</span>
+    <span class="ver">v5.21.9 Full Payout + Wide3</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -3548,27 +3548,34 @@ function parsePayoutsFromResultDoc(doc){
         if(t) currentType = t;
       }
       if(!currentType) return;
-      const amountCell = tr.querySelector('.refundMoney, [class*="refundMoney"], [class*="RefundMoney"]');
-      if(!amountCell) return;
-      const amountText = normSimDigits(amountCell.textContent || '').replace(/,/g, '');
-      const amount = Number((amountText.match(/(\d+)/) || [])[1] || 0);
-      if(!(amount > 0)) return;
+      // v5.21.9: 1行に複数の組番・払戻が入る表をすべて読む。
+      // 特にワイドは通常3組あるため querySelector(先頭1件) では欠落する。
+      const amountCells = [...tr.querySelectorAll('.refundMoney, [class*="refundMoney"], [class*="RefundMoney"]')];
+      if(!amountCells.length) return;
+      const amounts = amountCells.flatMap(cell =>
+        [...normSimDigits(cell.textContent || '').matchAll(/([0-9][0-9,]*)\s*円?/g)]
+          .map(m => Number(m[1].replace(/,/g,''))).filter(n => n > 0)
+      );
+      if(!amounts.length) return;
 
-      // 公式表は組番が td.a（単複・枠連・馬連）または td.d（馬単等）。
-      const comboCell = tr.querySelector('td.a, td.d, [class~="combination"], [class*="Combination"]');
-      const comboText = normSimDigits(comboCell?.textContent || '');
-      let nums = [];
+      // 公式表は組番が td.a / td.d。セル内改行で3組並ぶワイドにも対応。
+      const comboCells = [...tr.querySelectorAll('td.a, td.d, [class~="combination"], [class*="Combination"]')];
+      const comboText = normSimDigits(comboCells.map(c=>c.textContent||'').join(' '));
+      const combos = [];
       if(currentType === '単勝' || currentType === '複勝'){
-        const n = Number((comboText.match(/([1-9]|1[0-8])/) || [])[1] || 0);
-        if(n) nums = [n];
+        [...comboText.matchAll(/(?:^|[^0-9])([1-9]|1[0-8])(?=[^0-9]|$)/g)].forEach(m=>combos.push([Number(m[1])]));
       }else{
-        const m = comboText.match(/([1-9]|1[0-8])\s*-\s*([1-9]|1[0-8])(?:\s*-\s*([1-9]|1[0-8]))?/);
-        if(m){ nums = [Number(m[1]), Number(m[2])]; if(m[3]) nums.push(Number(m[3])); }
+        [...comboText.matchAll(/([1-9]|1[0-8])\s*(?:-|－|―|–|→|⇒)\s*([1-9]|1[0-8])(?:\s*(?:-|－|―|–|→|⇒)\s*([1-9]|1[0-8]))?/g)].forEach(m=>{
+          const nums=[Number(m[1]),Number(m[2])]; if(m[3]) nums.push(Number(m[3])); combos.push(nums);
+        });
       }
-      if(!nums.length) return;
-      const key = `${currentType}:${comboKey(currentType, nums)}`;
-      payouts[key] = amount;
-      officialKeys.add(key);
+      combos.forEach((nums,i)=>{
+        const amount = amounts[Math.min(i,amounts.length-1)];
+        if(!(amount>0)) return;
+        const key = `${currentType}:${comboKey(currentType, nums)}`;
+        payouts[key] = amount;
+        officialKeys.add(key);
+      });
     });
   });
   // 公式表が取れた場合は、本文フォールバックが人気数字等から作った余分なキーを除去する。

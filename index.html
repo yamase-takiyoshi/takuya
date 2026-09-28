@@ -40,7 +40,7 @@
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.21.9 Full Payout + Wide3</title>
+<title>The競馬 EV分析 v5.22.0 BOX精算 + 開催場/日次/累積収支</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -22294,7 +22294,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     return {
       schema:'thekeiba-live-forecast-v1', raceId:String(rec.race_id||''), kind:String(rec.kind||kind215(rec.race_id)),
       label:String(rec.race_label||rec.race_id||''), capturedMs:Number(rec.captured_ms||Date.now()), capturedAt:String(rec.captured_at||new Date().toISOString()),
-      marks:marks215(rec).map(x=>({mark:x.mark,num:x.num,name:x.name,winP:x.winP,odds:x.odds,pop:x.pop})),
+      marks:marks215(rec).map(x=>({mark:x.mark,num:x.num,name:x.name,frame:x.frame,winP:x.winP,odds:x.odds,pop:x.pop})),
       tickets:recommended215(rec).map(x=>({type:x.type,combo:x.combo,nums:x.nums,odds:x.odds,p:x.p,ev:x.ev,edge:x.edge,minEv:x.minEv})),
       marketCount:TYPES215.reduce((s,t)=>s+(rec?.markets?.[t]?.length||0),0)
     };
@@ -22302,6 +22302,170 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
 
   function readTrack215(){ try{ const a=JSON.parse(localStorage.getItem(TRACK_KEY215)||'[]'); return Array.isArray(a)?a:[]; }catch(e){return [];} }
   function writeTrack215(rows){ try{localStorage.setItem(TRACK_KEY215,JSON.stringify(rows.slice(-300)));}catch(e){} }
+
+  const BOX_PREF_KEY522='tk-box-settlement-pref-v1';
+  const BOX_TYPES522=['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
+
+  function boxPrefs522(){
+    try{
+      const j=JSON.parse(localStorage.getItem(BOX_PREF_KEY522)||'null');
+      if(j&&Array.isArray(j.types)) return {types:j.types.filter(x=>BOX_TYPES522.includes(x)),stake:100};
+    }catch(e){}
+    return {types:[...BOX_TYPES522],stake:100};
+  }
+  function saveBoxPrefs522(types){
+    const clean=[...new Set((types||[]).filter(x=>BOX_TYPES522.includes(x)))];
+    try{localStorage.setItem(BOX_PREF_KEY522,JSON.stringify({types:clean,stake:100}));}catch(e){}
+    return clean;
+  }
+  function comb522(a,k){
+    const out=[]; const walk=(start,p)=>{
+      if(p.length===k){out.push([...p]);return;}
+      for(let i=start;i<a.length;i++){p.push(a[i]);walk(i+1,p);p.pop();}
+    }; walk(0,[]); return out;
+  }
+  function perm522(a,k){
+    const out=[]; const walk=(p,left)=>{
+      if(p.length===k){out.push([...p]);return;}
+      left.forEach((v,i)=>walk(p.concat(v),left.slice(0,i).concat(left.slice(i+1))));
+    }; walk([],a); return out;
+  }
+  function boxTickets522(row){
+    const marks=(row?.marks||[]).slice(0,4);
+    const nums=[...new Set(marks.map(x=>Number(x.num)).filter(n=>n>0))];
+    const frames=[...new Set(marks.map(x=>Number(x.frame)).filter(n=>n>0&&n<=8))];
+    const selected=boxPrefs522().types;
+    const out=[];
+    const push=(type,arr)=>arr.forEach(ns=>out.push({type,nums:ns,combo:ns.join('-'),stake:100}));
+    if(selected.includes('単勝')) push('単勝',nums.map(n=>[n]));
+    if(selected.includes('複勝')) push('複勝',nums.map(n=>[n]));
+    if(selected.includes('枠連') && frames.length>=2) push('枠連',comb522(frames,2));
+    if(selected.includes('ワイド') && nums.length>=2) push('ワイド',comb522(nums,2));
+    if(selected.includes('馬連') && nums.length>=2) push('馬連',comb522(nums,2));
+    if(selected.includes('馬単') && nums.length>=2) push('馬単',perm522(nums,2));
+    if(selected.includes('3連複') && nums.length>=3) push('3連複',comb522(nums,3));
+    if(selected.includes('3連単') && nums.length>=3) push('3連単',perm522(nums,3));
+    return out;
+  }
+  function settleTicketSet522(tickets,finish,payouts){
+    const byType={}; let bet=0,ret=0,hits=0,missing=0;
+    (tickets||[]).forEach(t=>{
+      const type=String(t.type||''); const stake=Number(t.stake||100)||100;
+      if(!byType[type]) byType[type]={type,points:0,hits:0,bet:0,ret:0,profit:0,roi:0,items:[]};
+      const g=byType[type]; g.points++; g.bet+=stake; bet+=stake;
+      let hit=false; try{ if(typeof judgeTicketHit==='function') hit=!!judgeTicketHit({type,nums:t.nums,odds:t.odds},finish); }catch(e){}
+      let pay100=0;
+      if(hit){
+        hits++; g.hits++;
+        try{ if(typeof payoutForTicket==='function') pay100=Number(payoutForTicket({type,nums:t.nums,odds:t.odds},payouts)?.amount||0); }catch(e){}
+        if(pay100>0){ const got=pay100*(stake/100); ret+=got; g.ret+=got; }
+        else missing++;
+      }
+      g.items.push({combo:String(t.combo||((t.nums||[]).join('-'))),stake,hit,payout100:pay100,return:pay100*(stake/100)});
+    });
+    Object.values(byType).forEach(g=>{g.profit=g.ret-g.bet;g.roi=g.bet?g.ret/g.bet*100:0;});
+    return {points:(tickets||[]).length,hits,bet,ret,profit:ret-bet,roi:bet?ret/bet*100:0,payoutMissingHits:missing,byType};
+  }
+  function jstDate522(ms){
+    try{return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(ms));}
+    catch(e){return new Date(ms).toISOString().slice(0,10);}
+  }
+  function venue522(row){
+    const label=String(row?.label||'');
+    const venues=['札幌','函館','福島','新潟','東京','中山','中京','京都','阪神','小倉','門別','盛岡','水沢','浦和','船橋','大井','川崎','金沢','笠松','名古屋','園田','姫路','高知','佐賀','帯広'];
+    return venues.find(v=>label.includes(v))||String(row?.venue||row?.kind||'不明');
+  }
+  function aggregate522(rows){
+    const settled=(rows||[]).filter(x=>x.settled);
+    const make=()=>({races:0,recommended:{bet:0,ret:0,profit:0,roi:0},box:{bet:0,ret:0,profit:0,roi:0}});
+    const add=(a,r)=>{
+      a.races++;
+      const rb=Number(r?.recommendedSettlement?.bet ?? r?.bet ?? 0), rr=Number(r?.recommendedSettlement?.ret ?? r?.ret ?? 0);
+      const bb=Number(r?.boxSettlement?.bet||0), br=Number(r?.boxSettlement?.ret||0);
+      a.recommended.bet+=rb;a.recommended.ret+=rr;
+      a.box.bet+=bb;a.box.ret+=br;
+    };
+    const finish=a=>{
+      for(const k of ['recommended','box']){a[k].profit=a[k].ret-a[k].bet;a[k].roi=a[k].bet?a[k].ret/a[k].bet*100:0;}
+      return a;
+    };
+    const byDay={},byVenueDay={};
+    settled.forEach(r=>{
+      const day=String(r.raceDate||jstDate522(r.settledMs||r.predictedMs||Date.now()));
+      const venue=String(r.venue||venue522(r));
+      if(!byDay[day])byDay[day]=make(); add(byDay[day],r);
+      const key=day+'|'+venue;
+      if(!byVenueDay[key])byVenueDay[key]={date:day,venue,...make()};
+      add(byVenueDay[key],r);
+    });
+    Object.values(byDay).forEach(finish); Object.values(byVenueDay).forEach(finish);
+    const cumulative=finish(make()); settled.forEach(r=>add(cumulative,r)); finish(cumulative);
+    return {byDay,byVenueDay,cumulative};
+  }
+  function exportSettlement522(){
+    const rows=readTrack215(), ag=aggregate522(rows);
+    const payload={
+      schema:'thekeiba-settlement-v2',
+      exportedAt:new Date().toISOString(),
+      boxSettings:boxPrefs522(),
+      races:rows,
+      venueDaily:Object.values(ag.byVenueDay).sort((a,b)=>(a.date+a.venue).localeCompare(b.date+b.venue,'ja')),
+      daily:Object.entries(ag.byDay).map(([date,v])=>({date,...v})).sort((a,b)=>a.date.localeCompare(b.date)),
+      cumulative:ag.cumulative
+    };
+    const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+    a.download='thekeiba_settlement_'+jstDate522(Date.now()).replace(/-/g,'')+'.json';
+    document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1000);
+  }
+  function renderSettlement522(){
+    const host=$215('liveSettlement522'); if(!host)return;
+    const rows=readTrack215(), ag=aggregate522(rows), prefs=boxPrefs522();
+    const settled=rows.filter(x=>x.settled);
+    const latest=settled.slice().sort((a,b)=>Number(b.settledMs||0)-Number(a.settledMs||0))[0];
+    const money=n=>Number(n||0).toLocaleString()+'円';
+    const pct=n=>Number(n||0).toFixed(1)+'%';
+    const day=latest?String(latest.raceDate||jstDate522(latest.settledMs||latest.predictedMs)):jstDate522(Date.now());
+    const dayAg=ag.byDay[day]||{races:0,recommended:{},box:{}};
+    const venueRows=Object.values(ag.byVenueDay).filter(x=>x.date===day).sort((a,b)=>a.venue.localeCompare(b.venue,'ja'));
+    host.innerHTML=`
+      <div class="live-card215">
+        <div class="live-head215"><b>🧺 予想印BOX 精算設定</b><span class="live-badge215">全8券種 / 任意選択</span></div>
+        <div id="boxTypeChecks522" style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;font-size:10px">
+          ${BOX_TYPES522.map(t=>`<label style="display:flex;gap:4px;align-items:center"><input type="checkbox" value="${t}" ${prefs.types.includes(t)?'checked':''}>${t}</label>`).join('')}
+        </div>
+        <div class="live-tools215" style="margin-top:8px">
+          <button class="btn-sm" id="boxAll522" type="button">全8券種</button>
+          <button class="btn-sm" id="boxNone522" type="button">全解除</button>
+          <button class="btn-sm" id="settleExport522" type="button">JSON保存</button>
+        </div>
+        <div class="live-result-sub215" style="margin-top:6px">印は ◎○▲△ の最大4頭。単勝/複勝は各印、馬連/ワイドは組合せ、馬単/3連単は着順違いも別点として精算します。</div>
+      </div>
+      <div class="live-card215">
+        <div class="live-head215"><b>📅 ${esc215(day)} 全開催場合計</b><span class="live-badge215">${Number(dayAg.races||0)}R</span></div>
+        <div class="live-track215">
+          <div><b>${money(dayAg.recommended?.profit)}</b><span>推奨収支</span></div>
+          <div><b>${pct(dayAg.recommended?.roi)}</b><span>推奨ROI</span></div>
+          <div><b>${money(dayAg.box?.profit)}</b><span>BOX収支</span></div>
+          <div><b>${pct(dayAg.box?.roi)}</b><span>BOX ROI</span></div>
+        </div>
+        <div style="margin-top:8px">${venueRows.map(v=>`<div class="live-hist215"><span>${esc215(v.venue)} ${v.races}R</span><span>推奨 ${money(v.recommended.profit)} / BOX ${money(v.box.profit)}</span></div>`).join('')||'<div class="live-empty215">確定データなし</div>'}</div>
+      </div>
+      <div class="live-card215">
+        <div class="live-head215"><b>📈 累積収支</b><span class="live-badge215">${ag.cumulative.races}R</span></div>
+        <div class="live-track215">
+          <div><b>${money(ag.cumulative.recommended.profit)}</b><span>推奨累積</span></div>
+          <div><b>${pct(ag.cumulative.recommended.roi)}</b><span>推奨ROI</span></div>
+          <div><b>${money(ag.cumulative.box.profit)}</b><span>BOX累積</span></div>
+          <div><b>${pct(ag.cumulative.box.roi)}</b><span>BOX ROI</span></div>
+        </div>
+      </div>`;
+    const sync=()=>{const types=[...host.querySelectorAll('#boxTypeChecks522 input:checked')].map(x=>x.value);saveBoxPrefs522(types);};
+    host.querySelectorAll('#boxTypeChecks522 input').forEach(x=>x.addEventListener('change',sync));
+    $215('boxAll522')?.addEventListener('click',()=>{saveBoxPrefs522([...BOX_TYPES522]);renderSettlement522();});
+    $215('boxNone522')?.addEventListener('click',()=>{saveBoxPrefs522([]);renderSettlement522();});
+    $215('settleExport522')?.addEventListener('click',exportSettlement522);
+  }
   function savePending215(fc){
     if(!fc?.raceId) return;
     const rows=readTrack215();
@@ -22404,6 +22568,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
       const recent=settled.slice().sort((a,b)=>Number(b.settledMs||0)-Number(a.settledMs||0)).slice(0,8);
       hist.innerHTML=recent.length?recent.map(x=>`<div class="live-hist215"><span>${x.markWin?'◎🎯':x.markTop4?'印✓':'印×'} ${esc215(x.label||x.raceId)}</span><span>馬券 ${x.ticketHits}/${x.ticketCount} / ROI ${Number(x.roi||0).toFixed(0)}%</span></div>`).join(''):'<div class="live-empty215">確定成績はまだありません</div>';
     }
+    renderSettlement522();
   }
 
   async function checkResult215(manual=false){
@@ -22440,7 +22605,17 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
         }
       });
       const bet=tickets.length*100;
-      rows[pos]={...row,settled:true,settledAt:new Date().toISOString(),settledMs:Date.now(),finishTop:finish.slice(0,3).map(x=>Number(x.horseNo)),winner,markWin:Number(marks[0]?.num||0)===winner,markTop4:marks.some(m=>Number(m.num)===winner),ticketHits,ticketCount:tickets.length,bet,ret,roi:bet?ret/bet*100:0,payoutMissingHits:missingPay};
+      const recommendedTickets=tickets.map(t=>({...t,stake:100}));
+      const recommendedSettlement=settleTicketSet522(recommendedTickets,finish,payouts);
+      const boxTickets=boxTickets522(row);
+      const boxSettlement=settleTicketSet522(boxTickets,finish,payouts);
+      const settledMs=Date.now();
+      rows[pos]={...row,settled:true,settledAt:new Date(settledMs).toISOString(),settledMs,
+        raceDate:jstDate522(row.predictedMs||settledMs),venue:venue522(row),
+        finishTop:finish.slice(0,5).map(x=>Number(x.horseNo)),winner,
+        markWin:Number(marks[0]?.num||0)===winner,markTop4:marks.some(m=>Number(m.num)===winner),
+        ticketHits,ticketCount:tickets.length,bet,ret,roi:bet?ret/bet*100:0,payoutMissingHits:missingPay,
+        recommendedSettlement,boxSettingsAtSettlement:boxPrefs522(),boxTickets,boxSettlement};
       writeTrack215(rows);
       renderRecord215(rid);
       setLiveStatus215(`🏁 結果確定：${finish.slice(0,3).map(x=>x.horseNo).join('-')} / ◎${rows[pos].markWin?'的中':'不的中'} / 推奨馬券 ${ticketHits}/${tickets.length}的中${missingPay?'（払戻未取得あり）':''}`,'ok');
@@ -22497,7 +22672,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
       <div class="live-card215"><div class="live-head215"><b>🎫 推奨馬券</b><span class="live-badge215">券種別EV閾値通過</span></div><div id="liveTickets215"></div></div>
       <div class="live-card215"><div class="live-head215"><b>📣 データ実況</b><span class="live-badge215">前回比</span></div><div id="liveText215" class="live-text215"></div></div>
       <div class="live-card215"><div class="live-head215"><b>🏁 このレースの成績</b><span class="live-badge215">結果連動</span></div><div id="liveCurrentResult215"></div></div>
-      <div class="live-card215"><div class="live-head215"><b>📊 累計成績</b><span class="live-badge215">保存済み</span></div><div id="liveTrackStats215" class="live-track215"></div><div id="liveResultHistory215" style="margin-top:8px"></div></div>`;
+      <div class="live-card215"><div class="live-head215"><b>📊 累計成績</b><span class="live-badge215">保存済み</span></div><div id="liveTrackStats215" class="live-track215"></div><div id="liveResultHistory215" style="margin-top:8px"></div></div><div id="liveSettlement522"></div>`;
     frame.insertAdjacentElement('afterend',pane);
 
     $215('liveNow215').onclick=()=>{ refreshLive215(true); try{window.captureOddsTimelineNow?.();}catch(e){} };

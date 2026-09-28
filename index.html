@@ -31,7 +31,7 @@
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.21.2 Independent Blend Fix</title>
+<title>The競馬 EV分析 v5.21.4 Archive JSON + Graph Analysis</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -364,7 +364,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.21.1 Independent Blend</span>
+    <span class="ver">v5.21.4 Archive JSON + Graph Analysis</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -26622,5 +26622,579 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
 })();
 </script>
 
+\n<!-- ============================================================
+     v5.21.3 Saved Archive JSON Analysis
+     - GitHubArchive first_full_then_delta を復元
+     - 端末JSON / GitHub raw/path / 現在レースのGitHub保存JSONを読込
+     - IndexedDBへ投入して既存「時系列オッズ」解析（8券種/EV/Kelly/乖離）を再利用
+     ============================================================ -->
+<script>
+(function(){
+  'use strict';
+  if(window.__V5213_ARCHIVE_JSON_ANALYSIS__) return;
+  window.__V5213_ARCHIVE_JSON_ANALYSIS__ = true;
+
+  const VERSION='v5.21.4 Archive JSON + Graph Analysis';
+  const DB_NAME='thekeiba-odds-timeline-v1';
+  const DB_VERSION=1;
+  const STORE='captures';
+  const TYPES=['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
+  const GH={owner:'yamase-takiyoshi',repo:'takuya',branch:'main',base:'odds-data'};
+  const $=id=>document.getElementById(id);
+  const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+  function markVersion(){
+    try{
+      window.APP_VERSION=VERSION;
+      const v=document.querySelector('.ver');
+      if(v){ const bridge=/🌉/.test(v.textContent||''); v.textContent=VERSION+(bridge?' 🌉':''); }
+      document.title='The競馬 EV分析 '+VERSION;
+    }catch(e){}
+  }
+
+  function deepClone(v){
+    try{return structuredClone(v);}catch(e){return JSON.parse(JSON.stringify(v));}
+  }
+
+  function rowNorm(row,key){
+    if(row==null) return null;
+    const odds=Number(row.odds!=null?row.odds:row.odds_min);
+    if(!Number.isFinite(odds)||odds<1) return null;
+    const out={combination:String(row.combination||key||''),odds};
+    if(Number.isFinite(Number(row.odds_min))) out.odds_min=Number(row.odds_min);
+    if(Number.isFinite(Number(row.odds_max))) out.odds_max=Number(row.odds_max);
+    if(Number.isFinite(Number(row.popularity))) out.popularity=Number(row.popularity);
+    return out.combination?out:null;
+  }
+
+  function normalizeMarkets(src){
+    const out={};
+    TYPES.forEach(type=>{
+      const map=new Map();
+      const rows=Array.isArray(src?.[type])?src[type]:[];
+      rows.forEach(row=>{
+        const r=rowNorm(row,row?.combination);
+        if(r) map.set(r.combination,r);
+      });
+      const a=[...map.values()].sort((a,b)=>Number(a.odds)-Number(b.odds)||String(a.combination).localeCompare(String(b.combination),'ja',{numeric:true}));
+      if(a.length) out[type]=a;
+    });
+    return out;
+  }
+
+  function applyDelta(markets,changes){
+    const next=normalizeMarkets(markets);
+    for(const [type,comboChanges] of Object.entries(changes||{})){
+      if(!TYPES.includes(type)||!comboChanges||typeof comboChanges!=='object') continue;
+      const map=new Map((next[type]||[]).map(r=>[String(r.combination),deepClone(r)]));
+      for(const [key,val] of Object.entries(comboChanges)){
+        if(val==null){ map.delete(String(key)); continue; }
+        const r=rowNorm(val,key);
+        if(r) map.set(String(key),r);
+      }
+      const rows=[...map.values()].sort((a,b)=>Number(a.odds)-Number(b.odds)||String(a.combination).localeCompare(String(b.combination),'ja',{numeric:true}));
+      if(rows.length) next[type]=rows; else delete next[type];
+    }
+    return next;
+  }
+
+  function msOf(v){
+    let n=Number(v||0);
+    if(n>0&&n<1e11) n*=1000;
+    return Number.isFinite(n)&&n>0?n:0;
+  }
+
+  function archiveStatus(markets,ms){
+    const out={};
+    TYPES.forEach(type=>{
+      const n=Array.isArray(markets?.[type])?markets[type].length:0;
+      if(n) out[type]={state:'archive',source:'保存JSON',fetched_ms:ms,source_updated_ms:ms,source_time_label:'保存JSON',count:n};
+    });
+    return out;
+  }
+
+  function makeRecord(meta,ms,markets,extras={}){
+    const rid=String(meta.race_id||'');
+    return {
+      schema:'thekeiba-odds-timeline-v1',
+      id:`${rid}:${ms}`,
+      race_id:rid,
+      kind:String(meta.kind||'JRA').toUpperCase()==='NAR'?'NAR':'JRA',
+      race_label:String(meta.race_label||rid),
+      captured_ms:ms,
+      captured_at:new Date(ms).toISOString(),
+      source:'archive-json',
+      source_url:'GitHub/保存済みJSON',
+      collector_origin:'archive-json-v5.21.4',
+      verified_network:true,
+      archive_import:true,
+      archive_raw_capture_count:Number(meta.raw_capture_count||0),
+      archive_delta_event_count:Number(meta.delta_event_count||0),
+      horses:Array.isArray(extras.horses)?deepClone(extras.horses):[],
+      markets:normalizeMarkets(markets),
+      market_status:extras.market_status&&typeof extras.market_status==='object'?deepClone(extras.market_status):archiveStatus(markets,ms)
+    };
+  }
+
+  function reconstructCompressedArchive(data){
+    const race=data?.race||{};
+    const rid=String(race.race_id||data.race_id||'').replace(/\\D/g,'');
+    if(!/^\\d{10,14}$/.test(rid)) throw new Error('保存JSONから race_id を確認できません');
+    const init=data?.initial_snapshot||{};
+    const firstMs=msOf(init.captured_ms)||msOf(data?.stats?.first_capture_ms)||Date.parse(init.captured_at||'')||0;
+    if(!(firstMs>0)) throw new Error('initial_snapshot の取得時刻を確認できません');
+    const meta={
+      race_id:rid, kind:race.kind||data.kind||'', race_label:race.race_label||data.race_label||rid,
+      raw_capture_count:Number(data?.stats?.raw_capture_count||0), delta_event_count:Number(data?.stats?.delta_event_count||0),
+      race_date:String(race.race_date||''), post_time:String(race.post_time||''), post_ms:msOf(race.post_ms)
+    };
+    let markets=normalizeMarkets(init.markets||{});
+    const base=[makeRecord(meta,firstMs,markets,{market_status:init.market_status||{}})];
+    const deltas=(Array.isArray(data?.deltas)?data.deltas:[]).slice().sort((a,b)=>msOf(a?.captured_ms)-msOf(b?.captured_ms));
+    for(const d of deltas){
+      const t=msOf(d?.captured_ms)||Date.parse(d?.captured_at||'')||0;
+      if(!(t>0)) continue;
+      markets=applyDelta(markets,d?.changes||{});
+      base.push(makeRecord(meta,t,markets));
+    }
+    // 圧縮JSONは「変化しなかった5秒点」を持たない。
+    // 変化点が多すぎない場合だけ、直前1msの保持点を足して折れ線を階段状にし、
+    // 「徐々に変化した」ように見える誤解を避ける。
+    let records=base;
+    if(base.length<=2400){
+      const stepped=[base[0]];
+      for(let i=1;i<base.length;i++){
+        const prev=base[i-1],cur=base[i];
+        if(cur.captured_ms-prev.captured_ms>1000){
+          stepped.push({...deepClone(prev),id:`${rid}:${cur.captured_ms-1}`,captured_ms:cur.captured_ms-1,captured_at:new Date(cur.captured_ms-1).toISOString(),archive_hold_point:true});
+        }
+        stepped.push(cur);
+      }
+      records=stepped;
+    }
+    const lastMs=msOf(data?.stats?.last_capture_ms);
+    if(lastMs>0 && records.length && lastMs>records[records.length-1].captured_ms){
+      const last=records[records.length-1];
+      records.push({...deepClone(last),id:`${rid}:${lastMs}`,captured_ms:lastMs,captured_at:new Date(lastMs).toISOString(),archive_hold_point:true});
+    }
+    if(records.length>5000){
+      const first=records[0],last=records[records.length-1];
+      const middle=records.slice(1,-1);
+      const step=Math.max(1,Math.ceil(middle.length/4998));
+      records=[first,...middle.filter((_,i)=>i%step===0).slice(0,4998),last];
+    }
+    return {
+      meta, records, compressed:true,
+      rawCaptureCount:Number(data?.stats?.raw_capture_count||0),
+      deltaEventCount:Number(data?.stats?.delta_event_count||deltas.length),
+      sourceSchema:String(data?.schema||'thekeiba-odds-archive-v1')
+    };
+  }
+
+  function reconstructRawTimeline(data){
+    let src=[];
+    if(Array.isArray(data)) src=data;
+    else if(Array.isArray(data?.captures)) src=data.captures;
+    else if(Array.isArray(data?.history)) src=data.history;
+    else if(Array.isArray(data?.records)) src=data.records;
+    else if(Array.isArray(data?.data?.captures)) src=data.data.captures;
+    if(!src.length) return null;
+    const topRid=String(data?.race_id||data?.race?.race_id||'').replace(/\\D/g,'');
+    const records=[];
+    let rid=topRid;
+    for(const raw of src){
+      if(!raw||typeof raw!=='object') continue;
+      const rr=String(raw.race_id||raw.raceId||rid||'').replace(/\\D/g,'');
+      if(!/^\\d{10,14}$/.test(rr)) continue;
+      rid=rid||rr;
+      if(rr!==rid) continue;
+      let ms=msOf(raw.captured_ms||raw.capturedMs||raw.ts_ms||raw.timestamp_ms||raw.time_ms);
+      if(!(ms>0)){ const p=Date.parse(raw.captured_at||raw.capturedAt||raw.timestamp||raw.time||''); if(Number.isFinite(p)) ms=p; }
+      if(!(ms>0)) continue;
+      const mk=normalizeMarkets(raw.markets||raw.odds||raw.market_data||raw.marketData||{});
+      const meta={race_id:rid,kind:raw.kind||data.kind||data?.race?.kind||'',race_label:raw.race_label||data.race_label||data?.race?.race_label||rid};
+      records.push({...makeRecord(meta,ms,mk,{horses:raw.horses,market_status:raw.market_status}),...deepClone(raw),id:`${rid}:${ms}`,race_id:rid,captured_ms:ms,captured_at:raw.captured_at||new Date(ms).toISOString(),markets:mk,archive_import:true,collector_origin:'archive-json-v5.21.4'});
+    }
+    records.sort((a,b)=>a.captured_ms-b.captured_ms);
+    if(!records.length) return null;
+    return {meta:{race_id:rid,kind:records[0].kind||'',race_label:records[0].race_label||rid},records:records.slice(-5000),compressed:false,rawCaptureCount:records.length,deltaEventCount:0,sourceSchema:String(data?.schema||'raw-captures')};
+  }
+
+  function parseArchive(data){
+    if(!data||typeof data!=='object') throw new Error('JSONの中身がオブジェクトではありません');
+    if(data.app==='The競馬 EV分析' && !data.initial_snapshot && !data.captures){
+      throw new Error('これは設定バックアップJSONです。「設定 → JSON読込」を使ってください。');
+    }
+    if(String(data.schema||'')==='thekeiba-odds-archive-v1' || (data.initial_snapshot && Array.isArray(data.deltas))){
+      return reconstructCompressedArchive(data);
+    }
+    const raw=reconstructRawTimeline(data);
+    if(raw) return raw;
+    throw new Error('対応するオッズ履歴JSONではありません（GitHubArchive v1 / Timeline export v1 を読み込めます）');
+  }
+
+  function openDb(){
+    return new Promise((resolve,reject)=>{
+      if(!window.indexedDB){ reject(new Error('このブラウザではIndexedDBを利用できません')); return; }
+      const req=indexedDB.open(DB_NAME,DB_VERSION);
+      req.onupgradeneeded=()=>{
+        const db=req.result;
+        let st;
+        if(!db.objectStoreNames.contains(STORE)) st=db.createObjectStore(STORE,{keyPath:'id'});
+        else st=req.transaction.objectStore(STORE);
+        if(!st.indexNames.contains('race_id')) st.createIndex('race_id','race_id',{unique:false});
+        if(!st.indexNames.contains('captured_ms')) st.createIndex('captured_ms','captured_ms',{unique:false});
+      };
+      req.onsuccess=()=>resolve(req.result);
+      req.onerror=()=>reject(req.error||new Error('IndexedDBを開けません'));
+    });
+  }
+
+  async function putRecords(records){
+    const db=await openDb();
+    try{
+      await new Promise((resolve,reject)=>{
+        const tx=db.transaction(STORE,'readwrite');
+        const st=tx.objectStore(STORE);
+        records.forEach(r=>st.put(r));
+        tx.oncomplete=()=>resolve();
+        tx.onerror=()=>reject(tx.error||new Error('保存JSONのIndexedDB取込に失敗しました'));
+        tx.onabort=()=>reject(tx.error||new Error('保存JSONのIndexedDB取込が中断されました'));
+      });
+    }finally{ try{db.close();}catch(e){} }
+  }
+
+  function analysisSummary(pack){
+    const last=pack.records[pack.records.length-1]||{};
+    const counts=TYPES.map(t=>`${t}${Array.isArray(last.markets?.[t])?last.markets[t].length:0}`).join(' / ');
+    return `📦 保存JSON解析：${pack.meta.kind||''} ${pack.meta.race_label||pack.meta.race_id} / `+
+      `${pack.compressed?`元5秒記録 ${pack.rawCaptureCount}点・変化 ${pack.deltaEventCount}件・解析用再構成 ${pack.records.length}点`:`${pack.records.length}点`} / ${counts}`;
+  }
+
+  async function openInTimeline(pack){
+    const rid=String(pack.meta.race_id||'');
+    const auto=$('oddsTsAuto'); if(auto) auto.checked=false;
+    // まず既存の右側「時系列」UIを確実に生成・表示し、その後に保存レースへ切替える。
+    try{ window.showOddsTimeline206?.(); }catch(e){ try{window.showOddsTimeline?.();}catch(_){} }
+    await sleep(80);
+    try{ await window.refreshOddsRaceArchive?.(); }catch(e){}
+    await sleep(30);
+    try{ await window.reloadOddsTimelineRace202?.(rid); }catch(e){}
+    const sel=$('oddsTsRaceArchive');
+    if(sel){
+      if([...sel.options].some(o=>o.value===rid)) sel.value=rid;
+      // loadRaceContext202 は上で実行済み。changeは二重読込になるので発火しない。
+    }
+    const st=$('oddsTsStatus');
+    if(st){ st.className='odds-ts-status ok'; st.textContent=analysisSummary(pack); }
+    const fresh=$('oddsTsFresh247');
+    if(fresh){ fresh.className='odds-ts-status ok'; fresh.textContent='📚 保存済みJSON解析モード：ネット再取得OFF / 保存時点の全8券種履歴を解析中'; }
+  }
+
+  async function importData(data,label='保存JSON'){
+    status(`🔄 ${label} を解析中…`,'wait');
+    const pack=parseArchive(data);
+    if(!pack.records.length) throw new Error('解析できる時系列記録がありません');
+    await putRecords(pack.records);
+    try{
+      const metaAll=JSON.parse(localStorage.getItem('thekeiba_archive_import_meta_v5213')||'{}')||{};
+      metaAll[pack.meta.race_id]={at:new Date().toISOString(),label,schema:pack.sourceSchema,raw_capture_count:pack.rawCaptureCount,delta_event_count:pack.deltaEventCount,reconstructed_points:pack.records.length};
+      localStorage.setItem('thekeiba_archive_import_meta_v5213',JSON.stringify(metaAll));
+    }catch(e){}
+    status('✅ '+analysisSummary(pack),'ok');
+    window.__archiveJsonLastPack5214=pack;
+    await openInTimeline(pack);
+    closeModal();
+    return pack;
+  }
+
+  function status(msg,type){
+    const el=$('archiveJsonStatus5213');
+    if(el){ el.textContent=msg; el.className='archive-json-status5213 '+(type||''); }
+    try{
+      const d=$('dataIoStatus');
+      if(d){d.textContent=msg;d.style.color=type==='err'?'#f87171':type==='ok'?'#34d399':'var(--muted)';}
+    }catch(e){}
+  }
+
+  async function readFile(file){
+    const text=await file.text();
+    let data; try{data=JSON.parse(text);}catch(e){throw new Error('JSONとして読み込めません: '+e.message);}
+    return importData(data,file.name||'端末JSON');
+  }
+
+  function rawUrl(input){
+    let s=String(input||'').trim();
+    if(!s) throw new Error('GitHub JSON URL またはパスを入力してください');
+    const blob=s.match(/^https:\/\/github\\.com\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+)$/i);
+    if(blob) return `https://raw.githubusercontent.com/${blob[1]}/${blob[2]}/${blob[3]}/${blob[4]}`;
+    if(/^https?:\/\//i.test(s)) return s;
+    s=s.replace(/^\/+/, '');
+    return `https://raw.githubusercontent.com/${GH.owner}/${GH.repo}/${GH.branch}/${s}`;
+  }
+
+  async function fetchGithub(input,label='GitHub保存JSON'){
+    const url=rawUrl(input);
+    status('☁️ GitHub保存JSONを読み込み中…','wait');
+    const res=await fetch(url,{cache:'no-store'});
+    if(!res.ok) throw new Error(`GitHub JSON HTTP ${res.status}（パス・保存完了・公開設定を確認してください）`);
+    const text=await res.text();
+    let data; try{data=JSON.parse(text);}catch(e){throw new Error('GitHubの応答がJSONではありません');}
+    return importData(data,label);
+  }
+
+  function currentRid(){
+    try{if(window.currentRaceId)return String(window.currentRaceId);}catch(e){}
+    const u=$('raceUrl')?.value||''; const m=String(u).match(/race_id=(\\d{10,14})/);
+    if(m) return m[1];
+    const s=$('raceSelect')?.value||''; const m2=String(s).match(/(\\d{10,14})/); return m2?m2[1]:'';
+  }
+  function currentKind(rid){
+    const k=String($('pickKind')?.value||'').toUpperCase();
+    if(k==='NAR'||k==='JRA') return k;
+    return /^(0[1-9]|10)$/.test(String(rid).slice(4,6))?'JRA':'NAR';
+  }
+  function currentArchivePath(){
+    const rid=currentRid();
+    const ymd=String($('pickDate')?.value||'');
+    if(!/^\\d{10,14}$/.test(rid)) throw new Error('左側でレースを選択してください');
+    if(!/^20\\d{2}-\\d{2}-\\d{2}$/.test(ymd)) throw new Error('開催日を選択してください');
+    const [y,m,d]=ymd.split('-');
+    return `${GH.base}/${y}/${m}/${d}/${currentKind(rid)}/${rid}.json`;
+  }
+
+  function closeModal(){ const m=$('archiveJsonModal5213'); if(m)m.hidden=true; }
+  function openModal(){
+    install();
+    const m=$('archiveJsonModal5213'); if(!m)return;
+    m.hidden=false;
+    const input=$('archiveJsonGithub5213');
+    try{ if(input&&!input.value) input.value=currentArchivePath(); }catch(e){}
+    status('端末のJSON、またはGitHubに自動保存されたJSONを選んでください。','');
+  }
+
+  function install(){
+    if(!$('archiveJsonStyle5213')){
+      const s=document.createElement('style'); s.id='archiveJsonStyle5213'; s.textContent=`
+        #archiveJsonModal5213[hidden]{display:none!important}#archiveJsonModal5213{position:fixed;inset:0;z-index:10060;background:rgba(2,8,18,.78);display:flex;align-items:center;justify-content:center;padding:18px;backdrop-filter:blur(4px)}
+        .archive-json-card5213{width:min(720px,100%);max-height:90vh;overflow:auto;background:#0b1726;border:1px solid rgba(0,230,118,.35);border-radius:16px;padding:16px;box-shadow:0 24px 90px rgba(0,0,0,.55);color:#e2e8f0}
+        .archive-json-head5213{display:flex;align-items:center;gap:8px;margin-bottom:10px}.archive-json-head5213 b{font-size:16px;color:#d9ffe8}.archive-json-head5213 button{margin-left:auto}
+        .archive-json-grid5213{display:grid;gap:10px}.archive-json-box5213{padding:11px;border:1px solid #334155;border-radius:10px;background:#0f1d2f}.archive-json-box5213 label{display:block;font-size:11px;color:#94a3b8;margin-bottom:5px}.archive-json-box5213 input[type=text]{width:100%;box-sizing:border-box;background:#07111d;color:#e2e8f0;border:1px solid #334155;border-radius:8px;padding:9px;font-size:12px}.archive-json-actions5213{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}.archive-json-status5213{margin-top:11px;padding:9px 10px;border-radius:9px;background:rgba(148,163,184,.09);font-size:11px;line-height:1.55;color:#cbd5e1}.archive-json-status5213.ok{background:rgba(0,230,118,.09);color:#86efac}.archive-json-status5213.err{background:rgba(248,113,113,.10);color:#fca5a5}.archive-json-status5213.wait{color:#93c5fd}.archive-json-note5213{margin-top:10px;font-size:10px;line-height:1.55;color:#94a3b8}
+        @media(max-width:700px){.archive-json-card5213{padding:12px}.archive-json-actions5213 .btn-sm{flex:1 1 auto}}`; document.head.appendChild(s);
+    }
+    if(!$('archiveJsonFile5213')){
+      const f=document.createElement('input'); f.id='archiveJsonFile5213'; f.type='file'; f.accept='application/json,.json'; f.hidden=true;
+      f.addEventListener('change',async e=>{
+        const file=e.target.files?.[0]; e.target.value=''; if(!file)return;
+        try{await readFile(file);}catch(err){status('❌ '+String(err?.message||err),'err');}
+      });
+      document.body.appendChild(f);
+    }
+    if(!$('archiveJsonModal5213')){
+      const m=document.createElement('div'); m.id='archiveJsonModal5213'; m.hidden=true;
+      m.innerHTML=`<div class="archive-json-card5213" role="dialog" aria-modal="true" aria-label="保存JSON解析">
+        <div class="archive-json-head5213"><b>📦 保存済みJSON解析モード</b><button class="btn-sm" id="archiveJsonClose5213" type="button">✕ 閉じる</button></div>
+        <div class="archive-json-grid5213">
+          <div class="archive-json-box5213"><label>端末 / iCloud Drive / Files に保存したJSON</label><div class="archive-json-actions5213"><button class="btn-sm" id="archiveJsonPick5213" type="button">📂 JSONファイルを選ぶ</button></div></div>
+          <div class="archive-json-box5213"><label>GitHub保存JSONのURL、またはリポジトリ内パス</label><input id="archiveJsonGithub5213" type="text" placeholder="odds-data/2026/09/28/NAR/202636092801.json"><div class="archive-json-actions5213"><button class="btn-sm" id="archiveJsonFetch5213" type="button">☁️ GitHubから読込</button><button class="btn-sm" id="archiveJsonCurrent5213" type="button">🏇 現在レースの保存JSON</button></div></div>
+        </div>
+        <div id="archiveJsonStatus5213" class="archive-json-status5213">保存JSONを選択してください。</div>
+        <div class="archive-json-note5213">対応: Workerの <b>thekeiba-odds-archive-v1</b>（first_full_then_delta）と、このHTMLが出力した <b>thekeiba-odds-timeline-export-v1</b>。圧縮Archiveは変化しなかった5秒点を保存していないため、元の記録件数と解析用の再構成点数は一致しません。オッズ値そのものは初回完全値＋差分から復元します。</div>
+      </div>`;
+      document.body.appendChild(m);
+      $('archiveJsonClose5213').onclick=closeModal;
+      m.addEventListener('click',e=>{if(e.target===m)closeModal();});
+      $('archiveJsonPick5213').onclick=()=>$('archiveJsonFile5213')?.click();
+      $('archiveJsonFetch5213').onclick=async()=>{try{await fetchGithub($('archiveJsonGithub5213')?.value||'');}catch(err){status('❌ '+String(err?.message||err),'err');}};
+      $('archiveJsonCurrent5213').onclick=async()=>{try{const p=currentArchivePath();$('archiveJsonGithub5213').value=p;await fetchGithub(p,'現在レース GitHub保存JSON');}catch(err){status('❌ '+String(err?.message||err),'err');}};
+    }
+    // 設定タブ「データ保存・読込」に入口を追加。
+    const io=$('dataIoStatus')?.parentElement;
+    if(io&&!$('archiveJsonSettingsBtn5213')){
+      const b=document.createElement('button'); b.id='archiveJsonSettingsBtn5213'; b.type='button'; b.className='btn-sm'; b.textContent='📦 保存JSON解析'; b.onclick=openModal;
+      const row=io.querySelector('div[style*="display:flex"]')||io; row.appendChild(b);
+    }
+    // 右側「時系列オッズ」にも入口を追加。
+    const toolbar=$('oddsTsJson')?.parentElement;
+    if(toolbar&&!$('archiveJsonTimelineBtn5213')){
+      const b=document.createElement('button'); b.id='archiveJsonTimelineBtn5213'; b.type='button'; b.className='btn-sm'; b.textContent='📦 保存JSON解析'; b.onclick=openModal; toolbar.appendChild(b);
+    }
+    window.triggerSavedArchiveAnalysis5213=openModal;
+    window.importSavedArchiveData5213=importData;
+    window.fetchSavedArchiveGithub5213=fetchGithub;
+    markVersion();
+  }
+
+  function boot(){install();markVersion();}
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
+  [300,1000,2500,6000,12000,20000,30000,45000,65000].forEach(ms=>setTimeout(()=>{install();markVersion();},ms));
+  console.log('[v5.21.3] Saved Archive JSON Analysis enabled');
+})();
+</script>
+
+
+
+<!-- ============================================================
+     v5.21.4 Saved Archive Graph Dashboard
+     - 保存JSON/IndexedDBの履歴を専用グラフで可視化
+     - 8券種 / オッズ / 市場確率 / 初回比変化率
+     - 最新人気上位5本の比較 + 選択1点
+     - 初回→最新の変動率 Top10 横棒グラフ
+     ============================================================ -->
+<script>
+(function(){
+  'use strict';
+  if(window.__V5214_ARCHIVE_GRAPH__) return;
+  window.__V5214_ARCHIVE_GRAPH__=true;
+
+  const DB_NAME='thekeiba-odds-timeline-v1', STORE='captures';
+  const TYPES=['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
+  const $=id=>document.getElementById(id);
+  const COLORS=['#38bdf8','#22c55e','#f59e0b','#f472b6','#a78bfa','#fb7185','#2dd4bf','#f97316','#84cc16','#60a5fa'];
+  let currentPack=null;
+
+  function css(){
+    if($('archiveGraphStyle5214')) return;
+    const st=document.createElement('style'); st.id='archiveGraphStyle5214'; st.textContent=`
+      #archiveGraphModal5214[hidden]{display:none!important}#archiveGraphModal5214{position:fixed;inset:0;z-index:10080;background:rgba(2,8,18,.82);display:flex;align-items:center;justify-content:center;padding:14px;backdrop-filter:blur(5px)}
+      .ag-card5214{width:min(1100px,100%);max-height:94vh;overflow:auto;background:#081421;border:1px solid rgba(56,189,248,.35);border-radius:16px;padding:14px;box-shadow:0 28px 100px rgba(0,0,0,.62);color:#e2e8f0}
+      .ag-head5214{display:flex;align-items:center;gap:8px;position:sticky;top:-14px;background:#081421;z-index:2;padding:12px 0 9px}.ag-head5214 b{font-size:16px;color:#dff6ff}.ag-head5214 button{margin-left:auto}
+      .ag-controls5214{display:flex;gap:8px;flex-wrap:wrap;align-items:end;padding:10px;border:1px solid #263549;border-radius:11px;background:#0b1726;margin-bottom:10px}.ag-controls5214 label{font-size:10px;color:#94a3b8;display:grid;gap:4px}.ag-controls5214 select{min-width:110px;background:#07111d;color:#e2e8f0;border:1px solid #334155;border-radius:7px;padding:7px;font-size:12px}.ag-check5214{display:flex!important;grid-auto-flow:column;align-items:center;gap:5px!important;padding-bottom:6px}
+      .ag-meta5214{font-size:11px;line-height:1.55;color:#b9c8d8;padding:8px 10px;border-radius:9px;background:rgba(56,189,248,.07);margin-bottom:10px}.ag-grid5214{display:grid;grid-template-columns:1fr;gap:12px}.ag-box5214{border:1px solid #263549;border-radius:12px;background:#07111d;padding:10px}.ag-title5214{font-size:12px;font-weight:700;color:#dbeafe;margin:0 0 7px}.ag-canvas5214{width:100%;height:360px;display:block;border-radius:8px;background:#07111d;touch-action:pan-y}.ag-bars5214{height:330px}.ag-legend5214{display:flex;flex-wrap:wrap;gap:7px 11px;margin-top:8px;font-size:10px;color:#cbd5e1}.ag-leg5214{display:flex;align-items:center;gap:4px}.ag-dot5214{width:9px;height:9px;border-radius:50%;display:inline-block}.ag-stats5214{display:grid;grid-template-columns:repeat(5,minmax(90px,1fr));gap:7px;margin-top:9px}.ag-stat5214{border:1px solid #263549;background:#0b1726;border-radius:8px;padding:7px}.ag-stat5214 small{display:block;color:#94a3b8;font-size:9px}.ag-stat5214 b{display:block;margin-top:3px;font-size:12px;color:#e2e8f0}.ag-note5214{font-size:10px;line-height:1.55;color:#94a3b8;margin-top:9px}
+      @media(max-width:720px){.ag-card5214{padding:10px}.ag-head5214{top:-10px}.ag-canvas5214{height:300px}.ag-bars5214{height:300px}.ag-stats5214{grid-template-columns:repeat(2,minmax(90px,1fr))}.ag-controls5214 label{flex:1 1 42%}.ag-controls5214 select{width:100%;min-width:0}}
+    `;
+    document.head.appendChild(st);
+  }
+
+  function openDb(){
+    return new Promise((resolve,reject)=>{
+      const req=indexedDB.open(DB_NAME,1);
+      req.onsuccess=()=>resolve(req.result); req.onerror=()=>reject(req.error||new Error('IndexedDBを開けません'));
+    });
+  }
+  async function loadRace(rid){
+    const db=await openDb();
+    try{
+      const rows=await new Promise((resolve,reject)=>{
+        const tx=db.transaction(STORE,'readonly'), st=tx.objectStore(STORE); let req;
+        try{req=st.index('race_id').getAll(String(rid));}catch(e){req=st.getAll();}
+        req.onsuccess=()=>resolve((req.result||[]).filter(x=>String(x.race_id||'')===String(rid)));
+        req.onerror=()=>reject(req.error||new Error('履歴の読込に失敗しました'));
+      });
+      rows.sort((a,b)=>Number(a.captured_ms||0)-Number(b.captured_ms||0));
+      if(!rows.length) throw new Error('このレースの保存履歴がありません');
+      return {meta:{race_id:String(rid),kind:rows[0].kind||'',race_label:rows[0].race_label||String(rid)},records:rows,compressed:false,rawCaptureCount:rows.length,deltaEventCount:0,sourceSchema:'IndexedDB'};
+    } finally {try{db.close();}catch(e){}}
+  }
+  function selectedRid(){
+    const s=$('oddsTsRaceArchive')?.value||''; if(/^\d{10,14}$/.test(s)) return s;
+    try{if(window.currentRaceId&&/^\d{10,14}$/.test(String(window.currentRaceId))) return String(window.currentRaceId);}catch(e){}
+    const u=$('raceUrl')?.value||''; return (u.match(/race_id=(\d{10,14})/)||[])[1]||'';
+  }
+  function lastRows(pack,type){
+    for(let i=(pack?.records?.length||0)-1;i>=0;i--){const a=pack.records[i]?.markets?.[type];if(Array.isArray(a)&&a.length)return a;}
+    return [];
+  }
+  function combos(pack,type){
+    const set=new Set(); (pack?.records||[]).forEach(r=>(r.markets?.[type]||[]).forEach(x=>x?.combination&&set.add(String(x.combination))));
+    const latest=new Map(lastRows(pack,type).map(x=>[String(x.combination),Number(x.odds)]));
+    return [...set].sort((a,b)=>(latest.get(a)??1e99)-(latest.get(b)??1e99)||a.localeCompare(b,'ja',{numeric:true}));
+  }
+  function rowAt(r,type,combo){return (r?.markets?.[type]||[]).find(x=>String(x.combination)===String(combo));}
+  function metric(odds,kind,firstOdds){
+    odds=Number(odds); if(!Number.isFinite(odds)||odds<=0)return NaN;
+    if(kind==='marketP') return 100/odds;
+    if(kind==='changePct') return Number.isFinite(firstOdds)&&firstOdds>0?(odds/firstOdds-1)*100:0;
+    return odds;
+  }
+  function metricLabel(k){return k==='marketP'?'市場確率 %':k==='changePct'?'初回比変化 %':'オッズ';}
+  function fmt(v,k){if(!Number.isFinite(v))return '-';return k==='odds'?v.toFixed(v<10?2:1):v.toFixed(2)+'%';}
+  function timeLabel(ms){const d=new Date(ms);return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;}
+
+  function setupCombos(){
+    if(!currentPack)return;
+    const type=$('archiveGraphMarket5214').value, sel=$('archiveGraphCombo5214'); const old=sel.value;
+    const cs=combos(currentPack,type); sel.innerHTML='<option value="__TOP5__">最新人気上位5点を比較</option>'+cs.map(c=>`<option value="${String(c).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}">${c}</option>`).join('');
+    if(cs.includes(old)||old==='__TOP5__') sel.value=old; else sel.value='__TOP5__';
+  }
+
+  function resizeCanvas(c,h){
+    const dpr=Math.min(2,window.devicePixelRatio||1),w=Math.max(320,c.clientWidth||900); c.style.height=h+'px'; c.width=Math.floor(w*dpr);c.height=Math.floor(h*dpr);const ctx=c.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);return {ctx,w,h};
+  }
+  function lineData(pack,type,combo,kind){
+    let selected=[];
+    if(combo==='__TOP5__') selected=lastRows(pack,type).slice().sort((a,b)=>Number(a.odds)-Number(b.odds)).slice(0,5).map(x=>String(x.combination));
+    else selected=[combo];
+    return selected.map(c=>{
+      let first=NaN; const pts=[];
+      for(const r of pack.records||[]){const x=rowAt(r,type,c);if(!x)continue;const o=Number(x.odds);if(!Number.isFinite(first))first=o;const y=metric(o,kind,first);if(Number.isFinite(y))pts.push({t:Number(r.captured_ms),y,odds:o});}
+      return {combo:c,pts,firstOdds:first};
+    }).filter(s=>s.pts.length);
+  }
+  function drawLine(){
+    if(!currentPack)return; const c=$('archiveGraphCanvas5214');if(!c)return;
+    const type=$('archiveGraphMarket5214').value, combo=$('archiveGraphCombo5214').value, kind=$('archiveGraphMetric5214').value, log=$('archiveGraphLog5214').checked;
+    const series=lineData(currentPack,type,combo,kind); const {ctx,w,h}=resizeCanvas(c,360);ctx.clearRect(0,0,w,h);
+    const m={l:64,r:18,t:20,b:42}; const pts=series.flatMap(s=>s.pts); if(!pts.length){ctx.fillStyle='#94a3b8';ctx.font='13px sans-serif';ctx.fillText('表示できる履歴がありません',m.l,m.t+30);return;}
+    const t0=Math.min(...pts.map(p=>p.t)),t1=Math.max(...pts.map(p=>p.t)); let ys=pts.map(p=>p.y).filter(Number.isFinite);
+    let ymin=Math.min(...ys),ymax=Math.max(...ys); if(kind==='odds'&&log){ys=ys.filter(v=>v>0).map(Math.log);ymin=Math.min(...ys);ymax=Math.max(...ys);} if(ymax===ymin){ymax=ymin+1;} const pad=(ymax-ymin)*.08; ymin-=pad;ymax+=pad;
+    const xp=t=>m.l+(t-t0)/Math.max(1,t1-t0)*(w-m.l-m.r); const yp0=y=>m.t+(ymax-y)/(ymax-ymin)*(h-m.t-m.b); const yp=y=>yp0(kind==='odds'&&log?Math.log(Math.max(y,1e-9)):y);
+    ctx.strokeStyle='rgba(148,163,184,.18)';ctx.fillStyle='#8aa0b8';ctx.font='10px sans-serif';ctx.lineWidth=1;
+    for(let i=0;i<=5;i++){const yy=m.t+(h-m.t-m.b)*i/5;ctx.beginPath();ctx.moveTo(m.l,yy);ctx.lineTo(w-m.r,yy);ctx.stroke();const raw=ymax-(ymax-ymin)*i/5;const val=kind==='odds'&&log?Math.exp(raw):raw;ctx.fillText(fmt(val,kind),4,yy+3);}
+    for(let i=0;i<=4;i++){const xx=m.l+(w-m.l-m.r)*i/4;ctx.beginPath();ctx.moveTo(xx,m.t);ctx.lineTo(xx,h-m.b);ctx.stroke();ctx.fillText(timeLabel(t0+(t1-t0)*i/4),xx-22,h-16);}
+    series.forEach((s,si)=>{ctx.strokeStyle=COLORS[si%COLORS.length];ctx.lineWidth=2;ctx.beginPath();s.pts.forEach((p,i)=>{const x=xp(p.t),y=yp(p.y);if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);});ctx.stroke();});
+    ctx.fillStyle='#cbd5e1';ctx.font='11px sans-serif';ctx.fillText(metricLabel(kind)+(kind==='odds'&&log?'（対数）':''),m.l,12);
+    const leg=$('archiveGraphLegend5214'); leg.innerHTML=series.map((s,i)=>{const last=s.pts[s.pts.length-1];return `<span class="ag-leg5214"><i class="ag-dot5214" style="background:${COLORS[i%COLORS.length]}"></i>${s.combo} ${fmt(last.y,kind)}</span>`;}).join('');
+    updateStats(series,kind);
+  }
+  function updateStats(series,kind){
+    const box=$('archiveGraphStats5214'); if(!box)return; const s=series[0]; if(!s||!s.pts.length){box.innerHTML='';return;} const vs=s.pts.map(p=>p.y); const first=s.pts[0].y,last=s.pts[s.pts.length-1].y,min=Math.min(...vs),max=Math.max(...vs); let changes=0; for(let i=1;i<vs.length;i++)if(vs[i]!==vs[i-1])changes++;
+    const data=[['対象',s.combo],['初回',fmt(first,kind)],['最新',fmt(last,kind)],['最小 / 最大',`${fmt(min,kind)} / ${fmt(max,kind)}`],['変化回数',String(changes)]];
+    box.innerHTML=data.map(([k,v])=>`<div class="ag-stat5214"><small>${k}</small><b>${v}</b></div>`).join('');
+  }
+  function movementRows(pack,type){
+    const out=[]; for(const c of combos(pack,type)){let first=null,last=null;for(const r of pack.records||[]){const x=rowAt(r,type,c);if(!x)continue;const o=Number(x.odds);if(!Number.isFinite(o))continue;if(first===null)first=o;last=o;}if(first&&last)out.push({combo:c,first,last,pct:(last/first-1)*100});}
+    return out.sort((a,b)=>Math.abs(b.pct)-Math.abs(a.pct)).slice(0,10);
+  }
+  function drawBars(){
+    if(!currentPack)return;const c=$('archiveGraphBars5214');if(!c)return;const type=$('archiveGraphMarket5214').value,rows=movementRows(currentPack,type);const {ctx,w,h}=resizeCanvas(c,330);ctx.clearRect(0,0,w,h);if(!rows.length){ctx.fillStyle='#94a3b8';ctx.fillText('変動率を計算できる履歴がありません',20,30);return;}
+    const l=Math.min(155,w*.34),r=42,t=20,b=24, max=Math.max(1,...rows.map(x=>Math.abs(x.pct)));const zero=l+(w-l-r)/2;ctx.strokeStyle='rgba(148,163,184,.25)';ctx.beginPath();ctx.moveTo(zero,t);ctx.lineTo(zero,h-b);ctx.stroke();ctx.font='10px sans-serif';
+    const rh=(h-t-b)/rows.length; rows.forEach((x,i)=>{const y=t+i*rh+rh*.15,bh=rh*.7,len=(w-l-r)/2*Math.min(1,Math.abs(x.pct)/max);ctx.fillStyle=x.pct>=0?'rgba(248,113,113,.78)':'rgba(52,211,153,.78)';ctx.fillRect(x.pct>=0?zero:zero-len,y,len,bh);ctx.fillStyle='#cbd5e1';ctx.textAlign='right';ctx.fillText(x.combo,l-8,y+bh*.72);ctx.textAlign=x.pct>=0?'left':'right';ctx.fillText(`${x.pct>=0?'+':''}${x.pct.toFixed(1)}%`,x.pct>=0?zero+len+5:zero-len-5,y+bh*.72);});ctx.textAlign='left';
+  }
+  function render(){
+    if(!currentPack)return; const rid=currentPack.meta?.race_id||'',type=$('archiveGraphMarket5214').value;const meta=$('archiveGraphMeta5214');const rec=currentPack.records||[];const a=rec[0],z=rec[rec.length-1];
+    if(meta)meta.textContent=`📦 ${currentPack.meta?.kind||''} ${currentPack.meta?.race_label||rid} / ${rid} / ${rec.length}解析点 / ${a?timeLabel(a.captured_ms):'-'} → ${z?timeLabel(z.captured_ms):'-'} / ${type}`;
+    drawLine();drawBars();
+  }
+  async function resolvePack(){
+    if(window.__archiveJsonLastPack5214?.records?.length) return window.__archiveJsonLastPack5214;
+    const rid=selectedRid(); if(!rid)throw new Error('保存JSONを読み込むか、時系列画面で保存済みレースを選択してください'); return loadRace(rid);
+  }
+  async function openGraph(){
+    install(); const m=$('archiveGraphModal5214');m.hidden=false;$('archiveGraphMeta5214').textContent='履歴を読み込み中…';
+    try{currentPack=await resolvePack();window.__archiveJsonLastPack5214=currentPack;setupCombos();render();}catch(e){$('archiveGraphMeta5214').textContent='⚠️ '+String(e?.message||e);}
+  }
+  function closeGraph(){const m=$('archiveGraphModal5214');if(m)m.hidden=true;}
+  function install(){
+    css();
+    if(!$('archiveGraphModal5214')){
+      const m=document.createElement('div');m.id='archiveGraphModal5214';m.hidden=true;m.innerHTML=`<div class="ag-card5214" role="dialog" aria-modal="true" aria-label="保存JSONグラフ解析"><div class="ag-head5214"><b>📊 保存JSON グラフ解析</b><button id="archiveGraphClose5214" class="btn-sm" type="button">✕ 閉じる</button></div><div class="ag-controls5214"><label>券種<select id="archiveGraphMarket5214">${TYPES.map(t=>`<option>${t}</option>`).join('')}</select></label><label>指標<select id="archiveGraphMetric5214"><option value="odds">オッズ</option><option value="marketP">市場確率 %</option><option value="changePct">初回比変化率 %</option></select></label><label>買い目<select id="archiveGraphCombo5214"><option value="__TOP5__">最新人気上位5点を比較</option></select></label><label class="ag-check5214"><input id="archiveGraphLog5214" type="checkbox">オッズ対数</label><button id="archiveGraphReload5214" class="btn-sm" type="button">🔄 再読込</button></div><div id="archiveGraphMeta5214" class="ag-meta5214">保存JSONを読み込んでください。</div><div class="ag-grid5214"><div class="ag-box5214"><div class="ag-title5214">時系列推移</div><canvas id="archiveGraphCanvas5214" class="ag-canvas5214"></canvas><div id="archiveGraphLegend5214" class="ag-legend5214"></div><div id="archiveGraphStats5214" class="ag-stats5214"></div></div><div class="ag-box5214"><div class="ag-title5214">初回 → 最新 オッズ変動率 Top10（上昇=赤 / 低下=緑）</div><canvas id="archiveGraphBars5214" class="ag-canvas5214 ag-bars5214"></canvas></div></div><div class="ag-note5214">圧縮Archiveは「値が変わらなかった5秒点」を省略します。折れ線は保存された変化点を時刻順に復元して表示します。オッズ低下は市場評価が上がった方向、オッズ上昇は市場評価が下がった方向です。</div></div>`;document.body.appendChild(m);
+      $('archiveGraphClose5214').onclick=closeGraph;m.addEventListener('click',e=>{if(e.target===m)closeGraph();});
+      $('archiveGraphMarket5214').onchange=()=>{setupCombos();render();};$('archiveGraphMetric5214').onchange=render;$('archiveGraphCombo5214').onchange=render;$('archiveGraphLog5214').onchange=render;$('archiveGraphReload5214').onclick=async()=>{window.__archiveJsonLastPack5214=null;currentPack=null;await openGraph();};
+      window.addEventListener('resize',()=>{if(!m.hidden)render();});
+    }
+    const toolbar=$('oddsTsJson')?.parentElement;if(toolbar&&!$('archiveGraphToolbarBtn5214')){const b=document.createElement('button');b.id='archiveGraphToolbarBtn5214';b.type='button';b.className='btn-sm';b.textContent='📊 保存JSONグラフ';b.onclick=openGraph;toolbar.appendChild(b);}
+    const io=$('dataIoStatus')?.parentElement;if(io&&!$('archiveGraphSettingsBtn5214')){const b=document.createElement('button');b.id='archiveGraphSettingsBtn5214';b.type='button';b.className='btn-sm';b.textContent='📊 保存JSONグラフ';b.onclick=openGraph;const row=io.querySelector('div[style*="display:flex"]')||io;row.appendChild(b);}
+    const box=$('archiveJsonStatus5213')?.parentElement;if(box&&!$('archiveGraphImportBtn5214')){const b=document.createElement('button');b.id='archiveGraphImportBtn5214';b.type='button';b.className='btn-sm';b.textContent='📊 読込済みJSONをグラフ表示';b.onclick=openGraph;const a=document.createElement('div');a.className='archive-json-actions5213';a.appendChild(b);box.insertBefore(a,$('archiveJsonStatus5213').nextSibling);}
+    window.openSavedArchiveGraph5214=openGraph;
+  }
+  function mark(){try{const v=document.querySelector('.ver');if(v&&!/v5\.21\.4/.test(v.textContent||''))v.textContent='v5.21.4 Archive JSON + Graph Analysis';document.title='The競馬 EV分析 v5.21.4 Archive JSON + Graph Analysis';}catch(e){}}
+  function boot(){install();mark();}
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
+  [300,900,1800,3500,7000,12000].forEach(ms=>setTimeout(()=>{install();mark();},ms));
+  console.log('[v5.21.4] Saved Archive Graph Dashboard enabled');
+})();
+</script>
 </body>
 </html>

@@ -31,7 +31,7 @@
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.21.0 Prediction Core</title>
+<title>The競馬 EV分析 v5.21.2 Independent Blend Fix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -364,7 +364,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.20.4 Timeline Collector Fix</span>
+    <span class="ver">v5.21.1 Independent Blend</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -921,7 +921,7 @@ body.right-analysis-active #rightAnalysisPane{
     return /<(?:html|table|tr|li|a)(?:\s|>)/i.test(s);
   };
   window.bridgeText246 = function(url){
-    // v5.20.4 Timeline Collector Fix:
+    // v5.21.1 Independent Blend:
     // Tampermonkey Bridge uses @noframes, so embedded panes borrow the top page Bridge.
     try{
       const qp=new URLSearchParams(location.search);
@@ -19161,7 +19161,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.20.4 Timeline Collector Fix';
+  const VERSION202 = 'v5.21.1 Independent Blend';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
@@ -22052,7 +22052,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   if(window.__V518216_LIVE_COMMENTARY__) return;
   window.__V518216_LIVE_COMMENTARY__ = true;
 
-  const VERSION215 = 'v5.20.4 Timeline Collector Fix';
+  const VERSION215 = 'v5.21.1 Independent Blend';
   const DB_NAME215 = 'thekeiba-odds-timeline-v1';
   const STORE215 = 'captures';
   const TYPES215 = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
@@ -22507,7 +22507,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
 <script>
 (function(){
   'use strict';
-  const VERSION219='v5.20.4 Timeline Collector Fix';
+  const VERSION219='v5.21.1 Independent Blend';
   const CFG_KEY219='thekeiba_timeline_cloud_v219';
   const CFG_GLOBAL_KEY219='thekeiba_timeline_cloud_global';
   const DEFAULT_WORKER_URL219='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
@@ -22899,7 +22899,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
 (function(){
   'use strict';
 
-  const VERSION227 = 'v5.20.4 Timeline Collector Fix';
+  const VERSION227 = 'v5.21.1 Independent Blend';
   let oddsJobSeq227 = 0;
 
   function el227(id){ return document.getElementById(id); }
@@ -23543,7 +23543,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   if(window.__THEKEIBA_232__) return;
   window.__THEKEIBA_232__ = true;
 
-  const VERSION = 'v5.20.4 Timeline Collector Fix';
+  const VERSION = 'v5.21.1 Independent Blend';
   const JRA_VENUE_NAMES = {'01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京','06':'中山','07':'中京','08':'京都','09':'阪神','10':'小倉',
     '30':'門別','35':'盛岡','36':'水沢','42':'浦和','43':'船橋','44':'大井','45':'川崎','46':'金沢','47':'笠松','48':'名古屋','50':'園田','51':'姫路','54':'高知','55':'佐賀','65':'帯広'};
   const $ = id => document.getElementById(id);
@@ -24763,7 +24763,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
 /* The競馬 MultiScreen v2 — pane-owned state; no child application documents. */
 (function () {
   'use strict';
-  const VERSION = 'v5.20.4 Timeline Collector Fix';
+  const VERSION = 'v5.21.1 Independent Blend';
   const MARKETS = ['単勝','複勝','枠連','馬連','ワイド','馬単','3連複','3連単'];
   const VENUES = {
     JRA: {'01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京','06':'中山','07':'中京','08':'京都','09':'阪神','10':'小倉'},
@@ -25776,7 +25776,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
   if(window.__THEKEIBA_PREDICT_CORE_521__) return;
   window.__THEKEIBA_PREDICT_CORE_521__ = true;
 
-  const VERSION = 'v5.21.0 Prediction Core';
+  const VERSION = 'v5.21.2 Independent Blend Fix';
   const TYPES = ['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
   const UNORDERED = new Set(['枠連','ワイド','馬連','3連複']);
   const HIGH_VAR = new Set(['馬単','3連複','3連単']);
@@ -25860,9 +25860,24 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       }
       return {h,no,p,fair,rank};
     });
+    // v5.21.2: all ticket probabilities must consume the same blended weights.
+    // Changing evProbRaw alone does not reach this closed-over prediction core.
+    let independentApplied=false;
+    try{
+      const blend=window.__independentBlend5211;
+      if(blend && typeof blend.enabled==='function' && blend.enabled() && typeof blend.rowsFor==='function'){
+        const blended=blend.rowsFor(hs);
+        const byNumber=new Map((blended||[]).map(r=>[Number(r.num),Number(r.raw)]));
+        const weights=rows.map(r=>byNumber.get(r.no));
+        if(rows.length && weights.every(p=>Number.isFinite(p)&&p>0)){
+          rows.forEach((r,i)=>{r.p=weights[i];});
+          independentApplied=true;
+        }
+      }
+    }catch(e){ console.warn('[v5.21.2] blend unavailable; using core prior',e); }
     let s=rows.reduce((a,r)=>a+r.p,0)||1;
     rows.forEach(r=>r.p/=s);
-    return {rows,n,oddsCoverage,popCoverage,marketOverround:invSum};
+    return {rows,n,oddsCoverage,popCoverage,marketOverround:invSum,independentApplied};
   }
 
   function coherentProbabilities(horses){
@@ -25888,11 +25903,11 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       for(const [k,p] of exacta){
         const [a,b]=k.split('-').map(Number);
         place.set(a,num(place.get(a))+p); place.set(b,num(place.get(b))+p);
-        wide.set(pairKey(a,b),num(wide.get(pairKey(a,b)))+p);
+
       }
     }
 
-    // Top-3 order probabilities are always needed for 3連複/3連単, even when 複勝/ワイド pay only top-2.
+    // Wide uses top-3 even when place pays only top-2 in a small field.
     if(n>=3){
       for(const a of rows){
         const rem1=Math.max(1e-12,1-a.p);
@@ -25906,9 +25921,9 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
             const tk=tripleKey(a.no,b.no,c.no); trio.set(tk,num(trio.get(tk))+p3);
             if(slots===3){
               place.set(a.no,num(place.get(a.no))+p3); place.set(b.no,num(place.get(b.no))+p3); place.set(c.no,num(place.get(c.no))+p3);
-              const ab=pairKey(a.no,b.no), ac=pairKey(a.no,c.no), bc=pairKey(b.no,c.no);
-              wide.set(ab,num(wide.get(ab))+p3); wide.set(ac,num(wide.get(ac))+p3); wide.set(bc,num(wide.get(bc))+p3);
             }
+            const ab=pairKey(a.no,b.no), ac=pairKey(a.no,c.no), bc=pairKey(b.no,c.no);
+            wide.set(ab,num(wide.get(ab))+p3); wide.set(ac,num(wide.get(ac))+p3); wide.set(bc,num(wide.get(bc))+p3);
           }
         }
       }
@@ -25972,7 +25987,8 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       expectedReturn:ev*(num(settings?.unit,100)||100),
       oddsSource:oddsInfo.source, oddsVerified:!!oddsInfo.verified, oddsStale:!!oddsInfo.stale, precloseVerified:!!oddsInfo.preclose,
       recommendationEligible:allowed, researchOnly:!allowed,
-      modelQuality:qualityLabel(base,oddsInfo), modelVersion:'PL-COHERENT-v5.21.0',
+      modelQuality:qualityLabel(base,oddsInfo), modelVersion:'PL-COHERENT-v5.21.2',
+      probabilitySource:base.independentApplied?'independent-blend':'core-prior',
       oddsProvider:oddsInfo.provider||'', oddsCapturedMs:num(oddsInfo.ts,0)
     };
   }
@@ -26006,7 +26022,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       win:sum(cp.win), place:sum(cp.place), exacta:sum(cp.exacta), quinella:sum(cp.quinella),
       wide:sum(cp.wide), trio:sum(cp.trio), trifecta:sum(cp.trifecta), frameQ:sum(cp.frameQ)
     };
-    const expectedWide=cp.slots>=2 ? (cp.slots*(cp.slots-1))/2 : 0;
+    const expectedWide=cp.pack.n>=3 ? 3 : 0;
     const eps=1e-7;
     const invariants={
       win:Math.abs(sums.win-1)<eps,
@@ -26021,6 +26037,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     const real=recs.filter(r=>r.oddsVerified).length, eligible=recs.filter(r=>r.recommendationEligible).length;
     const stale=recs.filter(r=>r.oddsStale).length, estimated=recs.length-real;
     return {sums,invariants,allInvariant:Object.values(invariants).every(Boolean),real,eligible,stale,estimated,total:recs.length,
+      independentApplied:!!cp.pack.independentApplied,
       oddsCoverage:cp.pack.oddsCoverage,popCoverage:cp.pack.popCoverage,overround:cp.pack.marketOverround,slots:cp.slots,
       validationMode:validationMode(),date:currentDate(),today:todayJst()};
   }
@@ -26109,6 +26126,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     el.innerHTML=`
       <div><b style="color:${d.allInvariant?'var(--green)':'var(--yellow)'}">${ok}</b>：勝率・馬連/馬単・3連複/3連単・複勝/ワイドを同一の着順確率モデルから算出。</div>
       <div>実オッズ確認 <b>${d.real}/${d.total}</b>候補 ／ 推奨可能 <b style="color:var(--green)">${d.eligible}</b> ／ 推定オッズのみ <b>${d.estimated}</b> ／ stale <b>${d.stale}</b></div>
+      <div>共通モデルへの補正反映：${d.independentApplied?'ON':'OFF（従来の基礎勝率）'}</div>
       <div>単勝オッズ網羅率 ${(d.oddsCoverage*100).toFixed(0)}% ／ 人気網羅率 ${(d.popCoverage*100).toFixed(0)}% ／ 単勝overround ${d.overround?d.overround.toFixed(3):'-'}</div>
       <div>${strict?'PRE_RACE_STRICT':'FINAL_RESEARCH'}${strict&&past?'：過去レースは締切前スナップショット実オッズだけを推奨対象':'：現在/研究データ'}。推定オッズ候補は比較表示だけで、買い目には採用しません。</div>`;
   }
@@ -26145,6 +26163,463 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
   };
 })();
 
+</script>
+
+
+<script>
+/* ============================================================
+   v5.21.1 Independent Probability Blend
+   市場オッズ依存を弱め、枠・NAR馬柱補正・任意指数を基礎勝率へ混合
+   ============================================================ */
+(function(){
+  'use strict';
+  if(window.__THEKEIBA_INDEPENDENT_BLEND_5211__) return;
+  window.__THEKEIBA_INDEPENDENT_BLEND_5211__ = true;
+
+  const VERSION = 'v5.21.2 Independent Blend Fix';
+
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, Number(v)));
+  const num = (v, d = 0) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : d;
+  };
+  const safeLog = p => Math.log(Math.max(1e-9, Number(p) || 0));
+  // Missing data must not become a zero-valued independent observation.
+  function indexValue(v){
+    if(typeof v!=='number' && typeof v!=='string') return NaN;
+    if(typeof v==='string' && !v.trim()) return NaN;
+    const n=Number(v);
+    return Number.isFinite(n)?n:NaN;
+  }
+
+  function raceIdNow(){
+    try{
+      return String(
+        (typeof currentRaceId !== 'undefined' && currentRaceId) ||
+        window.currentRaceId ||
+        ''
+      );
+    }catch(e){
+      return String(window.currentRaceId || '');
+    }
+  }
+
+  function isNarRace(){
+    try{
+      if(typeof isNAR === 'function' && isNAR()) return true;
+    }catch(e){}
+    const rid = raceIdNow();
+    const code = rid.slice(4, 6);
+    return /^\d{12}$/.test(rid) && !/^(0[1-9]|10)$/.test(code);
+  }
+
+  function independentBlendEnabled(){
+    try{
+      if(window.settings && settings.independentBlend5211 === false) return false;
+    }catch(e){}
+    return true;
+  }
+
+  function takebackRate(){
+    return isNarRace() ? 0.30 : 0.225;
+  }
+
+  function fieldSize(all){
+    return Math.max(1, (all || []).length);
+  }
+
+  function frameFactor(h, all){
+    const n = fieldSize(all);
+    const frame = num(h.frame, 0);
+    if(frame < 1 || frame > 8) return 1;
+
+    const sizeScale = n >= 14 ? 1.00 : (n >= 10 ? 0.70 : 0.45);
+    let f = 1;
+
+    if(isNarRace()){
+      if(frame <= 2) f = 1.030;
+      else if(frame <= 5) f = 1.012;
+      else if(frame === 6) f = 0.998;
+      else f = 0.982;
+    }else{
+      if(frame <= 2) f = 1.012;
+      else if(frame <= 6) f = 1.006;
+      else f = 0.992;
+    }
+
+    return 1 + (f - 1) * sizeScale;
+  }
+
+  function pastPerformanceFactor(h){
+    try{
+      const rid = raceIdNow();
+      const last = window.__narPastAdjLast;
+      if(!last || String(last.rid || '') !== String(rid)) return 1;
+
+      const m = last.mult;
+      const v = m instanceof Map ? m.get(Number(h.num)) : m && m[String(Number(h.num))];
+      if(!Number.isFinite(Number(v))) return 1;
+
+      return clamp(v, 0.76, 1.32);
+    }catch(e){
+      return 1;
+    }
+  }
+
+  function optionalIndexFactor(h){
+    const fields = [
+      'speedIndex',
+      'formIndex',
+      'last3Index',
+      'distanceScore',
+      'courseScore',
+      'surfaceScore',
+      'classScore',
+      'jockeyScore',
+      'trainerScore',
+      'runningStyleScore'
+    ];
+
+    let total = 0;
+    let used = 0;
+
+    for(const key of fields){
+      const v = indexValue(h[key]);
+      if(Number.isFinite(v)){
+        total += v;
+        used++;
+      }
+    }
+
+    if(!used) return 1;
+
+    const avg = total / used;
+    const z = clamp((avg - 50) / 10, -2.5, 2.5);
+
+    return clamp(1 + z * 0.045, 0.86, 1.16);
+  }
+
+  function independentScore(h, all){
+    return clamp(
+      frameFactor(h, all) *
+      pastPerformanceFactor(h) *
+      optionalIndexFactor(h, all),
+      0.70,
+      1.45
+    );
+  }
+
+  function hasStrongIndependentEvidence(all){
+    const hs = Array.isArray(all) ? all : [];
+
+    try{
+      const rid = raceIdNow();
+      const last = window.__narPastAdjLast;
+      if(last && String(last.rid || '') === String(rid) && last.mult){
+        const vals = last.mult instanceof Map ? [...last.mult.values()] : Object.values(last.mult);
+        if(vals.some(v => Math.abs(num(v, 1) - 1) > 0.015)) return true;
+      }
+    }catch(e){}
+
+    const keys = [
+      'speedIndex',
+      'formIndex',
+      'last3Index',
+      'distanceScore',
+      'courseScore',
+      'surfaceScore',
+      'classScore',
+      'jockeyScore',
+      'trainerScore',
+      'runningStyleScore'
+    ];
+
+    return hs.some(h => keys.some(k => Number.isFinite(indexValue(h[k]))));
+  }
+
+  function hasWeakIndependentEvidence(all){
+    const hs = Array.isArray(all) ? all : [];
+    return hs.some(h => num(h.frame, 0) >= 1);
+  }
+
+  let cacheSig = '';
+  let cacheRows = null;
+  let lastDiag = null;
+
+  function makeSignature(all){
+    const rid = raceIdNow();
+    return rid + '|' + isNarRace() + '|' + (all || []).map(h => [
+      h.num,
+      h.odds,
+      h.pop,
+      h.frame,
+      h.speedIndex,
+      h.formIndex,
+      h.last3Index,
+      h.distanceScore,
+      h.courseScore,
+      h.surfaceScore,
+      h.classScore,
+      h.jockeyScore,
+      h.trainerScore,
+      h.runningStyleScore
+    ].map(v => [typeof v, v]).map(v => JSON.stringify(v)).join(':')).join('|')
+      + '|' + (all || []).map(h => pastPerformanceFactor(h)).join(':');
+  }
+
+  function buildRows(all){
+    const hs = (Array.isArray(all) ? all : []).filter(h => num(h.num, 0) > 0);
+    const n = Math.max(1, hs.length);
+    const takeback = takebackRate();
+
+    const validOdds = hs.map(h => num(h.odds, 0)).filter(o => o > 1);
+
+    const overround = validOdds.length > 1
+      ? validOdds.reduce((s, o) => s + 1 / o, 0)
+      : 1 / Math.max(0.01, 1 - takeback);
+
+    const marketRaw = hs.map(h => {
+      const o = num(h.odds, 0);
+      return o > 1
+        ? (1 / o) / Math.max(overround, 1 / Math.max(0.01, 1 - takeback))
+        : 0;
+    });
+
+    const marketPow = marketRaw.map(p => p > 0 ? Math.pow(p, 0.94) : 0);
+    const marketSum = marketPow.reduce((a, b) => a + b, 0) || 0;
+
+    const popRawTable = Array.from({length:n}, (_, i) => 1 / Math.pow(i + 1, 1.08));
+    const popSumTable = popRawTable.reduce((a, b) => a + b, 0) || 1;
+
+    const rankByOdds = new Map(
+      hs.slice()
+        .filter(h => num(h.odds, 0) > 1)
+        .sort((a, b) => num(a.odds, 9999) - num(b.odds, 9999))
+        .map((h, i) => [Number(h.num), i + 1])
+    );
+
+    const indScores = hs.map(h => independentScore(h, hs));
+    const indSum = indScores.reduce((a, b) => a + b, 0) || n;
+
+    const strong = hasStrongIndependentEvidence(hs);
+    const weak = !strong && hasWeakIndependentEvidence(hs);
+
+    let weights;
+    if(strong){
+      weights = { market:0.65, pop:0.13, independent:0.22 };
+    }else if(weak){
+      weights = { market:0.72, pop:0.18, independent:0.10 };
+    }else{
+      weights = { market:0.80, pop:0.20, independent:0.00 };
+    }
+
+    const rows = hs.map((h, i) => {
+      const pop = num(h.pop, 0);
+      const pMarket = marketSum > 0 ? marketPow[i] / marketSum : 0;
+
+      const usePop = pop >= 1 && pop <= n ? pop : num(rankByOdds.get(Number(h.num)), 0);
+      const pPop = usePop >= 1 && usePop <= n
+        ? (1 / Math.pow(usePop, 1.08)) / popSumTable
+        : 0;
+
+      const pIndependent = indScores[i] / indSum;
+
+      let parts = [];
+      if(pMarket > 0 && weights.market > 0) parts.push([pMarket, weights.market]);
+      if(pPop > 0 && weights.pop > 0) parts.push([pPop, weights.pop]);
+      if(pIndependent > 0 && weights.independent > 0) parts.push([pIndependent, weights.independent]);
+
+      if(!parts.length) parts = [[1 / n, 1]];
+
+      const wsum = parts.reduce((s, x) => s + x[1], 0) || 1;
+      const raw = Math.exp(parts.reduce((s, x) => s + safeLog(x[0]) * x[1], 0) / wsum);
+
+      return {
+        num:Number(h.num),
+        raw,
+        pMarket,
+        pPop,
+        pIndependent,
+        independentScore:indScores[i],
+        weights
+      };
+    });
+
+    lastDiag = {
+      version: VERSION,
+      raceId: raceIdNow(),
+      enabled: independentBlendEnabled(),
+      strongEvidence: strong,
+      weakEvidence: weak,
+      weights,
+      overround,
+      count: n,
+      topIndependent: rows.slice()
+        .sort((a,b) => b.independentScore - a.independentScore)
+        .slice(0, 5)
+        .map(r => ({
+          num:r.num,
+          score:Number(r.independentScore.toFixed(3)),
+          pIndependent:Number((r.pIndependent * 100).toFixed(2))
+        }))
+    };
+
+    window.__independentBlend5211.lastDiag = lastDiag;
+    return rows;
+  }
+
+  function rowsFor(all){
+    const sig = makeSignature(all);
+    if(sig === cacheSig && cacheRows) return cacheRows;
+    cacheSig = sig;
+    cacheRows = buildRows(all);
+    return cacheRows;
+  }
+
+  const prevEvProbRaw = window.evProbRaw || (typeof evProbRaw === 'function' ? evProbRaw : null);
+
+  function improvedEvProbRaw(h, allHorses){
+    try{
+      if(!independentBlendEnabled()){
+        return typeof prevEvProbRaw === 'function'
+          ? prevEvProbRaw.apply(this, arguments)
+          : 1 / Math.max(1, (allHorses || []).length);
+      }
+
+      const rows = rowsFor(allHorses);
+      const row = rows.find(x => Number(x.num) === Number(h.num));
+
+      if(row && Number.isFinite(row.raw) && row.raw > 0) return row.raw;
+
+      return typeof prevEvProbRaw === 'function'
+        ? prevEvProbRaw.apply(this, arguments)
+        : 1 / Math.max(1, (allHorses || []).length);
+    }catch(e){
+      return typeof prevEvProbRaw === 'function'
+        ? prevEvProbRaw.apply(this, arguments)
+        : 1 / Math.max(1, (allHorses || []).length);
+    }
+  }
+
+  window.evProbRaw = improvedEvProbRaw;
+  try{ evProbRaw = improvedEvProbRaw; }catch(e){}
+
+  window.__independentBlend5211 = window.__independentBlend5211 || {};
+  window.__independentBlend5211.version = VERSION;
+  window.__independentBlend5211.rowsFor = rowsFor;
+  window.__independentBlend5211.independentScore = independentScore;
+  window.__independentBlend5211.enabled = independentBlendEnabled;
+  window.__independentBlend5211.lastDiag = lastDiag;
+
+  function installSettingPanel(){
+    try{
+      const mg = document.getElementById('modeGrid');
+      if(!mg || document.getElementById('indBlend5211Panel')) return;
+
+      if(window.settings && settings.independentBlend5211 == null){
+        settings.independentBlend5211 = true;
+        try{
+          localStorage.setItem('tk-html-settings', JSON.stringify(settings));
+        }catch(e){}
+      }
+
+      const p = document.createElement('div');
+      p.id = 'indBlend5211Panel';
+      p.style.cssText = 'margin-top:10px;padding:10px 12px;border:1px solid rgba(96,165,250,.30);border-radius:10px;background:rgba(96,165,250,.055);font-size:11px;line-height:1.6;color:var(--muted)';
+      p.innerHTML =
+        '<label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer">' +
+          '<input id="indBlend5211Toggle" type="checkbox" style="width:18px;height:18px;accent-color:var(--green)">' +
+          '<span><b style="color:var(--text)">🧠 独立補正 v5.21.2</b><br>' +
+          '市場オッズだけに寄せず、枠・NAR馬柱補正・任意指数を基礎勝率へ混合します。' +
+          '強い独立材料あり: 市場65% / 人気13% / 条件22%。弱い材料のみ: 市場72% / 人気18% / 条件10%。</span>' +
+        '</label>' +
+        '<div id="indBlend5211Diag" style="margin-top:6px">診断: 未計算</div>';
+
+      mg.parentElement.insertBefore(p, mg.nextSibling);
+
+      const cb = document.getElementById('indBlend5211Toggle');
+      cb.checked = settings.independentBlend5211 !== false;
+      cb.addEventListener('change', function(){
+        try{
+          settings.independentBlend5211 = !!this.checked;
+          localStorage.setItem('tk-html-settings', JSON.stringify(settings));
+        }catch(e){}
+        cacheSig=''; cacheRows=null;
+        lastDiag=null; window.__independentBlend5211.lastDiag=null;
+        renderDiag();
+      });
+    }catch(e){}
+  }
+
+  function renderDiag(){
+    try{
+      installSettingPanel();
+      const el = document.getElementById('indBlend5211Diag');
+      const d = window.__independentBlend5211.lastDiag;
+      if(!el) return;
+      if(!independentBlendEnabled()){
+        el.textContent='診断: 独立補正OFF。次回のEV計算から従来の基礎勝率を使用します。';
+        return;
+      }
+      if(!d){ el.textContent='診断: 未計算。EV計算で反映します。'; return; }
+
+      const w = d.weights || {};
+      const ev = d.strongEvidence ? '強' : (d.weakEvidence ? '弱' : 'なし');
+      const top = (d.topIndependent || [])
+        .map(x => x.num + '番×' + x.score)
+        .join(' / ');
+
+      el.innerHTML =
+        '診断: 独立材料=' + ev +
+        ' | 市場' + Math.round((w.market || 0) * 100) + '%' +
+        ' / 人気' + Math.round((w.pop || 0) * 100) + '%' +
+        ' / 条件' + Math.round((w.independent || 0) * 100) + '%' +
+        ' | 条件上位 ' + (top || '-');
+    }catch(e){}
+  }
+
+  const prevRunPredict = window.runPredict || (typeof runPredict === 'function' ? runPredict : null);
+  if(typeof prevRunPredict === 'function'){
+    const wrappedRunPredict = function(){
+      const r = prevRunPredict.apply(this, arguments);
+      setTimeout(renderDiag, 0);
+      return r;
+    };
+    window.runPredict = wrappedRunPredict;
+    try{ runPredict = wrappedRunPredict; }catch(e){}
+  }
+
+  function markVersion(){
+    try{
+      window.APP_VERSION = VERSION;
+      const v = document.querySelector('.ver');
+      if(v){
+        const bridge = /🌉/.test(v.textContent || '');
+        v.textContent = VERSION + (bridge ? ' 🌉' : '');
+      }
+      document.title = 'The競馬 EV分析 ' + VERSION;
+    }catch(e){}
+  }
+
+  function boot(){
+    installSettingPanel();
+    renderDiag();
+    markVersion();
+  }
+
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', boot, {once:true});
+  }else{
+    boot();
+  }
+
+  [300, 1200, 3500, 8000, 15000, 26000].forEach(ms => setTimeout(function(){
+    installSettingPanel();
+    markVersion();
+  }, ms));
+
+  console.log('[v5.21.2] Independent Probability Blend connected to prediction core');
+})();
 </script>
 
 </body>

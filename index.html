@@ -40,7 +40,7 @@
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.21 Forecast ChangeOnly Realtime</title>
+<title>The競馬 EV分析 v5.23.22 LightDark ForecastPop NextRace</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -403,7 +403,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.23.21 Forecast ChangeOnly Realtime ☁️ 5s</span>
+    <span class="ver">v5.23.22 LightDark ForecastPop NextRace ☁️ 5s Δ</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -25038,7 +25038,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
 /* The競馬 MultiScreen v2 — pane-owned state; no child application documents. */
 (function () {
   'use strict';
-  const VERSION = 'v5.23.21 Forecast ChangeOnly Realtime';
+  const VERSION = 'v5.23.22 LightDark ForecastPop NextRace';
   const MARKETS = ['単勝','複勝','枠連','馬連','ワイド','馬単','3連複','3連単'];
   const ALL_TICKETS='__ALL__', CUSTOM_TICKETS='__CUSTOM__';
   const TICKET_CHOICES=[ALL_TICKETS,CUSTOM_TICKETS,...MARKETS];
@@ -25219,7 +25219,21 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       if(Number.isInteger(num)&&num>=1&&num<=18&&name)horses.set(num,{num,name,frame:frame>=1&&frame<=8?frame:0});
     }
     const rows=[...horses.values()].sort((a,b)=>a.num-b.num);
-    try{ rows.startTime=extractRaceStartTime231(doc.body?.textContent||''); }catch(_){ rows.startTime=''; }
+    try{
+      let tm='';
+      const sels=['.RaceData01','.Race_Data','.RaceData','.RaceList_Item02','.race_otherdata','.RaceHeader','h1'];
+      for(const sel of sels){
+        for(const el of doc.querySelectorAll(sel)){
+          const tx=String(el.textContent||'').replace(/[０-９：]/g,ch=>ch==='：'?':':String.fromCharCode(ch.charCodeAt(0)-0xFEE0));
+          const mm=tx.match(/(?:発走(?:時刻|予定)?\s*[:：]?\s*)?([01]?\d|2[0-3]):([0-5]\d)/);
+          if(mm){tm=String(Number(mm[1])).padStart(2,'0')+':'+mm[2];break;}
+        }
+        if(tm)break;
+      }
+      if(!tm)tm=extractRaceStartTime231(doc.body?.textContent||'');
+      if(!tm)tm=String(window.__raceStartTimes232?.get(rid)||'');
+      rows.startTime=tm;
+    }catch(_){ rows.startTime=''; }
     // v5.23.15: NARは同じ出馬表HTMLから正式レース名も回収する（追加リクエストなし）。
     try{
       const no=Number(String(rid||'').slice(-2));
@@ -25409,7 +25423,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
                 try{ assertRace('NAR',rid,date); }catch(_){ continue; }
                 const raceNo=Number(x.raceNo||x.race_no||rid.slice(-2));
                 if(!(raceNo>=1&&raceNo<=12))continue;
-                const rawTime=String(x.startTime||x.postTime||x.post_time||'').trim();
+                const rawTime=String(x.startTime||x.postTime||x.post_time||window.__raceStartTimes232?.get(rid)||'').trim();
                 const tm=(rawTime.match(/(?:[01]?\d|2[0-3]):[0-5]\d/)||[])[0]||'';
                 const rawName=clean(x.raceName||x.name||'');
                 const name=safeRaceName52315(rawName,raceNo)||`${raceNo}R`;
@@ -25647,7 +25661,12 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
           for(const [venue,rows] of byVenue){
             rows.sort((a,b)=>Number(a.raceNo)-Number(b.raceNo));
             const now=Date.now();
-            const next=rows.find(r=>Number(r.postMs)>now) || rows[rows.length-1] || rows[0];
+            for(const r of rows){
+              if(!r.startTime){const remembered=String(window.__raceStartTimes232?.get(r.raceId)||'');if(remembered)r.startTime=remembered;}
+              if(!Number(r.postMs)&&r.startTime){const ms=Date.parse(date+'T'+String(r.startTime).padStart(5,'0')+':00+09:00');if(Number.isFinite(ms))r.postMs=ms;}
+            }
+            const timed=rows.filter(r=>Number(r.postMs)>0);
+            const next=timed.find(r=>Number(r.postMs)>now) || (timed.length?timed[timed.length-1]:rows[0]);
             const nextMs=Number(next?.postMs)||Number.MAX_SAFE_INTEGER;
             groups.push({source:pack.source,venue,rows,next,nextMs});
           }
@@ -28792,7 +28811,7 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 'use strict';
 if(window.__FORECAST_CHANGE_ONLY_52321__) return;
 window.__FORECAST_CHANGE_ONLY_52321__=true;
-const V='v5.23.21 Forecast ChangeOnly Realtime';
+const V='v5.23.22 LightDark ForecastPop NextRace';
 const DB='thekeiba-netkeiba-forecast-v1', STORE='captures', POLL=5000, KEY_AUTO='tk-forecast-changeonly-auto-v52321';
 const $=id=>document.getElementById(id);
 const norm=s=>String(s??'').replace(/\u00a0/g,' ').replace(/[\t\r\n]+/g,' ').replace(/[　 ]+/g,' ').trim();
@@ -28980,19 +28999,23 @@ function draw(){
   const ctx=c.getContext('2d'), box=c.getBoundingClientRect();
   const w=Math.max(280,Math.floor(box.width||560)), h=Math.max(180,Math.floor(box.height||220)), dpr=Math.min(2,window.devicePixelRatio||1);
   c.width=w*dpr; c.height=h*dpr; ctx.setTransform(dpr,0,0,dpr,0,0);
-  ctx.clearRect(0,0,w,h); ctx.fillStyle='#07111d'; ctx.fillRect(0,0,w,h);
+  ctx.clearRect(0,0,w,h); ctx.fillStyle=document.documentElement.dataset.theme==='light'?'#f8fafc':'#07111d'; ctx.fillRect(0,0,w,h);
   const no=Number($('forecastHorse52321')?.value||history[history.length-1]?.horses?.[0]?.num||0);
+  const graphMode=$('forecastMetric52322')?.value||'odds';
   const points=[];
   for(const r of history){
     const x=(r.horses||[]).find(z=>Number(z.num)===no);
-    if(x&&Number(x.odds)>0) points.push({t:Number(r.captured_ms),v:Number(x.odds),type:'forecast'});
+    if(graphMode==='pop'){if(x&&Number(x.pop)>0) points.push({t:Number(r.captured_ms),v:Number(x.pop),type:'forecastPop'});}
+    else if(x&&Number(x.odds)>0) points.push({t:Number(r.captured_ms),v:Number(x.odds),type:'forecast'});
   }
-  for(const r of liveRows){
-    const x=(r.markets?.['単勝']||[]).find(z=>Number(z.combination)===no);
-    if(x&&Number(x.odds)>0) points.push({t:Number(r.captured_ms),v:Number(x.odds),type:'live'});
+  if(graphMode!=='pop'){
+    for(const r of liveRows){
+      const x=(r.markets?.['単勝']||[]).find(z=>Number(z.combination)===no);
+      if(x&&Number(x.odds)>0) points.push({t:Number(r.captured_ms),v:Number(x.odds),type:'live'});
+    }
   }
   if(!points.length){
-    ctx.fillStyle='#94a3b8';ctx.font='12px sans-serif';ctx.textAlign='center';ctx.fillText('予想オッズの変化点を取得するとグラフを表示します',w/2,h/2);return;
+    ctx.fillStyle=document.documentElement.dataset.theme==='light'?'#64748b':'#94a3b8';ctx.font='12px sans-serif';ctx.textAlign='center';ctx.fillText(graphMode==='pop'?'予想人気の変化点を取得するとグラフを表示します':'予想オッズの変化点を取得するとグラフを表示します',w/2,h/2);return;
   }
   const t0=Math.min(...points.map(x=>x.t)), t1=Math.max(...points.map(x=>x.t));
   const vals=points.map(x=>x.v); let y0=Math.min(...vals), y1=Math.max(...vals);
@@ -29009,8 +29032,13 @@ function draw(){
     a.forEach((p,i)=>{const x=xx(p.t),y=yy(p.v);if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);});ctx.stroke();
     for(const p of a){ctx.fillStyle=color;ctx.beginPath();ctx.arc(xx(p.t),yy(p.v),2.6,0,Math.PI*2);ctx.fill();}
   }
-  line('forecast','#60a5fa'); line('live','#34d399');
-  ctx.font='10px sans-serif';ctx.textAlign='left';ctx.fillStyle='#60a5fa';ctx.fillText('● netkeiba予想',L,T-7);ctx.fillStyle='#34d399';ctx.fillText('● 実単勝',L+105,T-7);
+  if(graphMode==='pop'){
+    line('forecastPop','#60a5fa');
+    ctx.font='10px sans-serif';ctx.textAlign='left';ctx.fillStyle='#60a5fa';ctx.fillText('● netkeiba予想人気（小さいほど上位）',L,T-7);
+  }else{
+    line('forecast','#60a5fa'); line('live','#34d399');
+    ctx.font='10px sans-serif';ctx.textAlign='left';ctx.fillStyle='#60a5fa';ctx.fillText('● netkeiba予想オッズ',L,T-7);ctx.fillStyle='#34d399';ctx.fillText('● 実単勝',L+128,T-7);
+  }
 }
 function render(){
   populateHorseSelect();
@@ -29080,7 +29108,7 @@ function install(){
   const card=document.createElement('div');
   card.id='forecastCard52321';card.className='card forecast52321';
   card.innerHTML=`<div class="fc-head"><h2>📡 netkeiba予想オッズ・変化点リアルタイム</h2><span class="fc-badge">5秒確認 / 変化時だけ保存</span></div>
-  <div class="fc-tools"><label><input id="forecastAuto52321" type="checkbox">自動監視</label><button id="forecastNow52321" class="btn-sm" type="button">🔄 今すぐ確認</button><button id="forecastJson52321" class="btn-sm" type="button">💾 JSON保存</button><label>馬<select id="forecastHorse52321"></select></label><span id="fcCount52321" class="fc-badge">0変化点</span></div>
+  <div class="fc-tools"><label><input id="forecastAuto52321" type="checkbox">自動監視</label><button id="forecastNow52321" class="btn-sm" type="button">🔄 今すぐ確認</button><button id="forecastJson52321" class="btn-sm" type="button">💾 JSON保存</button><label>馬<select id="forecastHorse52321"></select></label><label>グラフ<select id="forecastMetric52322"><option value="odds">予想オッズ＋実単勝</option><option value="pop">予想人気</option></select></label><span id="fcCount52321" class="fc-badge">0変化点</span></div>
   <div id="forecastStatus52321" class="fc-status wait">レース選択後、netkeibaの「予想オッズ」列を5秒ごとに確認します。</div>
   <div class="fc-kpis"><div class="fc-kpi"><b id="fcOdds52321">—</b><span>予想オッズ</span></div><div class="fc-kpi"><b id="fcPop52321">—</b><span>予想人気</span></div><div class="fc-kpi"><b id="fcLive52321">—</b><span>実単勝オッズ</span></div><div class="fc-kpi"><b id="fcGap52321">—</b><span>実÷予想 乖離</span></div><div class="fc-kpi"><b id="fcProb52321">—</b><span>予想市場確率(正規化)</span></div><div class="fc-kpi"><b id="fcMove52321">—</b><span>前回変化点比</span></div></div>
   <div class="fc-chart-wrap"><canvas id="forecastChart52321"></canvas></div>
@@ -29089,7 +29117,7 @@ function install(){
   const auto=$('forecastAuto52321');let saved=null;try{saved=localStorage.getItem(KEY_AUTO);}catch(e){}
   auto.checked=saved===null?true:saved==='1';
   auto.onchange=()=>{try{localStorage.setItem(KEY_AUTO,auto.checked?'1':'0');}catch(e){}setStatus(`自動監視 ${auto.checked?'ON':'OFF'} / 5秒確認・変化時のみ保存`,auto.checked?'ok':'wait');if(auto.checked)check(true);};
-  $('forecastNow52321').onclick=()=>check(true);$('forecastJson52321').onclick=exportJson;$('forecastHorse52321').onchange=()=>render();
+  $('forecastNow52321').onclick=()=>check(true);$('forecastJson52321').onclick=exportJson;$('forecastHorse52321').onchange=()=>render();$('forecastMetric52322').onchange=()=>draw();
   ['raceSelect','raceUrl','pickKind','pickVenue'].forEach(id=>$(id)?.addEventListener(id==='raceUrl'?'input':'change',()=>{setTimeout(()=>{const r=currentRid();if(r!==activeRid)loadRace(r).then(()=>{if(auto.checked)check(true);});},300);}));
   window.addEventListener('resize',()=>draw());
 }
@@ -29103,6 +29131,83 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 [500,2000,7000,16000,32000,60000,120000,180000].forEach(ms=>setTimeout(()=>{install();stamp();},ms));
 document.addEventListener('visibilitychange',()=>{if(!document.hidden){stamp();if($('forecastAuto52321')?.checked)check(true);}});
 window.checkNetkeibaForecast52321=()=>check(true);window.exportNetkeibaForecast52321=exportJson;
+})();
+</script>
+
+
+<!-- v5.23.22: Light/Dark theme + forecast odds/popularity visibility + start-time/next-race UX -->
+<style id="theme-v52322-css">
+html[data-theme="light"]{
+  --bg:#eef3f8;--surface:#ffffff;--card:#f8fafc;--border:#cbd5e1;--text:#0f172a;--muted:#526174;
+  --accent:#00a85a;--green:#07884b;--red:#c62828;--yellow:#9a6700;--glass:rgba(255,255,255,.88);
+  color-scheme:light;
+}
+html[data-theme="light"] body{
+  background:linear-gradient(180deg,#f7fafc 0%,#edf3f8 45%,#e8eef5 100%);color:var(--text);
+}
+html[data-theme="light"] .header{background:rgba(255,255,255,.96);box-shadow:0 7px 24px rgba(15,23,42,.08),inset 0 -1px 0 rgba(0,168,90,.15)}
+html[data-theme="light"] .card,html[data-theme="light"] .right-analysis-panel,html[data-theme="light"] .archive-json-modal5213 .modal-card{background:var(--card)!important;color:var(--text)!important}
+html[data-theme="light"] .field input,html[data-theme="light"] .field select,html[data-theme="light"] .field textarea,
+html[data-theme="light"] .btn-sm,html[data-theme="light"] .tab-btn,html[data-theme="light"] .mode-btn,
+html[data-theme="light"] select,html[data-theme="light"] input,html[data-theme="light"] textarea{background:#fff;color:#0f172a;border-color:#cbd5e1}
+html[data-theme="light"] select option{background:#fff;color:#0f172a}
+html[data-theme="light"] .result-table th,html[data-theme="light"] .summary-item,html[data-theme="light"] .progress,html[data-theme="light"] .chart-box{background:#edf3f8}
+html[data-theme="light"] .sim-result-row{background:rgba(255,255,255,.72)}
+html[data-theme="light"] .msv2{background:#eaf0f6;color:#0f172a;color-scheme:light}
+html[data-theme="light"] .msv2-toolbar,html[data-theme="light"] .msv2-planbar{background:#f8fafc!important;border-color:#cbd5e1!important;color:#0f172a!important}
+html[data-theme="light"] .msv2-pane{background:#fff!important;border-color:#b8c6d5!important;color:#0f172a!important}
+html[data-theme="light"] .msv2-pane-heading{background:#eef4f8!important;border-color:#cbd5e1!important}
+html[data-theme="light"] .msv2-scroll{background:#fff!important}
+html[data-theme="light"] .msv2-fields input,html[data-theme="light"] .msv2-fields select,html[data-theme="light"] .msv2-fields button,
+html[data-theme="light"] .msv2-actions button,html[data-theme="light"] .msv2-rank-presets button,
+html[data-theme="light"] .msv2-toolbar button,html[data-theme="light"] .msv2-planbar button{background:#f8fafc!important;color:#0f172a!important;border-color:#b9c7d6!important}
+html[data-theme="light"] .msv2-identity{background:#e7f6ef!important;color:#0f5132!important}
+html[data-theme="light"] .msv2-status,html[data-theme="light"] .msv2-gap-status,html[data-theme="light"] .msv2-market-filter,
+html[data-theme="light"] .msv2-rank-scroll,html[data-theme="light"] .msv2-diagnostics,html[data-theme="light"] .msv2-rank-help{background:#f8fafc!important;color:#334155!important;border-color:#cbd5e1!important}
+html[data-theme="light"] .msv2-rank-table th{background:#edf3f8!important;color:#334155!important}
+html[data-theme="light"] .msv2-rank-table td{border-color:#dbe3ec!important;color:#0f172a!important}
+html[data-theme="light"] .msv2-note,html[data-theme="light"] .msv2-rank-help,html[data-theme="light"] .msv2-rank-status{color:#526174!important}
+html[data-theme="light"] .forecast52321 .fc-status{background:#eef4f8;color:#334155}
+html[data-theme="light"] .forecast52321 .fc-kpi{background:#f7fafc;border-color:#d3dde8}
+html[data-theme="light"] .forecast52321 .fc-chart-wrap{background:#f8fafc}
+html[data-theme="light"] .forecast52321 .fc-badge{color:#1e40af;background:#eff6ff;border-color:#93c5fd}
+.theme-toggle52322{white-space:nowrap;min-height:32px}
+.msv2-theme-toggle52322{white-space:nowrap}
+.forecast52321 .fc-head h2::after{content:' + 人気';font-size:10px;color:var(--muted);margin-left:6px;font-weight:700}
+@media(max-width:780px){.theme-toggle52322{padding:5px 8px;font-size:11px}.header .ver{display:none}}
+</style>
+<script id="theme-forecast-starttime-v52322">
+(function(){
+'use strict';
+if(window.__THEKEIBA_52322_PATCH__)return;window.__THEKEIBA_52322_PATCH__=true;
+const VERSION='v5.23.22 LightDark ForecastPop NextRace';
+const KEY='thekeiba-theme-v52322';
+const root=document.documentElement;
+function preferred(){try{const s=localStorage.getItem(KEY);if(s==='light'||s==='dark')return s;}catch(_){}return matchMedia?.('(prefers-color-scheme: light)').matches?'light':'dark';}
+function setTheme(v){v=v==='light'?'light':'dark';root.dataset.theme=v;try{localStorage.setItem(KEY,v);}catch(_){};document.querySelectorAll('.theme-toggle52322,.msv2-theme-toggle52322').forEach(b=>{b.textContent=v==='light'?'🌙 ダーク':'☀️ ライト';b.setAttribute('aria-label',v==='light'?'ダークモードに切替':'ライトモードに切替');});try{window.TheKeibaMultiV2?.workspace?.panes?.filter(p=>p?.visible).forEach(p=>window.TheKeibaMultiV2.workspace.draw(p));}catch(_){};try{window.dispatchEvent(new Event('resize'));}catch(_){}}
+function toggle(){setTheme(root.dataset.theme==='light'?'dark':'light');}
+function installMain(){const h=document.querySelector('.header>div:last-child');if(h&&!document.getElementById('themeToggle52322')){const b=document.createElement('button');b.id='themeToggle52322';b.type='button';b.className='btn-sm theme-toggle52322';b.onclick=toggle;h.insertBefore(b,h.firstChild);}}
+function installMulti(){const ws=window.TheKeibaMultiV2?.workspace;if(!ws?.root)return;const bar=ws.root.querySelector('.msv2-toolbar');if(bar&&!bar.querySelector('.msv2-theme-toggle52322')){const b=document.createElement('button');b.type='button';b.className='msv2-theme-toggle52322';b.onclick=toggle;const close=bar.querySelector('[data-action="close"]');bar.insertBefore(b,close);}}
+function stamp(){document.title='The競馬 EV分析 '+VERSION;document.querySelectorAll('.ver').forEach(e=>e.textContent=VERSION+' ☁️ 5s Δ');window.APP_VERSION=VERSION;}
+setTheme(preferred());
+function boot(){installMain();installMulti();stamp();}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
+[300,900,2000,5000,10000,20000,40000,80000].forEach(ms=>setTimeout(boot,ms));
+
+// MultiScreenが後からbuildされた場合にもテーマ切替ボタンを追加する。
+const api=window.TheKeibaMultiV2,Proto=api?.MultiPaneWorkspace?.prototype;
+if(Proto&&!Proto.__theme52322Wrapped){Proto.__theme52322Wrapped=true;const oldBuild=Proto.build;Proto.build=function(){const r=oldBuild.apply(this,arguments);setTimeout(()=>{installMulti();setTheme(root.dataset.theme||'dark');},0);return r;};}
+
+// 予想オッズ履歴には人気も必ず保存される。旧履歴にpopが無い場合は0として扱い、UIは「—」。
+window.addEventListener('thekeiba-forecast-change',e=>{
+  const d=e?.detail;if(!d||!Array.isArray(d.horses))return;
+  d.horses=d.horses.map(h=>({...h,pop:Number(h.pop||0)}));
+});
+
+// Safari復帰後、発走時刻キャッシュを各Paneへ反映する。
+function repairTimes(){try{const ws=window.TheKeibaMultiV2?.workspace;if(!ws)return;for(const p of ws.panes||[]){if(!p?.raceId)continue;const tm=String(window.__raceStartTimes232?.get(p.raceId)||p.race?.startTime||'');if(tm&&p.race&&!p.race.startTime){p.race.startTime=tm;const rr=p.races?.find(r=>r.raceId===p.raceId);if(rr){rr.startTime=tm;if(!Number(rr.postMs)){const ms=Date.parse(p.date+'T'+tm+':00+09:00');if(Number.isFinite(ms))rr.postMs=ms;}}ws.renderSelectors?.(p);ws.render?.(p);}}}catch(_){}}
+window.addEventListener('pageshow',repairTimes);document.addEventListener('visibilitychange',()=>{if(!document.hidden)setTimeout(repairTimes,250);});
+[1500,5000,12000,30000].forEach(ms=>setTimeout(repairTimes,ms));
 })();
 </script>
 </body>

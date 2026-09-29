@@ -40,7 +40,7 @@
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.11 Safari Light + Tap Fix + All Venues</title>
+<title>The競馬 EV分析 v5.23.12 Safari Light + Success Fix + All Venues</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -396,7 +396,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.23.11 Safari Light + Tap Fix + All Venues ☁️ 5s</span>
+    <span class="ver">v5.23.12 Safari Light + Success Fix + All Venues ☁️ 5s</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -24992,7 +24992,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
 /* The競馬 MultiScreen v2 — pane-owned state; no child application documents. */
 (function () {
   'use strict';
-  const VERSION = 'v5.23.11 Safari Light + Tap Fix + All Venues';
+  const VERSION = 'v5.23.12 Safari Light + Success Fix + All Venues';
   const MARKETS = ['単勝','複勝','枠連','馬連','ワイド','馬単','3連複','3連単'];
   const VENUES = {
     JRA: {'01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京','06':'中山','07':'中京','08':'京都','09':'阪神','10':'小倉'},
@@ -25437,6 +25437,29 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       await new Promise(r=>requestAnimationFrame(()=>r()));
       const date=validDay(this.planDate)?this.planDate:today();
       this.planDate=date;this.markManual();
+      if(this.__autoAllVenuesBusy){
+        if(button){button.disabled=false;button.textContent=oldText;}
+        return;
+      }
+      this.__autoAllVenuesBusy=true;
+
+      const placedSnapshot=()=>{
+        const seen=new Set(),items=[];
+        for(const p of this.panes||[]){
+          if(!p || p.date!==date || !p.source || !p.venue || !p.raceId)continue;
+          if(!VENUES[p.source]?.[p.venue])continue;
+          const k=p.source+'|'+p.venue;if(seen.has(k))continue;seen.add(k);
+          items.push({source:p.source,venue:p.venue});
+        }
+        return items;
+      };
+      const successSummary=(items,note='')=>{
+        const names=items.map(g=>`${g.source}:${VENUES[g.source][g.venue]}`).join(' / ');
+        const summary=this.$('.plan-summary');
+        if(summary)summary.textContent=`✅ 全開催場 ${items.length}場取得成功 ${date} ｜ ${names}${note}`;
+        if(button)button.textContent=`🏟 全開催場 ${items.length}`;
+      };
+
       try{
         // JRA/NARを独立取得。開催がない区分の失敗は全体を止めない。
         const settled=await Promise.all(['JRA','NAR'].map(async source=>{
@@ -25525,16 +25548,24 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
         }));
 
         this.save();this.updatePlanSummary();
-        const names=chosen.map(g=>`${g.source}:${VENUES[g.source][g.venue]}`).join(' / ');
         const extra=uniq.length>6?` / 全${uniq.length}場中、発走が近い6場を表示`:'';
-        const summary=this.$('.plan-summary');
-        if(summary)summary.textContent=`全開催場自動配置 ${date} ｜ ${names}${extra}`;
-        if(button)button.textContent=uniq.length>6?`🏟 全開催場 ${chosen.length}/${uniq.length}`:`🏟 全開催場 ${count}`;
+        successSummary(chosen.map(g=>({source:g.source,venue:g.venue})),extra);
+        if(button && uniq.length>6)button.textContent=`🏟 全開催場 ${chosen.length}/${uniq.length}`;
       }catch(e){
-        const summary=this.$('.plan-summary');
-        if(summary)summary.textContent='⚠️ 全開催場の自動配置に失敗：'+String(e?.message||e);
-        if(button)button.textContent='🏟 全開催場';
+        // 取得経路の一部が失敗しても、画面側に同日・重複なしの有効開催場が
+        // 既に配置済みなら「失敗」扱いにしない。Safariで成功後に遅い通信が
+        // エラーを返して警告へ上書きされるケースを防ぐ。
+        const placed=placedSnapshot();
+        if(placed.length){
+          successSummary(placed,' / 画面配置を確認済み');
+          console.warn('[v5.23.12] 開催一覧の一部取得は失敗したが、既存の有効配置を成功扱いにしました',e);
+        }else{
+          const summary=this.$('.plan-summary');
+          if(summary)summary.textContent='⚠️ 全開催場の自動配置に失敗：'+String(e?.message||e);
+          if(button)button.textContent='🏟 全開催場';
+        }
       }finally{
+        this.__autoAllVenuesBusy=false;
         if(button)button.disabled=false;
       }
     }
@@ -27808,7 +27839,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
 <script id="worker-hybrid-v5215-version-lock">
 (function(){
   'use strict';
-  const V='v5.23.11 Safari Light + Tap Fix + All Venues';
+  const V='v5.23.12 Safari Light + Success Fix + All Venues';
   function mark(){
     try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;const el=document.querySelector('.ver');if(el)el.textContent=V+(window.__NAR_BRIDGE_READY__?' 🌉':'')+' ☁️';}catch(e){}
   }
@@ -27874,7 +27905,7 @@ function mark(){try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;
 <script id="canonical-version-v5230">
 (function(){
  'use strict';
- const V='v5.23.11 Safari Light + Tap Fix + All Venues';
+ const V='v5.23.12 Safari Light + Success Fix + All Venues';
  function mark(){
    try{
      window.APP_VERSION=V;
@@ -28020,7 +28051,7 @@ function mark(){try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;
    Existing parsers remain primary; missing official payout rows are merged in. */
 (function(){
 'use strict';
-const V='v5.23.11 Safari Light + Tap Fix + All Venues';
+const V='v5.23.12 Safari Light + Success Fix + All Venues';
 const oldP=window.parsePayoutsFromResultDoc || (typeof parsePayoutsFromResultDoc==='function'?parsePayoutsFromResultDoc:null);
 const oldF=window.parseFinishFromResultDoc || (typeof parseFinishFromResultDoc==='function'?parseFinishFromResultDoc:null);
 const norm=s=>String(s||'').normalize('NFKC').replace(/[‐‑‒–—―−]/g,'-').replace(/\u00a0/g,' ');
@@ -28075,7 +28106,7 @@ stamp();document.addEventListener('DOMContentLoaded',stamp,{once:true});[500,200
 <script id="repair-v5234-final">
 (function(){
   'use strict';
-  const V='v5.23.11 Safari Light + Tap Fix + All Venues';
+  const V='v5.23.12 Safari Light + Success Fix + All Venues';
   function stamp(){
     window.APP_VERSION=V;
     document.title='The競馬 EV分析 '+V;
@@ -28090,7 +28121,7 @@ stamp();document.addEventListener('DOMContentLoaded',stamp,{once:true});[500,200
 <script id="classic-ui-all-venues-v5238-final">
 (function(){
   'use strict';
-  const V='v5.23.11 Safari Light + Tap Fix + All Venues';
+  const V='v5.23.12 Safari Light + Success Fix + All Venues';
   function stamp(){
     try{
       window.APP_VERSION=V;
@@ -28109,7 +28140,7 @@ stamp();document.addEventListener('DOMContentLoaded',stamp,{once:true});[500,200
 <script id="classic-ui-nohang-v5239-final">
 (function(){
   'use strict';
-  const V='v5.23.11 Safari Light + Tap Fix + All Venues';
+  const V='v5.23.12 Safari Light + Success Fix + All Venues';
   const $=id=>document.getElementById(id);
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
   function timeout(p,ms,label){
@@ -28274,18 +28305,18 @@ stamp();document.addEventListener('DOMContentLoaded',stamp,{once:true});[500,200
 </script>
 
 
-<style id="safari-light-v52311-css">
-#safariLight52311{margin:8px 0;padding:8px 10px;border:1px solid rgba(52,211,153,.28);border-radius:9px;background:rgba(52,211,153,.08);color:#bbf7d0;font-size:11px;line-height:1.55}
+<style id="safari-light-v52312-css">
+#safariLight52312{margin:8px 0;padding:8px 10px;border:1px solid rgba(52,211,153,.28);border-radius:9px;background:rgba(52,211,153,.08);color:#bbf7d0;font-size:11px;line-height:1.55}
 </style>
-<script id="safari-light-v52311">
+<script id="safari-light-v52312">
 (function(){
  'use strict';
- const V='v5.23.11 Safari Light + Tap Fix + All Venues';
+ const V='v5.23.12 Safari Light + Success Fix + All Venues';
  function mark(){try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;const e=document.querySelector('.ver');if(e)e.textContent=V+' ☁️ 5s';}catch(_){}}
  function ui(){
    const host=document.getElementById('bridgeModeBar252')||document.getElementById('tab-horses');
-   if(!host||document.getElementById('safariLight52311'))return;
-   const d=document.createElement('div');d.id='safariLight52311';
+   if(!host||document.getElementById('safariLight52312'))return;
+   const d=document.createElement('div');d.id='safariLight52312';
    d.innerHTML='🍃 <b>Safari軽量モード</b>：起動時の5秒オッズ収集と締切3分前の端末監視を停止しています。必要な機能だけONにすると、Safari全体の負荷を抑えられます。';
    host.insertAdjacentElement(host.id==='bridgeModeBar252'?'afterend':'afterbegin',d);
  }

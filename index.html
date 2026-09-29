@@ -27731,5 +27731,81 @@ function mark(){try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;
 })();
 </script>
 
+
+<script id="nar-official-primary-v5231">
+/* v5.23.1 — NAR official API is authoritative for race-list loading.
+   Bypasses nar.netkeiba race_list / Bridge for NAR list discovery.
+   Worker route: /nar-races -> keiba.go.jp. JRA path is unchanged. */
+(function(){
+ 'use strict';
+ const VERSION='v5.23.1 NAR Official Primary';
+ const $=id=>document.getElementById(id);
+ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+ function base(){
+   const raw=String($('proxyUrl')?.value || window.settings?.proxyUrl || '').trim();
+   return raw.replace(/\/+$/,'');
+ }
+ function setVersion(){
+   try{ window.APP_VERSION=VERSION; document.title='The競馬 EV分析 '+VERSION; const e=document.querySelector('.ver'); if(e)e.textContent=VERSION+' ☁️ 5s'; }catch(_){}
+ }
+ function raceUrl(rid){ return `https://nar.netkeiba.com/race/shutuba.html?race_id=${encodeURIComponent(rid)}&rf=race_submenu`; }
+ async function narOfficial(date,venueCode){
+   const b=base(); if(!b) throw new Error('Workers URL未設定');
+   const u=`${b}/nar-races?date=${encodeURIComponent(date)}&venue_code=${encodeURIComponent(venueCode)}&timeout=12000&_=${Date.now()}`;
+   const ac=new AbortController(), timer=setTimeout(()=>ac.abort(),15000);
+   try{
+     const r=await fetch(u,{cache:'no-store',signal:ac.signal,headers:{Accept:'application/json'}});
+     const t=await r.text(); let j; try{j=JSON.parse(t)}catch(_){throw new Error(`WorkerがJSON以外を返しました (HTTP ${r.status})`)}
+     if(!r.ok || !j?.ok) throw new Error(j?.error || `Worker HTTP ${r.status}`);
+     return j;
+   } finally { clearTimeout(timer); }
+ }
+ function render(j,date,venueCode){
+   const sel=$('raceSelect'), input=$('raceUrl'), box=$('raceTitleBox'), status=$('urlStatus');
+   if(!sel) return [];
+   const rows=Array.isArray(j?.races)?j.races:[];
+   const vname=String(j?.venue_name || (typeof venueName==='function'?venueName('NAR',venueCode):venueCode) || venueCode);
+   if(!rows.length){
+     sel.innerHTML=`<option value="">${j?.noRace?'この日は開催がありません':'レースを確認できません'}</option>`;
+     if(input)input.value='';
+     if(status)status.innerHTML=`<div class="url-status ${j?.noRace?'':'err'}">${j?.noRace?'ℹ️':'⚠️'} ${esc(date)} ${esc(vname)}：${j?.noRace?'地方競馬公式で開催なしを確認':'地方競馬公式APIは0件を返しました（開催なしとは断定しません）'}</div>`;
+     return [];
+   }
+   rows.sort((a,b)=>Number(a.race_no)-Number(b.race_no));
+   sel.innerHTML=rows.map(r=>{
+     const rid=String(r.race_id||''), no=Number(r.race_no||rid.slice(-2)), name=String(r.race_name||`${no}R`), post=String(r.post_time||r.discovered_post_time||'');
+     const label=`${String(date).replace(/-/g,'/')} ${vname} ${no}R${post?' '+post+'発走':''} ${name} / ${rid}`;
+     return `<option value="${esc(raceUrl(rid))}" data-race-id="${esc(rid)}" data-race-name="${esc(name)}" data-post-time="${esc(post)}">${esc(label)}</option>`;
+   }).join('');
+   const opt=sel.options[0];
+   if(opt){
+     if(input)input.value=opt.value;
+     window.currentRaceId=opt.dataset.raceId||''; window.currentRaceName=opt.dataset.raceName||'';
+     if(box){box.style.display='block';box.textContent=opt.textContent||'';}
+     try{ if(typeof applySelectedRaceUrl==='function') applySelectedRaceUrl(); }catch(_){}
+   }
+   if(status)status.innerHTML=`<div class="url-status ok">✅ ${esc(date)} ${esc(vname)} ${rows.length}R<br><span style="font-size:11px;opacity:.86">NAR主経路: Worker /nar-races → keiba.go.jp（nar.netkeiba一覧/Bridgeを不使用）</span></div>`;
+   return rows;
+ }
+ const previous=window.loadRaceList || (typeof loadRaceList==='function'?loadRaceList:null);
+ const canonical=async function(){
+   const kind=$('pickKind')?.value||'JRA';
+   if(kind!=='NAR') return typeof previous==='function'?previous.apply(this,arguments):undefined;
+   const date=$('pickDate')?.value || (typeof todayYmd==='function'?todayYmd():'');
+   const code=$('pickVenue')?.value||''; const status=$('urlStatus');
+   if(!code){if(status)status.innerHTML='<div class="url-status">開催場を選択してください</div>';return []}
+   if(status)status.innerHTML=`<div class="url-status">🌐 ${esc(date)} ${esc(typeof venueName==='function'?venueName('NAR',code):code)} を地方競馬公式から取得中...</div>`;
+   try{return render(await narOfficial(date,code),date,code)}catch(e){
+     if(status)status.innerHTML=`<div class="url-status err">❌ NAR公式API取得失敗: ${esc(e?.message||e)}<br><span style="font-size:11px;opacity:.86">Workerの /nar-races と keiba.go.jp 経路を確認してください。nar.netkeiba一覧へは自動退避しません。</span></div>`;
+     const sel=$('raceSelect'); if(sel)sel.innerHTML='<option value="">NAR公式API取得失敗</option>'; return [];
+   }
+ };
+ window.loadRaceList=canonical; try{loadRaceList=canonical}catch(_){}
+ // Existing late scripts repeatedly rewrite the version label; keep this build identifiable.
+ setVersion(); [100,700,2200,6500,16000,31000,53000].forEach(ms=>setTimeout(setVersion,ms));
+ document.addEventListener('visibilitychange',()=>{if(!document.hidden)setVersion()});
+})();
+</script>
+
 </body>
 </html>

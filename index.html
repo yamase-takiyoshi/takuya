@@ -40,7 +40,7 @@
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.7 All Venues Auto Sync Fix + All Results + All Payouts</title>
+<title>The競馬 EV分析 v5.23.8 Classic UI + All Venues Auto</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -396,7 +396,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.23.7 All Venues Auto Sync Fix + All Results + All Payouts ☁️ 5s</span>
+    <span class="ver">v5.23.8 Classic UI + All Venues Auto ☁️ 5s</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -23757,7 +23757,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   if(window.__THEKEIBA_232__) return;
   window.__THEKEIBA_232__ = true;
 
-  const VERSION = 'v5.23.7 All Venues Auto Sync Fix + All Results + All Payouts';
+  const VERSION = 'v5.23.4 All Results + All Payouts';
   const JRA_VENUE_NAMES = {'01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京','06':'中山','07':'中京','08':'京都','09':'阪神','10':'小倉',
     '30':'門別','35':'盛岡','36':'水沢','42':'浦和','43':'船橋','44':'大井','45':'川崎','46':'金沢','47':'笠松','48':'名古屋','50':'園田','51':'姫路','54':'高知','55':'佐賀','65':'帯広'};
   const $ = id => document.getElementById(id);
@@ -24986,7 +24986,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
 /* The競馬 MultiScreen v2 — pane-owned state; no child application documents. */
 (function () {
   'use strict';
-  const VERSION = 'v5.23.7 All Venues Auto Sync Fix + All Results + All Payouts';
+  const VERSION = 'v5.23.8 Classic UI + All Venues Auto';
   const MARKETS = ['単勝','複勝','枠連','馬連','ワイド','馬単','3連複','3連単'];
   const VENUES = {
     JRA: {'01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京','06':'中山','07':'中京','08':'京都','09':'阪神','10':'小倉'},
@@ -25221,6 +25221,48 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       source,
       async getRaces(date,{signal}={}){
         if(!/^\d{4}-\d{2}-\d{2}$/.test(date))throw new Error('日付を選択してください');
+
+        // v5.23.8: NARは「現在選択中の1場」ではなく、当日の公式開催一覧に載る
+        // 全開催場の出馬表リンクを集約する。各Paneはここから別々の開催場を選ぶ。
+        if(source==='NAR' &&
+           typeof fetchNarOfficialRaceListHtml==='function' &&
+           typeof parseNarOfficialVenueCodesFromList==='function'){
+          try{
+            const baseHtml=await abortable(fetchNarOfficialRaceListHtml(date,''),signal);
+            checkAbort(signal);
+            const codes=parseNarOfficialVenueCodesFromList(baseHtml,date);
+            const byId=new Map();
+            for(const code of codes){
+              checkAbort(signal);
+              let list=[];
+              try{
+                if(typeof loadNarRaceListFromOfficialList==='function'){
+                  list=await abortable(loadNarRaceListFromOfficialList(date,code),signal);
+                }
+              }catch(_){ list=[]; }
+              if(!list.length && typeof parseNarRaceListOfficial==='function'){
+                try{ list=parseNarRaceListOfficial(baseHtml,date,code)||[]; }catch(_){ list=[]; }
+              }
+              for(const x of list||[]){
+                const rid=String(x.raceId||x.race_id||'');
+                try{ assertRace('NAR',rid,date); }catch(_){ continue; }
+                const raceNo=Number(x.raceNo||x.race_no||rid.slice(-2));
+                if(!(raceNo>=1&&raceNo<=12))continue;
+                const rawTime=String(x.startTime||x.postTime||x.post_time||'').trim();
+                const tm=(rawTime.match(/(?:[01]?\d|2[0-3]):[0-5]\d/)||[])[0]||'';
+                const name=clean(x.raceName||x.name||`${raceNo}R`)||`${raceNo}R`;
+                byId.set(rid,{source:'NAR',date,raceId:rid,venue:rid.slice(4,6),raceNo,name,startTime:tm,
+                  postMs:tm?Date.parse(date+'T'+tm.padStart(5,'0')+':00+09:00'):0});
+              }
+            }
+            const all=[...byId.values()].sort((a,b)=>a.venue.localeCompare(b.venue)||a.raceNo-b.raceNo);
+            if(all.length){ all.transport='NAR公式・全開催場出馬表一覧'; return all; }
+          }catch(e){
+            if(e?.name==='AbortError')throw e;
+            console.warn('[v5.23.8] NAR全開催場の公式一覧取得を通常経路へフォールバック',e);
+          }
+        }
+
         const host=source==='JRA'?'race':'nar',page=source==='JRA'?'race_list_sub':'race_list';
         const url=`https://${host}.netkeiba.com/top/${page}.html?kaisai_date=${date.replace(/-/g,'')}`;
         const r=await read(url,signal);checkAbort(signal);const rows=parseRaceList(r.text,source,date,r.finalUrl||url);rows.transport=r.path||'';return rows;
@@ -25365,23 +25407,129 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       this.mode=MODES.includes(saved.mode)?saved.mode:2;this.active=Math.max(0,Math.min(5,Number(saved.active)||0));
       const root=document.createElement('div');root.id='multiWorkspaceV2';root.className='msv2';root.hidden=true;
       root.innerHTML=`<div class="msv2-toolbar"><strong>時系列オッズ <small>曜日別マルチ画面</small></strong><span class="msv2-hybrid-mode">☁️ Worker優先 → 🌉 Bridge自動切替</span>
-        <button data-action="mixed">JRA｜NAR</button>${MODES.map(n=>`<button data-mode="${n}">${n}画面</button>`).join('')}
-        <button data-action="planner">⚙ 配置設定</button><button data-action="next">画面切替</button><button data-action="sync">同じR</button><span class="msv2-sync-info">選択画面 A のR番号を同期</span><button data-action="close" class="msv2-close">閉じる</button></div><div class="msv2-planbar"><label>配置日 <input class="plan-date" type="date" aria-label="自動配置の基準日"></label><button data-action="today">今日</button><button data-action="planned">設定した配置に戻す</button><button data-action="allvenues">🏟 全開催場</button><span class="plan-summary" role="status"></span></div><div class="msv2-grid"></div>`;
+        <button data-action="mixed">JRA｜NAR</button><button data-action="allvenues" title="当日の出馬表リンクから実開催場を重複なしで自動配置">🏟 全開催場</button>${MODES.map(n=>`<button data-mode="${n}">${n}画面</button>`).join('')}
+        <button data-action="planner">⚙ 配置設定</button><button data-action="next">画面切替</button><button data-action="sync">同じR</button><span class="msv2-sync-info">選択画面 A のR番号を同期</span><button data-action="close" class="msv2-close">閉じる</button></div><div class="msv2-planbar"><label>配置日 <input class="plan-date" type="date" aria-label="自動配置の基準日"></label><button data-action="today">今日</button><button data-action="planned">設定した配置に戻す</button><span class="plan-summary" role="status"></span></div><div class="msv2-grid"></div>`;
       this.mount.appendChild(root);this.root=root;
       for(const p of this.panes)this.buildPane(p);
       root.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{this.setMode(Number(b.dataset.mode));this.markManual();});
-      this.$('[data-action="mixed"]').onclick=()=>this.mixed();this.$('[data-action="close"]').onclick=()=>this.close();
+      this.$('[data-action="mixed"]').onclick=()=>this.mixed();this.$('[data-action="allvenues"]').onclick=()=>this.autoAllVenues();this.$('[data-action="close"]').onclick=()=>this.close();
       this.$('[data-action="next"]').onclick=()=>{this.active=(this.active+1)%this.panes.length;this.setMode(1);this.markManual();};
       this.$('[data-action="sync"]').onclick=()=>this.syncRaceNo(this.active);
       this.buildPlanner();
       this.$('[data-action="planner"]').onclick=()=>this.openPlanner();
       this.$('[data-action="planned"]').onclick=()=>this.applyPlan(this.planDate,true);
-      this.$('[data-action="allvenues"]').onclick=()=>this.autoAllVenues();
       this.$('[data-action="today"]').onclick=()=>{this.plan.followToday=true;this.applyPlan(today(),true);};
       this.$('.plan-date').onchange=e=>{if(validDay(e.target.value)){this.plan.followToday=e.target.value===today();this.applyPlan(e.target.value,true);}};
       this.updatePlanSummary();
       if(typeof ResizeObserver==='function'){this.observer=new ResizeObserver(()=>{if(this.opened)this.panes.filter(p=>p.visible).forEach(p=>this.draw(p));});this.observer.observe(this.$('.msv2-grid'));}
     }
+
+    async autoAllVenues(){
+      const button=this.$('[data-action="allvenues"]');
+      const oldText=button?.textContent||'🏟 全開催場';
+      if(button){button.disabled=true;button.textContent='🏟 取得中…';}
+      const date=validDay(this.planDate)?this.planDate:today();
+      this.planDate=date;this.markManual();
+      try{
+        // JRA/NARを独立取得。開催がない区分の失敗は全体を止めない。
+        const settled=await Promise.all(['JRA','NAR'].map(async source=>{
+          try{
+            const rows=await this.providers[source].getRaces(date,{});
+            return {source,rows:Array.isArray(rows)?rows:[]};
+          }catch(error){return {source,rows:[],error};}
+        }));
+
+        const groups=[];
+        for(const pack of settled){
+          const byVenue=new Map();
+          for(const r of pack.rows){
+            if(!r?.venue||!VENUES[pack.source]?.[r.venue])continue;
+            if(!byVenue.has(r.venue))byVenue.set(r.venue,[]);
+            byVenue.get(r.venue).push(r);
+          }
+          for(const [venue,rows] of byVenue){
+            rows.sort((a,b)=>Number(a.raceNo)-Number(b.raceNo));
+            const now=Date.now();
+            const next=rows.find(r=>Number(r.postMs)>now) || rows[rows.length-1] || rows[0];
+            const nextMs=Number(next?.postMs)||Number.MAX_SAFE_INTEGER;
+            groups.push({source:pack.source,venue,rows,next,nextMs});
+          }
+        }
+
+        // 同じ区分・場は1つだけ。最大6画面なので、超えた場合は発走が近い場を優先する。
+        const uniq=[];
+        const seen=new Set();
+        for(const g of groups){
+          const k=g.source+'|'+g.venue;
+          if(seen.has(k))continue;
+          seen.add(k);uniq.push(g);
+        }
+        uniq.sort((a,b)=>{
+          const af=Number.isFinite(a.nextMs)&&a.nextMs!==Number.MAX_SAFE_INTEGER;
+          const bf=Number.isFinite(b.nextMs)&&b.nextMs!==Number.MAX_SAFE_INTEGER;
+          if(af!==bf)return af?-1:1;
+          if(af&&bf&&a.nextMs!==b.nextMs)return a.nextMs-b.nextMs;
+          if(a.source!==b.source)return a.source==='JRA'?-1:1;
+          return a.venue.localeCompare(b.venue);
+        });
+
+        if(!uniq.length)throw new Error(date+' の出馬表リンクから開催場を確認できませんでした');
+
+        const chosen=uniq.slice(0,6);
+        const count=chosen.length;
+        const mode=count<=4?count:6;
+        const oldVisible=this.panes.map(p=>p.visible);
+
+        // 先にPaneの状態へ実開催場を固定する。これで4画面すべて門別、のような重複を防ぐ。
+        for(let i=0;i<this.panes.length;i++){
+          const p=this.panes[i],g=chosen[i];
+          p.listController?.abort();p.listRevision++;this.clearRace(p);
+          if(!g){
+            p.preferredVenue='';p.venue='';p.races=[];p.raceId='';p.race=null;
+            p.initialized=true;p.loading=false;p.status='空き画面';p.tone='';
+            p.root.querySelector('.dateInput').value=date;
+            this.renderSelectors(p);this.render(p);
+            continue;
+          }
+          p.source=g.source;p.date=date;p.preferredVenue=g.venue;p.venue=g.venue;
+          p.races=clone(g.rows);p.initialized=true;p.loading=false;
+          const selected=g.next||g.rows[0];
+          p.raceId=selected?.raceId||'';p.race=selected?clone(selected):null;
+          p.status=`${VENUES[g.source][g.venue]}を自動配置 / 出馬表一覧 ${g.rows.length}R`;p.tone='ok';
+          p.root.querySelector('.sourceSelect').value=p.source;
+          p.root.querySelector('.dateInput').value=p.date;
+          this.renderSelectors(p);this.render(p);
+        }
+
+        this.active=0;this.setMode(mode);
+
+        // 5開催場のときだけ6画面グリッドの最後を空欄として非表示にする。
+        if(count===5){
+          const p=this.panes[5];
+          p.visible=false;p.root.hidden=true;
+        }
+
+        // 既に表示中だったPaneはsetModeだけではresumeされないため、全対象を安全に再選択。
+        await Promise.allSettled(chosen.map((g,i)=>{
+          const p=this.panes[i];
+          return p.raceId?this.selectRace(i,p.raceId):Promise.resolve();
+        }));
+
+        this.save();this.updatePlanSummary();
+        const names=chosen.map(g=>`${g.source}:${VENUES[g.source][g.venue]}`).join(' / ');
+        const extra=uniq.length>6?` / 全${uniq.length}場中、発走が近い6場を表示`:'';
+        const summary=this.$('.plan-summary');
+        if(summary)summary.textContent=`全開催場自動配置 ${date} ｜ ${names}${extra}`;
+        if(button)button.textContent=uniq.length>6?`🏟 全開催場 ${chosen.length}/${uniq.length}`:`🏟 全開催場 ${count}`;
+      }catch(e){
+        const summary=this.$('.plan-summary');
+        if(summary)summary.textContent='⚠️ 全開催場の自動配置に失敗：'+String(e?.message||e);
+        if(button)button.textContent='🏟 全開催場';
+      }finally{
+        if(button)button.disabled=false;
+      }
+    }
+
     buildPane(p){
       const root=document.createElement('section');root.dataset.pane=String(p.id);root.className='msv2-pane';p.root=root;
       root.innerHTML=`<div class="msv2-pane-heading"><b class="msv2-badge"></b><span class="msv2-title"></span><span class="msv2-route" title="Worker優先・Bridge自動フォールバック">☁️→🌉</span><span class="msv2-starttime unknown">🕒 発走 --:--</span><button class="prevRace" aria-label="前のレース">◀R</button><button class="nextRace" aria-label="次のレース">R▶</button><button class="focusPane" aria-label="この画面を拡大">拡大</button></div>
@@ -25462,62 +25610,15 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
         p.initialized=true;
         if(!p.races.length){p.status='この日・区分の出馬表リンクを確認できません（未取得／開催なし等）';p.tone='warn';this.renderSelectors(p);this.render(p);return;}
         const venues=[...new Set(p.races.map(r=>r.venue))].sort();
-
-        // v5.23.7: 出馬表リンクから実際に取得できた開催場を、表示中Paneへ重複なしで順次自動配置する。
-        // preferredVenue が指定されているPaneだけは明示指定を優先し、空欄は未使用開催場を順番に割り当てる。
-        const usedVenues=new Set(this.panes
-          .filter(q=>q.visible && q.id!==p.id && q.source===source && q.date===date && q.venue)
-          .map(q=>q.venue));
-        if(p.preferredVenue){
-          p.venue=venues.includes(p.preferredVenue)?p.preferredVenue:'';
-        }else if(venue && venues.includes(venue) && !usedVenues.has(venue)){
-          p.venue=venue;
-        }else{
-          p.venue=venues.find(v=>!usedVenues.has(v))||'';
-        }
-
-        if(!p.venue){
-          p.status=p.preferredVenue
-            ? `${VENUES[source][p.preferredVenue]}の出馬表リンクが見つかりません。開催場を選び直してください。`
-            : `出馬表から確認できた${source}開催場は他の画面へすべて配置済みです。`;
-          p.tone='warn';this.renderSelectors(p);this.render(p);return;
-        }
-
-        const choices=p.races.filter(r=>r.venue===p.venue);
-        const now=Date.now();
-        const selected=
-          choices.find(r=>r.raceId===wanted) ||
-          choices.find(r=>Number(r.postMs)>now) ||
-          choices.at(-1) || choices[0];
+        const reserved=new Set(this.panes.filter(q=>q.visible&&q.source===source&&q.date===date&&q.preferredVenue).map(q=>q.preferredVenue));
+        const available=venues.filter(v=>!reserved.has(v));
+        const ordinal=this.panes.filter(q=>q.visible&&q.id<p.id&&q.source===source&&q.date===date&&!q.preferredVenue).length;
+        p.venue=p.preferredVenue?(venues.includes(p.preferredVenue)?p.preferredVenue:''):(venues.includes(venue)?venue:available[ordinal]||'');
+        if(!p.venue){p.status=p.preferredVenue?`${VENUES[source][p.preferredVenue]}の出馬表リンクが見つかりません。開催場を選び直してください。`:`取得できた開催場は${venues.length}会場です。この画面に自動割当できる別会場がありません。開催場を選ぶと同じ会場も表示できます。`;p.tone='warn';this.renderSelectors(p);this.render(p);return;}
+        const choices=p.races.filter(r=>r.venue===p.venue),selected=choices.find(r=>r.raceId===wanted)||choices.find(r=>r.postMs>Date.now())||choices[0];
         this.renderSelectors(p);await this.selectRace(id,selected.raceId);
       }catch(e){if(valid()){p.status='開催取得失敗：'+e.message;p.tone='error';this.render(p);}}
       finally{if(valid()){p.loading=false;this.render(p);}}
-    }
-    async loadRacesSequential(ids){
-      for(const id of ids){
-        const p=this.panes[id];
-        if(!this.opened||!p?.visible)continue;
-        await this.loadRaces(id);
-      }
-    }
-    async autoAllVenues(){
-      const panes=this.panes.filter(p=>p.visible);
-      const btn=this.$('[data-action="allvenues"]'),summary=this.$('.plan-summary');
-      if(!panes.length)return;
-      if(btn){btn.disabled=true;btn.textContent='🏟 全開催場を検出中…';}
-      if(summary)summary.textContent='出馬表を参照して全開催場を検出・重複なしで自動配置中…';
-      try{
-        for(const p of panes){
-          p.preferredVenue='';p.venue='';p.raceId='';p.races=[];p.initialized=false;
-          p.listController?.abort();p.listRevision++;this.clearRace(p);
-        }
-        await this.loadRacesSequential(panes.map(p=>p.id));
-        this.save();this.updatePlanSummary();
-        const assigned=panes.filter(p=>p.venue).map(p=>`${String.fromCharCode(65+p.id)}:${p.source} ${VENUES[p.source]?.[p.venue]||p.venue}`);
-        if(summary)summary.textContent+=(assigned.length?` ｜ 配置：${assigned.join('・')}`:' ｜ 開催場を取得できませんでした');
-      }finally{
-        if(btn){btn.disabled=false;btn.textContent='🏟 全開催場';}
-      }
     }
     selectVenue(id,venue){const p=this.panes[id];if(!p.races.some(r=>r.venue===venue))return;const no=p.race?.raceNo;p.venue=venue;this.renderSelectors(p);const rows=p.races.filter(r=>r.venue===venue);return this.selectRace(id,(rows.find(r=>r.raceNo===no)||rows[0]).raceId);}
     async selectRace(id,rid){
@@ -25800,16 +25901,15 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     markActive(){this.panes.forEach(p=>p.root.classList.toggle('is-active',p.id===this.active));this.$('.msv2-sync-info').textContent='選択画面 '+String.fromCharCode(65+this.active)+' のR番号を同期';}
     setMode(n){
       if(!MODES.includes(n))return;this.mode=n;this.root.dataset.mode=String(n);
-      const visible=n===1?[this.active]:Array.from({length:n},(_,i)=>i),loadIds=[];if(!visible.includes(this.active))this.active=visible[0];
+      const visible=n===1?[this.active]:Array.from({length:n},(_,i)=>i);if(!visible.includes(this.active))this.active=visible[0];
       this.panes.forEach(p=>{const was=p.visible;p.visible=this.opened&&visible.includes(p.id);
         if(was&&!p.visible){const sc=p.root.querySelector('.msv2-scroll');p.scrollTop=sc.scrollTop;p.scrollLeft=sc.scrollLeft;this.cancel(p);p.listController?.abort();p.listRevision++;p.loading=false;}
         p.root.hidden=!p.visible;
         if(p.visible&&!was){const sc=p.root.querySelector('.msv2-scroll');sc.scrollTop=p.scrollTop;sc.scrollLeft=p.scrollLeft;
-          if(!p.initialized||!p.raceId)loadIds.push(p.id);else this.resume(p);}
+          if(!p.initialized||!p.raceId)this.loadRaces(p.id);else this.resume(p);}
         if(p.visible)this.draw(p);
       });
       this.root.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('active',Number(b.dataset.mode)===n));this.markActive();this.save();this.updatePlanSummary();
-      if(loadIds.length)this.loadRacesSequential(loadIds);
     }
     async mixed(){
       this.markManual();const jobs=[];for(const p of this.panes){p.preferredVenue='';const wanted=p.id%2===0?'JRA':'NAR';if(p.source!==wanted)jobs.push(this.configure(p.id,{source:wanted}));}
@@ -25867,8 +25967,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
         this.renderSelectors(p);this.render(p);
       }
       this.setMode(info.profile.count);
-      const reloadIds=changedVisible.filter(id=>this.panes[id].visible);
-      if(reloadIds.length)this.loadRacesSequential(reloadIds);
+      for(const id of changedVisible)if(this.panes[id].visible)this.loadRaces(id);
       this.savePlan();this.updatePlanSummary();
     }
     checkPlanDay(){
@@ -27700,7 +27799,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
 <script id="worker-hybrid-v5215-version-lock">
 (function(){
   'use strict';
-  const V='v5.23.7 All Venues Auto Sync Fix + All Results + All Payouts';
+  const V='v5.23.8 Classic UI + All Venues Auto';
   function mark(){
     try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;const el=document.querySelector('.ver');if(el)el.textContent=V+(window.__NAR_BRIDGE_READY__?' 🌉':'')+' ☁️';}catch(e){}
   }
@@ -27766,7 +27865,7 @@ function mark(){try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;
 <script id="canonical-version-v5230">
 (function(){
  'use strict';
- const V='v5.23.4 All Results + All Payouts';
+ const V='v5.23.8 Classic UI + All Venues Auto';
  function mark(){
    try{
      window.APP_VERSION=V;
@@ -27912,7 +28011,7 @@ function mark(){try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;
    Existing parsers remain primary; missing official payout rows are merged in. */
 (function(){
 'use strict';
-const V='v5.23.4 All Results + All Payouts';
+const V='v5.23.8 Classic UI + All Venues Auto';
 const oldP=window.parsePayoutsFromResultDoc || (typeof parsePayoutsFromResultDoc==='function'?parsePayoutsFromResultDoc:null);
 const oldF=window.parseFinishFromResultDoc || (typeof parseFinishFromResultDoc==='function'?parseFinishFromResultDoc:null);
 const norm=s=>String(s||'').normalize('NFKC').replace(/[‐‑‒–—―−]/g,'-').replace(/\u00a0/g,' ');
@@ -27958,7 +28057,7 @@ window.parsePayoutsFromResultDoc=mergedP;try{parsePayoutsFromResultDoc=mergedP}c
 // Keep original finish parser, but add horse names from result rows when available.
 function finishNames(doc){const map=new Map();for(const tr of doc.querySelectorAll('tr')){const a=tr.querySelector('a[href*="horse"],a[href*="/horse/"]');if(!a)continue;const tx=norm(tr.innerText||tr.textContent||'');const m=tx.match(/(?:^|\s)(1[0-8]|[1-9])(?:\s)/);if(m){const name=norm(a.textContent).trim();if(name)map.set(+m[1],name)}}return map}
 if(oldF){const nf=function(doc){const r=oldF(doc)||[];try{const nm=finishNames(doc);return r.map(x=>({...x,name:x.name||nm.get(+x.horseNo)||''}))}catch(e){return r}};window.parseFinishFromResultDoc=nf;try{parseFinishFromResultDoc=nf}catch(e){}}
-function stamp(){window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;document.querySelectorAll('.ver').forEach(e=>e.textContent=V+' ☁️ 5s');const b=document.querySelector('#bridgeModeBar252 b');if(b)b.textContent='v5.23.4'}
+function stamp(){window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;document.querySelectorAll('.ver').forEach(e=>e.textContent=V+' ☁️ 5s');const b=document.querySelector('#bridgeModeBar252 b');if(b)b.textContent='v5.23.8'}
 stamp();document.addEventListener('DOMContentLoaded',stamp,{once:true});[500,2000,6000,15000].forEach(ms=>setTimeout(stamp,ms));
 })();
 </script>
@@ -27967,38 +28066,33 @@ stamp();document.addEventListener('DOMContentLoaded',stamp,{once:true});[500,200
 <script id="repair-v5234-final">
 (function(){
   'use strict';
-  const V='v5.23.4 All Results + All Payouts';
+  const V='v5.23.8 Classic UI + All Venues Auto';
   function stamp(){
     window.APP_VERSION=V;
     document.title='The競馬 EV分析 '+V;
     document.querySelectorAll('.ver').forEach(function(e){e.textContent=V+' ☁️ 5s';});
-    const b=document.querySelector('#bridgeModeBar252 b'); if(b)b.textContent='v5.23.4';
+    const b=document.querySelector('#bridgeModeBar252 b'); if(b)b.textContent='v5.23.8';
   }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',stamp,{once:true}); else stamp();
   [250,1000,3000,8000].forEach(function(ms){setTimeout(stamp,ms);});
 })();
 </script>
 
-<script id="version-lock-v5237-final">
+<script id="classic-ui-all-venues-v5238-final">
 (function(){
   'use strict';
-  const V='v5.23.7 All Venues Auto Sync Fix + All Results + All Payouts';
+  const V='v5.23.8 Classic UI + All Venues Auto';
   function stamp(){
     try{
       window.APP_VERSION=V;
       document.title='The競馬 EV分析 '+V;
-      document.querySelectorAll('.ver').forEach(e=>{const t=V+' ☁️ 5s';if(e.textContent!==t)e.textContent=t;});
-      const b=document.querySelector('#bridgeModeBar252 b');if(b&&b.textContent!=='v5.23.7')b.textContent='v5.23.7';
-    }catch(_){}
+      document.querySelectorAll('.ver').forEach(e=>e.textContent=V+' ☁️ 5s');
+      const b=document.querySelector('#bridgeModeBar252 b'); if(b)b.textContent='v5.23.8';
+    }catch(_e){}
   }
-  stamp();
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',stamp,{once:true});
-  const mo=new MutationObserver(()=>stamp());
-  document.addEventListener('DOMContentLoaded',()=>{
-    const h=document.querySelector('.header');if(h)mo.observe(h,{subtree:true,childList:true,characterData:true});
-    const t=document.querySelector('title');if(t)mo.observe(t,{childList:true,characterData:true});
-  },{once:true});
-  setInterval(stamp,5000);
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',stamp,{once:true});else stamp();
+  [250,1000,3000,8000,16000,32000,54000].forEach(ms=>setTimeout(stamp,ms));
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)stamp();});
 })();
 </script>
 

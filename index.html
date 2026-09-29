@@ -40,7 +40,7 @@
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.12 Safari Light + Success Fix + All Venues</title>
+<title>The競馬 EV分析 v5.23.13 NAR AllMarkets 6.1.14 + Safari Light + All Venues</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -396,7 +396,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.23.12 Safari Light + Success Fix + All Venues ☁️ 5s</span>
+    <span class="ver">v5.23.13 NAR AllMarkets 6.1.14 + Safari Light + All Venues ☁️ 5s</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -24894,7 +24894,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
         }catch(e){status.textContent='⚠️ '+String(e.message||e)+'。SafariのBridgeを有効にして再読込してください';}
         finally{this.disabled=false;}
       };
-      document.getElementById('bridgeModeState252').textContent=only?'端末内に保存／Safariを前面に表示して使用／スリープ中の収集は不可':'☁️ Worker優先 → 🌉 Bridge自動切替（全画面）';
+      document.getElementById('bridgeModeState252').textContent=only?'端末内に保存／Safariを前面に表示して使用／スリープ中の収集は不可':'☁️ NAR全8券種一括 / JRA Worker優先 → 🌉 Bridge（全画面）';
     }
     if(only){
       const strip=document.getElementById('oddsTsCloud219');
@@ -24992,7 +24992,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
 /* The競馬 MultiScreen v2 — pane-owned state; no child application documents. */
 (function () {
   'use strict';
-  const VERSION = 'v5.23.12 Safari Light + Success Fix + All Venues';
+  const VERSION = 'v5.23.13 NAR AllMarkets 6.1.14 + Safari Light + All Venues';
   const MARKETS = ['単勝','複勝','枠連','馬連','ワイド','馬単','3連複','3連単'];
   const VENUES = {
     JRA: {'01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京','06':'中山','07':'中京','08':'京都','09':'阪神','10':'小倉'},
@@ -25223,6 +25223,73 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       }
       throw new Error(errors.join(' / '));
     }
+    // v5.23.13: NARはabc Worker /all-marketsを最優先。
+    // 1回のJSONで全8券種を取得し、各Paneが自分のrace_idだけを独立保持する。
+    // Worker/JSON検証に失敗した場合だけ従来OddsEngineへフォールバックする。
+    async function getNarAllMarketsBatch(race,signal,onProgress=()=>{}){
+      if(source!=='NAR')return null;
+      const rid=assertRace('NAR',race.raceId,race.date),cfg=config();
+      if(cfg.bridgeOnly)throw new Error('Bridge専用モードのため /all-markets Workerを使用しません');
+      const base=String(cfg.proxy||'').trim();
+      if(!base)throw new Error('取得Worker URLが未設定です');
+      const u=new URL(base);
+      if(!/^https?:$/.test(u.protocol)||u.username||u.password)throw new Error('取得Worker URLを確認してください');
+      u.pathname='/all-markets';u.search='';u.hash='';
+      u.searchParams.set('race_id',rid);u.searchParams.set('kind','NAR');u.searchParams.set('date',race.date);
+      u.searchParams.set('_msv2',String(Date.now()));
+      const response=await fetchText(u.href,signal,{Accept:'application/json'});
+      let j;try{j=JSON.parse(response.text);}catch(_){throw new Error('/all-markets がJSON以外を返しました');}
+      if(!j||j.ok!==true)throw new Error(j?.error||'/all-markets 取得失敗');
+      if(String(j.race_id||'')!==rid||String(j.kind||'').toUpperCase()!=='NAR')throw new Error('別区分・別レースの /all-markets 応答を破棄しました');
+      if(j.date&&String(j.date)!==String(race.date))throw new Error('別日付の /all-markets 応答を破棄しました');
+      const input=(j.markets&&typeof j.markets==='object')?j.markets:((j.additional_markets&&typeof j.additional_markets==='object')?j.additional_markets:{});
+      const statusIn=(j.market_status&&typeof j.market_status==='object')?j.market_status:((j.diagnostics&&typeof j.diagnostics==='object')?j.diagnostics:{});
+      const markets={},diagnostics={};
+      let capturedMs=Date.parse(String(j.captured_at||''));
+      if(!Number.isFinite(capturedMs)||capturedMs<=0)capturedMs=Number(response.fetched_ms)||Date.now();
+      const fetchedMs=Number(response.fetched_ms)||Date.now();
+      const arity={ '単勝':1,'複勝':1,'枠連':2,'馬連':2,'ワイド':2,'馬単':2,'3連複':3,'3連単':3 };
+      const unordered=new Set(['枠連','馬連','ワイド','3連複']);
+      const validateRows=(type,rows)=>{
+        const seen=new Set(),safe=[];let invalid=0,duplicates=0;
+        for(const raw of Array.isArray(rows)?rows:[]){
+          if(!raw||typeof raw!=='object'){invalid++;continue;}
+          const combo=String(raw.combination??'').trim(),parts=combo.split('-').map(Number),max=type==='枠連'?8:18;
+          const okParts=parts.length===arity[type]&&parts.every(n=>Number.isInteger(n)&&n>=1&&n<=max)&&(type==='枠連'||new Set(parts).size===parts.length);
+          const odds=Number(raw.odds);
+          if(!okParts||!Number.isFinite(odds)||odds<1){invalid++;continue;}
+          const key=unordered.has(type)?parts.slice().sort((a,b)=>a-b).join('-'):parts.join('-');
+          if(seen.has(key)){duplicates++;continue;}seen.add(key);
+          const row={...raw,combination:key,odds};
+          if(Number.isFinite(Number(raw.odds_min)))row.odds_min=Number(raw.odds_min);
+          if(Number.isFinite(Number(raw.odds_max)))row.odds_max=Number(raw.odds_max);
+          safe.push(row);
+        }
+        return {safe,invalid,duplicates};
+      };
+      let done=0;
+      for(const type of MARKETS){
+        const checked=validateRows(type,input[type]),d={...(statusIn[type]||{})};
+        const triple=type==='3連複'||type==='3連単';
+        // 3連系はv6.1.14以降のWorker整合性判定を必須にする。
+        // integrity_okが無い旧Worker(v6.1.12等)の三連系は、件数が揃っていても受理しない。
+        const integrityBad=(triple&&d.integrity_ok!==true)||d.integrity_ok===false||Number(d.invalid_row_count||0)>0||checked.invalid>0||checked.duplicates>0;
+        const expected=Number(d.expected_count||0),short=triple?(expected<=0||checked.safe.length!==expected||d.complete!==true):(expected>0&&checked.safe.length<expected&&d.complete===true);
+        const usable=checked.safe.length>0&&!integrityBad&&!short;
+        if(usable)markets[type]=checked.safe;
+        const reason=integrityBad?'整合性検査NG':short?'件数不足':String(d.error||'');
+        diagnostics[type]={...d,state:usable?'ok':'error',count:usable?checked.safe.length:0,
+          message:usable?'':(reason||'未取得'),path:'Worker /all-markets '+String(j.version||''),
+          fetched_ms:fetchedMs,source_updated_ms:capturedMs,source_time_label:clock(capturedMs),
+          client_invalid_row_count:checked.invalid,client_duplicate_count:checked.duplicates};
+        done++;onProgress(done,clone(diagnostics));
+      }
+      if(!Object.keys(markets).length)throw new Error('/all-markets に利用できる券種がありません');
+      return {race_id:rid,kind:'NAR',date:race.date,markets,diagnostics,source:String(j.source||'NAR_OFFICIAL_ALL_MARKETS'),
+        version:String(j.version||''),captured_ms:capturedMs,captured_at:new Date(capturedMs).toISOString(),
+        transport:'Worker /all-markets '+String(j.version||'')};
+    }
+
     return Object.freeze({
       source,
       async getRaces(date,{signal}={}){
@@ -25281,10 +25348,20 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       },
       async getOdds(race,{signal,horses=[],ticket='単勝',onProgress=()=>{}}={}){
         const rid=assertRace(source,race.raceId,race.date);
+        if(source==='NAR'){
+          try{
+            const batch=await getNarAllMarketsBatch(race,signal,(...args)=>{checkAbort(signal);onProgress(...args);});
+            checkAbort(signal);
+            if(batch)return batch;
+          }catch(e){
+            if(e?.name==='AbortError')throw e;
+            console.warn('[v5.23.13] NAR /all-markets を従来OddsEngineへフォールバック',e);
+          }
+        }
         const got=await primitives.getOdds(source,rid,horses,{read:url=>read(url,signal,rid),ticket,onProgress:(...args)=>{checkAbort(signal);onProgress(...args);}});
         checkAbort(signal);
         const paths=[...new Set(Object.values(got?.diagnostics||{}).map(x=>String(x?.path||'')).filter(Boolean).map(x=>/bridge/i.test(x)?'Bridge':/worker/i.test(x)?'Worker':x))];
-        return {...got,transport:'OddsEngine5230'+(paths.length?' / '+paths.join('+'):'')};
+        return {...got,transport:'OddsEngine5230 fallback'+(paths.length?' / '+paths.join('+'):'')};
       },
       async getTimeline(race,{signal,since=0}={}){
         const rid=assertRace(source,race.raceId,race.date),cfg=config();
@@ -25412,7 +25489,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       });
       this.mode=MODES.includes(saved.mode)?saved.mode:2;this.active=Math.max(0,Math.min(5,Number(saved.active)||0));
       const root=document.createElement('div');root.id='multiWorkspaceV2';root.className='msv2';root.hidden=true;
-      root.innerHTML=`<div class="msv2-toolbar"><strong>時系列オッズ <small>曜日別マルチ画面</small></strong><span class="msv2-hybrid-mode">☁️ Worker優先 → 🌉 Bridge自動切替</span>
+      root.innerHTML=`<div class="msv2-toolbar"><strong>時系列オッズ <small>曜日別マルチ画面</small></strong><span class="msv2-hybrid-mode">☁️ NAR全8券種一括 / JRA Worker優先 → 🌉 Bridge</span>
         <button data-action="mixed">JRA｜NAR</button><button data-action="allvenues" title="当日の出馬表リンクから実開催場を重複なしで自動配置">🏟 全開催場</button>${MODES.map(n=>`<button data-mode="${n}">${n}画面</button>`).join('')}
         <button data-action="planner">⚙ 配置設定</button><button data-action="next">画面切替</button><button data-action="sync">同じR</button><span class="msv2-sync-info">選択画面 A のR番号を同期</span><button data-action="close" class="msv2-close">閉じる</button></div><div class="msv2-planbar"><label>配置日 <input class="plan-date" type="date" aria-label="自動配置の基準日"></label><button data-action="today">今日</button><button data-action="planned">設定した配置に戻す</button><span class="plan-summary" role="status"></span></div><div class="msv2-grid"></div>`;
       this.mount.appendChild(root);this.root=root;
@@ -25758,7 +25835,8 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
         }
         p.diagnostics=diagnostics;
         p.transport.odds=String(got.transport||[...new Set(Object.values(diagnostics).map(x=>String(x?.path||'')).filter(Boolean).map(x=>/bridge/i.test(x)?'Bridge':/worker/i.test(x)?'Worker':x))].join('+'));
-        const rec=normalizeRecord({race_id:c.raceId,kind:c.source,captured_ms:Date.now(),race_label:race.name,horses:p.horses,markets,market_status:diagnostics,source:got.source,collector_origin:'browser-multiscreen-v2',verified_network:true},c.source,c.raceId,c.date);
+        const captureMs=Number(got.captured_ms)||Date.parse(String(got.captured_at||''))||Date.now();
+        const rec=normalizeRecord({race_id:c.raceId,kind:c.source,captured_ms:captureMs,captured_at:new Date(captureMs).toISOString(),race_label:race.name,horses:p.horses,markets,market_status:diagnostics,source:got.source,worker_version:got.version||'',collector_origin:'browser-multiscreen-v2',verified_network:true},c.source,c.raceId,c.date);
         if(!rec)throw new Error('有効なオッズなし（未発売・売止・取得失敗等）。券種別の取得状況を確認してください');
         this.merge(p,[rec]);
         const count=Object.keys(rec.markets).length;p.status=`${clock(rec.captured_ms)} 受信・記録 ${count}/8券種 ／ ${p.history.length}点`;p.tone=count<8?'warn':'ok';
@@ -27839,7 +27917,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
 <script id="worker-hybrid-v5215-version-lock">
 (function(){
   'use strict';
-  const V='v5.23.12 Safari Light + Success Fix + All Venues';
+  const V='v5.23.13 NAR AllMarkets 6.1.14 + Safari Light + All Venues';
   function mark(){
     try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;const el=document.querySelector('.ver');if(el)el.textContent=V+(window.__NAR_BRIDGE_READY__?' 🌉':'')+' ☁️';}catch(e){}
   }
@@ -27905,7 +27983,7 @@ function mark(){try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;
 <script id="canonical-version-v5230">
 (function(){
  'use strict';
- const V='v5.23.12 Safari Light + Success Fix + All Venues';
+ const V='v5.23.13 NAR AllMarkets 6.1.14 + Safari Light + All Venues';
  function mark(){
    try{
      window.APP_VERSION=V;
@@ -28051,7 +28129,7 @@ function mark(){try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;
    Existing parsers remain primary; missing official payout rows are merged in. */
 (function(){
 'use strict';
-const V='v5.23.12 Safari Light + Success Fix + All Venues';
+const V='v5.23.13 NAR AllMarkets 6.1.14 + Safari Light + All Venues';
 const oldP=window.parsePayoutsFromResultDoc || (typeof parsePayoutsFromResultDoc==='function'?parsePayoutsFromResultDoc:null);
 const oldF=window.parseFinishFromResultDoc || (typeof parseFinishFromResultDoc==='function'?parseFinishFromResultDoc:null);
 const norm=s=>String(s||'').normalize('NFKC').replace(/[‐‑‒–—―−]/g,'-').replace(/\u00a0/g,' ');
@@ -28106,7 +28184,7 @@ stamp();document.addEventListener('DOMContentLoaded',stamp,{once:true});[500,200
 <script id="repair-v5234-final">
 (function(){
   'use strict';
-  const V='v5.23.12 Safari Light + Success Fix + All Venues';
+  const V='v5.23.13 NAR AllMarkets 6.1.14 + Safari Light + All Venues';
   function stamp(){
     window.APP_VERSION=V;
     document.title='The競馬 EV分析 '+V;
@@ -28121,7 +28199,7 @@ stamp();document.addEventListener('DOMContentLoaded',stamp,{once:true});[500,200
 <script id="classic-ui-all-venues-v5238-final">
 (function(){
   'use strict';
-  const V='v5.23.12 Safari Light + Success Fix + All Venues';
+  const V='v5.23.13 NAR AllMarkets 6.1.14 + Safari Light + All Venues';
   function stamp(){
     try{
       window.APP_VERSION=V;
@@ -28140,7 +28218,7 @@ stamp();document.addEventListener('DOMContentLoaded',stamp,{once:true});[500,200
 <script id="classic-ui-nohang-v5239-final">
 (function(){
   'use strict';
-  const V='v5.23.12 Safari Light + Success Fix + All Venues';
+  const V='v5.23.13 NAR AllMarkets 6.1.14 + Safari Light + All Venues';
   const $=id=>document.getElementById(id);
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
   function timeout(p,ms,label){
@@ -28311,7 +28389,7 @@ stamp();document.addEventListener('DOMContentLoaded',stamp,{once:true});[500,200
 <script id="safari-light-v52312">
 (function(){
  'use strict';
- const V='v5.23.12 Safari Light + Success Fix + All Venues';
+ const V='v5.23.13 NAR AllMarkets 6.1.14 + Safari Light + All Venues';
  function mark(){try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;const e=document.querySelector('.ver');if(e)e.textContent=V+' ☁️ 5s';}catch(_){}}
  function ui(){
    const host=document.getElementById('bridgeModeBar252')||document.getElementById('tab-horses');

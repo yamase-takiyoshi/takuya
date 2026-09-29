@@ -40,7 +40,7 @@
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.10 Classic UI + Tap Fix + All Venues</title>
+<title>The競馬 EV分析 v5.23.11 Safari Light + Tap Fix + All Venues</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -396,7 +396,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.23.10 Classic UI + Tap Fix + All Venues ☁️ 5s</span>
+    <span class="ver">v5.23.11 Safari Light + Tap Fix + All Venues ☁️ 5s</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -16827,13 +16827,15 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
     // 右側ONかつ画面表示中だけ5秒間隔で差分確認する。
     setInterval(function(){
       if(document.hidden || !panelActive()) return;
+      var rid=(window.currentRaceId||'') || ((document.getElementById('raceUrl')?.value||'').match(/race_id=(\d{10,14})/)||[])[1] || '';
+      if(!rid) return;
       var snap = snapshot();
       var sig = snapshotSignature(snap);
       if(sig !== lastSignature){
         lastSignature = sig;
         window.scheduleRightAnalysisSync(180);
       }
-    }, 5000);
+    }, 15000);
   }
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, {once:true});
   else init();
@@ -17569,11 +17571,11 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     let x = {};
     try{ x = JSON.parse(localStorage.getItem(CFG_KEY) || '{}') || {}; }catch(e){}
     return {
-      enabled: x.enabled !== false,
+      enabled: x.enabled === true,
       closeLeadSec: Math.max(0, Math.min(600, Number(x.closeLeadSec ?? 60) || 60)),
       workerUrl: String(x.workerUrl || '').trim(),
       token: String(x.token || ''),
-      autoBuild: x.autoBuild !== false
+      autoBuild: x.autoBuild === true
     };
   }
   function saveConfig(patch){
@@ -17957,7 +17959,14 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
       <div id="preclose3mStatus" style="margin-top:8px"></div>`;
     tab.appendChild(card);
 
-    $('preclose3mEnabled').addEventListener('change', e => { saveConfig({enabled:!!e.target.checked}); if(e.target.checked) buildSchedule(true); });
+    $('preclose3mEnabled').addEventListener('change', async e => {
+      const on=!!e.target.checked; saveConfig({enabled:on});
+      if(on){
+        try{ await dbAll(); }catch(_){ }
+        if(!timer) timer=setInterval(()=>tick().catch(err=>console.warn('[PreClose3m] tick',err)),TICK_MS);
+        buildSchedule(true);
+      }else if(timer){ clearInterval(timer); timer=null; setStatus('軽量モード：締切3分前の端末側5秒監視は停止中。','ok'); }
+    });
     $('preclose3mLead').addEventListener('change', e => { saveConfig({closeLeadSec:Number(e.target.value)||60}); buildSchedule(true); });
     $('preclose3mWorker').addEventListener('change', e => saveConfig({workerUrl:String(e.target.value||'').trim()}));
     $('preclose3mToken').addEventListener('change', e => saveConfig({token:String(e.target.value||'')}));
@@ -17998,10 +18007,15 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 
   async function boot(){
     setVersion(); injectUi(); wrapStateExports(); wrapRaceList();
-    try{ await dbAll(); }catch(e){ console.warn('[PreClose3m] DB load failed',e); }
-    if(!timer) timer = setInterval(()=>tick().catch(e=>console.warn('[PreClose3m] tick',e)),TICK_MS);
-    document.addEventListener('visibilitychange',()=>{ if(!document.hidden) tick().catch(()=>{}); });
-    if(config().enabled && config().autoBuild){ setTimeout(()=>buildSchedule(false).catch(()=>{}),1200); }
+    const c=config();
+    if(c.enabled){
+      try{ await dbAll(); }catch(e){ console.warn('[PreClose3m] DB load failed',e); }
+      if(!timer) timer = setInterval(()=>tick().catch(e=>console.warn('[PreClose3m] tick',e)),TICK_MS);
+      if(c.autoBuild){ setTimeout(()=>buildSchedule(false).catch(()=>{}),1200); }
+    }else{
+      setStatus('Safari軽量モード：締切3分前の端末側5秒監視はOFF。必要な時だけ設定でONにできます。','ok');
+    }
+    document.addEventListener('visibilitychange',()=>{ if(!document.hidden && config().enabled) tick().catch(()=>{}); });
   }
 
   window.__precloseBuildSchedule = buildSchedule;
@@ -20820,7 +20834,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
           </select></label>
           <label>表示<select id="oddsTsCombo"><option value="__ALL__">全馬を表示</option></select></label>
           <label>買い目1点<select id="oddsTsSinglePoint"><option value="">券種を選択</option></select></label>
-          <label class="odds-ts-check"><input type="checkbox" id="oddsTsAuto" checked>5秒ごとに再取得</label>
+          <label class="odds-ts-check"><input type="checkbox" id="oddsTsAuto">5秒ごとに再取得（必要時のみON）</label>
           <label class="odds-ts-check"><input type="checkbox" id="oddsTsLog">対数</label>
           <label>表示幅<select id="oddsTsWindow">
             <option value="300000">直近5分</option>
@@ -23784,15 +23798,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   try{
     Object.defineProperty(window, 'APP_VERSION', { get(){ return VERSION; }, set(){}, configurable:true });
   }catch(e){}
-  try{
-    const v = document.querySelector('.header .ver');
-    if(v){
-      new MutationObserver(() => { if(!String(v.textContent || '').startsWith(VERSION)) applyVersion(); })
-        .observe(v, { childList:true, characterData:true, subtree:true });
-    }
-    const tt = document.querySelector('title');
-    if(tt) new MutationObserver(() => { if(!document.title.includes(VERSION)) applyVersion(); }).observe(tt, { childList:true, characterData:true, subtree:true });
-  }catch(e){}
+  // Safari軽量化: バージョン表示を監視し続けるMutationObserverは使わない。
   applyVersion();
 
   // オッズ取得ログの専用欄（出馬表ステータスを上書きしない）
@@ -24986,7 +24992,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
 /* The競馬 MultiScreen v2 — pane-owned state; no child application documents. */
 (function () {
   'use strict';
-  const VERSION = 'v5.23.10 Classic UI + Tap Fix + All Venues';
+  const VERSION = 'v5.23.11 Safari Light + Tap Fix + All Venues';
   const MARKETS = ['単勝','複勝','枠連','馬連','ワイド','馬単','3連複','3連単'];
   const VENUES = {
     JRA: {'01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京','06':'中山','07':'中京','08':'京都','09':'阪神','10':'小倉'},
@@ -27802,7 +27808,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
 <script id="worker-hybrid-v5215-version-lock">
 (function(){
   'use strict';
-  const V='v5.23.10 Classic UI + Tap Fix + All Venues';
+  const V='v5.23.11 Safari Light + Tap Fix + All Venues';
   function mark(){
     try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;const el=document.querySelector('.ver');if(el)el.textContent=V+(window.__NAR_BRIDGE_READY__?' 🌉':'')+' ☁️';}catch(e){}
   }
@@ -27868,7 +27874,7 @@ function mark(){try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;
 <script id="canonical-version-v5230">
 (function(){
  'use strict';
- const V='v5.23.10 Classic UI + Tap Fix + All Venues';
+ const V='v5.23.11 Safari Light + Tap Fix + All Venues';
  function mark(){
    try{
      window.APP_VERSION=V;
@@ -28014,7 +28020,7 @@ function mark(){try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;
    Existing parsers remain primary; missing official payout rows are merged in. */
 (function(){
 'use strict';
-const V='v5.23.10 Classic UI + Tap Fix + All Venues';
+const V='v5.23.11 Safari Light + Tap Fix + All Venues';
 const oldP=window.parsePayoutsFromResultDoc || (typeof parsePayoutsFromResultDoc==='function'?parsePayoutsFromResultDoc:null);
 const oldF=window.parseFinishFromResultDoc || (typeof parseFinishFromResultDoc==='function'?parseFinishFromResultDoc:null);
 const norm=s=>String(s||'').normalize('NFKC').replace(/[‐‑‒–—―−]/g,'-').replace(/\u00a0/g,' ');
@@ -28069,7 +28075,7 @@ stamp();document.addEventListener('DOMContentLoaded',stamp,{once:true});[500,200
 <script id="repair-v5234-final">
 (function(){
   'use strict';
-  const V='v5.23.10 Classic UI + Tap Fix + All Venues';
+  const V='v5.23.11 Safari Light + Tap Fix + All Venues';
   function stamp(){
     window.APP_VERSION=V;
     document.title='The競馬 EV分析 '+V;
@@ -28084,7 +28090,7 @@ stamp();document.addEventListener('DOMContentLoaded',stamp,{once:true});[500,200
 <script id="classic-ui-all-venues-v5238-final">
 (function(){
   'use strict';
-  const V='v5.23.10 Classic UI + Tap Fix + All Venues';
+  const V='v5.23.11 Safari Light + Tap Fix + All Venues';
   function stamp(){
     try{
       window.APP_VERSION=V;
@@ -28103,7 +28109,7 @@ stamp();document.addEventListener('DOMContentLoaded',stamp,{once:true});[500,200
 <script id="classic-ui-nohang-v5239-final">
 (function(){
   'use strict';
-  const V='v5.23.10 Classic UI + Tap Fix + All Venues';
+  const V='v5.23.11 Safari Light + Tap Fix + All Venues';
   const $=id=>document.getElementById(id);
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
   function timeout(p,ms,label){
@@ -28264,6 +28270,28 @@ stamp();document.addEventListener('DOMContentLoaded',stamp,{once:true});[500,200
   // Safari対策: document全体のMutationObserverは使わない。
   // 古い遅延version stampは、軽量タイマーとvisibility復帰時だけ補正する。
   [45000,65000,90000].forEach(ms=>setTimeout(stamp,ms));
+})();
+</script>
+
+
+<style id="safari-light-v52311-css">
+#safariLight52311{margin:8px 0;padding:8px 10px;border:1px solid rgba(52,211,153,.28);border-radius:9px;background:rgba(52,211,153,.08);color:#bbf7d0;font-size:11px;line-height:1.55}
+</style>
+<script id="safari-light-v52311">
+(function(){
+ 'use strict';
+ const V='v5.23.11 Safari Light + Tap Fix + All Venues';
+ function mark(){try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;const e=document.querySelector('.ver');if(e)e.textContent=V+' ☁️ 5s';}catch(_){}}
+ function ui(){
+   const host=document.getElementById('bridgeModeBar252')||document.getElementById('tab-horses');
+   if(!host||document.getElementById('safariLight52311'))return;
+   const d=document.createElement('div');d.id='safariLight52311';
+   d.innerHTML='🍃 <b>Safari軽量モード</b>：起動時の5秒オッズ収集と締切3分前の端末監視を停止しています。必要な機能だけONにすると、Safari全体の負荷を抑えられます。';
+   host.insertAdjacentElement(host.id==='bridgeModeBar252'?'afterend':'afterbegin',d);
+ }
+ function boot(){mark();ui();const a=document.getElementById('oddsTsAuto');if(a)a.checked=false;}
+ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
+ [1000,10000,65000].forEach(ms=>setTimeout(()=>{mark();ui();},ms));
 })();
 </script>
 

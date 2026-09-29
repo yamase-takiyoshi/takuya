@@ -40,7 +40,7 @@
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.4 All Results + All Payouts</title>
+<title>The競馬 EV分析 v5.23.5 All Panes Sync + All Results + All Payouts</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -396,7 +396,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.23.4 All Results + All Payouts ☁️ 5s</span>
+    <span class="ver">v5.23.5 All Panes Sync + All Results + All Payouts ☁️ 5s</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -23757,7 +23757,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   if(window.__THEKEIBA_232__) return;
   window.__THEKEIBA_232__ = true;
 
-  const VERSION = 'v5.23.4 All Results + All Payouts';
+  const VERSION = 'v5.21.7 Cross-Market Freeze Fix';
   const JRA_VENUE_NAMES = {'01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京','06':'中山','07':'中京','08':'京都','09':'阪神','10':'小倉',
     '30':'門別','35':'盛岡','36':'水沢','42':'浦和','43':'船橋','44':'大井','45':'川崎','46':'金沢','47':'笠松','48':'名古屋','50':'園田','51':'姫路','54':'高知','55':'佐賀','65':'帯広'};
   const $ = id => document.getElementById(id);
@@ -25461,12 +25461,32 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
         p.initialized=true;
         if(!p.races.length){p.status='この日・区分の出馬表リンクを確認できません（未取得／開催なし等）';p.tone='warn';this.renderSelectors(p);this.render(p);return;}
         const venues=[...new Set(p.races.map(r=>r.venue))].sort();
-        const reserved=new Set(this.panes.filter(q=>q.visible&&q.source===source&&q.date===date&&q.preferredVenue).map(q=>q.preferredVenue));
-        const available=venues.filter(v=>!reserved.has(v));
-        const ordinal=this.panes.filter(q=>q.visible&&q.id<p.id&&q.source===source&&q.date===date&&!q.preferredVenue).length;
-        p.venue=p.preferredVenue?(venues.includes(p.preferredVenue)?p.preferredVenue:''):(venues.includes(venue)?venue:available[ordinal]||'');
-        if(!p.venue){p.status=p.preferredVenue?`${VENUES[source][p.preferredVenue]}の出馬表リンクが見つかりません。開催場を選び直してください。`:`取得できた開催場は${venues.length}会場です。この画面に自動割当できる別会場がありません。開催場を選ぶと同じ会場も表示できます。`;p.tone='warn';this.renderSelectors(p);this.render(p);return;}
-        const choices=p.races.filter(r=>r.venue===p.venue),selected=choices.find(r=>r.raceId===wanted)||choices.find(r=>r.postMs>Date.now())||choices[0];
+
+        // v5.23.5: visible panes may intentionally share the same venue/race.
+        // Prefer an already selected visible pane for the same source/date so that
+        // 2/3/4/6-screen mode opens with the same race on every pane.
+        const refPane=this.panes.find(q=>
+          q.visible && q.id!==p.id && q.source===source && q.date===date &&
+          q.venue && venues.includes(q.venue) && q.race
+        );
+        p.venue=p.preferredVenue
+          ? (venues.includes(p.preferredVenue)?p.preferredVenue:'')
+          : (refPane?.venue || (venues.includes(venue)?venue:venues[0]||''));
+
+        if(!p.venue){
+          p.status=p.preferredVenue
+            ? `${VENUES[source][p.preferredVenue]}の出馬表リンクが見つかりません。開催場を選び直してください。`
+            : `取得できた開催場がありません。`;
+          p.tone='warn';this.renderSelectors(p);this.render(p);return;
+        }
+
+        const choices=p.races.filter(r=>r.venue===p.venue);
+        const refRaceNo=refPane?.race?.raceNo;
+        const selected=
+          choices.find(r=>r.raceId===wanted) ||
+          (refRaceNo ? choices.find(r=>r.raceNo===refRaceNo) : null) ||
+          choices.find(r=>r.postMs>Date.now()) ||
+          choices[0];
         this.renderSelectors(p);await this.selectRace(id,selected.raceId);
       }catch(e){if(valid()){p.status='開催取得失敗：'+e.message;p.tone='error';this.render(p);}}
       finally{if(valid()){p.loading=false;this.render(p);}}
@@ -27650,7 +27670,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
 <script id="worker-hybrid-v5215-version-lock">
 (function(){
   'use strict';
-  const V='v5.23.4 All Results + All Payouts';
+  const V='v5.21.7 Cross-Market Freeze Fix';
   function mark(){
     try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;const el=document.querySelector('.ver');if(el)el.textContent=V+(window.__NAR_BRIDGE_READY__?' 🌉':'')+' ☁️';}catch(e){}
   }

@@ -40,7 +40,7 @@
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.14 D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues</title>
+<title>The競馬 EV分析 v5.23.15 RaceName Fix + D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -396,7 +396,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.23.14 D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues ☁️ 5s</span>
+    <span class="ver">v5.23.15 RaceName Fix + D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues ☁️ 5s</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -8525,7 +8525,7 @@ function isGenericRaceName68(name, raceNo){
   const compact = t.replace(/\s+/g,'');
   if(!compact) return true;
   if(compact === `${no}R` || compact === `第${no}R` || /^\d{1,2}R$/.test(compact)) return true;
-  if(/レース情報|レース一覧|netkeiba|ネット競馬|地方競馬|出馬表|オッズ|結果|払戻|競馬データベース/i.test(t)) return true;
+  if(/レース情報|レース一覧|netkeiba|ネット競馬|地方競馬|出馬表|オッズ|結果|払戻|競馬データベース|競馬専門紙|競馬新聞|専門紙/i.test(t)) return true;
   if(/attachEvent|addEventListener|messageEvent|function\s*\(|window\.|document\.|var\s|let\s|const\s|=>|<script/i.test(t)) return true;
   return false;
 }
@@ -9189,7 +9189,7 @@ loadRaceList = async function(){
     if(!t) return true;
     if(t === `${no}R` || t === `第${no}R`) return true;
     if(/^\d{1,2}R$/.test(t)) return true;
-    if(/レース一覧|レース情報|出馬表|オッズ|結果|払戻|netkeiba|地方競馬|競馬データベース/i.test(t)) return true;
+    if(/レース一覧|レース情報|出馬表|オッズ|結果|払戻|netkeiba|地方競馬|競馬データベース|競馬専門紙|競馬新聞|専門紙/i.test(t)) return true;
     if(/function\s*\(|addEventListener|attachEvent|messageEvent|window\.|document\.|<script/i.test(t)) return true;
     return false;
   }
@@ -9887,7 +9887,7 @@ if(horses.length === 0){
     if(!t) return true;
     if(t===`${no}R` || t===String(no)) return true;
     if(/^\d{1,2}R$/.test(t)) return true;
-    if(/^(発売|締切|オッズ|結果|出馬表|レース一覧|地方競馬|予想|払戻)/.test(t)) return true;
+    if(/^(発売|締切|オッズ|結果|出馬表|レース一覧|地方競馬|予想|払戻|競馬専門紙|競馬新聞|専門紙)/.test(t)) return true;
     return false;
   }
   function nameFromBlock86(text,no){
@@ -24992,7 +24992,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
 /* The競馬 MultiScreen v2 — pane-owned state; no child application documents. */
 (function () {
   'use strict';
-  const VERSION = 'v5.23.14 D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues';
+  const VERSION = 'v5.23.15 RaceName Fix + D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues';
   const MARKETS = ['単勝','複勝','枠連','馬連','ワイド','馬単','3連複','3連単'];
   const VENUES = {
     JRA: {'01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京','06':'中山','07':'中京','08':'京都','09':'阪神','10':'小倉'},
@@ -25004,6 +25004,14 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
   const PLAN_KEY = 'thekeiba-multiscreen-plans-v1';
   const PROFILE_NAMES = {weekday:'平日用',weekend:'休日用',custom1:'自由設定1',custom2:'自由設定2'};
   const WEEKDAYS = ['日','月','火','水','木','金','土'];
+  // v5.23.15: 一覧ページの「競馬専門紙」等をレース名として表示しない。
+  function safeRaceName52315(raw,raceNo){
+    const no=Number(raceNo||0);
+    let t=clean(raw||'').replace(/\s+/g,' ').trim();
+    if(!t||t===`${no}R`||t===`第${no}R`||/^\d{1,2}R$/.test(t))return '';
+    if(/競馬専門紙|競馬新聞|専門紙|レース情報|レース一覧|出馬表|オッズ|結果|払戻|netkeiba|ネット競馬|地方競馬|競馬データベース/i.test(t))return '';
+    return t;
+  }
   // Cabinet Office calendar, checked 2026-09-27. Outside these years, no holiday is inferred.
   // https://www8.cao.go.jp/chosei/shukujitsu/gaiyou.html
   const HOLIDAYS = {
@@ -25141,6 +25149,15 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     }
     const rows=[...horses.values()].sort((a,b)=>a.num-b.num);
     try{ rows.startTime=extractRaceStartTime231(doc.body?.textContent||''); }catch(_){ rows.startTime=''; }
+    // v5.23.15: NARは同じ出馬表HTMLから正式レース名も回収する（追加リクエストなし）。
+    try{
+      const no=Number(String(rid||'').slice(-2));
+      let rn='';
+      if(/nar(?:\.sp)?\.netkeiba\.com/i.test(String(url||'')) && typeof extractNarRaceNameFromHtml68==='function'){
+        rn=extractNarRaceNameFromHtml68(text,rid,no)||'';
+      }
+      rows.raceName=safeRaceName52315(rn,no);
+    }catch(_){ rows.raceName=''; }
     return rows;
   }
   function normalizeRecord(raw,source,rid,date,inheritedId='') {
@@ -25223,7 +25240,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       }
       throw new Error(errors.join(' / '));
     }
-    // v5.23.14: NARはabc Worker v6.1.15 D1-only /all-marketsを最優先。
+    // v5.23.15: NARはabc Worker v6.1.15 D1-only /all-marketsを最優先。
     // 1回のJSONで全8券種を取得し、各Paneが自分のrace_idだけを独立保持する。
     // Worker/JSON検証に失敗した場合だけ従来OddsEngineへフォールバックする。
     async function getNarAllMarketsBatch(race,signal,onProgress=()=>{}){
@@ -25323,7 +25340,8 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
                 if(!(raceNo>=1&&raceNo<=12))continue;
                 const rawTime=String(x.startTime||x.postTime||x.post_time||'').trim();
                 const tm=(rawTime.match(/(?:[01]?\d|2[0-3]):[0-5]\d/)||[])[0]||'';
-                const name=clean(x.raceName||x.name||`${raceNo}R`)||`${raceNo}R`;
+                const rawName=clean(x.raceName||x.name||'');
+                const name=safeRaceName52315(rawName,raceNo)||`${raceNo}R`;
                 byId.set(rid,{source:'NAR',date,raceId:rid,venue:rid.slice(4,6),raceNo,name,startTime:tm,
                   postMs:tm?Date.parse(date+'T'+tm.padStart(5,'0')+':00+09:00'):0});
               }
@@ -25355,7 +25373,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
             if(batch)return batch;
           }catch(e){
             if(e?.name==='AbortError')throw e;
-            console.warn('[v5.23.14] NAR /all-markets を従来OddsEngineへフォールバック',e);
+            console.warn('[v5.23.15] NAR /all-markets を従来OddsEngineへフォールバック',e);
           }
         }
         const got=await primitives.getOdds(source,rid,horses,{read:url=>read(url,signal,rid),ticket,onProgress:(...args)=>{checkAbort(signal);onProgress(...args);}});
@@ -25744,7 +25762,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       this.clearRace(p);p.raceId=rid;p.race=clone(race);p.status='保存履歴を読み込み中…';p.tone='';
       const c=this.context(p);this.renderSelectors(p);this.render(p);this.save();
       const history=this.loadHistory(id);
-      const horses=(async()=>{try{const rows=await this.providers[c.source].getHorses(clone(race),{signal:c.signal});if(this.valid(p,c)){p.transport.card=String(rows.transport||'');if(rows.startTime&&!p.race?.startTime){p.race.startTime=rows.startTime;const rr=p.races.find(x=>x.raceId===p.raceId);if(rr)rr.startTime=rows.startTime;}p.horses=clone(rows);p.cardWarning='';this.render(p);}}catch(e){if(this.valid(p,c)){p.cardWarning='馬名：'+e.message;this.render(p);}}})();
+      const horses=(async()=>{try{const rows=await this.providers[c.source].getHorses(clone(race),{signal:c.signal});if(this.valid(p,c)){p.transport.card=String(rows.transport||'');if(rows.startTime&&!p.race?.startTime){p.race.startTime=rows.startTime;const rr=p.races.find(x=>x.raceId===p.raceId);if(rr)rr.startTime=rows.startTime;}if(rows.raceName){const rn=safeRaceName52315(rows.raceName,p.race?.raceNo);if(rn){p.race.name=rn;const rr=p.races.find(x=>x.raceId===p.raceId);if(rr)rr.name=rn;this.renderSelectors(p);}}p.horses=clone(rows);p.cardWarning='';this.render(p);}}catch(e){if(this.valid(p,c)){p.cardWarning='馬名：'+e.message;this.render(p);}}})();
       await Promise.allSettled([history,horses]);
       if(this.valid(p,c)&&this.opened&&p.visible){await this.loadOdds(id);this.schedule(p);}
     }
@@ -25863,7 +25881,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       const venue=p.root.querySelector('.venueSelect'),race=p.root.querySelector('.raceSelect');
       const venues=[...new Set(p.races.map(r=>r.venue))];
       venue.innerHTML='<option value="">開催場を選択</option>'+venues.map(v=>`<option value="${esc(v)}">${esc(VENUES[p.source][v])}</option>`).join('')||'<option value="">開催未取得</option>';venue.value=p.venue;
-      race.innerHTML=p.races.filter(r=>r.venue===p.venue).map(r=>{const nm=clean(r.name);const showName=nm&&!new RegExp('^'+r.raceNo+'R$','i').test(nm)?nm:'';return `<option value="${esc(r.raceId)}">${r.raceNo}R${r.startTime?' '+esc(r.startTime):''}${showName?' '+esc(showName):''}</option>`;}).join('')||'<option value="">レース未選択</option>';race.value=p.raceId;
+      race.innerHTML=p.races.filter(r=>r.venue===p.venue).map(r=>{const nm=safeRaceName52315(r.name,r.raceNo);const showName=nm&&!new RegExp('^'+r.raceNo+'R$','i').test(nm)?nm:'';return `<option value="${esc(r.raceId)}">${r.raceNo}R${r.startTime?' '+esc(r.startTime):''}${showName?' '+esc(showName):''}</option>`;}).join('')||'<option value="">レース未選択</option>';race.value=p.raceId;
     }
     rankSelection5216(p){
       const end=this.endTime(p),size=RANK_SIZES.includes(p.topN)?p.topN:10;
@@ -26010,7 +26028,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       p.controller=new AbortController();const c=this.context(p),race=clone(p.race);
       const jobs=[this.loadHistory(p.id)];
       if(p.horses.length<2)jobs.push((async()=>{
-        try{const horses=await this.providers[c.source].getHorses(race,{signal:c.signal});if(this.valid(p,c)){p.transport.card=String(horses.transport||'');if(horses.startTime&&!p.race?.startTime){p.race.startTime=horses.startTime;const rr=p.races.find(x=>x.raceId===p.raceId);if(rr)rr.startTime=horses.startTime;}p.horses=clone(horses);p.cardWarning='';this.render(p);}}
+        try{const horses=await this.providers[c.source].getHorses(race,{signal:c.signal});if(this.valid(p,c)){p.transport.card=String(horses.transport||'');if(horses.startTime&&!p.race?.startTime){p.race.startTime=horses.startTime;const rr=p.races.find(x=>x.raceId===p.raceId);if(rr)rr.startTime=horses.startTime;}if(horses.raceName){const rn=safeRaceName52315(horses.raceName,p.race?.raceNo);if(rn){p.race.name=rn;const rr=p.races.find(x=>x.raceId===p.raceId);if(rr)rr.name=rn;this.renderSelectors(p);}}p.horses=clone(horses);p.cardWarning='';this.render(p);}}
         catch(e){if(this.valid(p,c)){p.cardWarning='馬名：'+e.message;this.render(p);}}
       })());
       await Promise.allSettled(jobs);
@@ -27917,7 +27935,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
 <script id="worker-hybrid-v5215-version-lock">
 (function(){
   'use strict';
-  const V='v5.23.14 D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues';
+  const V='v5.23.15 RaceName Fix + D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues';
   function mark(){
     try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;const el=document.querySelector('.ver');if(el)el.textContent=V+(window.__NAR_BRIDGE_READY__?' 🌉':'')+' ☁️';}catch(e){}
   }
@@ -27983,7 +28001,7 @@ function mark(){try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;
 <script id="canonical-version-v5230">
 (function(){
  'use strict';
- const V='v5.23.14 D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues';
+ const V='v5.23.15 RaceName Fix + D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues';
  function mark(){
    try{
      window.APP_VERSION=V;
@@ -28129,7 +28147,7 @@ function mark(){try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;
    Existing parsers remain primary; missing official payout rows are merged in. */
 (function(){
 'use strict';
-const V='v5.23.14 D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues';
+const V='v5.23.15 RaceName Fix + D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues';
 const oldP=window.parsePayoutsFromResultDoc || (typeof parsePayoutsFromResultDoc==='function'?parsePayoutsFromResultDoc:null);
 const oldF=window.parseFinishFromResultDoc || (typeof parseFinishFromResultDoc==='function'?parseFinishFromResultDoc:null);
 const norm=s=>String(s||'').normalize('NFKC').replace(/[‐‑‒–—―−]/g,'-').replace(/\u00a0/g,' ');
@@ -28184,7 +28202,7 @@ stamp();document.addEventListener('DOMContentLoaded',stamp,{once:true});[500,200
 <script id="repair-v5234-final">
 (function(){
   'use strict';
-  const V='v5.23.14 D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues';
+  const V='v5.23.15 RaceName Fix + D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues';
   function stamp(){
     window.APP_VERSION=V;
     document.title='The競馬 EV分析 '+V;
@@ -28199,7 +28217,7 @@ stamp();document.addEventListener('DOMContentLoaded',stamp,{once:true});[500,200
 <script id="classic-ui-all-venues-v5238-final">
 (function(){
   'use strict';
-  const V='v5.23.14 D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues';
+  const V='v5.23.15 RaceName Fix + D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues';
   function stamp(){
     try{
       window.APP_VERSION=V;
@@ -28218,7 +28236,7 @@ stamp();document.addEventListener('DOMContentLoaded',stamp,{once:true});[500,200
 <script id="classic-ui-nohang-v5239-final">
 (function(){
   'use strict';
-  const V='v5.23.14 D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues';
+  const V='v5.23.15 RaceName Fix + D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues';
   const $=id=>document.getElementById(id);
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
   function timeout(p,ms,label){
@@ -28389,7 +28407,7 @@ stamp();document.addEventListener('DOMContentLoaded',stamp,{once:true});[500,200
 <script id="safari-light-v52312">
 (function(){
  'use strict';
- const V='v5.23.14 D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues';
+ const V='v5.23.15 RaceName Fix + D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues';
  function mark(){try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;const e=document.querySelector('.ver');if(e)e.textContent=V+' ☁️ 5s';}catch(_){}}
  function ui(){
    const host=document.getElementById('bridgeModeBar252')||document.getElementById('tab-horses');

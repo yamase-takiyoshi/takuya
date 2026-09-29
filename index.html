@@ -40,7 +40,7 @@
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.20 Archive Full Replay + Replay History + CrossMarket + Full Result + D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues</title>
+<title>The競馬 EV分析 v5.23.21 Forecast ChangeOnly Realtime</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -403,7 +403,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.23.20 Archive Full Replay + Replay History + CrossMarket + Full Result + D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues ☁️ 5s</span>
+    <span class="ver">v5.23.21 Forecast ChangeOnly Realtime ☁️ 5s</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -20052,7 +20052,15 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
       retryAfterByRace254.delete(rid);
       const successful=Object.values(got.diagnostics).filter(d=>d.state==='ok' && d.count>0);
       const unchanged202=successful.length>0 && successful.every(d=>d.changed_count===0);
-      // Successful network observations keep their real time, including unchanged prices.
+      // v5.23.21 ChangeOnly: 5秒ごとの確認は続けるが、全成功券種が前回と同値なら
+      // IndexedDB/履歴へ新しい点を追加しない。初回（changed_count=null）は必ず基準点として保存する。
+      if(unchanged202){
+        const checkedAt=Date.now();
+        activeKind=kind; activeRaceLabel=raceLabel202();
+        refreshControls202(); draw202();
+        setStatus202(`✅ ${new Date(checkedAt).toLocaleTimeString('ja-JP')} 確認済み / オッズ変化なし → 保存なし（5秒監視継続）`,'ok');
+        return;
+      }
       // Failed markets are absent; stale saved values are never stamped as new observations.
       const now=Date.now();
       const currentHorses247=expectedHorses202();
@@ -20842,7 +20850,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
           </select></label>
           <label>表示<select id="oddsTsCombo"><option value="__ALL__">全馬を表示</option></select></label>
           <label>買い目1点<select id="oddsTsSinglePoint"><option value="">券種を選択</option></select></label>
-          <label class="odds-ts-check"><input type="checkbox" id="oddsTsAuto">5秒ごとに再取得（必要時のみON）</label>
+          <label class="odds-ts-check"><input type="checkbox" id="oddsTsAuto">5秒ごとに確認（変化時のみ保存）</label>
           <label class="odds-ts-check"><input type="checkbox" id="oddsTsLog">対数</label>
           <label>表示幅<select id="oddsTsWindow">
             <option value="300000">直近5分</option>
@@ -22927,11 +22935,41 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     rec.collector_origin='worker';
     return rec;
   }
+  function signature219(rec){
+    const markets=rec?.markets&&typeof rec.markets==='object'?rec.markets:{};
+    const parts=[];
+    for(const type of Object.keys(markets).sort()){
+      const rows=Array.isArray(markets[type])?markets[type]:[];
+      const vals=rows.map(x=>[String(x?.combination??''),Number(x?.odds||0),Number((x?.odds_min??x?.odds) || 0),Number((x?.odds_max??x?.odds) || 0)].join(':')).sort();
+      parts.push(type+'='+vals.join(','));
+    }
+    return parts.join('|');
+  }
+  async function latestLocal219(rid){
+    let rows=[];
+    await idbRun219('readonly',(st,tx,reject)=>{
+      const q=st.index('race_id').getAll(IDBKeyRange.only(String(rid)));
+      q.onsuccess=()=>{rows=(q.result||[]).sort((a,b)=>Number(a?.captured_ms||0)-Number(b?.captured_ms||0));};
+      q.onerror=()=>reject(q.error||new Error('IndexedDB latest read failed'));
+    });
+    return rows.length?rows[rows.length-1]:null;
+  }
   async function putMany219(rows,rid=''){
-    const normalized=(Array.isArray(rows)?rows:[]).map(r=>normalizeWorkerCapture219(r,rid)).filter(Boolean);
+    const normalized=(Array.isArray(rows)?rows:[]).map(r=>normalizeWorkerCapture219(r,rid)).filter(Boolean).sort((a,b)=>a.captured_ms-b.captured_ms);
     if(!normalized.length)return 0;
-    await idbRun219('readwrite',(st)=>{normalized.forEach(r=>st.put(r));});
-    return normalized.length;
+    // v5.23.21 ChangeOnly: Workerが5秒全点を返しても、端末側は値が変化した点だけ保存する。
+    const prev=await latestLocal219(rid);
+    let prevSig=prev?signature219(prev):'';
+    const changed=[];
+    for(const rec of normalized){
+      const sig=signature219(rec);
+      if(prevSig && sig===prevSig) continue;
+      changed.push(rec);
+      prevSig=sig;
+    }
+    if(!changed.length)return 0;
+    await idbRun219('readwrite',(st)=>{changed.forEach(r=>st.put(r));});
+    return changed.length;
   }
   function extractWorkerRows219(j){
     if(Array.isArray(j))return j;
@@ -23061,7 +23099,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
         <div class="field"><label>常時時系列Worker URL</label><input id="timelineCloudUrl219" type="url" value="${esc219(c.workerUrl)}" placeholder="https://the-keiba-timeline-collector.xxxxx.workers.dev"></div>
         <div class="field"><label>Token（Workerに設定した場合のみ）</label><input id="timelineCloudToken219" type="password" value="${esc219(c.token)}" autocomplete="off"></div>
         <label style="display:flex;gap:8px;align-items:center;font-size:12px;margin:7px 0"><input id="timelineCloudAutoReg219" type="checkbox" ${c.autoRegister?'checked':''}> レース選択時に常時収集を自動開始</label>
-        <label style="display:flex;gap:8px;align-items:center;font-size:12px;margin:7px 0 10px"><input id="timelineCloudAutoSync219" type="checkbox" ${c.autoSync?'checked':''}> HTML起動中はWorker履歴を5秒ごとに同期（Live）</label>
+        <label style="display:flex;gap:8px;align-items:center;font-size:12px;margin:7px 0 10px"><input id="timelineCloudAutoSync219" type="checkbox" ${c.autoSync?'checked':''}> HTML起動中はWorker履歴を同期（端末保存は変化点のみ）</label>
         <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn-sm" id="timelineCloudHealth219">🔌 接続確認</button><button class="btn-sm" id="timelineCloudStart219">☁️ 現在Rを常時収集</button><button class="btn-sm" id="timelineCloudSync219">⬇️ Worker差分同期</button><button class="btn-sm" id="timelineCloudFullSync245">☁️ Worker全5秒履歴</button><button class="btn-sm" id="timelineCloudDiscover219">📅 今日の全R自動探索</button></div>
         <div id="timelineCloudStatus219" style="margin-top:8px"></div>`;
       settingsTab.appendChild(card);
@@ -25000,7 +25038,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
 /* The競馬 MultiScreen v2 — pane-owned state; no child application documents. */
 (function () {
   'use strict';
-  const VERSION = 'v5.23.20 Archive Full Replay + Replay History + CrossMarket + Full Result + D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues';
+  const VERSION = 'v5.23.21 Forecast ChangeOnly Realtime';
   const MARKETS = ['単勝','複勝','枠連','馬連','ワイド','馬単','3連複','3連単'];
   const ALL_TICKETS='__ALL__', CUSTOM_TICKETS='__CUSTOM__';
   const TICKET_CHOICES=[ALL_TICKETS,CUSTOM_TICKETS,...MARKETS];
@@ -28729,5 +28767,343 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 })();
 </script>
 
+
+<style id="forecast-change-only-v52321-css">
+.forecast52321{border-color:rgba(96,165,250,.28)!important}
+.forecast52321 .fc-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.forecast52321 .fc-badge{font-size:10px;padding:3px 7px;border-radius:999px;border:1px solid rgba(96,165,250,.35);color:#bfdbfe;background:rgba(59,130,246,.10);font-weight:800}
+.forecast52321 .fc-tools{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:8px 0}
+.forecast52321 .fc-tools button,.forecast52321 .fc-tools select{min-height:34px}
+.forecast52321 .fc-tools label{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--muted)}
+.forecast52321 .fc-tools input{width:18px;height:18px;accent-color:var(--accent)}
+.forecast52321 .fc-status{padding:8px 10px;border-radius:8px;background:rgba(15,23,42,.32);font-size:11px;line-height:1.65;color:#cbd5e1}
+.forecast52321 .fc-status.ok{color:#a7f3d0}.forecast52321 .fc-status.wait{color:#fde68a}.forecast52321 .fc-status.err{color:#fecaca}
+.forecast52321 .fc-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin:9px 0}
+.forecast52321 .fc-kpi{padding:8px;border:1px solid rgba(148,163,184,.16);border-radius:9px;background:rgba(15,23,42,.34);text-align:center;min-width:0}
+.forecast52321 .fc-kpi b{display:block;font-size:16px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.forecast52321 .fc-kpi span{display:block;font-size:9px;color:var(--muted);margin-top:2px}
+.forecast52321 .fc-chart-wrap{height:220px;border:1px solid var(--border);border-radius:9px;background:#07111d;overflow:hidden}
+.forecast52321 canvas{width:100%;height:100%;display:block}
+.forecast52321 .fc-note{font-size:10px;color:var(--muted);line-height:1.6;margin-top:7px}
+@media(max-width:520px){.forecast52321 .fc-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+</style>
+<script id="forecast-change-only-v52321">
+(function(){
+'use strict';
+if(window.__FORECAST_CHANGE_ONLY_52321__) return;
+window.__FORECAST_CHANGE_ONLY_52321__=true;
+const V='v5.23.21 Forecast ChangeOnly Realtime';
+const DB='thekeiba-netkeiba-forecast-v1', STORE='captures', POLL=5000, KEY_AUTO='tk-forecast-changeonly-auto-v52321';
+const $=id=>document.getElementById(id);
+const norm=s=>String(s??'').replace(/\u00a0/g,' ').replace(/[\t\r\n]+/g,' ').replace(/[　 ]+/g,' ').trim();
+const half=s=>String(s??'').replace(/[０-９．－]/g,c=>({'０':'0','１':'1','２':'2','３':'3','４':'4','５':'5','６':'6','７':'7','８':'8','９':'9','．':'.','－':'-'}[c]||c));
+let dbp=null, activeRid='', history=[], busy=false, timer=null, lastChecked=0, sessionChecks=0, liveRows=[];
+
+function currentRid(){
+  try{ if(typeof currentRaceId!=='undefined' && currentRaceId) return String(currentRaceId); }catch(e){}
+  const u=String($('raceUrl')?.value||'');
+  return (u.match(/race_id=(\d{10,14})/)||[])[1]||'';
+}
+function currentKind(r){
+  const k=String($('pickKind')?.value||'').toUpperCase();
+  if(k==='NAR'||k==='JRA') return k;
+  const c=String(r||'').slice(4,6);
+  return /^(0[1-9]|10)$/.test(c)?'JRA':'NAR';
+}
+function forecastUrls(r,k){
+  return k==='NAR'
+    ? [`https://nar.netkeiba.com/race/shutuba.html?race_id=${r}&rf=race_submenu`,`https://nar.sp.netkeiba.com/race/shutuba.html?race_id=${r}`]
+    : [`https://race.netkeiba.com/race/shutuba.html?race_id=${r}&rf=race_submenu`,`https://race.netkeiba.com/race/shutuba.html?race_id=${r}`];
+}
+function openDb(){
+  if(dbp) return dbp;
+  dbp=new Promise((resolve,reject)=>{
+    const q=indexedDB.open(DB,1);
+    q.onupgradeneeded=()=>{
+      const d=q.result;
+      if(!d.objectStoreNames.contains(STORE)){
+        const st=d.createObjectStore(STORE,{keyPath:'id'});
+        st.createIndex('race_id','race_id',{unique:false});
+      }
+    };
+    q.onsuccess=()=>resolve(q.result);
+    q.onerror=()=>reject(q.error);
+  });
+  return dbp;
+}
+async function dbRows(r){
+  const d=await openDb();
+  return new Promise((resolve,reject)=>{
+    const tx=d.transaction(STORE,'readonly');
+    const q=tx.objectStore(STORE).index('race_id').getAll(IDBKeyRange.only(String(r)));
+    q.onsuccess=()=>resolve((q.result||[]).sort((a,b)=>Number(a.captured_ms||0)-Number(b.captured_ms||0)));
+    q.onerror=()=>reject(q.error);
+  });
+}
+async function dbPut(rec){
+  const d=await openDb();
+  return new Promise((resolve,reject)=>{
+    const tx=d.transaction(STORE,'readwrite');
+    tx.objectStore(STORE).put(rec);
+    tx.oncomplete=()=>resolve();
+    tx.onerror=()=>reject(tx.error);
+  });
+}
+function parseForecastTable(doc){
+  const out=new Map();
+  for(const table of Array.from(doc.querySelectorAll('table'))){
+    const trs=Array.from(table.querySelectorAll('tr'));
+    if(!trs.length) continue;
+    let header=null, oddsIdx=-1, popIdx=-1;
+    for(const tr of trs){
+      const cells=Array.from(tr.children);
+      const texts=cells.map(c=>half(norm(c.textContent)));
+      const oi=texts.findIndex(t=>/予想オッズ/.test(t));
+      if(oi>=0){
+        header=tr;
+        oddsIdx=oi;
+        popIdx=texts.findIndex(t=>/^人気$|人気順/.test(t));
+        break;
+      }
+    }
+    if(!header || oddsIdx<0) continue;
+    for(const tr of trs){
+      if(tr===header) continue;
+      const cells=Array.from(tr.children);
+      if(cells.length<=oddsIdx) continue;
+      let no=0;
+      const noEl=tr.querySelector('.Umaban,[class*="Umaban"],[class*="HorseNum"]');
+      if(noEl){
+        const m=half(norm(noEl.textContent)).match(/(?:^|\D)([1-9]|1[0-8])(?:\D|$)/);
+        if(m) no=Number(m[1]);
+      }
+      if(!no){
+        for(const c of cells.slice(0,4)){
+          const t=half(norm(c.textContent));
+          if(/^([1-9]|1[0-8])$/.test(t)){ no=Number(t); break; }
+        }
+      }
+      if(!(no>=1 && no<=18)) continue;
+      const oddsText=half(norm(cells[oddsIdx]?.textContent));
+      const om=oddsText.match(/(\d{1,4}(?:\.\d+)?)/);
+      const odds=om?Number(om[1]):0;
+      if(!(odds>=1 && odds<=9999)) continue;
+      let pop=0;
+      if(popIdx>=0 && cells[popIdx]){
+        const pm=half(norm(cells[popIdx].textContent)).match(/([1-9]|1[0-8])/);
+        if(pm) pop=Number(pm[1]);
+      }
+      const link=tr.querySelector('a[href*="/horse/"]');
+      out.set(no,{num:no,name:norm(link?.textContent||''),odds:Math.round(odds*10)/10,pop});
+    }
+    if(out.size>=2) return out;
+    out.clear();
+  }
+  if(/予想オッズ/.test(norm(doc.body?.textContent||'')) && typeof parseWinOddsPopularityFromDoc==='function'){
+    try{
+      const m=parseWinOddsPopularityFromDoc(doc);
+      if(m?.size>=2){
+        for(const [no,v] of m){
+          const n=Number(no),o=Number(v?.odds||0),p=Number(v?.pop||0);
+          if(n>=1&&n<=18&&o>=1) out.set(n,{num:n,name:'',odds:o,pop:p});
+        }
+      }
+    }catch(e){}
+  }
+  return out;
+}
+function currentNames(){
+  const m=new Map();
+  try{ if(Array.isArray(horses)) horses.forEach(h=>m.set(Number(h.num),String(h.name||''))); }catch(e){}
+  return m;
+}
+function signature(rows){
+  return (rows||[]).slice().sort((a,b)=>Number(a.num)-Number(b.num)).map(x=>`${Number(x.num)}:${Number(x.odds).toFixed(1)}:${Number(x.pop||0)}`).join('|');
+}
+function diffCount(a,b){
+  const A=new Map((a||[]).map(x=>[Number(x.num),`${Number(x.odds).toFixed(1)}:${Number(x.pop||0)}`]));
+  const B=new Map((b||[]).map(x=>[Number(x.num),`${Number(x.odds).toFixed(1)}:${Number(x.pop||0)}`]));
+  let n=0;
+  for(const k of new Set([...A.keys(),...B.keys()])) if(A.get(k)!==B.get(k)) n++;
+  return n;
+}
+async function fetchForecast(r,k){
+  let last='';
+  for(const url of forecastUrls(r,k)){
+    try{
+      const html=await fetchHtmlViaProxy(url);
+      const doc=new DOMParser().parseFromString(html,'text/html');
+      const map=parseForecastTable(doc);
+      if(map.size>=2) return {url,map};
+      last=`予想オッズ列なし（${url.includes('.sp.')?'SP':'PC'}）`;
+    }catch(e){ last=String(e?.message||e); }
+  }
+  throw new Error(last||'予想オッズを取得できません');
+}
+function liveLatest(no){
+  for(let i=liveRows.length-1;i>=0;i--){
+    const x=(liveRows[i]?.markets?.['単勝']||[]).find(z=>Number(z.combination)===Number(no));
+    if(x && Number(x.odds)>0) return Number(x.odds);
+  }
+  return 0;
+}
+function forecastProb(rec,no){
+  const rows=rec?.horses||[];
+  let sum=0,target=0;
+  for(const h of rows){
+    const o=Number(h.odds);
+    if(o>0){ const q=1/o; sum+=q; if(Number(h.num)===Number(no)) target=q; }
+  }
+  return sum>0&&target>0?target/sum*100:NaN;
+}
+function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
+function setStatus(msg,tone=''){
+  const e=$('forecastStatus52321');
+  if(e){ e.textContent=msg; e.className='fc-status '+tone; }
+}
+function populateHorseSelect(){
+  const sel=$('forecastHorse52321');
+  if(!sel) return;
+  const latest=history[history.length-1];
+  const rows=latest?.horses||[];
+  const keep=sel.value;
+  sel.innerHTML=rows.map(h=>`<option value="${h.num}">${h.num} ${esc(h.name||'')}</option>`).join('');
+  if(rows.some(h=>String(h.num)===keep)) sel.value=keep;
+}
+async function refreshLive(){
+  try{ liveRows=await window.TheKeibaTimelinePrimitives?.readLegacy?.(activeRid)||[]; }
+  catch(e){ liveRows=[]; }
+}
+function draw(){
+  const c=$('forecastChart52321');
+  if(!c) return;
+  const ctx=c.getContext('2d'), box=c.getBoundingClientRect();
+  const w=Math.max(280,Math.floor(box.width||560)), h=Math.max(180,Math.floor(box.height||220)), dpr=Math.min(2,window.devicePixelRatio||1);
+  c.width=w*dpr; c.height=h*dpr; ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,w,h); ctx.fillStyle='#07111d'; ctx.fillRect(0,0,w,h);
+  const no=Number($('forecastHorse52321')?.value||history[history.length-1]?.horses?.[0]?.num||0);
+  const points=[];
+  for(const r of history){
+    const x=(r.horses||[]).find(z=>Number(z.num)===no);
+    if(x&&Number(x.odds)>0) points.push({t:Number(r.captured_ms),v:Number(x.odds),type:'forecast'});
+  }
+  for(const r of liveRows){
+    const x=(r.markets?.['単勝']||[]).find(z=>Number(z.combination)===no);
+    if(x&&Number(x.odds)>0) points.push({t:Number(r.captured_ms),v:Number(x.odds),type:'live'});
+  }
+  if(!points.length){
+    ctx.fillStyle='#94a3b8';ctx.font='12px sans-serif';ctx.textAlign='center';ctx.fillText('予想オッズの変化点を取得するとグラフを表示します',w/2,h/2);return;
+  }
+  const t0=Math.min(...points.map(x=>x.t)), t1=Math.max(...points.map(x=>x.t));
+  const vals=points.map(x=>x.v); let y0=Math.min(...vals), y1=Math.max(...vals);
+  if(y0===y1){ y0=Math.max(1,y0*.9); y1*=1.1; }
+  const L=44,R=12,T=20,B=28, xx=t=>L+(t-t0)/Math.max(1,t1-t0)*(w-L-R), yy=v=>T+(y1-v)/Math.max(.0001,y1-y0)*(h-T-B);
+  ctx.strokeStyle='#334155';ctx.lineWidth=1;
+  for(let i=0;i<5;i++){const y=T+i*(h-T-B)/4;ctx.beginPath();ctx.moveTo(L,y);ctx.lineTo(w-R,y);ctx.stroke();}
+  ctx.fillStyle='#94a3b8';ctx.font='10px sans-serif';ctx.textAlign='right';ctx.fillText(y1.toFixed(1),L-5,T+4);ctx.fillText(y0.toFixed(1),L-5,h-B);
+  ctx.textAlign='left';ctx.fillText(new Date(t0).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'}),L,h-8);
+  ctx.textAlign='right';ctx.fillText(new Date(t1).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'}),w-R,h-8);
+  function line(type,color){
+    const a=points.filter(x=>x.type===type).sort((x,y)=>x.t-y.t); if(!a.length) return;
+    ctx.strokeStyle=color;ctx.lineWidth=2;ctx.beginPath();
+    a.forEach((p,i)=>{const x=xx(p.t),y=yy(p.v);if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);});ctx.stroke();
+    for(const p of a){ctx.fillStyle=color;ctx.beginPath();ctx.arc(xx(p.t),yy(p.v),2.6,0,Math.PI*2);ctx.fill();}
+  }
+  line('forecast','#60a5fa'); line('live','#34d399');
+  ctx.font='10px sans-serif';ctx.textAlign='left';ctx.fillStyle='#60a5fa';ctx.fillText('● netkeiba予想',L,T-7);ctx.fillStyle='#34d399';ctx.fillText('● 実単勝',L+105,T-7);
+}
+function render(){
+  populateHorseSelect();
+  const latest=history[history.length-1];
+  const no=Number($('forecastHorse52321')?.value||latest?.horses?.[0]?.num||0);
+  const fh=latest?.horses?.find(x=>Number(x.num)===no), fo=Number(fh?.odds||0), lp=liveLatest(no);
+  const gap=fo>0&&lp>0?(lp/fo-1)*100:NaN, fp=forecastProb(latest,no);
+  let prev=0;
+  for(let i=history.length-2;i>=0;i--){const x=(history[i].horses||[]).find(z=>Number(z.num)===no);if(Number(x?.odds)>0){prev=Number(x.odds);break;}}
+  const ch=fo>0&&prev>0?(fo/prev-1)*100:NaN;
+  const set=(id,v)=>{const e=$(id);if(e)e.textContent=v;};
+  set('fcOdds52321',fo?fo.toFixed(1)+'倍':'—');
+  set('fcPop52321',fh?.pop?fh.pop+'人気':'—');
+  set('fcLive52321',lp?lp.toFixed(1)+'倍':'—');
+  set('fcGap52321',Number.isFinite(gap)?(gap>=0?'+':'')+gap.toFixed(1)+'%':'—');
+  set('fcProb52321',Number.isFinite(fp)?fp.toFixed(2)+'%':'—');
+  set('fcMove52321',Number.isFinite(ch)?(ch>=0?'+':'')+ch.toFixed(1)+'%':'—');
+  set('fcCount52321',history.length.toLocaleString()+'変化点');
+  draw();
+}
+async function loadRace(r){
+  activeRid=String(r||'');
+  history=activeRid?await dbRows(activeRid):[];
+  await refreshLive();render();
+  setStatus(activeRid?`📚 ${activeRid}：保存済み ${history.length}変化点 / 5秒監視${$('forecastAuto52321')?.checked?'ON':'OFF'}`:'レースを選択してください。',history.length?'ok':'wait');
+}
+async function check(force=false){
+  if(busy || (document.hidden&&!force)) return;
+  const r=currentRid();
+  if(!/^\d{10,14}$/.test(r)){setStatus('⚠️ レースを選択してください。','err');return;}
+  busy=true;
+  try{
+    if(r!==activeRid) await loadRace(r);
+    sessionChecks++;
+    const k=currentKind(r), got=await fetchForecast(r,k), nm=currentNames();
+    const rows=[...got.map.values()].sort((a,b)=>a.num-b.num).map(x=>({...x,name:x.name||nm.get(x.num)||''}));
+    lastChecked=Date.now();
+    const prev=history[history.length-1];
+    if(prev && signature(prev.horses)===signature(rows)){
+      await refreshLive();render();
+      setStatus(`✅ ${new Date(lastChecked).toLocaleTimeString('ja-JP')} 確認 / 変化なし → 保存なし（確認 ${sessionChecks}回）`,'ok');
+      return;
+    }
+    const count=prev?diffCount(prev.horses,rows):rows.length;
+    const rec={schema:'thekeiba-netkeiba-forecast-change-v1',id:`${r}:${lastChecked}`,race_id:r,kind:k,captured_ms:lastChecked,captured_at:new Date(lastChecked).toISOString(),source_url:got.url,change_count:count,initial:!prev,horses:rows};
+    await dbPut(rec);history.push(rec);await refreshLive();render();
+    setStatus(`${prev?'🔔':'✅'} ${new Date(lastChecked).toLocaleTimeString('ja-JP')} ${prev?count+'頭変化':'初回基準'} → 1変化点を保存（合計 ${history.length}点）`,'ok');
+    try{window.dispatchEvent(new CustomEvent('thekeiba-forecast-change',{detail:rec}));}catch(e){}
+  }catch(e){setStatus('⚠️ 予想オッズ取得: '+String(e?.message||e),'err');}
+  finally{busy=false;}
+}
+async function exportJson(){
+  if(!activeRid||!history.length){setStatus('⚠️ 保存済み予想オッズがありません。','err');return;}
+  const obj={schema:'thekeiba-netkeiba-forecast-change-export-v1',version:V,exported_at:new Date().toISOString(),race_id:activeRid,count:history.length,storage:'initial baseline + changed snapshots only',captures:history};
+  const blob=new Blob([JSON.stringify(obj,null,2)],{type:'application/json'});
+  try{
+    if(window.showSaveFilePicker){
+      const h=await showSaveFilePicker({suggestedName:`netkeiba_forecast_${activeRid}.json`,types:[{description:'JSON',accept:{'application/json':['.json']}}]});
+      const w=await h.createWritable();await w.write(blob);await w.close();setStatus('💾 予想オッズ変化点JSONを保存しました。','ok');return;
+    }
+  }catch(e){if(e?.name==='AbortError')return;}
+  const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download=`netkeiba_forecast_${activeRid}.json`;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),1000);setStatus('⬇️ 予想オッズ変化点JSONを保存しました。','ok');
+}
+function install(){
+  if($('forecastCard52321')) return;
+  const tab=$('tab-horses');if(!tab)return;
+  const card=document.createElement('div');
+  card.id='forecastCard52321';card.className='card forecast52321';
+  card.innerHTML=`<div class="fc-head"><h2>📡 netkeiba予想オッズ・変化点リアルタイム</h2><span class="fc-badge">5秒確認 / 変化時だけ保存</span></div>
+  <div class="fc-tools"><label><input id="forecastAuto52321" type="checkbox">自動監視</label><button id="forecastNow52321" class="btn-sm" type="button">🔄 今すぐ確認</button><button id="forecastJson52321" class="btn-sm" type="button">💾 JSON保存</button><label>馬<select id="forecastHorse52321"></select></label><span id="fcCount52321" class="fc-badge">0変化点</span></div>
+  <div id="forecastStatus52321" class="fc-status wait">レース選択後、netkeibaの「予想オッズ」列を5秒ごとに確認します。</div>
+  <div class="fc-kpis"><div class="fc-kpi"><b id="fcOdds52321">—</b><span>予想オッズ</span></div><div class="fc-kpi"><b id="fcPop52321">—</b><span>予想人気</span></div><div class="fc-kpi"><b id="fcLive52321">—</b><span>実単勝オッズ</span></div><div class="fc-kpi"><b id="fcGap52321">—</b><span>実÷予想 乖離</span></div><div class="fc-kpi"><b id="fcProb52321">—</b><span>予想市場確率(正規化)</span></div><div class="fc-kpi"><b id="fcMove52321">—</b><span>前回変化点比</span></div></div>
+  <div class="fc-chart-wrap"><canvas id="forecastChart52321"></canvas></div>
+  <div class="fc-note">青＝netkeiba予想オッズ、緑＝実単勝オッズ。最初の1点だけ基準として保存し、その後はオッズまたは人気が変化した時だけIndexedDB/JSON履歴へ追加します。値が同じ5秒確認は保存しません。</div>`;
+  const cards=tab.querySelectorAll('.card');if(cards.length>1)cards[1].after(card);else tab.appendChild(card);
+  const auto=$('forecastAuto52321');let saved=null;try{saved=localStorage.getItem(KEY_AUTO);}catch(e){}
+  auto.checked=saved===null?true:saved==='1';
+  auto.onchange=()=>{try{localStorage.setItem(KEY_AUTO,auto.checked?'1':'0');}catch(e){}setStatus(`自動監視 ${auto.checked?'ON':'OFF'} / 5秒確認・変化時のみ保存`,auto.checked?'ok':'wait');if(auto.checked)check(true);};
+  $('forecastNow52321').onclick=()=>check(true);$('forecastJson52321').onclick=exportJson;$('forecastHorse52321').onchange=()=>render();
+  ['raceSelect','raceUrl','pickKind','pickVenue'].forEach(id=>$(id)?.addEventListener(id==='raceUrl'?'input':'change',()=>{setTimeout(()=>{const r=currentRid();if(r!==activeRid)loadRace(r).then(()=>{if(auto.checked)check(true);});},300);}));
+  window.addEventListener('resize',()=>draw());
+}
+function stamp(){try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;document.querySelectorAll('.ver').forEach(e=>e.textContent=V+' ☁️ 5s Δ');}catch(e){}}
+function boot(){
+  install();stamp();const r=currentRid();
+  loadRace(r).then(()=>{if($('forecastAuto52321')?.checked&&/^\d{10,14}$/.test(r))check(true);});
+  if(timer)clearInterval(timer);timer=setInterval(()=>{if($('forecastAuto52321')?.checked)check(false);},POLL);
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
+[500,2000,7000,16000,32000,60000,120000,180000].forEach(ms=>setTimeout(()=>{install();stamp();},ms));
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){stamp();if($('forecastAuto52321')?.checked)check(true);}});
+window.checkNetkeibaForecast52321=()=>check(true);window.exportNetkeibaForecast52321=exportJson;
+})();
+</script>
 </body>
 </html>

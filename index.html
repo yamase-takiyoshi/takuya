@@ -40,7 +40,7 @@
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.22.0 BOX精算 + 開催場/日次/累積収支</title>
+<title>The競馬 EV分析 v5.23.0 Odds Engine Unified</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -396,7 +396,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.21.9 Full Payout + Wide3</span>
+    <span class="ver">v5.23.0 Odds Engine Unified ☁️ 5s</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -25236,7 +25236,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
         const got=await primitives.getOdds(source,rid,horses,{read:url=>read(url,signal,rid),ticket,onProgress:(...args)=>{checkAbort(signal);onProgress(...args);}});
         checkAbort(signal);
         const paths=[...new Set(Object.values(got?.diagnostics||{}).map(x=>String(x?.path||'')).filter(Boolean).map(x=>/bridge/i.test(x)?'Bridge':/worker/i.test(x)?'Worker':x))];
-        return {...got,transport:paths.join('+')};
+        return {...got,transport:'OddsEngine5230'+(paths.length?' / '+paths.join('+'):'')};
       },
       async getTimeline(race,{signal,since=0}={}){
         const rid=assertRace(source,race.raceId,race.date),cfg=config();
@@ -25977,8 +25977,39 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       }catch(e){p.status='保存に失敗しました：'+String(e?.message||e);p.tone='error';this.renderStatus(p);}
     }
   }
-  const primitives=window.TheKeibaTimelinePrimitives;
-  if(!primitives)throw new Error('時系列パーサの初期化に失敗しました');
+  const basePrimitives=window.TheKeibaTimelinePrimitives;
+  if(!basePrimitives)throw new Error('時系列パーサの初期化に失敗しました');
+  // v5.23.0 Odds Engine Unified
+  // 同一 source/race_id の同時取得を1本に束ねる。複数Paneが同じレースを表示しても
+  // netkeiba / Worker / Bridge へ重複要求を投げず、同じ8券種Snapshotを共有する。
+  const oddsFlights5230=window.__THEKEIBA_ODDS_FLIGHTS_5230__=window.__THEKEIBA_ODDS_FLIGHTS_5230__||new Map();
+  const oddsCache5230=window.__THEKEIBA_ODDS_CACHE_5230__=window.__THEKEIBA_ODDS_CACHE_5230__||new Map();
+  const clone5230=v=>{try{return structuredClone(v)}catch(_){return JSON.parse(JSON.stringify(v))}};
+  async function unifiedOdds5230(source,rid,horses,context={}){
+    const key=String(source)+'|'+String(rid), now=Date.now(), cached=oddsCache5230.get(key);
+    // 5秒周期内の別Pane要求は直近の検証済みSnapshotを再利用する。
+    if(cached && now-cached.at<4200){
+      try{context.onProgress?.(8,clone5230(cached.value.diagnostics||{}));}catch(_){}
+      return {...clone5230(cached.value),coalesced:true,engine:'v5.23.0'};
+    }
+    if(oddsFlights5230.has(key)){
+      const got=await oddsFlights5230.get(key);
+      try{context.onProgress?.(8,clone5230(got.diagnostics||{}));}catch(_){}
+      return {...clone5230(got),coalesced:true,engine:'v5.23.0'};
+    }
+    const task=(async()=>{
+      const got=await basePrimitives.getOdds(source,rid,horses,context);
+      const markets=got?.markets||{}, diagnostics=got?.diagnostics||{};
+      const count=Object.keys(markets).filter(k=>Array.isArray(markets[k])&&markets[k].length).length;
+      const value={...got,engine:'v5.23.0',market_count:count};
+      if(count>0)oddsCache5230.set(key,{at:Date.now(),value:clone5230(value)});
+      return value;
+    })();
+    oddsFlights5230.set(key,task);
+    try{return await task}finally{if(oddsFlights5230.get(key)===task)oddsFlights5230.delete(key);}
+  }
+  const primitives=Object.freeze({readLegacy:basePrimitives.readLegacy,getOdds:unifiedOdds5230});
+  window.TheKeibaOddsEngine5230=Object.freeze({version:'v5.23.0',getOdds:unifiedOdds5230,cache:oddsCache5230,flights:oddsFlights5230});
   const providers={JRA:createProvider('JRA',primitives),NAR:createProvider('NAR',primitives)};
   const workspace=new MultiPaneWorkspace({providers,store:new TimelineStore(),legacyRead:primitives.readLegacy});
   window.TheKeibaMultiV2=Object.freeze({version:VERSION,workspace,providers,MultiPaneWorkspace,TimelineStore,createProvider,parseRaceList,parseHorseCard,normalizeRecord,assertRace,resolvePlan,defaultPlan,cleanPlan,validDay,holidayNames:HOLIDAYS,MODES});
@@ -27681,5 +27712,24 @@ function mark(){try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;
  [500,2000,6000,15000].forEach(x=>setTimeout(mark,x));
 })();
 </script>
+
+<script id="canonical-version-v5230">
+(function(){
+ 'use strict';
+ const V='v5.23.0 Odds Engine Unified';
+ function mark(){
+   try{
+     window.APP_VERSION=V;
+     document.title='The競馬 EV分析 '+V;
+     const e=document.querySelector('.ver');
+     if(e)e.textContent=V+' ☁️ 5s';
+   }catch(_){}
+ }
+ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mark,{once:true});else mark();
+ [100,700,2200,6500,16000,31000,53000].forEach(ms=>setTimeout(mark,ms));
+ window.addEventListener('thekeiba-timeline-race-loaded',()=>setTimeout(mark,0));
+})();
+</script>
+
 </body>
 </html>

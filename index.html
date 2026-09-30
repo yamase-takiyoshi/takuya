@@ -23006,17 +23006,30 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   }
   async function fetchHistoryPages219(rid,since=0){
     const all=new Map();let cursor=Math.max(0,Number(since)||0);
-    const limit=5000;
-    for(let page=0;page<12;page++){
+    // v5.23.27: v6.2.5 HistorySafe Worker と同じ小ページで読む。
+    // 巨大な全8券種履歴を5000件要求してWorker/Safari双方を圧迫しない。
+    const limit=96;
+    for(let page=0;page<128;page++){
       const j=await fetch219(`/timeline/history?race_id=${encodeURIComponent(rid)}&since=${cursor}&limit=${limit}`,{headers:headers219(false)});
       const rows=extractWorkerRows219(j);
-      if(!rows.length)return [...all.values()].sort((a,b)=>a.captured_ms-b.captured_ms);
+      if(!rows.length){
+        const ns=Number(j?.next_since)||0;
+        if(j?.has_more===true && ns>cursor){cursor=ns;continue;}
+        return [...all.values()].sort((a,b)=>a.captured_ms-b.captured_ms);
+      }
       const normalized=rows.map(r=>normalizeWorkerCapture219(r,rid)).filter(Boolean);
-      if(!normalized.length)throw new Error('履歴のレースIDまたは記録時刻を確認できません');
+      if(!normalized.length){
+        const ns=Number(j?.next_since)||0;
+        if(j?.has_more===true && ns>cursor){cursor=ns;continue;}
+        throw new Error('履歴のレースIDまたは記録時刻を確認できません');
+      }
       let maxMs=cursor-1;
       for(const n of normalized){all.set(n.id,n);maxMs=Math.max(maxMs,n.captured_ms);}
-      if(maxMs<cursor)return [...all.values()].sort((a,b)=>a.captured_ms-b.captured_ms);
-      // v6.1.5は1ページ最大1000点を明示してhas_moreを返す。旧Workerは空ページまで継続する。
+      if(maxMs<cursor){
+        const ns=Number(j?.next_since)||0;
+        if(j?.has_more===true && ns>cursor){cursor=ns;continue;}
+        return [...all.values()].sort((a,b)=>a.captured_ms-b.captured_ms);
+      }
       if(j && j.has_more===false)return [...all.values()].sort((a,b)=>a.captured_ms-b.captured_ms);
       cursor=Number(j?.next_since)>maxMs?Number(j.next_since):maxMs+1;
     }
@@ -23558,7 +23571,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     const ctl=(typeof AbortController==='function')?new AbortController():null;
     const timer=setTimeout(()=>{ try{ctl?.abort();}catch(e){} },6500);
     try{
-      const r=await fetch(`${base}/timeline/history?race_id=${encodeURIComponent(raceId)}&since=0&limit=5000`,{
+      const r=await fetch(`${base}/timeline/history?race_id=${encodeURIComponent(raceId)}&since=0&limit=96`,{
         cache:'no-store',headers,signal:ctl?ctl.signal:undefined
       });
       if(!r.ok) return [];
@@ -25497,19 +25510,28 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
         if(cfg.bridgeOnly||!cfg.autoSync)return {rows:[],disabled:true,transport:'端末履歴'};
         const base=String(cfg.worker||'').replace(/\/+$/,'');if(!base)throw new Error('時系列Workerが未設定');
         const headers=cfg.token?{'X-Timeline-Token':cfg.token}:{},rows=new Map();let cursor=since,prefix='/timeline';
-        for(let page=0;page<12;page++){
+        for(let page=0;page<128;page++){
           let r;
-          const path=()=>`${base}${prefix}/history?race_id=${rid}&kind=${source}&since=${cursor}&limit=5000`;
+          const path=()=>`${base}${prefix}/history?race_id=${rid}&kind=${source}&since=${cursor}&limit=96`;
           try{r=await fetchText(path(),signal,headers);}catch(e){if(page===0&&[404,405].includes(e.status)){prefix='';r=await fetchText(path(),signal,headers);}else throw e;}
           const j=JSON.parse(r.text);if(j.ok===false)throw new Error(j.error||'履歴取得失敗');
           const rootId=String(j.race_id||j.meta?.race_id||j.data?.race_id||'');if(rootId&&rootId!==rid)throw new Error('別レースのWorker履歴を破棄しました');
           const raw=Array.isArray(j)?j:[j.captures,j.history,j.records,j.rows,j.items,j.data,j.data?.captures,j.data?.history,j.data?.records].find(Array.isArray);
           if(!raw)throw new Error('履歴配列を確認できません');
-          if(!raw.length)return {rows:[...rows.values()],transport:'Timeline Worker'};
+          if(!raw.length){
+            const ns=Number(j?.next_since)||0;
+            if(j?.has_more===true&&ns>cursor){cursor=ns;continue;}
+            return {rows:[...rows.values()],transport:'Timeline Worker'};
+          }
           const safe=raw.map(x=>normalizeRecord(x,source,rid,race.date,rootId)).filter(Boolean);
           if(safe.length!==raw.length)throw new Error('区分・レースID・記録時刻が一致しないWorker履歴を破棄しました');
           safe.forEach(x=>rows.set(x.id,x));const max=Math.max(...safe.map(x=>x.captured_ms));
-          if(j.has_more===false||max<cursor)return {rows:[...rows.values()],transport:'Timeline Worker'};
+          if(j.has_more===false)return {rows:[...rows.values()],transport:'Timeline Worker'};
+          if(max<cursor){
+            const ns=Number(j?.next_since)||0;
+            if(j?.has_more===true&&ns>cursor){cursor=ns;continue;}
+            return {rows:[...rows.values()],transport:'Timeline Worker'};
+          }
           cursor=Math.max(max+1,Number(j.next_since)||0);
         }
         throw new Error('Worker履歴のページ数が上限に達しました');
@@ -29450,7 +29472,7 @@ window.getSafariLightMode52325=()=>readLight();
 </script>
 
 
-<!-- v5.23.26: MultiScreen 5-second Timeline Worker realtime display -->
+<!-- v5.23.27: HistorySafe paging + MultiScreen 5-second Timeline Worker realtime display -->
 <style id="timeline-worker-live-v52326-css">
 .msv2-worker-live{display:inline-flex;align-items:center;gap:4px;min-height:24px;padding:2px 7px;border:1px solid #334155;border-radius:999px;font-size:10px;font-weight:800;white-space:nowrap;background:rgba(15,23,42,.72);color:#94a3b8}
 .msv2-worker-live::before{content:'●';font-size:9px;color:#64748b}
@@ -29472,7 +29494,7 @@ html[data-theme="light"] .msv2-worker-live[data-state="stale"],html[data-theme="
 if(window.__THEKEIBA_TIMELINE_WORKER_LIVE_52326__)return;
 window.__THEKEIBA_TIMELINE_WORKER_LIVE_52326__=true;
 
-const VERSION='v5.23.26 5sWorkerLive SafariLightSwitch LightDark ForecastPop NextRace';
+const VERSION='v5.23.27 HistorySafe 5sWorkerLive SafariLightSwitch LightDark ForecastPop NextRace';
 const DEFAULT_WORKER='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
 const INTERVAL=5000;
 const perPane=new Map();

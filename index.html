@@ -40,7 +40,7 @@
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.24 NAR AllMarkets RightPane Fix</title>
+<title>The競馬 EV分析 v5.23.23 RightPane ThemeSync ForecastPop NextRace</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -403,7 +403,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.23.24 NAR AllMarkets RightPane Fix ☁️ 5s Δ</span>
+    <span class="ver">v5.23.23 RightPane ThemeSync ForecastPop NextRace ☁️ 5s Δ</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -19222,7 +19222,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
 (function(){
   'use strict';
 
-  const VERSION202 = 'v5.23.24 NAR AllMarkets RightPane Fix';
+  const VERSION202 = 'v5.21.1 Independent Blend';
   const DB_NAME = 'thekeiba-odds-timeline-v1';
   const DB_VERSION = 1;
   const STORE = 'captures';
@@ -19882,72 +19882,9 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     return {text:body,finalUrl:String(r?.url||url),fetched_ms:Date.now(),elapsed_ms:Date.now()-started,path:`${label}/fetch`};
   }
 
-  // v5.23.24: 右側「時系列オッズ」も abc Worker /all-markets を最優先にする。
-  // 以前はマルチ画面だけが /all-markets を使い、右側ペインは NAR b0/Bridge 経路のままだったため、
-  // abc Worker が全券種を返せても右側が 0/8 のままになる経路差があった。
-  async function fetchNarWorkerBatch258(rid,onProgress=()=>{}){
-    if(window.bridgeOnly252?.()) return null;
-    let base='';
-    try{ base=String(settings?.proxyUrl||'').trim(); }catch(e){}
-    if(!base) return null;
-    let u;
-    try{ u=new URL(base); }catch(e){ throw new Error('abc Worker URLが不正です'); }
-    if(!/^https?:$/.test(u.protocol)||u.username||u.password) throw new Error('abc Worker URLを確認してください');
-    u.pathname='/all-markets'; u.search=''; u.hash='';
-    u.searchParams.set('race_id',String(rid));
-    u.searchParams.set('kind','NAR');
-    if(/^\d{12}$/.test(String(rid))) u.searchParams.set('date',`${rid.slice(0,4)}-${rid.slice(6,8)}-${rid.slice(8,10)}`);
-    u.searchParams.set('_right258',String(Date.now()));
-    const r=await window.fetchText246(u.href,{headers:{Accept:'application/json'}},14000);
-    let j=null;
-    try{ j=JSON.parse(String(r?.text||'')); }catch(e){
-      throw new Error(`abc /all-markets JSON不正 HTTP ${Number(r?.status||0)}`);
-    }
-    if(!r?.ok) throw new Error(`abc /all-markets HTTP ${Number(r?.status||0)}${j?.error?': '+String(j.error).slice(0,160):''}`);
-    if(!j||j.ok!==true) throw new Error(String(j?.error||'abc /all-markets 取得失敗'));
-    if(j.race_id!=null && String(j.race_id)!==String(rid)) throw new Error('abc /all-markets 別レース応答を破棄しました');
-    const input=(j.markets&&typeof j.markets==='object')?j.markets:((j.additional_markets&&typeof j.additional_markets==='object')?j.additional_markets:{});
-    const statusIn=(j.market_status&&typeof j.market_status==='object')?j.market_status:((j.diagnostics&&typeof j.diagnostics==='object')?j.diagnostics:{});
-    const markets={},diagnostics={},fetched=Date.now();
-    let sourceMs=Date.parse(String(j.captured_at||'')); if(!Number.isFinite(sourceMs)) sourceMs=fetched;
-    let done=0;
-    for(const type of MARKET_TYPES){
-      const rows=(Array.isArray(input[type])?input[type]:[]).map(raw=>{
-        if(!raw||typeof raw!=='object') return null;
-        const combination=String(raw.combination??raw.key??'').trim();
-        const odds=Number(raw.odds??raw.odds_min);
-        if(!combination||!Number.isFinite(odds)||odds<1) return null;
-        const row={...raw,combination,odds};
-        if(Number.isFinite(Number(raw.odds_min))) row.odds_min=Number(raw.odds_min);
-        if(Number.isFinite(Number(raw.odds_max))) row.odds_max=Number(raw.odds_max);
-        return row;
-      }).filter(Boolean);
-      if(rows.length) markets[type]=rows;
-      const st=statusIn[type]||{};
-      diagnostics[type]={...st,state:rows.length?'ok':(st.error?'error':'empty'),count:rows.length,
-        message:rows.length?'':String(st.error||st.integrity_reason||'未取得・未発売・未配信'),
-        fetched_ms:fetched,source_updated_ms:sourceMs,source_time_label:receiptTime247(sourceMs),
-        path:`abc /all-markets ${String(j.version||'')}`};
-      done++; try{onProgress(done,diagnostics);}catch(e){}
-    }
-    if(!Object.keys(markets).length) throw new Error('abc /all-markets は0/8券種でした');
-    return {markets,diagnostics,source:`abc /all-markets ${String(j.version||'')}`,market_count:Object.keys(markets).length};
-  }
-
   async function fetchNarMarkets257(rid,expected,onProgress=()=>{},context=null){
     const read=context?.read||directText257;
     const markets={}, diagnostics={}, sources=[], errors=[];
-
-    // まず abc Worker の公式NAR全8券種バッチを使う。失敗時だけ従来の公式/Bridge/b0へ退避。
-    if(!context){
-      try{
-        const batch=await fetchNarWorkerBatch258(rid,onProgress);
-        if(batch && Object.keys(batch.markets||{}).length){
-          window.__narTimeline257={rid,route:'abc-all-markets',at:Date.now(),market_count:batch.market_count||0,source:batch.source,errors:[]};
-          return batch;
-        }
-      }catch(e){ errors.push('abc /all-markets: '+String(e?.message||e)); }
-    }
     let done=0;
     const progress=()=>{ try{onProgress(Math.min(8,done),diagnostics);}catch(e){} };
 
@@ -28151,7 +28088,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
 <script id="worker-hybrid-v5215-version-lock">
 (function(){
   'use strict';
-  const V='v5.23.24 NAR AllMarkets RightPane Fix + Archive Full Replay + Replay History + CrossMarket + Full Result + D1 Only + Safari Light + All Venues';
+  const V='v5.23.20 Archive Full Replay + Replay History + CrossMarket + Full Result + D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues';
   function mark(){
     try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;const el=document.querySelector('.ver');if(el)el.textContent=V+(window.__NAR_BRIDGE_READY__?' 🌉':'')+' ☁️';}catch(e){}
   }
@@ -28217,7 +28154,7 @@ function mark(){try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;
 <script id="canonical-version-v5230">
 (function(){
  'use strict';
- const V='v5.23.24 NAR AllMarkets RightPane Fix + Archive Full Replay + Replay History + CrossMarket + Full Result + D1 Only + Safari Light + All Venues';
+ const V='v5.23.20 Archive Full Replay + Replay History + CrossMarket + Full Result + D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues';
  function mark(){
    try{
      window.APP_VERSION=V;
@@ -28363,7 +28300,7 @@ function mark(){try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;
    Existing parsers remain primary; missing official payout rows are merged in. */
 (function(){
 'use strict';
-const V='v5.23.24 NAR AllMarkets RightPane Fix + Archive Full Replay + Replay History + CrossMarket + Full Result + D1 Only + Safari Light + All Venues';
+const V='v5.23.20 Archive Full Replay + Replay History + CrossMarket + Full Result + D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues';
 const oldP=window.parsePayoutsFromResultDoc || (typeof parsePayoutsFromResultDoc==='function'?parsePayoutsFromResultDoc:null);
 const oldF=window.parseFinishFromResultDoc || (typeof parseFinishFromResultDoc==='function'?parseFinishFromResultDoc:null);
 const norm=s=>String(s||'').normalize('NFKC').replace(/[‐‑‒–—―−]/g,'-').replace(/\u00a0/g,' ');
@@ -28418,7 +28355,7 @@ stamp();document.addEventListener('DOMContentLoaded',stamp,{once:true});[500,200
 <script id="repair-v5234-final">
 (function(){
   'use strict';
-  const V='v5.23.24 NAR AllMarkets RightPane Fix + Archive Full Replay + Replay History + CrossMarket + Full Result + D1 Only + Safari Light + All Venues';
+  const V='v5.23.20 Archive Full Replay + Replay History + CrossMarket + Full Result + D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues';
   function stamp(){
     window.APP_VERSION=V;
     document.title='The競馬 EV分析 '+V;
@@ -28433,7 +28370,7 @@ stamp();document.addEventListener('DOMContentLoaded',stamp,{once:true});[500,200
 <script id="classic-ui-all-venues-v5238-final">
 (function(){
   'use strict';
-  const V='v5.23.24 NAR AllMarkets RightPane Fix + Archive Full Replay + Replay History + CrossMarket + Full Result + D1 Only + Safari Light + All Venues';
+  const V='v5.23.20 Archive Full Replay + Replay History + CrossMarket + Full Result + D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues';
   function stamp(){
     try{
       window.APP_VERSION=V;
@@ -28452,7 +28389,7 @@ stamp();document.addEventListener('DOMContentLoaded',stamp,{once:true});[500,200
 <script id="classic-ui-nohang-v5239-final">
 (function(){
   'use strict';
-  const V='v5.23.24 NAR AllMarkets RightPane Fix + Archive Full Replay + Replay History + CrossMarket + Full Result + D1 Only + Safari Light + All Venues';
+  const V='v5.23.20 Archive Full Replay + Replay History + CrossMarket + Full Result + D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues';
   const $=id=>document.getElementById(id);
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
   function timeout(p,ms,label){
@@ -28623,7 +28560,7 @@ stamp();document.addEventListener('DOMContentLoaded',stamp,{once:true});[500,200
 <script id="safari-light-v52312">
 (function(){
  'use strict';
- const V='v5.23.24 NAR AllMarkets RightPane Fix + Archive Full Replay + Replay History + CrossMarket + Full Result + D1 Only + Safari Light + All Venues';
+ const V='v5.23.20 Archive Full Replay + Replay History + CrossMarket + Full Result + D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues';
  function mark(){try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;const e=document.querySelector('.ver');if(e)e.textContent=V+' ☁️ 5s';}catch(_){}}
  function ui(){
    const host=document.getElementById('bridgeModeBar252')||document.getElementById('tab-horses');
@@ -28648,7 +28585,7 @@ stamp();document.addEventListener('DOMContentLoaded',stamp,{once:true});[500,200
 (function(){
 'use strict';
 if(window.__THEKEIBA_REPLAY_52317__)return;window.__THEKEIBA_REPLAY_52317__=true;
-const V='v5.23.24 NAR AllMarkets RightPane Fix + Archive Full Replay + Replay History + CrossMarket + Full Result + D1 Only + Safari Light + All Venues';
+const V='v5.23.20 Archive Full Replay + Replay History + CrossMarket + Full Result + D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues';
 const api=window.TheKeibaMultiV2,Proto=api?.MultiPaneWorkspace?.prototype;
 if(!Proto)return;
 const clock=ms=>{try{return new Date(Number(ms)||0).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});}catch(_){return '--:--:--';}};
@@ -28738,7 +28675,7 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 (function(){
 'use strict';
 if(window.__THEKEIBA_REPLAY_HISTORY_52319__)return;window.__THEKEIBA_REPLAY_HISTORY_52319__=true;
-const V='v5.23.24 NAR AllMarkets RightPane Fix + Archive Full Replay + Replay History + CrossMarket + Full Result + D1 Only + Safari Light + All Venues';
+const V='v5.23.20 Archive Full Replay + Replay History + CrossMarket + Full Result + D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues';
 const DB='thekeiba-odds-timeline-v1',STORE='captures',MARKETS=['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
 const workerCache=new Map();let rows52319=[];let scanning52319=false;
 const $=id=>document.getElementById(id);
@@ -28813,7 +28750,7 @@ window.openReplayHistory52319=openModal;window.refreshReplayHistory52319=refresh
 (function(){
 'use strict';
 if(window.__THEKEIBA_ARCHIVE_FULL_REPLAY_52320__)return;window.__THEKEIBA_ARCHIVE_FULL_REPLAY_52320__=true;
-const V='v5.23.24 NAR AllMarkets RightPane Fix + Archive Full Replay + Replay History + CrossMarket + Full Result + D1 Only + Safari Light + All Venues';
+const V='v5.23.20 Archive Full Replay + Replay History + CrossMarket + Full Result + D1 Only + NAR AllMarkets 6.1.15 + Safari Light + All Venues';
 const MARKETS=['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'],ALL='__ALL__';
 const $=id=>document.getElementById(id),clone=v=>{try{return structuredClone(v)}catch(_){return JSON.parse(JSON.stringify(v))}};
 const clock=ms=>{try{return new Date(Number(ms)||0).toLocaleTimeString('ja-JP',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})}catch(_){return '--:--:--'}};
@@ -29320,7 +29257,7 @@ html[data-theme="light"] .live-hist215{border-bottom-color:#dbe3ec!important;col
 (function(){
 'use strict';
 if(window.__THEKEIBA_52322_PATCH__)return;window.__THEKEIBA_52322_PATCH__=true;
-const VERSION='v5.23.24 NAR AllMarkets RightPane Fix';
+const VERSION='v5.23.23 RightPane ThemeSync ForecastPop NextRace';
 const KEY='thekeiba-theme-v52322';
 const root=document.documentElement;
 function preferred(){try{const s=localStorage.getItem(KEY);if(s==='light'||s==='dark')return s;}catch(_){}return matchMedia?.('(prefers-color-scheme: light)').matches?'light':'dark';}
@@ -29509,6 +29446,150 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden){installHe
 window.addEventListener('pageshow',()=>{installHeader();bindControls();updateUi();stamp();});
 window.setSafariLightMode52325=(on)=>apply(!!on,true);
 window.getSafariLightMode52325=()=>readLight();
+})();
+</script>
+
+
+<!-- v5.23.26: MultiScreen 5-second Timeline Worker realtime display -->
+<style id="timeline-worker-live-v52326-css">
+.msv2-worker-live{display:inline-flex;align-items:center;gap:4px;min-height:24px;padding:2px 7px;border:1px solid #334155;border-radius:999px;font-size:10px;font-weight:800;white-space:nowrap;background:rgba(15,23,42,.72);color:#94a3b8}
+.msv2-worker-live::before{content:'●';font-size:9px;color:#64748b}
+.msv2-worker-live[data-state="live"]{color:#86efac;border-color:rgba(52,211,153,.52);background:rgba(16,185,129,.12)}
+.msv2-worker-live[data-state="live"]::before{color:#22c55e;filter:drop-shadow(0 0 3px rgba(34,197,94,.8))}
+.msv2-worker-live[data-state="wait"]{color:#fde68a;border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.10)}
+.msv2-worker-live[data-state="wait"]::before{color:#f59e0b}
+.msv2-worker-live[data-state="stale"],.msv2-worker-live[data-state="error"]{color:#fecaca;border-color:rgba(248,113,113,.45);background:rgba(248,113,113,.10)}
+.msv2-worker-live[data-state="stale"]::before,.msv2-worker-live[data-state="error"]::before{color:#ef4444}
+html[data-theme="light"] .msv2-worker-live{background:#f8fafc;color:#475569;border-color:#cbd5e1}
+html[data-theme="light"] .msv2-worker-live[data-state="live"]{background:#ecfdf5;color:#047857;border-color:#86efac}
+html[data-theme="light"] .msv2-worker-live[data-state="wait"]{background:#fffbeb;color:#92400e;border-color:#fcd34d}
+html[data-theme="light"] .msv2-worker-live[data-state="stale"],html[data-theme="light"] .msv2-worker-live[data-state="error"]{background:#fef2f2;color:#991b1b;border-color:#fca5a5}
+@media(max-width:800px){.msv2-worker-live{padding:2px 5px;font-size:9px}.msv2-worker-live .twl-long{display:none}}
+</style>
+<script id="timeline-worker-live-v52326">
+(function(){
+'use strict';
+if(window.__THEKEIBA_TIMELINE_WORKER_LIVE_52326__)return;
+window.__THEKEIBA_TIMELINE_WORKER_LIVE_52326__=true;
+
+const VERSION='v5.23.26 5sWorkerLive SafariLightSwitch LightDark ForecastPop NextRace';
+const DEFAULT_WORKER='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
+const INTERVAL=5000;
+const perPane=new Map();
+let timer=0,busy=false;
+
+function stamp(){
+  try{
+    window.APP_VERSION=VERSION;
+    document.title='The競馬 EV分析 '+VERSION;
+    document.querySelectorAll('.ver').forEach(e=>e.textContent=VERSION+' ☁️ 5s LIVE');
+  }catch(e){}
+}
+function cfg(){
+  let a={},b={};
+  try{a=JSON.parse(localStorage.getItem('thekeiba_timeline_cloud_v219')||'{}')||{};}catch(e){}
+  try{b=JSON.parse(localStorage.getItem('thekeiba_timeline_cloud_global')||'{}')||{};}catch(e){}
+  const c={...a,...b};
+  let url=String(c.workerUrl||DEFAULT_WORKER).trim().replace(/\/+$/,'');
+  if(/^https?:\/\/abc\.nitta-katsuhiko\.workers\.dev(?:\/|$)/i.test(url))url=DEFAULT_WORKER;
+  return {url,token:String(c.token||'')};
+}
+function ensureBadge(p){
+  const h=p?.root?.querySelector('.msv2-pane-heading');if(!h)return null;
+  let e=h.querySelector('.msv2-worker-live');
+  if(!e){
+    e=document.createElement('span');e.className='msv2-worker-live';e.dataset.state='wait';e.innerHTML='☁️5秒<span class="twl-long">Worker</span> --:--:--';
+    const route=h.querySelector('.msv2-route');
+    if(route)h.insertBefore(e,route);else h.appendChild(e);
+  }
+  return e;
+}
+function hhmmss(ms){
+  if(!Number.isFinite(ms)||ms<=0)return '--:--:--';
+  try{return new Date(ms).toLocaleTimeString('ja-JP',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});}catch(e){return new Date(ms).toLocaleTimeString('ja-JP');}
+}
+function paint(p,state,label,title=''){
+  const e=ensureBadge(p);if(!e)return;
+  e.dataset.state=state;e.innerHTML=label;e.title=title;
+}
+async function requestJson(url,headers){
+  // Bridge専用モードでも「表示用の5秒Timeline Worker」だけは native fetch を許可する。
+  const f=(typeof window.__nativeFetch252==='function')?window.__nativeFetch252:window.fetch.bind(window);
+  const ctl=typeof AbortController==='function'?new AbortController():null;
+  const to=setTimeout(()=>{try{ctl?.abort();}catch(e){}},4200);
+  try{
+    const r=await f(url,{cache:'no-store',headers,signal:ctl?.signal});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    return await r.json();
+  }finally{clearTimeout(to);}
+}
+async function pollPane(ws,p){
+  if(!p?.visible||!p?.raceId||!/^\d{10,14}$/.test(String(p.raceId||''))){
+    if(p)paint(p,'wait','☁️5秒<span class="twl-long">Worker</span> 待機','レースを選択すると5秒Workerの最新記録を表示します');
+    return;
+  }
+  const raceId=String(p.raceId),state=perPane.get(p.id)||{lastMs:0,lastSeen:0};
+  const c=cfg();
+  if(!/^https?:\/\//i.test(c.url)){paint(p,'error','☁️5秒<span class="twl-long">Worker</span> URL','常時時系列Worker URLを確認してください');return;}
+  const headers={};if(c.token)headers['X-Timeline-Token']=c.token;
+  const url=c.url+'/timeline/latest?race_id='+encodeURIComponent(raceId)+'&_='+Date.now();
+  try{
+    const j=await requestJson(url,headers);
+    if(String(p.raceId)!==raceId)return;
+    const meta=j?.meta||{},cap=j?.capture||null;
+    const rootRid=String(cap?.race_id||meta?.race_id||raceId);
+    if(rootRid!==raceId)throw new Error('別レース応答');
+    const ms=Number(cap?.captured_ms||meta?.last_capture_ms||0);
+    const age=ms>0?Math.max(0,Date.now()-ms):Infinity;
+    const phase=String(meta?.phase||'');
+    const count=Number(j?.count||meta?.capture_count||0);
+    const active=meta?.active!==false;
+    if(cap&&Number(cap.captured_ms)>Number(state.lastMs||0)){
+      // Workerの5秒キャプチャを既存Pane履歴へ同じ形式でマージし、その場でグラフ/順位を更新。
+      try{
+        ws.merge(p,[cap]);
+        p.transport=p.transport||{};p.transport.timeline='☁️ 5秒Worker LIVE';
+        p.workerCursor=Math.max(Number(p.workerCursor||0),Number(cap.captured_ms||0)+1);
+        p.historyWarning='';
+        p.repairStatus=`${hhmmss(Number(cap.captured_ms))} 5秒Worker受信`;
+        try{await ws.store?.write?.(p.source,p.raceId,p.date,[cap]);}catch(e){}
+        ws.render?.(p);
+      }catch(e){console.warn('[5sWorkerLive] merge',e);}
+      state.lastMs=Number(cap.captured_ms)||state.lastMs;
+    }
+    state.lastSeen=Date.now();state.phase=phase;state.count=count;perPane.set(p.id,state);
+    if(ms>0&&age<=12000){
+      paint(p,'live',`☁️5秒<span class="twl-long">Worker</span> ${hhmmss(ms)}`,`LIVE / ${Math.round(age/1000)}秒前 / ${phase||'CAPTURING'}${count?' / '+count+'記録':''} / ${j?.version||meta?.version||''}`);
+    }else if(ms>0){
+      paint(p,'stale',`☁️5秒<span class="twl-long">Worker</span> +${Math.round(age/1000)}s`,`最新 ${hhmmss(ms)} / ${Math.round(age/1000)}秒前 / ${phase||'-'}${active?'':' / 停止'}`);
+    }else{
+      const txt=/WAIT_ODDS/i.test(phase)?'発売待ち':(active?'起動待ち':'停止');
+      paint(p,'wait',`☁️5秒<span class="twl-long">Worker</span> ${txt}`,`${phase||txt} / race_id=${raceId}`);
+    }
+  }catch(e){
+    if(String(p.raceId)!==raceId)return;
+    paint(p,'error','☁️5秒<span class="twl-long">Worker</span> ⚠','5秒Worker取得失敗: '+String(e?.message||e));
+  }
+}
+async function tick(){
+  stamp();
+  if(busy)return;busy=true;
+  try{
+    const ws=window.TheKeibaMultiV2?.workspace;
+    if(!ws?.panes)return;
+    for(const p of ws.panes){if(p?.visible)ensureBadge(p);}
+    await Promise.allSettled(ws.panes.filter(p=>p?.visible).map(p=>pollPane(ws,p)));
+  }finally{busy=false;}
+}
+function boot(){
+  stamp();tick();
+  clearInterval(timer);timer=setInterval(tick,INTERVAL);
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
+window.addEventListener('pageshow',()=>{stamp();setTimeout(tick,100)});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){stamp();setTimeout(tick,100);}});
+[300,1200,3000,7000,12000,22000].forEach(ms=>setTimeout(()=>{stamp();tick();},ms));
+window.refreshTimelineWorkerLive52326=tick;
 })();
 </script>
 

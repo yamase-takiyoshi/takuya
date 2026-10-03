@@ -25526,7 +25526,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
         };
         // Completed races are restored from the server's GitHub archive.
         const finished=(race.postMs>0&&Date.now()>=race.postMs+180000)||race.date<today();
-        if(finished){
+        if(finished || !race.postMs){
           const [y,m,d]=race.date.split('-');
           const archiveUrls=[
             `${base}/replay/load?race_id=${rid}&date=${encodeURIComponent(race.date)}&kind=${source}`,
@@ -25548,7 +25548,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
               if(!Array.isArray(raw))throw new Error('保存JSONの復元機能が未準備');
               const safe=raw.map(x=>normalizeRecord({...x,archive_change_only:true},source,rid,race.date,rid)).filter(Boolean);
               if(!safe.length||safe.length!==raw.length)throw new Error('GitHub履歴を検証できません');
-              return {rows:safe,transport:'GitHub保存履歴',github:true};
+              return {rows:safe,transport:'GitHub保存履歴',github:true,meta};
             }catch(e){
               if(e.name==='AbortError')throw e;
               errors.push(String(e.message||e));
@@ -25658,9 +25658,9 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
 
 
   function createPane(id,source,date,stored={}) {
-    return {id,source,date,venue:'',raceId:'',race:null,races:[],horses:[],ticket:ALL_TICKETS,customMarkets:MARKETS.slice(),metric:'ev',topN:10,autoRepair:true,repairStatus:'',lastHistoryAttempt:0,selectedBet:'',
+    return {id,source,date,venue:'',raceId:'',race:null,races:[],horses:[],ticket:'単勝',customMarkets:MARKETS.slice(),metric:'odds',topN:20,autoRepair:true,repairStatus:'',lastHistoryAttempt:0,selectedBet:'',
       odds:[],history:[],diagnostics:{},transport:{list:'',card:'',odds:'',timeline:''},scrollTop:0,scrollLeft:0,windowMs:3600000,follow:true,viewEnd:0,log:false,auto:true,
-      ...stored,id,source,date,revision:0,controller:null,listRevision:0,listController:null,busy:false,loading:false,timer:null,historyBusy:false,
+      ...stored,ticket:'単勝',metric:'odds',topN:20,selectedBet:'',windowMs:3600000,log:false,id,source,date,revision:0,controller:null,listRevision:0,listController:null,busy:false,loading:false,timer:null,historyBusy:false,
       historyWarning:'',cardWarning:'',storageWarning:'',workerCursor:0,lastWorkerPoll:0,result5202:null,resultError5202:'',resultBusy5202:false,lastResultPoll5202:0,status:'開催を読み込んでください',tone:'',root:null,visible:false,initialized:false};
   }
   class MultiPaneWorkspace {
@@ -25953,10 +25953,10 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     async selectRace(id,rid){
       const p=this.panes[id];const race=p?.races.find(r=>r.raceId===rid&&r.source===p.source&&r.date===p.date&&r.venue===p.venue);
       if(!race){if(p){p.status='選択中の区分・開催場にこのレースはありません';p.tone='warn';this.render(p);}return;}
-      this.clearRace(p);p.raceId=rid;p.race=clone(race);p.status='保存履歴を読み込み中…';p.tone='';
+      this.clearRace(p);p.ticket='単勝';p.metric='odds';p.topN=20;p.selectedBet='';p.windowMs=3600000;p.log=false;p.raceId=rid;p.race=clone(race);p.status='保存履歴を読み込み中…';p.tone='';
       const c=this.context(p);this.renderSelectors(p);this.render(p);this.save();
       const history=this.loadHistory(id);
-      const horses=(async()=>{try{const rows=await this.providers[c.source].getHorses(clone(race),{signal:c.signal});if(this.valid(p,c)){p.transport.card=String(rows.transport||'');if(rows.startTime&&!p.race?.startTime){p.race.startTime=rows.startTime;const rr=p.races.find(x=>x.raceId===p.raceId);if(rr)rr.startTime=rows.startTime;}if(rows.raceName){const rn=safeRaceName52315(rows.raceName,p.race?.raceNo);if(rn){p.race.name=rn;const rr=p.races.find(x=>x.raceId===p.raceId);if(rr)rr.name=rn;this.renderSelectors(p);}}p.horses=clone(rows);p.cardWarning='';this.render(p);}}catch(e){if(this.valid(p,c)){p.cardWarning='馬名：'+e.message;this.render(p);}}})();
+      const horses=(async()=>{try{const rows=await this.providers[c.source].getHorses(clone(race),{signal:c.signal});if(this.valid(p,c)){p.transport.card=String(rows.transport||'');if(rows.startTime&&!p.race?.startTime){p.race.startTime=rows.startTime;p.race.postMs=Date.parse(p.date+'T'+rows.startTime.padStart(5,'0')+':00+09:00')||0;const rr=p.races.find(x=>x.raceId===p.raceId);if(rr)rr.startTime=rows.startTime;}if(rows.raceName){const rn=safeRaceName52315(rows.raceName,p.race?.raceNo);if(rn){p.race.name=rn;const rr=p.races.find(x=>x.raceId===p.raceId);if(rr)rr.name=rn;this.renderSelectors(p);}}p.horses=clone(rows);p.cardWarning='';this.render(p);}}catch(e){if(this.valid(p,c)){p.cardWarning='馬名：'+e.message;this.render(p);}}})();
       await Promise.allSettled([history,horses]);
       if(this.valid(p,c)&&this.opened&&p.visible){await this.loadOdds(id);this.schedule(p);}
     }
@@ -26019,7 +26019,12 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
         const safe=(got.rows||[]).map(r=>normalizeRecord(r,c.source,c.raceId,c.date)).filter(Boolean);
         if(safe.length!==(got.rows||[]).length)throw new Error('別レースの履歴が含まれるため受理しません');
         const known=new Set(p.history.map(r=>r.id)),added=safe.filter(r=>!known.has(r.id)).length;
-        if(got.github&&this.stopped(p))p.history=[];this.merge(p,safe);this.completedGraph52328(p);p.lastWorkerPoll=Date.now();p.historyWarning='';
+        if(got.github){
+          const meta=got.meta||{},tm=String(meta.post_time||meta.start_time||'').match(/(?:[01]?\d|2[0-3]):[0-5]\d/);
+          const post=Number(meta.post_ms)|| (tm?Date.parse(p.date+'T'+tm[0].padStart(5,'0')+':00+09:00'):0);
+          if(post>0){p.race.postMs=post;p.race.startTime=clock(post).slice(0,5);}
+          p.history=[];
+        }this.merge(p,safe);this.completedGraph52328(p);p.lastWorkerPoll=Date.now();p.historyWarning='';
         p.repairStatus=got.disabled?got.transport:`${clock(Date.now())} ${got.transport||'Worker'}・追加${added}時刻`;
         const mergedById=new Map(p.history.map(r=>[r.id,r]));
         if(safe.length){p.workerCursor=Math.max(p.workerCursor,...safe.map(r=>r.captured_ms+1));try{await this.store.write(c.source,c.raceId,c.date,safe.map(r=>mergedById.get(r.id)||r));}catch(e){if(this.valid(p,c))p.storageWarning='履歴を保存できません：'+e.message;}}
@@ -26181,9 +26186,10 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     endTime(p){
       if(!p.follow)return p.viewEnd||Date.now();
       const post=Number(p.race?.postMs||0);
-      if(this.stopped(p)&&post>0){
-        const within=p.history.filter(r=>r.captured_ms<=post+180000);
-        if(within.length)return within[within.length-1].captured_ms;
+      if(this.stopped(p)){
+        const within=p.history.filter(r=>post>0?r.captured_ms<=post+180000:true);
+        if(within.length)return Math.max(...within.map(r=>r.captured_ms));
+        return post>0?post:Date.parse(p.date+'T23:59:59+09:00');
       }
       return p.history.at(-1)?.captured_ms||Date.now();
     }
@@ -26191,7 +26197,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     draw(p){
       const canvas=p.root.querySelector('canvas'),empty=p.root.querySelector('.msv2-chart-empty');
       const s=this.rankSelection5216(p),rows=s.shown;this.renderRanking5216(p,s);this.renderGaps5216(p,s);
-      empty.textContent=p.raceId?'この指標を比較できる保存データがありません':'開催場とレースを選択してください';empty.hidden=rows.length>0;
+      empty.textContent=p.raceId?(this.stopped(p)?'このレースの保存時系列データがありません（GitHub履歴を確認してください）':'この指標を比較できる保存データがありません'):'開催場とレースを選択してください';empty.hidden=rows.length>0;
       const ctx=canvas.getContext('2d');if(!ctx)return;
       const w=Math.max(240,canvas.clientWidth||480),h=250,dpr=Math.min(2,window.devicePixelRatio||1);
       canvas.width=w*dpr;canvas.height=h*dpr;ctx.scale(dpr,dpr);ctx.clearRect(0,0,w,h);
@@ -28886,7 +28892,7 @@ function paneInfo(ws,p,pack,meta){if(!p.root)return;let box=p.root.querySelector
 async function prepare(pack,raw={}){if(!pack?.records?.length)throw new Error('Archiveの時系列データがありません');const ws=window.TheKeibaMultiV2?.workspace;if(!ws)throw new Error('マルチ画面が初期化されていません');ws.open();await new Promise(r=>setTimeout(r,90));const id=Math.max(0,Math.min(5,num(ws.active))),p=ws.panes[id];if(!p)throw new Error('表示画面を選択できません');
   p.listController?.abort?.();p.listRevision=(p.listRevision||0)+1;ws.cancel?.(p);
   const rid=String(pack.meta?.race_id||'').replace(/\D/g,'');if(!/^\d{12}$/.test(rid))throw new Error('12桁のrace_idを確認できません');const first=num(pack.records[0]?.captured_ms),last=num(pack.records[pack.records.length-1]?.captured_ms),date=normDate(pack.meta?.race_date||raw?.race?.race_date||raw?.race_date)||jstDate(first||last),kind=kindFrom(rid,pack.meta,raw),venue=rid.slice(4,6),raceNo=num(rid.slice(-2))||1,post=postMsOf(raw,pack,date),startTime=post?clock(post).slice(0,5):String(pack.meta?.post_time||raw?.race?.post_time||'').slice(0,5),name=String(pack.meta?.race_label||raw?.race?.race_label||raw?.race?.name||`${raceNo}R`),horses=horseRows(raw,pack),rows=expand5(pack,horses);if(!rows.length)throw new Error('5秒タイムラインを復元できません');
-  const race={source:kind,date,venue,raceId:rid,raceNo,startTime,postMs:post,name};p.source=kind;p.date=date;p.preferredVenue=venue;p.venue=venue;p.races=[race];p.raceId=rid;p.race=clone(race);p.horses=clone(horses);p.history=[];p.odds=[];p.diagnostics={};p.transport={list:'Archive JSON',card:horses.length?'Archive JSON':'Archive JSON（馬名なし）',odds:'Archive JSON',timeline:'Archive Full Replay'};p.initialized=true;p.loading=false;p.busy=false;p.historyBusy=false;p.historyWarning='';p.cardWarning=horses.length?'':'Archiveに馬名・枠番が無い場合、枠連の想定確率は再計算できません';p.storageWarning='';p.workerCursor=0;p.lastWorkerPoll=0;p.lastHistoryAttempt=0;p.repairStatus='Archive再生中';p.auto=false;p.autoRepair=false;p.ticket=ALL;p.customMarkets=MARKETS.slice();p.metric='ev';p.topN=10;p.selectedBet='';p.windowMs=3600000;p.follow=false;p.viewEnd=num(rows[0].captured_ms);p.log=false;
+  const race={source:kind,date,venue,raceId:rid,raceNo,startTime,postMs:post,name};p.source=kind;p.date=date;p.preferredVenue=venue;p.venue=venue;p.races=[race];p.raceId=rid;p.race=clone(race);p.horses=clone(horses);p.history=[];p.odds=[];p.diagnostics={};p.transport={list:'Archive JSON',card:horses.length?'Archive JSON':'Archive JSON（馬名なし）',odds:'Archive JSON',timeline:'Archive Full Replay'};p.initialized=true;p.loading=false;p.busy=false;p.historyBusy=false;p.historyWarning='';p.cardWarning=horses.length?'':'Archiveに馬名・枠番が無い場合、枠連の想定確率は再計算できません';p.storageWarning='';p.workerCursor=0;p.lastWorkerPoll=0;p.lastHistoryAttempt=0;p.repairStatus='Archive再生中';p.auto=false;p.autoRepair=false;p.ticket='単勝';p.customMarkets=MARKETS.slice();p.metric='odds';p.topN=20;p.selectedBet='';p.windowMs=3600000;p.follow=false;p.viewEnd=num(rows[0].captured_ms);p.log=false;
   ws.merge(p,rows);const latest=p.history[p.history.length-1]||{};p.diagnostics=marketStatus(latest);p.status=`📦 Archive Full Replay：${p.history.length.toLocaleString()}点を${Math.round((rows.stepMs||5000)/1000)}秒基準で復元`;p.tone='ok';p.archive52320={active:true,pack,raw,stepMs:rows.stepMs||5000};
   const result=resultFromRaw(raw,rid,kind,horses);if(result)p.result5202=result;else p.result5202=null;p.resultError5202='';p.resultBusy5202=false;
   if(p.root){const q=s=>p.root.querySelector(s);q('.sourceSelect').value=kind;q('.dateInput').value=date;q('.ticketSelect').value=ALL;q('.metricSelect').value='ev';q('.rankSizeSelect').value='10';q('.windowSelect').value='3600000';q('.autoCheck').checked=false;q('.repairCheck').checked=false;q('.logCheck').checked=false;q('.logCheck').disabled=true;}
@@ -29565,7 +29571,7 @@ html[data-theme="light"] .msv2-worker-live[data-state="stale"],html[data-theme="
 if(window.__THEKEIBA_TIMELINE_WORKER_LIVE_52326__)return;
 window.__THEKEIBA_TIMELINE_WORKER_LIVE_52326__=true;
 
-const VERSION='v5.23.31 GitHubCalendarBatchGraphs 5sWorkerLive SafariLightSwitch LightDark ForecastPop NextRace';
+const VERSION='v5.23.32 UnifiedSavedRaceGraphs 5sWorkerLive SafariLightSwitch LightDark ForecastPop NextRace';
 const DEFAULT_WORKER='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
 const INTERVAL=5000;
 const perPane=new Map();
@@ -29637,7 +29643,7 @@ async function pollPane(ws,p){
     const phase=String(meta?.phase||'');
     const count=Number(j?.count||meta?.capture_count||0);
     const active=meta?.active!==false;
-    if(cap&&Number(cap.captured_ms)>Number(state.lastMs||0)){
+    if(cap&&!ws.stopped?.(p)&&Number(cap.captured_ms)>Number(state.lastMs||0)){
       // Workerの5秒キャプチャを既存Pane履歴へ同じ形式でマージし、その場でグラフ/順位を更新。
       try{
         ws.merge(p,[cap]);ws.completedGraph52328?.(p);

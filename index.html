@@ -403,7 +403,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.23.35 SafariScrollControls ☁️ 5s Δ</span>
+    <span class="ver">v5.23.36 RightPaneScroll JRAAllMarkets ☁️ 5s Δ</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -19983,13 +19983,28 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   async function fetchMarkets202(kind,rid,expected,preferred=''){
     // v257: NAR is HTML/official-first; JRA keeps the JSON API route.
     renderMarketStatus243({},0);
-    const got=kind==='NAR'
+    let batch=null;
+    if(kind==='JRA'&&!window.bridgeOnly252()){
+      try{
+        const date=String(document.getElementById('pickDate')?.value||'');
+        if(/^\d{4}-\d{2}-\d{2}$/.test(date)){
+          batch=await window.TheKeibaMultiV2.providers.JRA.getAllMarkets({raceId:rid,date},undefined);
+        }
+      }catch(e){console.warn('[5.23.36] JRA batch unavailable; preserve existing fallback',e.message);}
+    }
+    const got=batch&&Object.keys(batch.markets||{}).length===8?batch:kind==='NAR'
       ? await fetchNarMarkets257(rid,expected,(done,diagnostics)=>{
           if(activeRid===rid && currentRaceId202()===rid) renderMarketStatus243(diagnostics,done);
         })
       : await fetchAllTickets243(kind,rid,url=>window.liveOdds247.fetch(url),(done,diagnostics)=>{
           if(activeRid===rid && currentRaceId202()===rid) renderMarketStatus243(diagnostics,done);
         },preferred);
+    if(batch&&got!==batch){
+      for(const [type,rows] of Object.entries(batch.markets||{})){
+        if(!got.markets[type]?.length){got.markets[type]=rows;got.diagnostics[type]=batch.diagnostics[type];}
+      }
+      got.source=[batch.source,got.source].filter(Boolean).join(' | ');
+    }
     if(activeRid===rid && currentRaceId202()===rid){
       for(const type of MARKET_TYPES){
         const d=got.diagnostics[type],rows=got.markets[type];
@@ -25368,20 +25383,19 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     // 1回のJSONで全8券種を取得し、各Paneが自分のrace_idだけを独立保持する。
     // Worker/JSON検証に失敗した場合だけ従来OddsEngineへフォールバックする。
     async function getNarAllMarketsBatch(race,signal,onProgress=()=>{}){
-      if(source!=='NAR')return null;
-      const rid=assertRace('NAR',race.raceId,race.date),cfg=config();
+      const rid=assertRace(source,race.raceId,race.date),cfg=config();
       if(cfg.bridgeOnly)throw new Error('Bridge専用モードのため /all-markets Workerを使用しません');
       const base=String(cfg.proxy||'').trim();
       if(!base)throw new Error('取得Worker URLが未設定です');
       const u=new URL(base);
       if(!/^https?:$/.test(u.protocol)||u.username||u.password)throw new Error('取得Worker URLを確認してください');
       u.pathname='/all-markets';u.search='';u.hash='';
-      u.searchParams.set('race_id',rid);u.searchParams.set('kind','NAR');u.searchParams.set('date',race.date);
+      u.searchParams.set('race_id',rid);u.searchParams.set('kind',source);u.searchParams.set('date',race.date);
       u.searchParams.set('_msv2',String(Date.now()));
       const response=await fetchText(u.href,signal,{Accept:'application/json'});
       let j;try{j=JSON.parse(response.text);}catch(_){throw new Error('/all-markets がJSON以外を返しました');}
       if(!j||j.ok!==true)throw new Error(j?.error||'/all-markets 取得失敗');
-      if(String(j.race_id||'')!==rid||String(j.kind||'').toUpperCase()!=='NAR')throw new Error('別区分・別レースの /all-markets 応答を破棄しました');
+      if(String(j.race_id||'')!==rid||String(j.kind||'').toUpperCase()!==source)throw new Error('別区分・別レースの /all-markets 応答を破棄しました');
       if(j.date&&String(j.date)!==String(race.date))throw new Error('別日付の /all-markets 応答を破棄しました');
       const input=(j.markets&&typeof j.markets==='object')?j.markets:((j.additional_markets&&typeof j.additional_markets==='object')?j.additional_markets:{});
       const statusIn=(j.market_status&&typeof j.market_status==='object')?j.market_status:((j.diagnostics&&typeof j.diagnostics==='object')?j.diagnostics:{});
@@ -25426,13 +25440,14 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
         done++;onProgress(done,clone(diagnostics));
       }
       if(!Object.keys(markets).length)throw new Error('/all-markets に利用できる券種がありません');
-      return {race_id:rid,kind:'NAR',date:race.date,markets,diagnostics,source:String(j.source||'NAR_OFFICIAL_ALL_MARKETS'),
+      return {race_id:rid,kind:source,date:race.date,markets,diagnostics,source:String(j.source||(source+'_OFFICIAL_ALL_MARKETS')),
         version:String(j.version||''),captured_ms:capturedMs,captured_at:new Date(capturedMs).toISOString(),
         transport:'Worker /all-markets '+String(j.version||'')};
     }
 
     return Object.freeze({
       source,
+      getAllMarkets:getNarAllMarketsBatch,
       async getRaces(date,{signal}={}){
         if(!/^\d{4}-\d{2}-\d{2}$/.test(date))throw new Error('日付を選択してください');
 
@@ -25490,7 +25505,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       },
       async getOdds(race,{signal,horses=[],ticket='単勝',onProgress=()=>{}}={}){
         const rid=assertRace(source,race.raceId,race.date);
-        if(source==='NAR'){
+        if(source==='NAR'||source==='JRA'){
           try{
             const batch=await getNarAllMarketsBatch(race,signal,(...args)=>{checkAbort(signal);onProgress(...args);});
             checkAbort(signal);
@@ -29357,7 +29372,7 @@ html[data-theme="light"] .live-hist215{border-bottom-color:#dbe3ec!important;col
 (function(){
 'use strict';
 if(window.__THEKEIBA_52322_PATCH__)return;window.__THEKEIBA_52322_PATCH__=true;
-const VERSION='v5.23.35 SafariScrollControls';
+const VERSION='v5.23.36 RightPaneScroll JRAAllMarkets';
 const KEY='thekeiba-theme-v52322';
 const root=document.documentElement;
 function preferred(){try{const s=localStorage.getItem(KEY);if(s==='light'||s==='dark')return s;}catch(_){}return matchMedia?.('(prefers-color-scheme: light)').matches?'light':'dark';}
@@ -29572,7 +29587,7 @@ html[data-theme="light"] .msv2-worker-live[data-state="stale"],html[data-theme="
 if(window.__THEKEIBA_TIMELINE_WORKER_LIVE_52326__)return;
 window.__THEKEIBA_TIMELINE_WORKER_LIVE_52326__=true;
 
-const VERSION='v5.23.34 PaneNetkeibaForecastLive 5sWorkerLive SafariLightSwitch LightDark ForecastPop NextRace';
+const VERSION='v5.23.36 RightPaneScroll JRAAllMarkets 5sWorkerLive';
 const DEFAULT_WORKER='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
 const INTERVAL=5000;
 const perPane=new Map();
@@ -29989,6 +30004,58 @@ function install(){
  return true;
 }
 if(!install()){const t=setInterval(()=>{if(install())clearInterval(t);},250);setTimeout(()=>clearInterval(t),20000);}
+})();
+</script>
+
+
+<style id="right-scroll52336">
+body.right-analysis-active .main{min-height:0;-webkit-overflow-scrolling:touch;touch-action:pan-x pan-y}
+body.right-analysis-active #rightAnalysisPane{min-height:0;overflow:hidden}
+#rightAnalysisPane .right-analysis-bar{height:auto;min-height:44px;flex-shrink:0;flex-wrap:wrap}
+#rightAnalysisPane #rightOddsTimelinePane,
+#rightAnalysisPane #rightPreclose3mPane,
+#rightAnalysisPane #rightLiveCommentaryPane{
+  flex:1 1 0%;min-height:0;overflow-y:auto!important;overflow-x:hidden;
+  -webkit-overflow-scrolling:touch;touch-action:pan-x pan-y;overscroll-behavior-y:contain;overflow-anchor:none
+}
+#rightOddsTimelinePane>.odds-ts-toolbar,
+#rightOddsTimelinePane>.odds-ts-foot,
+#rightOddsTimelinePane>.odds-ts-chart-wrap{flex:0 0 auto}
+#rightOddsTimelinePane>.odds-ts-legend{flex:0 0 auto;overflow:visible;min-height:40px}
+#rightPreclose3mPane>.pc3-table-wrap{flex:0 0 auto;overflow:visible}
+.right-scroll-nav52336{display:flex;align-items:center;gap:5px;flex:0 0 auto;padding:5px 8px;background:var(--surface,#101e31);border-top:1px solid var(--border,#334155)}
+.right-scroll-nav52336 button{min-height:32px;padding:4px 8px;font-size:11px}
+.right-scroll-nav52336 small{margin-left:auto;color:var(--muted,#94a3b8);font-size:10px}
+</style>
+<script id="right-scroll52336-js">
+(function(){
+'use strict';
+const version='v5.23.36 RightPaneScroll JRAAllMarkets 5sWorkerLive';
+function stamp(){
+ window.APP_VERSION=version;
+ document.title='The競馬 EV分析 '+version;
+ document.querySelectorAll('.ver').forEach(el=>{if(el.textContent!==version+' ☁️ 5s LIVE')el.textContent=version+' ☁️ 5s LIVE';});
+}
+function install(){
+ stamp();
+ const parent=document.getElementById('rightAnalysisPane');if(!parent)return;
+ for(const id of ['rightOddsTimelinePane','rightPreclose3mPane','rightLiveCommentaryPane']){
+  const el=document.getElementById(id);if(el){el.tabIndex=0;el.setAttribute('aria-label','右画面の縦スクロール領域');}
+ }
+ if(parent.querySelector('.right-scroll-nav52336'))return;
+ const bar=document.createElement('nav');bar.className='right-scroll-nav52336';bar.setAttribute('aria-label','右画面のスクロール操作');
+ const current=()=>['rightOddsTimelinePane','rightPreclose3mPane','rightLiveCommentaryPane'].map(id=>document.getElementById(id)).find(e=>e&&getComputedStyle(e).display!=='none');
+ for(const [label,where] of [['先頭','first'],['↑上','up'],['↓下','down'],['末尾','last']]){
+  const b=document.createElement('button');b.type='button';b.className='btn-sm';b.textContent=label;
+  b.onclick=()=>{const e=current();if(!e)return;const step=Math.max(120,e.clientHeight*.75);e.scrollTop=where==='first'?0:where==='last'?e.scrollHeight:e.scrollTop+(where==='up'?-step:step);};bar.appendChild(b);
+ }
+ const note=document.createElement('small');note.textContent='v5.23.36／縦スワイプ';bar.appendChild(note);parent.appendChild(bar);
+}
+let queued=false;
+const observer=new MutationObserver(()=>{if(queued)return;queued=true;requestAnimationFrame(()=>{queued=false;install();});});
+observer.observe(document.body,{childList:true,subtree:true});
+install();window.addEventListener('resize',install,{passive:true});
+window.RightPaneScroll52336=Object.freeze({install,version});
 })();
 </script>
 

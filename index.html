@@ -25507,13 +25507,45 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       },
       async getTimeline(race,{signal,since=0}={}){
         const rid=assertRace(source,race.raceId,race.date),cfg=config();
-        if(cfg.bridgeOnly||!cfg.autoSync)return {rows:[],disabled:true,transport:'端末履歴'};
+        // Saved Timeline history is read-only and available in Bridge mode too.
+        // Read GitHub archives even when live automatic synchronization is disabled.
         const base=String(cfg.worker||'').replace(/\/+$/,'');if(!base)throw new Error('時系列Workerが未設定');
         const headers=cfg.token?{'X-Timeline-Token':cfg.token}:{},rows=new Map();let cursor=since,prefix='/timeline';
+        const readHistory=async url=>{
+          const native=typeof window.__nativeFetch252==='function'?window.__nativeFetch252:window.fetch.bind(window);
+          const ctl=new AbortController(),abort=()=>ctl.abort();
+          if(signal?.aborted)throw abortError();
+          signal?.addEventListener('abort',abort,{once:true});
+          const timeout=setTimeout(abort,20000);
+          try{
+            const response=await native(url,{headers,signal:ctl.signal,cache:'no-store'});
+            if(!response.ok){const e=new Error('履歴 HTTP '+response.status);e.status=response.status;throw e;}
+            return {text:await response.text()};
+          }finally{clearTimeout(timeout);signal?.removeEventListener('abort',abort);}
+        };
+        // Completed races are restored from the server's GitHub archive.
+        const finished=(race.postMs>0&&Date.now()>=race.postMs+180000)||race.date<today();
+        if(finished){
+          try{
+            const response=await readHistory(`${base}/replay/load?race_id=${rid}&date=${encodeURIComponent(race.date)}&kind=${source}`);
+            const archive=JSON.parse(response.text);
+            if(archive.ok===false)throw new Error(archive.error||'GitHub履歴未保存');
+            if(String(archive.race?.race_id||'')!==rid||String(archive.race?.kind||source).toUpperCase()!==source)throw new Error('別レースのGitHub履歴');
+            const raw=archive.captures||[],safe=raw.map(x=>normalizeRecord({...x,archive_change_only:true},source,rid,race.date,rid)).filter(Boolean);
+            if(!safe.length||safe.length!==raw.length)throw new Error('GitHub履歴を検証できません');
+            return {rows:safe,transport:'GitHub保存履歴',github:true};
+          }catch(e){
+            if(e.name==='AbortError')throw e;
+            // Preserve actual Worker data while the minute flush catches up.
+            // This fallback is visible and never labelled as GitHub saved.
+            rows.githubWarning=String(e.message||e);
+          }
+        }
+        if(!cfg.autoSync)return {rows:[],disabled:true,transport:'GitHub履歴未確認（Worker同期OFF）'};
         for(let page=0;page<128;page++){
           let r;
           const path=()=>`${base}${prefix}/history?race_id=${rid}&kind=${source}&since=${cursor}&limit=96`;
-          try{r=await fetchText(path(),signal,headers);}catch(e){if(page===0&&[404,405].includes(e.status)){prefix='';r=await fetchText(path(),signal,headers);}else throw e;}
+          try{r=await readHistory(path());}catch(e){if(page===0&&[404,405].includes(e.status)){prefix='';r=await readHistory(path());}else throw e;}
           const j=JSON.parse(r.text);if(j.ok===false)throw new Error(j.error||'履歴取得失敗');
           const rootId=String(j.race_id||j.meta?.race_id||j.data?.race_id||'');if(rootId&&rootId!==rid)throw new Error('別レースのWorker履歴を破棄しました');
           const raw=Array.isArray(j)?j:[j.captures,j.history,j.records,j.rows,j.items,j.data,j.data?.captures,j.data?.history,j.data?.records].find(Array.isArray);
@@ -25521,16 +25553,16 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
           if(!raw.length){
             const ns=Number(j?.next_since)||0;
             if(j?.has_more===true&&ns>cursor){cursor=ns;continue;}
-            return {rows:[...rows.values()],transport:'Timeline Worker'};
+            return {rows:[...rows.values()],transport:rows.githubWarning?'Worker履歴（GitHub未確認：'+rows.githubWarning+'）':'Timeline Worker'};
           }
           const safe=raw.map(x=>normalizeRecord(x,source,rid,race.date,rootId)).filter(Boolean);
           if(safe.length!==raw.length)throw new Error('区分・レースID・記録時刻が一致しないWorker履歴を破棄しました');
           safe.forEach(x=>rows.set(x.id,x));const max=Math.max(...safe.map(x=>x.captured_ms));
-          if(j.has_more===false)return {rows:[...rows.values()],transport:'Timeline Worker'};
+          if(j.has_more===false)return {rows:[...rows.values()],transport:rows.githubWarning?'Worker履歴（GitHub未確認：'+rows.githubWarning+'）':'Timeline Worker'};
           if(max<cursor){
             const ns=Number(j?.next_since)||0;
             if(j?.has_more===true&&ns>cursor){cursor=ns;continue;}
-            return {rows:[...rows.values()],transport:'Timeline Worker'};
+            return {rows:[...rows.values()],transport:rows.githubWarning?'Worker履歴（GitHub未確認：'+rows.githubWarning+'）':'Timeline Worker'};
           }
           cursor=Math.max(max+1,Number(j.next_since)||0);
         }
@@ -25872,7 +25904,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     context(p){return {revision:p.revision,source:p.source,date:p.date,raceId:p.raceId,signal:p.controller?.signal};}
     valid(p,c){return p.revision===c.revision&&p.source===c.source&&p.date===c.date&&p.raceId===c.raceId&&!c.signal?.aborted;}
     cancel(p){p.controller?.abort();clearTimeout(p.timer);p.timer=null;p.revision++;p.controller=new AbortController();p.busy=false;p.historyBusy=false;}
-    clearRace(p){this.cancel(p);p.raceId='';p.race=null;p.history=[];p.horses=[];p.odds=[];p.diagnostics={};p.transport=p.transport||{list:'',card:'',odds:'',timeline:''};p.transport.card='';p.transport.odds='';p.transport.timeline='';p.selectedBet='';p.workerCursor=0;p.lastWorkerPoll=0;p.lastHistoryAttempt=0;p.repairStatus='';p.historyWarning='';p.cardWarning='';p.storageWarning='';p.follow=true;p.viewEnd=0;}
+    clearRace(p){this.cancel(p);p.raceId='';p.race=null;p.history=[];p.horses=[];p.odds=[];p.diagnostics={};p.transport=p.transport||{list:'',card:'',odds:'',timeline:''};p.transport.card='';p.transport.odds='';p.transport.timeline='';p.selectedBet='';p.workerCursor=0;p.lastWorkerPoll=0;p.lastHistoryAttempt=0;p.repairStatus='';p.historyWarning='';p.cardWarning='';p.storageWarning='';p.follow=true;p.viewEnd=0;p.completedGraphRace52328='';}
     async configure(id,{source,date}={}){
       const p=this.panes[id];if(!p)return;if(source&&!VENUES[source])return;
       p.listController?.abort();p.listRevision++;this.clearRace(p);
@@ -25934,7 +25966,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
         for(const market of markets){
           if(!rec.markets?.[market]?.length)continue;
           const before=previous.get(market);
-          if(before!=null&&rec.captured_ms-before>RANK_MAX_AGE&&rec.captured_ms>=start)gaps.push({market,from:before,to:rec.captured_ms});
+          if(before!=null&&!rec.archive_change_only&&rec.captured_ms-before>RANK_MAX_AGE&&rec.captured_ms>=start)gaps.push({market,from:before,to:rec.captured_ms});
           previous.set(market,rec.captured_ms);
         }
       }
@@ -25954,7 +25986,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       const intervals=new Set(gaps.map(g=>g.from+'|'+g.to));
       const count=intervals.size;
       box.textContent=(count?`欠測区間 ${count}（30秒超）。`:'表示期間に30秒超の記録の切れ目なし。')+
-        (p.autoRepair?'JSON自動補完 ON（15秒ごと／直近30分）':'JSON自動補完 OFF')+(p.repairStatus?' ／ '+p.repairStatus:'')+
+        (p.history.some(r=>r.archive_change_only)?'GitHub差分履歴：次の変化まで保存値を維持':p.autoRepair?'JSON自動補完 ON（15秒ごと／直近30分）':'JSON自動補完 OFF')+(p.repairStatus?' ／ '+p.repairStatus:'')+
         (count?'。保存記録を取得できた部分から復元します。':'');
       box.dataset.gaps=count?'yes':'no';
     }
@@ -25964,7 +25996,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       try{
         const saved=await Promise.allSettled([this.store.read(c.source,c.raceId,c.date),this.legacyRead(c.raceId)]);
         if(!this.valid(p,c))return;
-        saved.forEach(r=>{if(r.status==='fulfilled')this.merge(p,r.value);});
+        saved.forEach(r=>{if(r.status==='fulfilled')this.merge(p,r.value);});this.completedGraph52328(p);
         if(saved[0].status==='rejected')p.storageWarning='端末への履歴保存が利用できません：'+saved[0].reason.message;
         this.render(p);
         const got=await this.providers[c.source].getTimeline(race,{signal:c.signal,since:this.repairSince5216(p,force)});if(!this.valid(p,c))return;
@@ -25972,18 +26004,31 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
         const safe=(got.rows||[]).map(r=>normalizeRecord(r,c.source,c.raceId,c.date)).filter(Boolean);
         if(safe.length!==(got.rows||[]).length)throw new Error('別レースの履歴が含まれるため受理しません');
         const known=new Set(p.history.map(r=>r.id)),added=safe.filter(r=>!known.has(r.id)).length;
-        this.merge(p,safe);p.lastWorkerPoll=Date.now();p.historyWarning='';
-        p.repairStatus=got.disabled?'端末履歴のみ（Worker同期設定を確認）':`${clock(Date.now())} JSON確認・追加${added}時刻`;
+        if(got.github&&this.stopped(p))p.history=[];this.merge(p,safe);this.completedGraph52328(p);p.lastWorkerPoll=Date.now();p.historyWarning='';
+        p.repairStatus=got.disabled?got.transport:`${clock(Date.now())} ${got.transport||'Worker'}・追加${added}時刻`;
         const mergedById=new Map(p.history.map(r=>[r.id,r]));
         if(safe.length){p.workerCursor=Math.max(p.workerCursor,...safe.map(r=>r.captured_ms+1));try{await this.store.write(c.source,c.raceId,c.date,safe.map(r=>mergedById.get(r.id)||r));}catch(e){if(this.valid(p,c))p.storageWarning='履歴を保存できません：'+e.message;}}
-        if(this.valid(p,c)&&!p.busy){p.status=`保存履歴 ${p.history.length}点${got.disabled?'（端末内）':'（Worker同期済み）'}`;p.tone='';}
+        if(this.valid(p,c)&&!p.busy){p.status=`保存履歴 ${p.history.length}点（${got.transport||'Worker'}）`;p.tone='';}
       }catch(e){if(this.valid(p,c)){p.historyWarning='履歴の読込：'+e.message;p.repairStatus='JSON補完を再試行します';}}
       finally{if(this.valid(p,c)){p.historyBusy=false;this.render(p);}}
     }
-    stopped(p){return p.race?.postMs>0&&Date.now()>=p.race.postMs+600000 || p.date<today();}
+    completedGraph52328(p){
+      if(!this.stopped(p)||p.history.length<2||p.completedGraphRace52328===p.raceId)return;
+      p.completedGraphRace52328=p.raceId;
+      // Finished races open with the saved win-odds curves, once per selection.
+      p.ticket='単勝';p.metric='odds';p.topN=20;p.selectedBet='';p.log=false;
+      p.windowMs=3600000;p.follow=true;p.viewEnd=0;
+      if(p.replay52317&&!p.replay52317.playing){p.replay52317.open=false;p.replay52317.cursorMs=0;}
+      const q=s=>p.root?.querySelector(s);
+      if(q('.metricSelect'))q('.metricSelect').value='odds';
+      if(q('.rankSizeSelect'))q('.rankSizeSelect').value='20';
+      if(q('.windowSelect'))q('.windowSelect').value='3600000';
+      if(q('.logCheck')){q('.logCheck').checked=false;q('.logCheck').disabled=false;}
+    }
+    stopped(p){return p.race?.postMs>0&&Date.now()>=p.race.postMs+180000 || p.date<today();}
     async loadOdds(id){
       const p=this.panes[id];if(!p?.raceId||p.busy)return;
-      if(this.stopped(p)){p.status='収集終了：過去日または発走10分後。保存済み履歴を表示します';p.tone='';this.render(p);return;}
+      if(this.stopped(p)){p.status='収集終了：保存済み履歴の最後の1時間を表示します';p.tone='';this.render(p);return;}
       p.busy=true;const started=Date.now(),c=this.context(p),race=clone(p.race);p.status=c.source+' '+c.raceId+' のオッズを取得中…';p.tone='';this.render(p);
       try{
         const got=await this.providers[c.source].getOdds(race,{signal:c.signal,horses:clone(p.horses),ticket:(p.ticket===ALL_TICKETS||p.ticket===CUSTOM_TICKETS)?'単勝':p.ticket,onProgress:(done,diagnostics)=>{
@@ -26018,7 +26063,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       p.timer=setTimeout(async()=>{
         p.timer=null;if(p.revision!==revision)return;const tickStart=Date.now();
         const jobs=[];
-        if(repair&&Date.now()-p.lastHistoryAttempt>=15000)jobs.push(this.loadHistory(p.id));
+        if(repair&&Date.now()-p.lastHistoryAttempt>=(this.stopped(p)?60000:15000))jobs.push(this.loadHistory(p.id));
         if(collect)jobs.push(this.loadOdds(p.id));
         await Promise.allSettled(jobs);
         if(p.revision===revision)this.schedule(p,collect?Math.max(250,5000-(Date.now()-tickStart)):15000);
@@ -26042,7 +26087,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       const candidates=[],missing=[],stale=[],usable=[];let invalid=0;
       for(const market of requested){
         const rec=found.get(market);if(!rec){missing.push(market);continue;}
-        if(end-rec.captured_ms>RANK_MAX_AGE){stale.push(market);continue;}
+        if(end-rec.captured_ms>RANK_MAX_AGE&&!rec.archive_change_only){stale.push(market);continue;}
         usable.push(market);const seen=new Set();
         for(const row of rec.markets[market]){
           const key=betKey5216(market,row.combination);if(seen.has(key))continue;seen.add(key);
@@ -26118,7 +26163,15 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       $('.msv2-identity').textContent=p.race?`${p.source} ｜ ${p.date} ｜ ${VENUES[p.source][p.venue]} ${p.race.raceNo}R ｜ 発走時刻 ${startTime||'--:--'} ｜ ${p.raceId}`:p.source+' ｜ '+p.date+' ｜ レース未選択 ｜ 発走時刻 --:--';
       $('.ticketSelect').value=p.ticket;this.renderMarketFilter52318(p);this.renderStatus(p);this.draw(p);
     }
-    endTime(p){return p.follow?(p.history.at(-1)?.captured_ms||Date.now()):(p.viewEnd||Date.now());}
+    endTime(p){
+      if(!p.follow)return p.viewEnd||Date.now();
+      const post=Number(p.race?.postMs||0);
+      if(this.stopped(p)&&post>0){
+        const within=p.history.filter(r=>r.captured_ms<=post+180000);
+        if(within.length)return within[within.length-1].captured_ms;
+      }
+      return p.history.at(-1)?.captured_ms||Date.now();
+    }
     pan(p,ms){p.viewEnd=this.endTime(p)+ms;p.follow=false;this.draw(p);}
     draw(p){
       const canvas=p.root.querySelector('canvas'),empty=p.root.querySelector('.msv2-chart-empty');
@@ -26133,7 +26186,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       const points=rows.map(row=>records.flatMap(rec=>{
         const r=paneRow5216(rec,row.market,row.row.combination);if(!r)return [];
         const v=paneMetricValue520(p,rec,row.market,row.row.combination,r);
-        return Number.isFinite(v)?[{t:rec.captured_ms,v}]:[];
+        return Number.isFinite(v)?[{t:rec.captured_ms,v,archive:rec.archive_change_only===true}]:[];
       }));
       let low=Infinity,high=-Infinity;
       for(const line of points)for(const pt of line){const v=trans(pt.v);if(Number.isFinite(v)){low=Math.min(low,v);high=Math.max(high,v);}}
@@ -26159,8 +26212,9 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       points.forEach((line,i)=>{
         ctx.strokeStyle=COLORS[(rows[i].rank-1)%COLORS.length];ctx.fillStyle=ctx.strokeStyle;ctx.lineWidth=1.7;ctx.beginPath();let previous=null;
         for(const pt of line){const x=left+(pt.t-start)/p.windowMs*(right-left),y=bottom-(trans(pt.v)-low)/(high-low)*(bottom-top);
-          if(!previous||pt.t-previous.t>30000)ctx.moveTo(x,y);else ctx.lineTo(x,y);previous=pt;
+          if(!previous||(pt.t-previous.t>30000&&!(pt.archive&&previous.archive)))ctx.moveTo(x,y);else if(pt.archive&&previous.archive){const py=bottom-(trans(previous.v)-low)/(high-low)*(bottom-top);ctx.lineTo(x,py);ctx.lineTo(x,y);}else ctx.lineTo(x,y);previous=pt;
         }
+        if(previous?.archive&&previous.t<end){const y=bottom-(trans(previous.v)-low)/(high-low)*(bottom-top);ctx.lineTo(right,y);}
         ctx.stroke();for(const pt of line){const x=left+(pt.t-start)/p.windowMs*(right-left),y=bottom-(trans(pt.v)-low)/(high-low)*(bottom-top);ctx.beginPath();ctx.arc(x,y,1.8,0,Math.PI*2);ctx.fill();}
       });
       canvas.setAttribute('aria-label',`${ticketLabel5216(p.ticket)} ${paneMetricLabel520(p.metric)} 上位${s.size}点の時系列グラフ`);
@@ -26449,7 +26503,8 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
   const primitives=Object.freeze({readLegacy:basePrimitives.readLegacy,getOdds:unifiedOdds5230});
   window.TheKeibaOddsEngine5230=Object.freeze({version:'v5.23.4',getOdds:unifiedOdds5230,cache:oddsCache5230,flights:oddsFlights5230});
   const providers={JRA:createProvider('JRA',primitives),NAR:createProvider('NAR',primitives)};
-  const workspace=new MultiPaneWorkspace({providers,store:new TimelineStore(),legacyRead:primitives.readLegacy});
+  // Timeline values stay in memory; permanent storage is the Worker's GitHub archive.
+  const workspace=new MultiPaneWorkspace({providers,store:{read:async()=>[],write:async()=>{}},legacyRead:async()=>[]});
   window.TheKeibaMultiV2=Object.freeze({version:VERSION,workspace,providers,MultiPaneWorkspace,TimelineStore,createProvider,parseRaceList,parseHorseCard,normalizeRecord,assertRace,resolvePlan,defaultPlan,cleanPlan,validDay,holidayNames:HOLIDAYS,MODES,MARKETS,ALL_TICKETS,CUSTOM_TICKETS});
   window.openMultiScreen258=()=>workspace.open();window.closeMultiScreen258=()=>workspace.close();window.setMultiScreenMode258=n=>{workspace.open();workspace.setMode(n);workspace.markManual();};
   window.openJraNarSideBySide261=()=>{workspace.open();workspace.mixed();};window.nextMultiScreen258=()=>{workspace.active=(workspace.active+1)%workspace.panes.length;workspace.setMode(1);workspace.markManual();};
@@ -29494,7 +29549,7 @@ html[data-theme="light"] .msv2-worker-live[data-state="stale"],html[data-theme="
 if(window.__THEKEIBA_TIMELINE_WORKER_LIVE_52326__)return;
 window.__THEKEIBA_TIMELINE_WORKER_LIVE_52326__=true;
 
-const VERSION='v5.23.27 HistorySafe 5sWorkerLive SafariLightSwitch LightDark ForecastPop NextRace';
+const VERSION='v5.23.28 GitHubSavedRaceGraphs 5sWorkerLive SafariLightSwitch LightDark ForecastPop NextRace';
 const DEFAULT_WORKER='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
 const INTERVAL=5000;
 const perPane=new Map();
@@ -29550,7 +29605,7 @@ async function pollPane(ws,p){
     if(p)paint(p,'wait','☁️5秒<span class="twl-long">Worker</span> 待機','レースを選択すると5秒Workerの最新記録を表示します');
     return;
   }
-  const raceId=String(p.raceId),state=perPane.get(p.id)||{lastMs:0,lastSeen:0};
+  const raceId=String(p.raceId),state=(perPane.get(p.id)?.raceId===raceId?perPane.get(p.id):{raceId,lastMs:0,lastSeen:0});
   const c=cfg();
   if(!/^https?:\/\//i.test(c.url)){paint(p,'error','☁️5秒<span class="twl-long">Worker</span> URL','常時時系列Worker URLを確認してください');return;}
   const headers={};if(c.token)headers['X-Timeline-Token']=c.token;
@@ -29569,8 +29624,8 @@ async function pollPane(ws,p){
     if(cap&&Number(cap.captured_ms)>Number(state.lastMs||0)){
       // Workerの5秒キャプチャを既存Pane履歴へ同じ形式でマージし、その場でグラフ/順位を更新。
       try{
-        ws.merge(p,[cap]);
-        p.transport=p.transport||{};p.transport.timeline='☁️ 5秒Worker LIVE';
+        ws.merge(p,[cap]);ws.completedGraph52328?.(p);
+        p.transport=p.transport||{};if(!ws.stopped?.(p))p.transport.timeline='☁️ 5秒Worker LIVE';
         p.workerCursor=Math.max(Number(p.workerCursor||0),Number(cap.captured_ms||0)+1);
         p.historyWarning='';
         p.repairStatus=`${hhmmss(Number(cap.captured_ms))} 5秒Worker受信`;
@@ -29580,7 +29635,9 @@ async function pollPane(ws,p){
       state.lastMs=Number(cap.captured_ms)||state.lastMs;
     }
     state.lastSeen=Date.now();state.phase=phase;state.count=count;perPane.set(p.id,state);
-    if(ms>0&&age<=12000){
+    if(ws.stopped?.(p)&&ms>0){
+      paint(p,'done',`${/GitHub/.test(p.transport?.timeline||'')&&!/未確認/.test(p.transport?.timeline||'')?'☁️ GitHub':'💾 履歴'} ${p.history?.length||0}点`,`収集終了 / 最終記録 ${hhmmss(ms)} / ${count}保存記録`);
+    }else if(ms>0&&age<=12000){
       paint(p,'live',`☁️5秒<span class="twl-long">Worker</span> ${hhmmss(ms)}`,`LIVE / ${Math.round(age/1000)}秒前 / ${phase||'CAPTURING'}${count?' / '+count+'記録':''} / ${j?.version||meta?.version||''}`);
     }else if(ms>0){
       paint(p,'stale',`☁️5秒<span class="twl-long">Worker</span> +${Math.round(age/1000)}s`,`最新 ${hhmmss(ms)} / ${Math.round(age/1000)}秒前 / ${phase||'-'}${active?'':' / 停止'}`);

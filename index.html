@@ -27907,7 +27907,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
   function rawUrl(input){
     let s=String(input||'').trim();
     if(!s) throw new Error('GitHub JSON URL またはパスを入力してください');
-    const blob=s.match(/^https:\/\/github\\.com\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+)$/i);
+    const blob=s.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+)$/i);
     if(blob) return `https://raw.githubusercontent.com/${blob[1]}/${blob[2]}/${blob[3]}/${blob[4]}`;
     if(/^https?:\/\//i.test(s)) return s;
     s=s.replace(/^\/+/, '');
@@ -27938,8 +27938,8 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
   function currentArchivePath(){
     const rid=currentRid();
     const ymd=String($('pickDate')?.value||'');
-    if(!/^\\d{10,14}$/.test(rid)) throw new Error('左側でレースを選択してください');
-    if(!/^20\\d{2}-\\d{2}-\\d{2}$/.test(ymd)) throw new Error('開催日を選択してください');
+    if(!/^\d{10,14}$/.test(rid)) throw new Error('左側でレースを選択してください');
+    if(!/^20\d{2}-\d{2}-\d{2}$/.test(ymd)) throw new Error('開催日を選択してください');
     const [y,m,d]=ymd.split('-');
     return `${GH.base}/${y}/${m}/${d}/${currentKind(rid)}/${rid}.json`;
   }
@@ -29565,7 +29565,7 @@ html[data-theme="light"] .msv2-worker-live[data-state="stale"],html[data-theme="
 if(window.__THEKEIBA_TIMELINE_WORKER_LIVE_52326__)return;
 window.__THEKEIBA_TIMELINE_WORKER_LIVE_52326__=true;
 
-const VERSION='v5.23.29 JRA_GitHubSavedRaceGraphs 5sWorkerLive SafariLightSwitch LightDark ForecastPop NextRace';
+const VERSION='v5.23.31 GitHubCalendarBatchGraphs 5sWorkerLive SafariLightSwitch LightDark ForecastPop NextRace';
 const DEFAULT_WORKER='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
 const INTERVAL=5000;
 const perPane=new Map();
@@ -29688,5 +29688,196 @@ window.refreshTimelineWorkerLive52326=tick;
 })();
 </script>
 
+
+<script id="github-date-venue-race-52330">
+(function(){
+'use strict';
+const GH={owner:'yamase-takiyoshi',repo:'takuya',branch:'main',base:'odds-data'};
+const venues={JRA:{'01':'札幌','02':'函館','03':'福島','04':'新潟','05':'東京','06':'中山','07':'中京','08':'京都','09':'阪神','10':'小倉'},NAR:{'30':'門別','35':'盛岡','36':'水沢','42':'浦和','43':'船橋','44':'大井','45':'川崎','46':'金沢','47':'笠松','48':'名古屋','50':'園田','51':'姫路','54':'高知','55':'佐賀','65':'帯広'}};
+const $=id=>document.getElementById(id);
+let rows=[],generation=0,controller=null,busy=false;
+function say(s){$('ghArchiveStatus52330').textContent=s;}
+function option(select,value,label){const o=document.createElement('option');o.value=value;o.textContent=label;select.appendChild(o);}
+function reset(select,label){select.replaceChildren();option(select,'',label);select.disabled=true;}
+function datePath(date){if(!/^20\d{2}-\d{2}-\d{2}$/.test(date))throw new Error('開催日を選択してください');return GH.base+'/'+date.replace(/-/g,'/');}
+function rawUrl(path){return `https://raw.githubusercontent.com/${GH.owner}/${GH.repo}/${GH.branch}/${path.split('/').map(encodeURIComponent).join('/')}`;}
+async function json(url,signal){
+ const fetcher=window.__nativeFetch252||window.fetch.bind(window),ctl=new AbortController();
+ const abort=()=>ctl.abort();signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)ctl.abort();
+ const timer=setTimeout(abort,20000);
+ try{const r=await fetcher(url,{cache:'no-store',signal:ctl.signal,headers:{Accept:'application/json'}});
+  if(!r.ok){const e=new Error(r.status===403||r.status===429?'GitHubの読込回数制限です。しばらく待って再読込してください':`GitHub HTTP ${r.status}`);e.status=r.status;throw e;}
+  return await r.json();
+ }finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);}
+}
+function newRequest(){controller?.abort();controller=new AbortController();return {id:++generation,signal:controller.signal};}
+function isCurrent(id){return id===generation;}
+function filenameRow(item,kind,date){
+ const match=String(item.name||'').match(/^(\d{12})\.json$/);if(item.type!=='file'||!match)return null;
+ const rid=match[1],code=rid.slice(4,6);if(!venues[kind][code])return null;
+ if(kind==='NAR'&&rid.slice(0,4)+rid.slice(6,10)!==date.replace(/-/g,''))return null;
+ const path=`${datePath(date)}/${kind}/${rid}.json`;
+ if(item.path!==path)return null;
+ return {rid,kind,date,code,venue:venues[kind][code],path,number:Number(rid.slice(-2))};
+}
+async function loadDate(){
+ const date=$('ghArchiveDate52330').value,req=newRequest();rows=[];busy=false;document.dispatchEvent(new CustomEvent('ghArchiveListReady52331',{detail:[]}));
+ reset($('ghArchiveVenue52330'),'開催場を取得中…');reset($('ghArchiveRace52330'),'開催場を選択');$('ghArchiveOpen52330').disabled=true;
+ try{
+ const base=datePath(date);say('☁️ GitHubの保存レースを確認中…');
+ const results=await Promise.allSettled(['JRA','NAR'].map(async kind=>{
+  let data;try{data=await json(`https://api.github.com/repos/${GH.owner}/${GH.repo}/contents/${base}/${kind}?ref=${GH.branch}`,req.signal);}catch(e){if(e.status===404)return [];throw e;}
+  if(!Array.isArray(data))throw new Error('GitHubの保存一覧を確認できません');
+  return data.map(item=>filenameRow(item,kind,date)).filter(Boolean);
+ }));
+ if(!isCurrent(req.id))return;
+ const errors=[];results.forEach((r,i)=>{if(r.status==='fulfilled')rows.push(...r.value);else errors.push(`${['JRA','NAR'][i]}: ${r.reason?.message||'読込失敗'}`);});
+ rows.sort((a,b)=>a.kind.localeCompare(b.kind)||a.code.localeCompare(b.code)||a.number-b.number);
+ const v=$('ghArchiveVenue52330');reset(v,rows.length?'開催場を選択':'保存履歴なし');
+ const keys=[...new Set(rows.map(r=>r.kind+':'+r.code))];for(const key of keys){const group=rows.filter(r=>r.kind+':'+r.code===key);option(v,key,`${group[0].kind} ${group[0].venue}（${group.length}レース・履歴あり）`);}
+ v.disabled=!rows.length;document.dispatchEvent(new CustomEvent('ghArchiveListReady52331',{detail:rows.slice()}));
+ say(rows.length?`${date}：${keys.length}開催場・${rows.length}保存レース。開催場とレースを選択してください。${errors.length?' 一部取得失敗：'+errors.join(' / '):''}`:errors.length?'一覧を取得できません：'+errors.join(' / '):`${date} のGitHub保存履歴はありません。別の日付を選んでください。`);
+ }catch(e){if(isCurrent(req.id)){reset($('ghArchiveVenue52330'),'取得失敗');say(e.name==='AbortError'?'読込がタイムアウトしました。再読込できます。':String(e.message||e));}}
+}
+function loadVenue(){
+ newRequest();busy=false;const key=$('ghArchiveVenue52330').value,r=$('ghArchiveRace52330');reset(r,'レースを選択');$('ghArchiveOpen52330').disabled=true;
+ const group=rows.filter(x=>x.kind+':'+x.code===key);group.forEach(x=>option(r,x.rid,`${x.number}R　履歴あり`));r.disabled=!group.length;
+ say(group.length?'レースを選ぶとグラフを表示します。レース名・発走時刻は保存JSONに含まれる場合、読込後に表示します。':'開催場を選択してください。');
+}
+function metadata(data,row,pack){
+ const m=data.race||data.meta||data;
+ const rid=String(m.race_id||pack.meta?.race_id||'');if(rid!==row.rid)throw new Error('保存履歴のレースIDが一致しません');
+ const kind=String(m.kind||pack.meta?.kind||row.kind).toUpperCase();if(kind!==row.kind)throw new Error('保存履歴のJRA/NAR区分が一致しません');
+ const d=String(m.race_date||m.date||'').replace(/\//g,'-');if(d&&d!==row.date)throw new Error('保存履歴の開催日が一致しません');
+ const label=String(m.race_name||m.race_label||pack.meta?.race_label||'');const time=String(m.post_time||m.start_time||'');
+ return {label:label===row.rid?'':label,time};
+}
+async function openRace(){
+ const row=rows.find(r=>r.rid===$('ghArchiveRace52330').value);if(!row||busy)return;
+ const req=newRequest();busy=true;$('ghArchiveOpen52330').disabled=true;say(`☁️ ${row.kind} ${row.venue} ${row.number}R のGitHub履歴を読み込み中…`);
+ try{
+ const data=await json(rawUrl(row.path),req.signal);if(!isCurrent(req.id))return;
+ if(typeof window.parseSavedArchive52329!=='function')throw new Error('グラフ準備中です。再度タップしてください');
+ const pack=window.parseSavedArchive52329(data),meta=metadata(data,row,pack);if(!pack.records?.length)throw new Error('グラフに表示する履歴がありません');
+ // データの保存元はGitHub。表示はメモリーのみで、IndexedDBへの取込は不要。
+ pack.meta={...pack.meta,kind:row.kind,race_date:row.date,race_label:`${row.date} ${row.venue} ${row.number}R${meta.label?' '+meta.label:''}${meta.time?' 発走 '+meta.time:''}`};
+ window.__archiveJsonLastPack5214=pack;window.__archiveJsonLastRaw52320=data;
+ const selected=$('ghArchiveRace52330').selectedOptions[0];selected.textContent=`${row.number}R${meta.label?' '+meta.label:''}${meta.time?' '+meta.time:''}　履歴あり`;
+ await window.openSavedArchiveGraph5214();if(!isCurrent(req.id))return;
+ $('ghArchivePicker52330').hidden=true;say(`✅ GitHubから ${pack.records.length}点の履歴を表示しました。`);
+ }catch(e){if(isCurrent(req.id))say(e.name==='AbortError'?'読込がタイムアウトしました。もう一度「グラフ表示」をタップしてください。':`⚠️ ${e.message||e}`);}
+ finally{if(isCurrent(req.id)){busy=false;$('ghArchiveOpen52330').disabled=false;}}
+}
+function open(){install();$('ghArchivePicker52330').hidden=false;if(!rows.length)loadDate();}
+function install(){
+ window.githubArchivePickerAPI52331={getRows:()=>rows.slice(),loadDate,json,rawUrl,metadata};
+ if(!$('ghArchivePicker52330')){
+ const style=document.createElement('style');style.textContent=`#ghArchivePicker52330[hidden]{display:none!important}#ghArchivePicker52330{position:fixed;inset:0;z-index:10070;display:flex;align-items:center;justify-content:center;background:rgba(2,8,18,.82);padding:16px}.gh-picker-card{width:min(680px,100%);max-height:90vh;overflow:auto;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:14px;padding:16px}.gh-picker-card label{display:grid;gap:5px;margin:12px 0;font-size:13px}.gh-picker-card input,.gh-picker-card select{width:100%;min-height:44px;font:inherit;color:var(--text);background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:9px}.gh-picker-card button{min-height:40px}.gh-picker-card :disabled{opacity:.55}.gh-picker-entry{margin-top:10px;padding:10px;border:1px solid var(--border);border-radius:10px;font-size:12px}#ghArchiveStatus52330{font-size:12px;line-height:1.7;white-space:pre-wrap;margin-top:12px}`;document.head.appendChild(style);
+ const modal=document.createElement('div');modal.id='ghArchivePicker52330';modal.hidden=true;
+ modal.innerHTML=`<div class="gh-picker-card" role="dialog" aria-modal="true" aria-labelledby="ghArchiveTitle52330"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b id="ghArchiveTitle52330">☁️ GitHub保存グラフ</b><button class="btn-sm" id="ghArchiveClose52330" type="button">閉じる</button></div><label>① 開催日<input type="date" id="ghArchiveDate52330"></label><label>② 開催場（JRA・NAR）<select id="ghArchiveVenue52330" disabled><option value="">日付を選択</option></select></label><label>③ レース<select id="ghArchiveRace52330" disabled><option value="">開催場を選択</option></select></label><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn-sm" id="ghArchiveRefresh52330" type="button">一覧を再読込</button><button class="btn-sm" id="ghArchiveOpen52330" type="button" disabled>📊 グラフ表示</button></div><div id="ghArchiveStatus52330" role="status" aria-live="polite">日付を選ぶと、GitHubに保存されている開催場・レースを表示します。</div><p style="font-size:11px;color:var(--muted);margin-top:12px">一覧にはGitHubに履歴ファイルがあるレースだけを表示します。未保存レースは表示されません。全8券種のうち、保存データがある券種をグラフで確認できます。</p></div>`;document.body.appendChild(modal);
+ $('ghArchiveDate52330').value=$('pickDate')?.value||new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Tokyo'}).format(new Date());
+ $('ghArchiveDate52330').onchange=loadDate;$('ghArchiveVenue52330').onchange=loadVenue;$('ghArchiveRace52330').onchange=()=>{newRequest();busy=false;$('ghArchiveOpen52330').disabled=!$('ghArchiveRace52330').value;openRace();};
+ $('ghArchiveRefresh52330').onclick=loadDate;$('ghArchiveOpen52330').onclick=openRace;
+ const close=()=>{modal.hidden=true;newRequest();busy=false;$('ghArchiveOpen52330').disabled=!$('ghArchiveRace52330').value;};$('ghArchiveClose52330').onclick=close;modal.addEventListener('click',e=>{if(e.target===modal)close();});
+ }
+ const host=$('pickDate')?.closest('.card');if(host&&!$('ghArchiveEntry52330')){const box=document.createElement('div');box.id='ghArchiveEntry52330';box.className='gh-picker-entry';const b=document.createElement('button');b.type='button';b.className='btn-sm';b.textContent='☁️ GitHub保存グラフ';b.onclick=open;box.appendChild(b);box.appendChild(document.createTextNode('　日付 → 開催場 → レース'));host.appendChild(box);}
+ for(const [id,host] of [['ghArchiveSettings52330',$('dataIoStatus')?.parentElement],['ghArchiveToolbar52330',$('oddsTsJson')?.parentElement],['ghArchiveImport52330',$('archiveJsonStatus5213')?.parentElement]]){
+  if(host&&!$(id)){const b=document.createElement('button');b.id=id;b.type='button';b.className='btn-sm';b.textContent='☁️ 日付から保存グラフ';b.onclick=open;host.appendChild(b);}
+ }
+ window.openGithubSavedRacePicker52330=open;
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install,{once:true});else install();
+[500,2000,6000,12000].forEach(ms=>setTimeout(install,ms));
+})();
+
+</script>
+<script id="github-calendar-batch-52331">
+(function(){
+'use strict';
+const $=id=>document.getElementById(id),TYPES=['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
+let month='',monthRequest=0,batchController=null,batchGeneration=0,packs=new Map();
+const folders=new Map();
+function dayString(y,m,d){return `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;}
+function api(){return window.githubArchivePickerAPI52331;}
+function drawCalendar(){
+ const input=$('ghArchiveDate52330');if(!input||!$('ghCalendarGrid52331'))return;
+ if(!/^\d{4}-\d{2}$/.test(month))month=input.value.slice(0,7);
+ const [y,m]=month.split('-').map(Number),count=new Date(Date.UTC(y,m,0)).getUTCDate(),start=new Date(Date.UTC(y,m-1,1)).getUTCDay();
+ $('ghCalendarMonth52331').textContent=`${y}年 ${m}月`;
+ const grid=$('ghCalendarGrid52331');grid.replaceChildren();const available=folders.get(month);
+ for(const w of ['日','月','火','水','木','金','土']){const s=document.createElement('span');s.textContent=w;s.className='gh-cal-week';grid.appendChild(s);}
+ for(let i=0;i<start;i++)grid.appendChild(document.createElement('span'));
+ for(let d=1;d<=count;d++){
+ const date=dayString(y,m,d),b=document.createElement('button');b.type='button';b.className='gh-cal-day'+(date===input.value?' selected':'');b.textContent=String(d);b.setAttribute('aria-label',date+(available?.has(String(d).padStart(2,'0'))?' 保存フォルダあり':''));b.setAttribute('aria-pressed',String(date===input.value));
+ if(available?.has(String(d).padStart(2,'0'))){b.classList.add('saved');const dot=document.createElement('small');dot.textContent='●';b.appendChild(dot);}
+ b.onclick=()=>{input.value=date;input.dispatchEvent(new Event('change',{bubbles:true}));drawCalendar();};grid.appendChild(b);
+ }
+}
+async function loadMonth(){
+ drawCalendar();const key=month,request=++monthRequest;
+ if(folders.has(key)){ $('ghCalendarNote52331').textContent='● はGitHubに保存フォルダがある日です。日付をタップして保存レースを確認できます。';return;}
+ $('ghCalendarNote52331').textContent='保存日の目印を確認中…（日付はすぐ選べます）';
+ try{
+ const data=await api().json(`https://api.github.com/repos/yamase-takiyoshi/takuya/contents/odds-data/${key.replace('-','/')}?ref=main`);
+ if(!Array.isArray(data))throw new Error('保存日一覧の形式を確認できません');
+ folders.set(key,new Set(data.filter(x=>x.type==='dir'&&/^\d{2}$/.test(x.name)).map(x=>x.name)));
+ if(request===monthRequest){drawCalendar();$('ghCalendarNote52331').textContent='● はGitHubに保存フォルダがある日です。日付をタップして保存レースを確認できます。';}
+ }catch(e){if(e.status===404)folders.set(key,new Set());if(request===monthRequest){drawCalendar();$('ghCalendarNote52331').textContent=e.status===404?'この月の保存フォルダはありません。':`保存日の目印は未確認です。日付を選んで確認できます。（${e.message||e}）`;}}
+}
+function changeMonth(step){const [y,m]=month.split('-').map(Number),d=new Date(Date.UTC(y,m-1+step,1));month=dayString(d.getUTCFullYear(),d.getUTCMonth()+1,1).slice(0,7);loadMonth();}
+function checkCount(){const n=$('ghBatchChecks52331').querySelectorAll('input:checked').length;$('ghBatchOpen52331').disabled=!n;$('ghBatchOpen52331').textContent=`📊 チェックした${n}レースをまとめて表示`;}
+function updateList(rows){
+ if(!$('ghBatchChecks52331'))return;const box=$('ghBatchChecks52331');box.replaceChildren();
+ for(const r of rows){const label=document.createElement('label');label.className='gh-batch-check';const check=document.createElement('input');check.type='checkbox';check.value=r.rid;check.onchange=checkCount;label.appendChild(check);label.appendChild(document.createTextNode(`${r.kind} ${r.venue} ${r.number}R　履歴あり`));box.appendChild(label);}
+ if(!rows.length)box.textContent='日付を選ぶと保存レースが表示されます。';checkCount();
+}
+function chart(canvas,pack,type){
+ const records=pack.records||[];let latest=[];for(let i=records.length-1;i>=0;i--)if(records[i].markets?.[type]?.length){latest=records[i].markets[type];break;}
+ const combos=latest.filter(x=>Number(x.odds)>0).slice().sort((a,b)=>Number(a.odds)-Number(b.odds)).slice(0,3).map(x=>String(x.combination));
+ const series=combos.map(combo=>({combo,points:records.flatMap(r=>{const row=(r.markets?.[type]||[]).find(x=>String(x.combination)===combo);const v=Number(row?.odds),t=Number(r.captured_ms);return v>0&&Number.isFinite(v)&&t>0?[{t,v}]:[];})}));
+ const width=Math.max(290,canvas.clientWidth||480),height=240,dpr=Math.min(2,devicePixelRatio||1);canvas.width=width*dpr;canvas.height=height*dpr;const ctx=canvas.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,width,height);
+ const colors=['#38bdf8','#22c55e','#f59e0b'];let t0=Infinity,t1=-Infinity,min=Infinity,max=-Infinity;
+ series.forEach(s=>s.points.forEach(p=>{t0=Math.min(t0,p.t);t1=Math.max(t1,p.t);min=Math.min(min,p.v);max=Math.max(max,p.v);}));
+ ctx.font='12px sans-serif';ctx.fillStyle='#94a3b8';if(!Number.isFinite(t0)){ctx.fillText(`${type}の保存データがありません`,16,40);return;}
+ min=Math.max(0,min-(max-min||1)*.1);max+=(max-min||1)*.1;const l=48,r=12,top=20,bottom=40;
+ const xp=t=>l+(t-t0)/Math.max(1,t1-t0)*(width-l-r),yp=v=>top+(max-v)/Math.max(.01,max-min)*(height-top-bottom);
+ for(let i=0;i<=4;i++){const v=min+(max-min)*i/4,y=yp(v);ctx.strokeStyle='#263549';ctx.beginPath();ctx.moveTo(l,y);ctx.lineTo(width-r,y);ctx.stroke();ctx.fillText(v.toFixed(1),2,y+4);}
+ const time=t=>new Intl.DateTimeFormat('ja-JP',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit'}).format(new Date(t));ctx.fillText(time(t0),l,height-12);ctx.fillText(time(t1),width-50,height-12);
+ series.forEach((s,i)=>{ctx.strokeStyle=colors[i];ctx.lineWidth=2;ctx.beginPath();s.points.forEach((p,j)=>j?ctx.lineTo(xp(p.t),yp(p.v)):ctx.moveTo(xp(p.t),yp(p.v)));ctx.stroke();if(s.points.length===1){ctx.beginPath();ctx.arc(xp(s.points[0].t),yp(s.points[0].v),3,0,Math.PI*2);ctx.fillStyle=colors[i];ctx.fill();}});
+ const legend=canvas.nextElementSibling;legend.textContent=series.map(s=>`${s.combo}：${s.points.at(-1)?.v||'-'}倍`).join('　');
+}
+function renderCards(){const type=$('ghBatchMarket52331').value;for(const [rid,pack] of packs){const canvas=$('ghBatchCanvas'+rid);if(canvas)chart(canvas,pack,type);}}
+async function openBatch(){
+ const selected=new Set([...$('ghBatchChecks52331').querySelectorAll('input:checked')].map(x=>x.value)),rows=api().getRows().filter(r=>selected.has(r.rid));if(!rows.length)return;
+ batchController?.abort();batchController=new AbortController();const signal=batchController.signal,gen=++batchGeneration;packs=new Map();
+ const modal=$('ghBatchModal52331');modal.hidden=false;$('ghBatchDate52331').textContent=$('ghArchiveDate52330').value;$('ghBatchCards52331').replaceChildren();
+ for(const row of rows){const card=document.createElement('section');card.className='gh-batch-card';const title=document.createElement('b');title.textContent=`${row.kind} ${row.venue} ${row.number}R`;card.appendChild(title);const status=document.createElement('p');status.id='ghBatchMessage'+row.rid;status.textContent='読込待ち…';card.appendChild(status);const canvas=document.createElement('canvas');canvas.id='ghBatchCanvas'+row.rid;canvas.hidden=true;card.appendChild(canvas);card.appendChild(document.createElement('p'));const detail=document.createElement('button');detail.type='button';detail.className='btn-sm';detail.textContent='券種・指標の詳細グラフ';detail.disabled=true;detail.id='ghBatchDetail'+row.rid;detail.onclick=async()=>{const pack=packs.get(row.rid);if(pack){window.__archiveJsonLastPack5214=pack;await window.openSavedArchiveGraph5214();}};card.appendChild(detail);$('ghBatchCards52331').appendChild(card);}
+ let next=0,done=0,failed=0;const update=()=>{$('ghBatchProgress52331').textContent=`${done}/${rows.length}レースを確認${failed?'（'+failed+'件は読込失敗）':''}`;};update();
+ async function runner(){while(next<rows.length&&!signal.aborted){const row=rows[next++],status=$('ghBatchMessage'+row.rid);status.textContent='☁️ GitHubから読込中…';try{
+ const data=await api().json(api().rawUrl(row.path),signal);if(gen!==batchGeneration)return;
+ const pack=window.parseSavedArchive52329(data),m=api().metadata(data,row,pack);if(!pack.records?.length)throw new Error('表示できる履歴がありません');
+ pack.meta={...pack.meta,kind:row.kind,race_label:`${row.date} ${row.venue} ${row.number}R${m.label?' '+m.label:''}${m.time?' 発走 '+m.time:''}`};packs.set(row.rid,pack);
+ status.textContent=`${m.label||''}${m.time?' 発走 '+m.time:''} / ${pack.records.length}解析点`;const canvas=$('ghBatchCanvas'+row.rid);canvas.hidden=false;$('ghBatchDetail'+row.rid).disabled=false;chart(canvas,pack,$('ghBatchMarket52331').value);
+ }catch(e){if(gen!==batchGeneration)return;failed++;status.textContent='⚠️ '+String(e.message||e);}finally{if(gen===batchGeneration){done++;update();}}}}
+ await Promise.all([runner(),runner()]);
+}
+function install(){
+ const host=$('ghArchiveDate52330')?.parentElement?.parentElement;if(!host||$('ghCalendar52331'))return;
+ const style=document.createElement('style');style.textContent=`.gh-cal-nav{display:flex;align-items:center;justify-content:space-between;gap:8px}.gh-cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;margin-top:8px}.gh-cal-week{text-align:center;font-size:11px;color:var(--muted);padding:4px}.gh-cal-day{position:relative;min-height:42px!important;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:7px;font:inherit}.gh-cal-day.selected{background:var(--accent,#3b82f6);color:#02140b;font-weight:800}.gh-cal-day.saved{border-color:#34d399}.gh-cal-day small{font-size:7px;position:absolute;bottom:1px;left:45%;color:#34d399}#ghBatchChecks52331{max-height:210px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:6px}.gh-picker-card .gh-batch-check{display:flex;align-items:center;gap:8px;margin:0;padding:7px;font-size:12px}.gh-picker-card .gh-batch-check input{width:20px;min-height:20px;height:20px}#ghBatchModal52331[hidden]{display:none!important}#ghBatchModal52331{position:fixed;inset:0;z-index:10075;background:rgba(2,8,18,.88);padding:12px;overflow:auto;color:#e2e8f0}.gh-batch-shell{max-width:1200px;margin:auto;background:#081421;border:1px solid #334155;border-radius:14px;padding:14px}.gh-batch-head{position:sticky;top:-12px;background:#081421;z-index:1;padding:12px 0;display:flex;gap:10px;flex-wrap:wrap;align-items:center}.gh-batch-head select{background:#0f172a;color:#e2e8f0;padding:8px;border-radius:8px}#ghBatchCards52331{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.gh-batch-card{background:#07111d;border:1px solid #334155;border-radius:10px;padding:12px;min-width:0}.gh-batch-card p{font-size:11px;color:#b9c8d8;margin:8px 0;overflow-wrap:anywhere}.gh-batch-card canvas{width:100%;height:240px;display:block}.gh-batch-card canvas[hidden]{display:none}@media(max-width:650px){#ghBatchCards52331{grid-template-columns:1fr}}`;document.head.appendChild(style);
+ const cal=document.createElement('section');cal.id='ghCalendar52331';cal.innerHTML='<div class="gh-cal-nav"><button class="btn-sm" type="button" id="ghCalendarPrev52331">‹ 前月</button><b id="ghCalendarMonth52331"></b><button class="btn-sm" type="button" id="ghCalendarNext52331">翌月 ›</button></div><div id="ghCalendarGrid52331" class="gh-cal-grid"></div><p id="ghCalendarNote52331" style="font-size:10px;color:var(--muted);margin-top:6px"></p>';host.insertBefore(cal,$('ghArchiveDate52330').parentElement);
+ const box=document.createElement('section');box.innerHTML='<b style="font-size:13px">④ レースにチェックしてまとめて閲覧（選択日の全開催場）</b><div style="display:flex;gap:6px;margin:8px 0"><button class="btn-sm" type="button" id="ghBatchAll52331">全レースをチェック</button><button class="btn-sm" type="button" id="ghBatchNone52331">チェック解除</button></div><div id="ghBatchChecks52331"></div><button class="btn-sm" type="button" id="ghBatchOpen52331" style="width:100%;margin-top:8px" disabled>チェックしたレースをまとめて表示</button>';host.insertBefore(box,$('ghArchiveStatus52330'));
+ const modal=document.createElement('div');modal.id='ghBatchModal52331';modal.hidden=true;modal.innerHTML='<div class="gh-batch-shell" role="dialog" aria-modal="true" aria-label="保存レースのグラフ一覧"><div class="gh-batch-head"><b>☁️ 保存グラフ一覧 <span id="ghBatchDate52331"></span></b><select id="ghBatchMarket52331" aria-label="券種"></select><button type="button" class="btn-sm" id="ghBatchClose52331" style="margin-left:auto">閉じる</button></div><p id="ghBatchProgress52331" role="status" style="font-size:12px;margin-bottom:8px"></p><p style="font-size:11px;color:#94a3b8;margin-bottom:12px">各レースの保存最終オッズ上位3点を比較。時刻は日本時間です。詳細ボタンで買い目・指標を選べます。</p><div id="ghBatchCards52331"></div></div>';document.body.appendChild(modal);
+ TYPES.forEach(t=>{const o=document.createElement('option');o.textContent=t;$('ghBatchMarket52331').appendChild(o);});$('ghBatchMarket52331').onchange=renderCards;
+ $('ghBatchClose52331').onclick=()=>{modal.hidden=true;batchController?.abort();batchGeneration++;};
+ $('ghCalendarPrev52331').onclick=()=>changeMonth(-1);$('ghCalendarNext52331').onclick=()=>changeMonth(1);
+ $('ghArchiveDate52330').addEventListener('change',()=>{month=$('ghArchiveDate52330').value.slice(0,7);loadMonth();});
+ $('ghBatchAll52331').onclick=()=>{for(const c of $('ghBatchChecks52331').querySelectorAll('input'))c.checked=true;checkCount();};$('ghBatchNone52331').onclick=()=>{for(const c of $('ghBatchChecks52331').querySelectorAll('input'))c.checked=false;checkCount();};$('ghBatchOpen52331').onclick=openBatch;
+ document.addEventListener('ghArchiveListReady52331',e=>updateList(e.detail));updateList(api().getRows());month=$('ghArchiveDate52330').value.slice(0,7);loadMonth();
+ window.addEventListener('resize',()=>{if(!modal.hidden)renderCards();});
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install,{once:true});else install();[500,2000,6000].forEach(ms=>setTimeout(install,ms));
+})();
+
+</script>
 </body>
 </html>

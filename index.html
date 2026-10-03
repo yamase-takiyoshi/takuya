@@ -25518,7 +25518,8 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
           signal?.addEventListener('abort',abort,{once:true});
           const timeout=setTimeout(abort,20000);
           try{
-            const response=await native(url,{headers,signal:ctl.signal,cache:'no-store'});
+            const requestHeaders=new URL(url).origin===new URL(base).origin?headers:{};
+            const response=await native(url,{headers:requestHeaders,signal:ctl.signal,cache:'no-store'});
             if(!response.ok){const e=new Error('履歴 HTTP '+response.status);e.status=response.status;throw e;}
             return {text:await response.text()};
           }finally{clearTimeout(timeout);signal?.removeEventListener('abort',abort);}
@@ -25526,22 +25527,36 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
         // Completed races are restored from the server's GitHub archive.
         const finished=(race.postMs>0&&Date.now()>=race.postMs+180000)||race.date<today();
         if(finished){
-          try{
-            const response=await readHistory(`${base}/replay/load?race_id=${rid}&date=${encodeURIComponent(race.date)}&kind=${source}`);
-            const archive=JSON.parse(response.text);
-            if(archive.ok===false)throw new Error(archive.error||'GitHub履歴未保存');
-            if(String(archive.race?.race_id||'')!==rid||String(archive.race?.kind||source).toUpperCase()!==source)throw new Error('別レースのGitHub履歴');
-            const raw=archive.captures||[],safe=raw.map(x=>normalizeRecord({...x,archive_change_only:true},source,rid,race.date,rid)).filter(Boolean);
-            if(!safe.length||safe.length!==raw.length)throw new Error('GitHub履歴を検証できません');
-            return {rows:safe,transport:'GitHub保存履歴',github:true};
-          }catch(e){
-            if(e.name==='AbortError')throw e;
-            // Preserve actual Worker data while the minute flush catches up.
-            // This fallback is visible and never labelled as GitHub saved.
-            rows.githubWarning=String(e.message||e);
+          const [y,m,d]=race.date.split('-');
+          const archiveUrls=[
+            `${base}/replay/load?race_id=${rid}&date=${encodeURIComponent(race.date)}&kind=${source}`,
+            `https://raw.githubusercontent.com/yamase-takiyoshi/takuya/main/odds-data/${y}/${m}/${d}/${source}/${rid}.json`
+          ];
+          const errors=[];
+          for(const archiveUrl of archiveUrls){
+            try{
+              const response=await readHistory(archiveUrl);
+              const archive=JSON.parse(response.text);
+              if(archive.ok===false)throw new Error(archive.error||'GitHub履歴未保存');
+              const meta=archive.race||archive.meta||archive;
+              if(String(meta.race_id||'')!==rid||String(meta.kind||source).toUpperCase()!==source)throw new Error('別レースのGitHub履歴');
+              const savedDate=String(meta.race_date||meta.date||'').replace(/\//g,'-');
+              if(savedDate&&savedDate!==race.date)throw new Error('保存履歴の開催日が選択日と一致しません');
+              const raw=archive.initial_snapshot
+                ? window.parseSavedArchive52329?.(archive)?.records
+                : (archive.captures||archive.records||archive.history||[]);
+              if(!Array.isArray(raw))throw new Error('保存JSONの復元機能が未準備');
+              const safe=raw.map(x=>normalizeRecord({...x,archive_change_only:true},source,rid,race.date,rid)).filter(Boolean);
+              if(!safe.length||safe.length!==raw.length)throw new Error('GitHub履歴を検証できません');
+              return {rows:safe,transport:'GitHub保存履歴',github:true};
+            }catch(e){
+              if(e.name==='AbortError')throw e;
+              errors.push(String(e.message||e));
+            }
           }
+          rows.githubWarning=errors.join(' / ');
         }
-        if(!cfg.autoSync)return {rows:[],disabled:true,transport:'GitHub履歴未確認（Worker同期OFF）'};
+        if(!cfg.autoSync)return {rows:[],disabled:true,transport:finished?'GitHub保存履歴なし：'+rows.githubWarning:'GitHub履歴未確認（Worker同期OFF）'};
         for(let page=0;page<128;page++){
           let r;
           const path=()=>`${base}${prefix}/history?race_id=${rid}&kind=${source}&since=${cursor}&limit=96`;
@@ -27702,8 +27717,8 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
 
   function reconstructCompressedArchive(data){
     const race=data?.race||{};
-    const rid=String(race.race_id||data.race_id||'').replace(/\\D/g,'');
-    if(!/^\\d{10,14}$/.test(rid)) throw new Error('保存JSONから race_id を確認できません');
+    const rid=String(race.race_id||data.race_id||'').replace(/\D/g,'');
+    if(!/^\d{10,14}$/.test(rid)) throw new Error('保存JSONから race_id を確認できません');
     const init=data?.initial_snapshot||{};
     const firstMs=msOf(init.captured_ms)||msOf(data?.stats?.first_capture_ms)||Date.parse(init.captured_at||'')||0;
     if(!(firstMs>0)) throw new Error('initial_snapshot の取得時刻を確認できません');
@@ -27763,13 +27778,13 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     else if(Array.isArray(data?.records)) src=data.records;
     else if(Array.isArray(data?.data?.captures)) src=data.data.captures;
     if(!src.length) return null;
-    const topRid=String(data?.race_id||data?.race?.race_id||'').replace(/\\D/g,'');
+    const topRid=String(data?.race_id||data?.race?.race_id||'').replace(/\D/g,'');
     const records=[];
     let rid=topRid;
     for(const raw of src){
       if(!raw||typeof raw!=='object') continue;
-      const rr=String(raw.race_id||raw.raceId||rid||'').replace(/\\D/g,'');
-      if(!/^\\d{10,14}$/.test(rr)) continue;
+      const rr=String(raw.race_id||raw.raceId||rid||'').replace(/\D/g,'');
+      if(!/^\d{10,14}$/.test(rr)) continue;
       rid=rid||rr;
       if(rr!==rid) continue;
       let ms=msOf(raw.captured_ms||raw.capturedMs||raw.ts_ms||raw.timestamp_ms||raw.time_ms);
@@ -27911,9 +27926,9 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
 
   function currentRid(){
     try{if(window.currentRaceId)return String(window.currentRaceId);}catch(e){}
-    const u=$('raceUrl')?.value||''; const m=String(u).match(/race_id=(\\d{10,14})/);
+    const u=$('raceUrl')?.value||''; const m=String(u).match(/race_id=(\d{10,14})/);
     if(m) return m[1];
-    const s=$('raceSelect')?.value||''; const m2=String(s).match(/(\\d{10,14})/); return m2?m2[1]:'';
+    const s=$('raceSelect')?.value||''; const m2=String(s).match(/(\d{10,14})/); return m2?m2[1]:'';
   }
   function currentKind(rid){
     const k=String($('pickKind')?.value||'').toUpperCase();
@@ -27987,6 +28002,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     }
     window.triggerSavedArchiveAnalysis5213=openModal;
     window.importSavedArchiveData5213=importData;
+    window.parseSavedArchive52329=parseArchive;
     window.fetchSavedArchiveGithub5213=fetchGithub;
     markVersion();
   }
@@ -29549,7 +29565,7 @@ html[data-theme="light"] .msv2-worker-live[data-state="stale"],html[data-theme="
 if(window.__THEKEIBA_TIMELINE_WORKER_LIVE_52326__)return;
 window.__THEKEIBA_TIMELINE_WORKER_LIVE_52326__=true;
 
-const VERSION='v5.23.28 GitHubSavedRaceGraphs 5sWorkerLive SafariLightSwitch LightDark ForecastPop NextRace';
+const VERSION='v5.23.29 JRA_GitHubSavedRaceGraphs 5sWorkerLive SafariLightSwitch LightDark ForecastPop NextRace';
 const DEFAULT_WORKER='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
 const INTERVAL=5000;
 const perPane=new Map();

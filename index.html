@@ -403,7 +403,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.23.36 RightPaneScroll JRAAllMarkets ☁️ 5s Δ</span>
+    <span class="ver">v5.23.37 JRAHistoryRecovery ☁️ 5s Δ</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -25571,7 +25571,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
           }
           rows.githubWarning=errors.join(' / ');
         }
-        if(!cfg.autoSync)return {rows:[],disabled:true,transport:finished?'GitHub保存履歴なし：'+rows.githubWarning:'GitHub履歴未確認（Worker同期OFF）'};
+        // 保存履歴の読込は自動収集ON/OFFに依存させない。GitHub欠落時はDO履歴を確認する。
         for(let page=0;page<128;page++){
           let r;
           const path=()=>`${base}${prefix}/history?race_id=${rid}&kind=${source}&since=${cursor}&limit=96`;
@@ -26212,7 +26212,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     draw(p){
       const canvas=p.root.querySelector('canvas'),empty=p.root.querySelector('.msv2-chart-empty');
       const s=this.rankSelection5216(p),rows=s.shown;this.renderRanking5216(p,s);this.renderGaps5216(p,s);
-      empty.textContent=p.raceId?(this.stopped(p)?'このレースの保存時系列データがありません（GitHub履歴を確認してください）':'この指標を比較できる保存データがありません'):'開催場とレースを選択してください';empty.hidden=rows.length>0;
+      empty.textContent=p.raceId?(this.stopped(p)?'時系列0点：GitHub・Worker履歴の読込状況を確認してください':'この指標を比較できる保存データがありません'):'開催場とレースを選択してください';empty.hidden=rows.length>0;
       const ctx=canvas.getContext('2d');if(!ctx)return;
       const w=Math.max(240,canvas.clientWidth||480),h=250,dpr=Math.min(2,window.devicePixelRatio||1);
       canvas.width=w*dpr;canvas.height=h*dpr;ctx.scale(dpr,dpr);ctx.clearRect(0,0,w,h);
@@ -29372,7 +29372,7 @@ html[data-theme="light"] .live-hist215{border-bottom-color:#dbe3ec!important;col
 (function(){
 'use strict';
 if(window.__THEKEIBA_52322_PATCH__)return;window.__THEKEIBA_52322_PATCH__=true;
-const VERSION='v5.23.36 RightPaneScroll JRAAllMarkets';
+const VERSION='v5.23.37 JRAHistoryRecovery';
 const KEY='thekeiba-theme-v52322';
 const root=document.documentElement;
 function preferred(){try{const s=localStorage.getItem(KEY);if(s==='light'||s==='dark')return s;}catch(_){}return matchMedia?.('(prefers-color-scheme: light)').matches?'light':'dark';}
@@ -29587,7 +29587,7 @@ html[data-theme="light"] .msv2-worker-live[data-state="stale"],html[data-theme="
 if(window.__THEKEIBA_TIMELINE_WORKER_LIVE_52326__)return;
 window.__THEKEIBA_TIMELINE_WORKER_LIVE_52326__=true;
 
-const VERSION='v5.23.36 RightPaneScroll JRAAllMarkets 5sWorkerLive';
+const VERSION='v5.23.37 JRAHistoryRecovery 5sWorkerLive';
 const DEFAULT_WORKER='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
 const INTERVAL=5000;
 const perPane=new Map();
@@ -29659,7 +29659,7 @@ async function pollPane(ws,p){
     const phase=String(meta?.phase||'');
     const count=Number(j?.count||meta?.capture_count||0);
     const active=meta?.active!==false;
-    if(cap&&!ws.stopped?.(p)&&Number(cap.captured_ms)>Number(state.lastMs||0)){
+    if(cap&&Number(cap.captured_ms)>Number(state.lastMs||0)){
       // Workerの5秒キャプチャを既存Pane履歴へ同じ形式でマージし、その場でグラフ/順位を更新。
       try{
         ws.merge(p,[cap]);ws.completedGraph52328?.(p);
@@ -29680,8 +29680,12 @@ async function pollPane(ws,p){
     }else if(ms>0){
       paint(p,'stale',`☁️5秒<span class="twl-long">Worker</span> +${Math.round(age/1000)}s`,`最新 ${hhmmss(ms)} / ${Math.round(age/1000)}秒前 / ${phase||'-'}${active?'':' / 停止'}`);
     }else{
-      const txt=/WAIT_ODDS/i.test(phase)?'発売待ち':(active?'起動待ち':'停止');
-      paint(p,'wait',`☁️5秒<span class="twl-long">Worker</span> ${txt}`,`${phase||txt} / race_id=${raceId}`);
+      const post=Number(p.race?.postMs||meta.post_ms||0);
+      const ended=!!ws.stopped?.(p)||(post>0&&Date.now()>=post)||(p.date&&p.date<new Date(Date.now()+9*3600000).toISOString().slice(0,10));
+      const historyCount=p.history?.length||0;
+      const err=String(meta.last_error||meta.last_release_probe_error||'');
+      const txt=ended?(historyCount?`履歴 ${historyCount}点`:'終了・履歴0点'):(err||/PROBE_ERROR/.test(phase)?'取得エラー':/WAIT_ODDS/i.test(phase)?'発売待ち':(meta.active===true?'起動待ち':'未収集'));
+      paint(p,ended?'done':err?'error':'wait',`☁️5秒<span class="twl-long">Worker</span> ${txt}`,`${phase||txt} / race_id=${raceId}${err?' / '+err:''}`);
     }
   }catch(e){
     if(String(p.raceId)!==raceId)return;
@@ -30030,7 +30034,7 @@ body.right-analysis-active #rightAnalysisPane{min-height:0;overflow:hidden}
 <script id="right-scroll52336-js">
 (function(){
 'use strict';
-const version='v5.23.36 RightPaneScroll JRAAllMarkets 5sWorkerLive';
+const version='v5.23.37 JRAHistoryRecovery 5sWorkerLive';
 function stamp(){
  window.APP_VERSION=version;
  document.title='The競馬 EV分析 '+version;
@@ -30049,7 +30053,7 @@ function install(){
   const b=document.createElement('button');b.type='button';b.className='btn-sm';b.textContent=label;
   b.onclick=()=>{const e=current();if(!e)return;const step=Math.max(120,e.clientHeight*.75);e.scrollTop=where==='first'?0:where==='last'?e.scrollHeight:e.scrollTop+(where==='up'?-step:step);};bar.appendChild(b);
  }
- const note=document.createElement('small');note.textContent='v5.23.36／縦スワイプ';bar.appendChild(note);parent.appendChild(bar);
+ const note=document.createElement('small');note.textContent='v5.23.37／縦スワイプ';bar.appendChild(note);parent.appendChild(bar);
 }
 let queued=false;
 const observer=new MutationObserver(()=>{if(queued)return;queued=true;requestAnimationFrame(()=>{queued=false;install();});});

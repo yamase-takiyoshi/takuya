@@ -30064,5 +30064,80 @@ window.RightPaneScroll52336=Object.freeze({install,version});
 })();
 </script>
 
+<script id="browser-history-backup-52339">
+(function(){
+'use strict';
+const DEFAULT='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
+const KNOWN=['thekeiba-odds-timeline-v1','thekeiba-multiscreen-v2-JRA','thekeiba-multiscreen-v2-NAR','thekeiba-preclose-v1','thekeiba-netkeiba-forecast-v1'];
+const LIMIT=384*1024,MAX=64*1024*1024;
+const enc=new TextEncoder();let busy=false,lastReceipt=null;
+const $=id=>document.getElementById(id),say=s=>{$('tkBackupStatus').textContent=s;};
+function config(){let a={},b={};try{a=JSON.parse(localStorage.getItem('thekeiba_timeline_cloud_v219')||'{}');b=JSON.parse(localStorage.getItem('thekeiba_timeline_cloud_global')||'{}');}catch(_){}return {...a,...b};}
+async function hash(value){return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',enc.encode(JSON.stringify(value)))),x=>x.toString(16).padStart(2,'0')).join('');}
+function scan(name){return new Promise((resolve,reject)=>{
+  let missing=false;const q=indexedDB.open(name);
+  q.onupgradeneeded=()=>{missing=true;q.transaction.abort();};
+  q.onerror=()=>missing?resolve([]):reject(q.error||new Error(name+'を読み取れません'));
+  q.onblocked=()=>reject(new Error(name+'が使用中です。他タブを閉じてください'));
+  q.onsuccess=()=>{
+    const db=q.result,stores=['captures','snapshots'].filter(s=>db.objectStoreNames.contains(s));
+    if(!stores.length){db.close();resolve([]);return;}
+    const batches=[];let total=0,error=null;const tx=db.transaction(stores,'readonly');
+    for(const store of stores){let rows=[],size=0;
+      const cursor=tx.objectStore(store).openCursor();
+      cursor.onsuccess=()=>{const c=cursor.result;
+        if(!c){if(rows.length)batches.push({database:name,store,records:rows});return;}
+        try{const row={key:c.primaryKey,value:c.value},n=enc.encode(JSON.stringify(row)).length;
+          if(n>LIMIT)throw new Error(name+'に大きすぎる1件があります。元データは変更していません');
+          total+=n;if(total>MAX)throw new Error(name+'が64MBを超えています。分割退避が必要です');
+          if(rows.length&&size+n>LIMIT){batches.push({database:name,store,records:rows});rows=[];size=0;}
+          rows.push(row);size+=n;c.continue();
+        }catch(e){error=e;tx.abort();}
+      };
+    }
+    tx.oncomplete=()=>{db.close();resolve(batches);};
+    tx.onabort=tx.onerror=()=>{db.close();reject(error||tx.error||new Error('履歴読取失敗'));};
+  };
+});}
+function downloadReceipt(){if(!lastReceipt)return;const a=document.createElement('a'),url=URL.createObjectURL(new Blob([JSON.stringify(lastReceipt,null,2)],{type:'application/json'}));a.href=url;a.download='TheKeiba_GitHub_BackupReceipt.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),10000);}
+async function run(){
+  if(busy)return;busy=true;lastReceipt=null;$('tkBackupGo').disabled=true;$('tkBackupReceipt').disabled=true;
+  let verified=0,total=0;
+  try{
+    const origin=new URL($('tkBackupUrl').value.trim());if(origin.protocol!=='https:'||origin.username||origin.password)throw new Error('HTTPSのTimeline Worker URLを指定してください');
+    const base=origin.href.replace(/\/+$/,''),token=$('tkBackupToken').value;
+    const native=window.__nativeFetch252||window.fetch.bind(window);
+    async function call(path,body){const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),60000);try{const r=await native(base+path,{method:body?'POST':'GET',headers:{...(body?{'Content-Type':'application/json'}:{}),...(token?{'X-Timeline-Token':token}:{})},body:body?JSON.stringify(body):undefined,signal:ctl.signal,cache:'no-store'});const j=await r.json();if(!r.ok||j.ok===false)throw new Error(j.error||'HTTP '+r.status);return j;}finally{clearTimeout(timer);}}
+    say('Workerの退避機能とGitHub設定を確認中…');const health=await call('/health');
+    if(!health.browser_backup)throw new Error('先にTimeline Workerを同梱のv6.2.8へ更新してください');
+    if(!health.github_ready)throw new Error('Timeline WorkerのGITHUB設定が未完了です');
+    let names=KNOWN.slice();if(typeof indexedDB.databases==='function'){const dbs=await indexedDB.databases();names=[...new Set([...names,...dbs.map(d=>d.name).filter(n=>/^thekeiba-/.test(n||''))])];}
+    const session=crypto.randomUUID().replace(/-/g,''),parts=[],databases=[];let index=0;
+    for(const name of names){
+      say(name+' の履歴を読み取り中…');const batches=await scan(name);if(!batches.length)continue;
+      const count=batches.reduce((n,b)=>n+b.records.length,0);total+=count;databases.push({name,count});
+      for(const batch of batches){
+        const part=String(index++).padStart(6,'0'),payload={schema:'thekeiba-browser-backup-part-v1',...batch};
+        say('GitHubへ退避・照合中… '+verified+'件確認済み / 読取済み '+total+'件');
+        const sha256=await hash(payload),ack=await call('/browser-backup',{session,part,payload});
+        if(!ack.verified||ack.sha256!==sha256||ack.count!==batch.records.length)throw new Error('送信した履歴とGitHub保存内容が一致しません');
+        verified+=ack.count;parts.push({part,path:ack.path,sha256,count:ack.count,verified:true,database:batch.database,store:batch.store});
+      }
+    }
+    if(!total){say('このブラウザ・このURLには対象履歴がありません。以前から使っているブラウザとアプリURLで実行してください。');return;}
+    const payload={schema:'thekeiba-browser-backup-manifest-v1',complete:true,session,exported_at:new Date().toISOString(),origin:location.origin,total,databases,parts,scope:'IndexedDB captures/snapshots; each database read in one readonly transaction; later additions need another backup'};
+    const ack=await call('/browser-backup',{session,part:'manifest',payload});
+    if(!ack.verified||ack.sha256!==await hash(payload))throw new Error('退避完了記録を照合できません');
+    lastReceipt={...payload,manifest_path:ack.path};$('tkBackupReceipt').disabled=false;
+    say('✅ GitHubへの退避・読戻し照合が完了：'+verified+'件 / '+parts.length+'ファイル。元の履歴は残っています。完了記録：'+ack.path);
+  }catch(e){say('❌ 退避未完了：'+String(e.message||e)+'（照合済み '+verified+'件）。元の履歴は残っています。全件退避の完了前に整理へ進まないでください。');}
+  finally{busy=false;$('tkBackupGo').disabled=false;}
+}
+function mount(){if($('tkBackupPanel'))return;const box=document.createElement('details');box.id='tkBackupPanel';box.open=true;box.style.cssText='margin:12px;padding:12px;border:2px solid #38bdf8;border-radius:10px;background:var(--panel,#152238);color:var(--text,#fff)';box.innerHTML=`<summary><b>☁️ 整理前のブラウザ履歴退避</b></summary><p>これまで使っていたブラウザ・同じアプリURLで実行してください。時系列・複数画面・締切前・予想オッズの保存履歴をGitHubへ退避し、読み直して照合します。元データは残します。</p><label>Timeline Worker URL <input id="tkBackupUrl" type="url" style="width:100%"></label><label>Timelineトークン（設定している場合） <input id="tkBackupToken" type="password" autocomplete="off" style="width:100%"></label><p><button id="tkBackupGo" type="button">① 履歴をGitHubへ退避</button> <button id="tkBackupReceipt" type="button" disabled>② 完了記録を保存</button></p><p id="tkBackupStatus" role="status" aria-live="polite">先に同梱のTimeline Workerを更新してください。履歴のある通常のアプリURLで実行します。読み取り後に増えた履歴は次の退避で保存します。</p>`;document.body.prepend(box);const c=config();$('tkBackupUrl').value=c.workerUrl||DEFAULT;$('tkBackupToken').value=c.token||'';$('tkBackupGo').onclick=run;$('tkBackupReceipt').onclick=downloadReceipt;}
+window.TheKeibaBrowserBackup=Object.freeze({scan,hash,run});
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount,{once:true});else mount();
+})();
+
+</script>
 </body>
 </html>

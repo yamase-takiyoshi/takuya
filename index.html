@@ -403,7 +403,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.23.40 CrossBetArchive ☁️ 10s Δ</span>
+    <span class="ver">v5.23.42 Timeseries WalkForward ☁️ 10s Δ</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -11747,6 +11747,7 @@ if(horses.length === 0){
     // 馬データタブの選択を退避
     const save = { kind: $('pickKind')?.value, date: $('pickDate')?.value, venue: $('pickVenue')?.value };
 
+    const tsEnabled = window.TheKeibaRangeTS?.begin() === true;
     rsAbort = false;
     rsLastRows = [];
     try{ window.__rsLastRows = []; }catch(e){}
@@ -11879,6 +11880,7 @@ if(horses.length === 0){
             const row = { date, venueCode: vc, venueName: vn, no: r.no, rid: r.rid,
                           raceName: r.name || (r.no + 'R'), status: 'pending',
                           count: 0, bet: 0, ret: 0, profit: 0, roi: 0, hit: 0, hasFinish: false, finishTop: [] };
+            let tsPrepared = null;
             try{
               window.__rsValidationRaceDate = date;
               const loaded = await asw_loadHorses(kind, r.rid);
@@ -11898,9 +11900,16 @@ if(horses.length === 0){
               const valid = horses.filter(h => Number(h.num) > 0 && h.name);
               if(valid.length < 2) throw new Error('有効な出走馬が2頭未満');
 
-              const made = generateCandidates(valid);
+              let made;
+              if(tsEnabled){
+                tsPrepared = await window.TheKeibaRangeTS.prepare(kind,r.rid,date,loaded,row,settings);
+                made = {recs:tsPrepared.recs};
+                lastTickets = tsPrepared.tickets;
+              }else{
+                made = generateCandidates(valid);
+                lastTickets = buildTickets(made.recs);
+              }
               lastRecs = made.recs.slice().sort((a, b) => b.ev - a.ev);
-              lastTickets = buildTickets(made.recs);
               simTickets = lastTickets.map(t => ({ ...t, nums: [...t.nums] }));
               row.count = lastTickets.length;
 
@@ -11921,7 +11930,9 @@ if(horses.length === 0){
                 throw new Error('過去レースの払戻を取得できません（結果ページ構造を確認してください）');
               }
 
-              const s = asw_settle(simTickets, finish, payouts);
+              const s = (tsPrepared && row.hasFinish)
+                ? window.TheKeibaRangeTS.complete(tsPrepared,row,finish,payouts,asw_settle)
+                : asw_settle(simTickets, finish, payouts);
               const missingOfficialHits = (s.ticketDetails || []).filter(d => Number(d.的中 || 0) > 0 && Number(d.払戻額 || 0) <= 0);
               row.officialPayoutComplete = missingOfficialHits.length === 0;
               if(missingOfficialHits.length){
@@ -11937,6 +11948,7 @@ if(horses.length === 0){
             }catch(e){
               row.status = 'error';
               row.error = (e && e.message) || String(e);
+              if(tsEnabled) row.tsExcluded = row.error;
             }
             rows.push(row);
             rsLastRows = rows;
@@ -11944,6 +11956,7 @@ if(horses.length === 0){
             rsRenderSummary(rows);
             rsRenderTable(rows);
             rsRenderChart(rows);
+            if(tsEnabled) window.TheKeibaRangeTS.render(rows);
             // v5.18.190: 1レースの精算が終わるたび、左側の最新配列を右側分析へ即時送信。
             // 期間全体の完了や1.2秒ポーリングを待たず、表・KPI・グラフを同じタイミングで更新する。
             try{
@@ -11986,7 +11999,7 @@ if(horses.length === 0){
     }
   }
 
-  function stopRangeVenueSimulation(){ rsAbort = true; }
+  function stopRangeVenueSimulation(){ rsAbort = true; window.TheKeibaRangeTS?.abort(); }
 
   // 初期化：日付デフォルト・開催場チェックボックス生成
   function rsInit(){
@@ -25583,16 +25596,16 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
           if(!raw.length){
             const ns=Number(j?.next_since)||0;
             if(j?.has_more===true&&ns>cursor){cursor=ns;continue;}
-            return {rows:[...rows.values()],transport:rows.githubWarning?'Worker履歴（GitHub未確認：'+rows.githubWarning+'）':'Timeline Worker'};
+            return {rows:[...rows.values()],transport:rows.githubWarning?'Worker履歴（GitHub未確認：'+rows.githubWarning+'）':'Timeline Worker',meta:j.meta||j.race||{}};
           }
           const safe=raw.map(x=>normalizeRecord(x,source,rid,race.date,rootId)).filter(Boolean);
           if(safe.length!==raw.length)throw new Error('区分・レースID・記録時刻が一致しないWorker履歴を破棄しました');
           safe.forEach(x=>rows.set(x.id,x));const max=Math.max(...safe.map(x=>x.captured_ms));
-          if(j.has_more===false)return {rows:[...rows.values()],transport:rows.githubWarning?'Worker履歴（GitHub未確認：'+rows.githubWarning+'）':'Timeline Worker'};
+          if(j.has_more===false)return {rows:[...rows.values()],transport:rows.githubWarning?'Worker履歴（GitHub未確認：'+rows.githubWarning+'）':'Timeline Worker',meta:j.meta||j.race||{}};
           if(max<cursor){
             const ns=Number(j?.next_since)||0;
             if(j?.has_more===true&&ns>cursor){cursor=ns;continue;}
-            return {rows:[...rows.values()],transport:rows.githubWarning?'Worker履歴（GitHub未確認：'+rows.githubWarning+'）':'Timeline Worker'};
+            return {rows:[...rows.values()],transport:rows.githubWarning?'Worker履歴（GitHub未確認：'+rows.githubWarning+'）':'Timeline Worker',meta:j.meta||j.race||{}};
           }
           cursor=Math.max(max+1,Number(j.next_since)||0);
         }
@@ -29427,7 +29440,7 @@ html[data-theme="light"] .live-hist215{border-bottom-color:#dbe3ec!important;col
 (function(){
 'use strict';
 if(window.__THEKEIBA_52322_PATCH__)return;window.__THEKEIBA_52322_PATCH__=true;
-const VERSION='v5.23.40 CrossBetArchive';
+const VERSION='v5.23.42 Timeseries WalkForward';
 const KEY='thekeiba-theme-v52322';
 const root=document.documentElement;
 function preferred(){try{const s=localStorage.getItem(KEY);if(s==='light'||s==='dark')return s;}catch(_){}return matchMedia?.('(prefers-color-scheme: light)').matches?'light':'dark';}
@@ -29642,7 +29655,7 @@ html[data-theme="light"] .msv2-worker-live[data-state="stale"],html[data-theme="
 if(window.__THEKEIBA_TIMELINE_WORKER_LIVE_52326__)return;
 window.__THEKEIBA_TIMELINE_WORKER_LIVE_52326__=true;
 
-const VERSION='v5.23.40 CrossBetArchive 10sWorkerLive';
+const VERSION='v5.23.42 Timeseries WalkForward 10sWorkerLive';
 const DEFAULT_WORKER='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
 const INTERVAL=10000;
 const perPane=new Map();
@@ -30090,7 +30103,7 @@ body.right-analysis-active #rightAnalysisPane{min-height:0;overflow:hidden}
 <script id="right-scroll52336-js">
 (function(){
 'use strict';
-const version='v5.23.40 CrossBetArchive 10sWorkerLive';
+const version='v5.23.42 Timeseries WalkForward 10sWorkerLive';
 function stamp(){
  window.APP_VERSION=version;
  document.title='The競馬 EV分析 '+version;
@@ -30121,7 +30134,7 @@ window.RightPaneScroll52336=Object.freeze({install,version});
 
 
 
-<!-- v5.23.40 CrossBetArchive: right workspace no-overlap / iPad landscape readability -->
+<!-- v5.23.42 Timeseries WalkForward: right workspace no-overlap / iPad landscape readability -->
 <style id="clean-split52339">
 :root{
   --clean-split-left:58%;
@@ -30245,7 +30258,7 @@ window.RightPaneScroll52336=Object.freeze({install,version});
 <script id="clean-split52339-js">
 (function(){
   'use strict';
-  const VERSION='v5.23.40 CrossBetArchive 10sWorkerLive';
+  const VERSION='v5.23.42 Timeseries WalkForward 10sWorkerLive';
   function syncTop(){
     try{
       const h=document.querySelector('.header');
@@ -30327,7 +30340,7 @@ html[data-theme="light"] .auditTable52341 .auditOk52341{color:#047857}html[data-
   if(window.__ODDS_PAYOUT_AUDIT_52341__) return;
   window.__ODDS_PAYOUT_AUDIT_52341__=true;
 
-  const VERSION='v5.23.41 OddsPayoutAudit';
+  const VERSION='v5.23.42 Timeseries WalkForward';
   const TYPES=['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
   const UNORDERED=new Set(['枠連','ワイド','馬連','3連複']);
   const num=v=>{const n=Number(v);return Number.isFinite(n)?n:NaN;};
@@ -30496,3 +30509,160 @@ html[data-theme="light"] .auditTable52341 .auditOk52341{color:#047857}html[data-
 
 </body>
 </html>
+
+<style>#rsTsMode,#rsTsClock{display:block;max-width:100%;margin-top:3px}#rsTsReport th,#rsTsReport td{padding:5px;border-bottom:1px solid var(--border);text-align:right}#rsTsReport th:first-child,#rsTsReport td:first-child{text-align:left}</style>
+<script id="range-timeseries52342-js">
+(function(){
+ 'use strict';
+ const $=id=>document.getElementById(id), TYPES=['単勝','複勝','枠連','馬連','ワイド','馬単','3連複','3連単'];
+ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+ const clip=(v,a,b)=>Math.max(a,Math.min(b,v));
+ const num=v=>Number.isFinite(Number(v))?Number(v):0;
+ const ms=v=>{const n=Number(v);return n>1e11?n:(n>0?n*1000:(Date.parse(v)||0));};
+ const combo=(t,v)=>{const a=(String(v).normalize('NFKC').match(/\d+/g)||[]).map(Number);if(['枠連','馬連','ワイド','3連複'].includes(t))a.sort((x,y)=>x-y);return a.join('-');};
+ let session=null, abortController=null;
+ const featureNames=['支持増加30分','支持増加10分','支持増加3分','勢い変化','変動幅','他券種の支持増加','人気上昇'];
+ function config(){return {mode:$('rsTsMode')?.value||'OFF',clock:$('rsTsClock')?.value||'CLOSE',offset:clip(num($('rsTsOffset')?.value),0,10),age:clip(num($('rsTsAge')?.value)||60,10,300)*1000,min:clip(num($('rsTsMin')?.value)||30,10,1000),ev:clip(num($('rsTsEv')?.value)||1.1,.5,5)};}
+ function begin(){const cfg=config();session={cfg,examples:[],fitDate:'',weights:Array(7).fill(0),trainingCount:0,rows:[],kind:'',results:[]};abortController=new AbortController();const el=$('rsTsReport');if(el)el.innerHTML=cfg.mode==='OFF'?'':'時系列履歴を確認中…';return cfg.mode!=='OFF';}
+ function abort(){abortController?.abort();}
+ function deadline(date,loaded,meta,rows,cfg){
+   const sources=[meta,meta?.race,loaded?.precloseSnapshot,...rows.slice(-1)];
+   let close=0,post=0;
+   for(const x of sources){if(!x)continue;if(!close)close=ms(x.close_ms||x.closeMs||x.deadline_ms||x.betting_close_ms||x.close_at||x.betting_close_at);if(!post)post=ms(x.post_ms||x.postMs);}
+   if(close){if(new Date(close+9*3600000).toISOString().slice(0,10)!==date)throw new Error('保存締切時刻の開催日が不一致');return {close,cutoff:close-180000,reference:false,basis:'保存締切時刻'};}
+   if(cfg.clock==='CLOSE')throw new Error('保存締切時刻なし。参考検証には「発走から仮締切を設定」を選択してください');
+   const text=String(meta?.post_time||loaded?.postTimeText||'').match(/(\d{1,2}):(\d{2})/);
+   if(!post&&text)post=Date.parse(`${date}T${text[1].padStart(2,'0')}:${text[2]}:00+09:00`);
+   if(!post)throw new Error('発走時刻も未取得のため時系列予測を除外');
+   close=post-cfg.offset*60000;
+   return {close,cutoff:close-180000,reference:true,basis:`仮締切＝発走${cfg.offset}分前（参考）`};
+ }
+ function buildFeatures(raw,cutoff,cfg){
+   const safe=raw.filter(r=>!r.archive_hold_point&&!r.synthetic&&!r.interpolated&&num(r.captured_ms)>0&&num(r.captured_ms)<=cutoff).sort((a,b)=>a.captured_ms-b.captured_ms);
+   const series=new Map(),latest=new Map();
+   for(const r of safe){
+     const wins=(r.markets?.['単勝']||[]).filter(x=>num(x.odds)>=1&&/^\d+$/.test(String(x.combination)));
+     const over=wins.reduce((s,x)=>s+1/x.odds,0);
+     if(wins.length>=2&&over>0){for(const x of wins){const k=Number(x.combination);if(!series.has(k))series.set(k,[]);series.get(k).push({ms:r.captured_ms,p:(1/x.odds)/over,odds:x.odds,rank:1+wins.filter(y=>y.odds<x.odds).length,record:r});}}
+     for(const t of TYPES)for(const x of r.markets?.[t]||[]){
+       const key=combo(t,x.combination),o=num(x.odds_min||x.odds);if(!key||o<1)continue;
+       // Archive carry-forward keeps the last observed quote time; synthesized ticks are never used.
+       const old=latest.get(t+'|'+key);
+       const quoteMs=r.archive_import&&old&&old.odds===o?old.ms:r.captured_ms;
+       latest.set(t+'|'+key,{...x,type:t,key,odds:o,ms:quoteMs});
+     }
+   }
+   const lastWin=safe.slice().reverse().find(r=>(r.markets?.['単勝']||[]).length>=2);
+   if(!lastWin||cutoff-lastWin.captured_ms>cfg.age)throw new Error('締切3分前の単勝記録が欠測・古すぎるため除外');
+   const roster=(lastWin.markets['単勝']||[]).map(x=>Number(x.combination));
+   const lastSet=new Set(roster),models=[];
+   const at=(arr,t)=>{let v=null;for(const x of arr){if(x.ms>t)break;v=x;}return v;};
+   // Membership changes in the feature window make support normalization incomparable.
+   for(const r of safe.filter(r=>r.captured_ms>=cutoff-1800000)){
+     const wins=r.markets?.['単勝'];if(!wins?.length)continue;
+     if(wins.length!==lastSet.size||wins.some(x=>!lastSet.has(Number(x.combination))))throw new Error('出走構成が変わった履歴は支持率の比較対象から除外');
+   }
+   const meta=new Map((lastWin.horses||[]).map(h=>[Number(h.num||h.horse_no),h]));
+   for(const n of roster){
+     const arr=series.get(n)||[],now=arr.at(-1),past10=at(arr,cutoff-600000),past3=at(arr,cutoff-180000),past30=at(arr,cutoff-1800000);
+     if(!now||!past10||cutoff-600000-past10.ms>cfg.age||arr.length<3)throw new Error('10分以上の連続した単勝履歴が不足');
+     const change=x=>x?Math.log(now.p/x.p):0;
+     const steps=arr.filter(x=>x.ms>=cutoff-600000),diffs=[];
+     const continuity=[past10,...steps.filter(x=>x.ms>past10.ms)];
+     if(continuity.some((x,i)=>i>0&&x.ms-continuity[i-1].ms>cfg.age))throw new Error('直前10分の履歴に許容値を超える空白があるため除外');
+     for(let i=1;i<steps.length;i++)diffs.push(Math.log(steps[i].p/steps[i-1].p));
+     const elapsed=Math.max(1,(steps.at(-1).ms-steps[0].ms)/60000);
+     const volatility=Math.sqrt(diffs.reduce((s,x)=>s+x*x,0)/elapsed);
+     // Place support is normalized within each quote, and does not use payout data.
+     const placeSupport=r=>{const a=r?.markets?.['複勝']||[],v=a.find(x=>combo('複勝',x.combination)===String(n));const z=a.reduce((s,x)=>s+1/Math.max(1,num(x.odds_min||x.odds)),0);return v&&z?(1/Math.max(1,num(v.odds_min||v.odds)))/z:0;};
+     const placeNow=safe.slice().reverse().find(r=>r.markets?.['複勝']?.length&&cutoff-r.captured_ms<=cfg.age);
+     const placeOld=safe.slice().reverse().find(r=>r.captured_ms<=cutoff-600000&&cutoff-600000-r.captured_ms<=cfg.age&&r.markets?.['複勝']?.length);
+     const pn=placeSupport(placeNow),po=placeSupport(placeOld),cross=pn&&po?Math.log(pn/po):0;
+     const c10=change(past10),c3=past3&&cutoff-180000-past3.ms<=cfg.age?change(past3):0;
+     const f=[change(past30&&cutoff-1800000-past30.ms<=cfg.age?past30:null),c10,c3,c3-c10*.3,volatility,cross,(past10.rank-now.rank)/Math.max(1,roster.length)];
+     const h=meta.get(n)||{};models.push({num:n,frame:num(h.frame||h.frame_no),base:now.p,features:f.map(x=>clip(x,-2,2)),odds:now.odds,observations:arr.length});
+   }
+   if(models.length<2)throw new Error('有効な時系列対象馬が2頭未満');
+   const total=models.reduce((s,h)=>s+h.base,0);models.forEach(h=>h.base/=total);
+   return {models,latest,points:safe.length,first:safe[0]?.captured_ms,last:lastWin.captured_ms};
+ }
+ function probabilities(models,w){const scores=models.map(h=>Math.log(Math.max(1e-12,h.base))+h.features.reduce((s,x,i)=>s+x*w[i],0));const max=Math.max(...scores),a=scores.map(x=>Math.exp(x-max)),z=a.reduce((s,x)=>s+x,0);return a.map(x=>x/z);}
+ function fit(examples){let w=Array(7).fill(0);for(let iter=0;iter<100;iter++){const g=w.map(v=>.08*v);for(const ex of examples){const p=probabilities(ex.models,w);ex.models.forEach((h,j)=>h.features.forEach((x,k)=>{g[k]+=(p[j]-(h.num===ex.winner?1:0))*x/examples.length;}));}w=w.map((v,k)=>clip(v-.35*g[k],-2,2));}return w;}
+ function trainBefore(date,kind){if(session.fitDate===date&&session.kind===kind)return;const ex=session.examples.filter(x=>x.date<date&&x.kind===kind).slice(-2000);session.weights=ex.length>=session.cfg.min?fit(ex):Array(7).fill(0);session.trainingCount=ex.length;session.fitDate=date;session.kind=kind;}
+ function distribution(models,p){
+   const maps=Object.fromEntries(TYPES.map(t=>[t,new Map()]));
+   const add=(t,ns,v)=>{const key=combo(t,ns.join('-'));maps[t].set(key,(maps[t].get(key)||0)+v);};
+   const n=models.length,placeN=n<8?2:3;
+   p.forEach((v,i)=>add('単勝',[models[i].num],v));
+   // Exact Plackett–Luce enumeration; no independent multiplication of win probabilities.
+   for(let i=0;i<n;i++)for(let j=0;j<n;j++)if(j!==i){
+     const pair=p[i]*p[j]/Math.max(1e-12,1-p[i]),a=models[i],b=models[j];
+     add('馬単',[a.num,b.num],pair);add('馬連',[a.num,b.num],pair);
+     if(a.frame&&b.frame&&(a.frame!==b.frame||models.filter(h=>h.frame===a.frame).length>=2))add('枠連',[a.frame,b.frame],pair);
+     if(placeN===2){add('複勝',[a.num],pair);add('複勝',[b.num],pair);}
+     if(n<3)continue;
+     for(let k=0;k<n;k++)if(k!==i&&k!==j){const c=models[k],q=pair*p[k]/Math.max(1e-12,1-p[i]-p[j]);
+       add('3連単',[a.num,b.num,c.num],q);add('3連複',[a.num,b.num,c.num],q);
+       if(placeN===3){for(const h of [a,b,c])add('複勝',[h.num],q);}
+       {add('ワイド',[a.num,b.num],q);add('ワイド',[a.num,c.num],q);add('ワイド',[b.num,c.num],q);}
+     }
+   }
+   return maps;
+ }
+ function candidates(pack,p,cutoff,cfg){const probs=distribution(pack.models,p),out=[];for(const t of TYPES)for(const [key,prob] of probs[t]){const q=pack.latest.get(t+'|'+key);if(!q||cutoff-q.ms>cfg.age)continue;const odds=q.odds,ev=prob*odds;out.push({type:t,nums:key.split('-').map(Number),p:prob,odds,ev,kelly:Math.max(0,(ev-1)/Math.max(.01,odds-1)),marketP:1/odds,edgePP:(prob-1/odds)*100,oddsSource:'saved-timeseries-real',oddsCapturedAt:new Date(q.ms).toISOString()});}return out.sort((a,b)=>b.ev-a.ev||a.type.localeCompare(b.type)||a.nums.join('-').localeCompare(b.nums.join('-')));}
+ function select(recs,cfg,settings){const unit=Math.max(100,Math.floor((num(settings.unit)||100)/100)*100),budget=Math.max(0,num(settings.budget)||500),max=Math.max(1,num(settings.maxTickets)||1);return recs.filter(r=>r.ev>=cfg.ev).slice(0,Math.min(max,Math.floor(budget/unit))).map(r=>({...r,amount:unit,stake:unit,unit}));}
+ async function prepare(kind,rid,date,loaded,row,settings){
+   const api=window.TheKeibaMultiV2;if(!api?.providers?.[kind])throw new Error('時系列履歴の読込機能が未準備');
+   const cfg=session.cfg;
+   let got;try{got=await api.providers[kind].getTimeline({raceId:rid,source:kind,date,postMs:0},{signal:abortController.signal,since:0});}catch(e){throw new Error('時系列保存履歴を取得できません: '+e.message);}
+   const raw=got.rows||[],meta=got.meta||{};
+   if(!raw.length)throw new Error('GitHub/Workerに時系列保存履歴なし');
+   const timing=deadline(date,loaded,meta,raw,cfg),pack=buildFeatures(raw,timing.cutoff,cfg);
+   const finalRoster=new Set((loaded.horses||[]).map(h=>Number(h.num)).filter(n=>n>0));
+   if(finalRoster.size!==pack.models.length||pack.models.some(h=>!finalRoster.has(h.num)))throw new Error('予測時点と精算時点の出走構成が異なるため除外（取消・除外の返還は未対応）');
+   trainBefore(date,kind);
+   const vectors={static:Array(7).fill(0),trend:[.08,.18,.12,.08,-.12,.08,.10],learn:session.weights.slice()};
+   const variants={};for(const [name,w] of Object.entries(vectors)){const p=probabilities(pack.models,w),recs=candidates(pack,p,timing.cutoff,cfg);variants[name]={probabilities:p,recs,tickets:name==='learn'&&session.trainingCount<cfg.min?[]:select(recs,cfg,settings)};}
+   // Compare on common learning-ready races separately; early rows remain explicit warm-up rows.
+   const active=cfg.mode==='LEARN'?'learn':cfg.mode==='STATIC'?'static':'trend';
+   row.ts={version:'5.23.42',mode:active,cutoff:new Date(timing.cutoff).toISOString(),timingBasis:timing.basis,referenceTiming:timing.reference,historySource:got.transport||'保存履歴',points:pack.points,historyFirst:new Date(pack.first).toISOString(),historyLast:new Date(pack.last).toISOString(),maxAgeSeconds:cfg.age/1000,trainingRaces:session.trainingCount,trainingBefore:date,learningReady:session.trainingCount>=cfg.min,weights:session.weights.slice(),horseFeatures:pack.models.map((h,i)=>({num:h.num,features:h.features,baseP:h.base,staticP:variants.static.probabilities[i],trendP:variants.trend.probabilities[i],learnP:variants.learn.probabilities[i]})),availableMarkets:[...new Set(variants.static.recs.map(r=>r.type))]};
+   row.validationMode=timing.reference?'TS_REFERENCE':'PRE_RACE_STRICT';row.oddsSnapshotType='TIMESERIES_PRE_CLOSE_3MIN';row.preRaceTimestampVerified=!timing.reference;row.auditEligible=!timing.reference;row.auditReason=timing.reference?'仮締切の参考検証':'';row.oddsFetchedAt=row.ts.historyLast;row.oddsSourceUrl=got.transport||'保存履歴';
+   return {pack,variants,active,date,kind,rid,ts:row.ts,recs:variants[active].recs,tickets:variants[active].tickets};
+ }
+ function complete(prepared,row,finish,payouts,settle){
+   const winner=Number(finish?.[0]?.horseNo),models=prepared.pack.models;
+   if(finish.some((h,i)=>i>0&&h.rank&&Number(h.rank)===Number(finish[i-1]?.rank)))throw new Error('同着レースは時系列学習・比較から除外');
+   if(!winner||!models.some(h=>h.num===winner))throw new Error('確定1着を時系列の出走構成と照合できないため除外');
+   const comparisons={};for(const [name,v] of Object.entries(prepared.variants)){
+     const s=settle(v.tickets,finish,payouts),missing=(s.ticketDetails||[]).some(d=>num(d.的中)>0&&num(d.払戻額)<=0);
+     if(missing)throw new Error('比較モデルの的中買い目に公式払戻欠落があるため精算除外');
+     const p=v.probabilities,idx=models.findIndex(h=>h.num===winner),brier=p.reduce((z,q,i)=>z+(q-(i===idx?1:0))**2,0);
+     comparisons[name]={...s,count:v.tickets.length,ready:name!=='learn'||row.ts.learningReady,brier,logLoss:-Math.log(Math.max(1e-12,p[idx])),tickets:v.tickets};
+   }
+   row.ts.comparisons=comparisons;
+   session.examples.push({date:prepared.date,kind:prepared.kind,rid:prepared.rid,winner,models:models.map(h=>({num:h.num,base:h.base,features:h.features.slice()}))});
+   return comparisons[prepared.active];
+ }
+ function render(rows){
+   const el=$('rsTsReport');if(!el||!session||session.cfg.mode==='OFF')return;
+   session.rows=rows.slice();
+   session.results=rows.filter(r=>r.status==='ok'&&r.hasFinish&&r.ts?.comparisons);
+   const ready=session.results.filter(r=>r.ts.learningReady),data=ready.length?ready:session.results;
+   const labels={static:'同時点・静的PL',trend:'時系列ルールPL',learn:'過去日学習PL'};
+   const stats=Object.keys(labels).map(name=>{let bet=0,ret=0,hit=0,count=0,peak=0,profit=0,dd=0,brier=0,loss=0,n=0;const chronological=data.slice().sort((a,b)=>a.ts.cutoff.localeCompare(b.ts.cutoff)||a.rid.localeCompare(b.rid));for(const row of chronological){const s=row.ts.comparisons[name];if(!s?.ready)continue;bet+=s.bet;ret+=s.ret;hit+=s.hit;count+=s.count;brier+=s.brier;loss+=s.logLoss;n++;profit+=s.profit;peak=Math.max(peak,profit);dd=Math.max(dd,peak-profit);}return {name,bet,ret,hit,count,dd,brier,loss,n};});
+   const errors=rows.filter(r=>r.tsExcluded),reference=session.results.filter(r=>r.ts.referenceTiming).length;
+   el.innerHTML=`<div class="url-status ${reference?'':'ok'}">🧠 時系列検証 ${session.results.length}R / 学習準備完了 ${ready.length}R / 除外 ${errors.length}R<br>${reference?'仮締切による参考検証を含みます。監査済みROIとは別扱いです。':'保存締切時刻の3分前までの記録を使用。'} ${ready.length?'下表は3方式を比較できる共通の学習準備完了レースのみ。':'学習用レースが不足：静的・ルール方式を表示し、学習方式は見送り。'}<br>勝率の評価は全対象馬、払戻は公式値。EVは予測値であり利益を保証しません。</div><div style="overflow-x:auto"><table style="width:100%;font-size:12px;white-space:nowrap"><thead><tr><th>方式</th><th>対象R</th><th>購入点</th><th>投資</th><th>払戻</th><th>回収率</th><th>的中点率</th><th>最大減少</th><th>Brier↓</th><th>LogLoss↓</th></tr></thead><tbody>${stats.map(s=>`<tr><td>${labels[s.name]}</td><td>${s.n}</td><td>${s.count}</td><td>${s.bet.toLocaleString()}</td><td>${s.ret.toLocaleString()}</td><td>${s.bet?(100*s.ret/s.bet).toFixed(1)+'%':'—'}</td><td>${s.count?(100*s.hit/s.count).toFixed(1)+'%':'—'}</td><td>${s.dd.toLocaleString()}</td><td>${s.n?(s.brier/s.n).toFixed(3):'—'}</td><td>${s.n?(s.loss/s.n).toFixed(3):'—'}</td></tr>`).join('')}</tbody></table></div><details><summary>予測時点・学習件数・除外理由</summary><div style="overflow-x:auto;max-height:320px"><table style="font-size:11px;white-space:nowrap"><tr><th>日付／レース</th><th>予測時点(JST)</th><th>学習R</th><th>履歴点</th><th>判定</th></tr>${rows.filter(r=>r.ts||r.tsExcluded).map(r=>`<tr><td>${esc(r.date+' '+r.venueName+' '+r.no+'R')}</td><td>${r.ts?esc(new Date(r.ts.cutoff).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})):'—'}</td><td>${r.ts?.trainingRaces??'—'}</td><td>${r.ts?.points??'—'}</td><td>${esc(r.tsExcluded||r.error||(r.ts?.learningReady?'学習可':'学習準備中'))}</td></tr>`).join('')}</table></div></details>`;
+ }
+ function init(){
+   const target=$('rsValidationNote');if(!target||$('rsTsMode'))return;
+   target.insertAdjacentHTML('afterend',`<div style="border:1px solid var(--border);border-radius:9px;padding:10px;margin-bottom:10px;line-height:1.6"><b>🧠 時系列オッズ予測・3方式比較</b><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><label>予測方式<select id="rsTsMode"><option value="OFF">現行方式（時系列OFF）</option><option value="TREND" selected>時系列ルール＋全券種横断</option><option value="LEARN">過去日学習＋全券種横断</option><option value="STATIC">同時点・静的PL＋全券種横断</option></select></label><label>締切の基準<select id="rsTsClock"><option value="CLOSE" selected>保存締切時刻（無ければ除外）</option><option value="POST_REFERENCE">発走から仮締切を設定（参考）</option></select></label><label>仮締切：発走の何分前<input id="rsTsOffset" type="number" min="0" max="10" step="1" value="1" style="width:80px"></label><label>採用EV下限<input id="rsTsEv" type="number" min="0.5" max="5" step="0.01" value="1.10" style="width:80px"></label><label>記録の古さ上限（秒）<input id="rsTsAge" type="number" min="10" max="300" value="60" style="width:80px"></label><label>学習開始に必要な過去R<input id="rsTsMin" type="number" min="10" max="1000" value="30" style="width:80px"></label></div><p style="font-size:12px;color:var(--muted);margin:8px 0 0">保存履歴の締切3分前までを使い、支持率の変化・勢い・変動・複勝との一致を分析します。学習は選択期間の前日以前のレースだけで日毎に更新。初期${30}Rは学習準備です。全8券種は保存実オッズがある買い目だけ採用し、点数・1点額・予算は現在の設定を使います。10分以上の単勝履歴が必要です。締切時刻が保存されていない従来データは、仮締切の参考検証を選べます。発走時刻と実際の締切時刻は別です。馬柱補正・現行モードの係数はこの3方式には使いません。</p><button class="btn-sm" type="button" id="rsTsExport">🧠 時系列比較JSON</button></div><div id="rsTsReport" style="margin-bottom:12px"></div>`);
+   $('rsTsExport').onclick=()=>{if(!session?.results?.length){alert('先に時系列モードで期間横断シミュレーションを実行してください');return;}const data={version:'5.23.42',config:session.cfg,featureNames,training:'選択期間内の前日以前。同日と未来を除外。JRA/NAR分離。',rows:session.rows};const a=document.createElement('a'),url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));a.href=url;a.download='TheKeiba_TimeseriesComparison_'+new Date().toISOString().slice(0,10)+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+ }
+ function stamp(){const text='v5.23.42 Timeseries WalkForward ☁️ 10s';window.APP_VERSION='v5.23.42 Timeseries WalkForward';document.querySelectorAll('.ver').forEach(e=>{if(e.textContent!==text)e.textContent=text;});}
+ window.TheKeibaRangeTS={begin,abort,prepare,complete,render,config,core:{deadline,buildFeatures,probabilities,fit,distribution,candidates,select,trainBefore},getSession:()=>session};
+ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});else init();
+ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',stamp,{once:true});else stamp();
+ [500,1500,5000,15000,35000,70000,110000,155000,185000].forEach(t=>setTimeout(stamp,t));
+})();
+
+</script>

@@ -403,7 +403,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.23.40 GitHubArchive CrossMarket ☁️ 10s Δ</span>
+    <span class="ver">v5.23.40 CrossBetArchive ☁️ 10s Δ</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -25633,7 +25633,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
   // A market and its combination form one identity; e.g. 馬連|1-2 != 馬単|1-2.
   const RANK_MAX_AGE=30000, RANK_SIZES=[5,10,20];
   const paneRatedCache5216=new WeakMap(), paneRowCache5216=new WeakMap();
-  const ticketLabel5216=t=>t===ALL_TICKETS?'全券種横断':t===CUSTOM_TICKETS?'任意券種横断':t;
+  const ticketLabel5216=t=>t===ALL_TICKETS?'買い目・全券種横断':t===CUSTOM_TICKETS?'任意券種横断':t;
   const betKey5216=(market,combination)=>market+'|'+combination;
   function paneOdds5216(row){
     const lo=Number(row?.odds_min),o=Number(row?.odds);
@@ -25669,6 +25669,40 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     if(m==='ev')return v.toFixed(2);
     if(m==='edge'||m==='edgePct')return (v>=0?'+':'')+v.toFixed(2)+(m==='edge'?'pt':'%');
     return String(v);
+  }
+  function panePrecloseChange52340(p,market,combination,currentOdds){
+    const post=Number(p?.race?.postMs||0),nowOdds=Number(currentOdds);
+    if(!(post>0)||!(nowOdds>=1)||!Array.isArray(p?.history)||!p.history.length)return NaN;
+    const target=post-180000;
+    // 3分前時点より前の最後の保存値。change-only Archive は次の変化まで有効。
+    for(let i=p.history.length-1;i>=0;i--){
+      const rec=p.history[i];if(Number(rec?.captured_ms||0)>target)continue;
+      const row=paneRow5216(rec,market,String(combination));
+      const before=paneOdds5216(row);
+      if(Number.isFinite(before)&&before>=1)return (nowOdds/before-1)*100;
+    }
+    return NaN;
+  }
+  function paneBestCrossBet52340(p,end){
+    const cached=p?.topBetCache52340;
+    if(cached&&cached.history===p.history&&cached.horses===p.horses&&cached.end===end)return cached.best;
+    const found=new Map();
+    for(let i=(p?.history?.length||0)-1;i>=0&&found.size<MARKETS.length;i--){
+      const rec=p.history[i];if(Number(rec?.captured_ms||0)>end)continue;
+      for(const market of MARKETS)if(!found.has(market)&&rec?.markets?.[market]?.length)found.set(market,rec);
+    }
+    let best=null;
+    for(const market of MARKETS){
+      const rec=found.get(market);if(!rec)continue;
+      if(end-Number(rec.captured_ms||0)>RANK_MAX_AGE&&!rec.archive_change_only)continue;
+      for(const row of rec.markets[market]||[]){
+        const metrics=paneMetrics5216(p,rec,market,row);
+        if(!Number.isFinite(metrics.ev))continue;
+        if(!best||metrics.ev>best.metrics.ev||(metrics.ev===best.metrics.ev&&metrics.kelly>best.metrics.kelly))best={market,row,record:rec,metrics};
+      }
+    }
+    if(p)p.topBetCache52340={history:p.history,horses:p.horses,end,best};
+    return best;
   }
 
 
@@ -25866,7 +25900,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
 
     buildPane(p){
       const root=document.createElement('section');root.dataset.pane=String(p.id);root.className='msv2-pane';p.root=root;
-      root.innerHTML=`<div class="msv2-pane-heading"><b class="msv2-badge"></b><span class="msv2-title"></span><span class="msv2-route" title="Worker優先・Bridge自動フォールバック">☁️→🌉</span><span class="msv2-starttime unknown">🕒 発走 --:--</span><button class="prevRace" aria-label="前のレース">◀R</button><button class="nextRace" aria-label="次のレース">R▶</button><button class="focusPane" aria-label="この画面を拡大">拡大</button></div>
+      root.innerHTML=`<div class="msv2-pane-heading"><b class="msv2-badge"></b><span class="msv2-title"></span><span class="msv2-route" title="Worker優先・Bridge自動フォールバック">☁️→🌉</span><span class="msv2-starttime unknown">🕒 発走 --:--</span><button class="crossBet52340" type="button" aria-label="買い目を全8券種横断EVで表示">🎯 買い目</button><span class="topBet52340" title="全8券種の現在EV総合1位">🎯 --</span><button class="prevRace" aria-label="前のレース">◀R</button><button class="nextRace" aria-label="次のレース">R▶</button><button class="focusPane" aria-label="この画面を拡大">拡大</button></div>
         <div class="msv2-scroll"><div class="msv2-fields">
           <label>日付<input class="dateInput" type="date"></label><label>区分<select class="sourceSelect"><option>JRA</option><option>NAR</option></select></label>
           <button class="loadRaces">開催を取得</button><label>開催場<select class="venueSelect"><option value="">未取得</option></select></label>
@@ -25877,14 +25911,14 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
           <label>点数<select class="rankSizeSelect"><option value="5">上位5点</option><option value="10">上位10点</option><option value="20">上位20点</option></select></label><label>買い目<select class="betSelect"><option value="">上位10点をまとめて表示</option></select></label>
           <label>表示期間<select class="windowSelect"><option value="900000">15分</option><option value="3600000">1時間</option><option value="10800000">3時間</option><option value="86400000">24時間</option></select></label>
           <label class="msv2-check"><input class="autoCheck" type="checkbox">10秒ごと</label><label class="msv2-check"><input class="repairCheck" type="checkbox">JSON自動補完</label><label class="msv2-check"><input class="logCheck" type="checkbox">対数</label>
-        </div><div class="msv2-market-filter" hidden><strong>横断対象</strong>${MARKETS.map(t=>`<label class="msv2-market-chip"><input type="checkbox" class="customMarketCheck" value="${t}">${t}</label>`).join('')}<button type="button" data-market-preset="all">全8券種</button><button type="button" data-market-preset="stable">単・複・ワイド</button><button type="button" data-market-preset="pair">2頭系</button><button type="button" data-market-preset="triple">三連系</button></div><div class="msv2-actions"><button class="refreshOdds">全8券種を取得</button><button class="refreshHistory">JSONで欠測補完</button><button class="latest">最新へ</button><button class="older">◀15分</button><button class="newer">15分▶</button><button class="exportJson">JSON保存…</button><button class="exportCsv">CSV保存…</button></div>
+        </div><div class="msv2-market-filter" hidden><strong>横断対象</strong>${MARKETS.map(t=>`<label class="msv2-market-chip"><input type="checkbox" class="customMarketCheck" value="${t}">${t}</label>`).join('')}<button type="button" data-market-preset="all">全8券種</button><button type="button" data-market-preset="stable">単・複・ワイド</button><button type="button" data-market-preset="pair">2頭系</button><button type="button" data-market-preset="triple">三連系</button></div><div class="msv2-actions"><button class="refreshOdds">全8券種を取得</button><button class="refreshHistory">JSONで欠測補完</button><button class="latest">最新へ</button><button class="older">◀15分</button><button class="newer">15分▶</button><button class="exportJson">JSON保存…</button><button class="exportCsv">CSV保存…</button><button class="archiveGithub52340" title="このレースのWorker保存分をGitHub Archiveへ強制flush">☁️ GitHub退避</button></div>
         <div class="msv2-status" role="status" aria-live="polite"></div><div class="msv2-warnings"></div>
-        <div class="msv2-rank-presets"><button type="button" data-rank-metric="ev">全券種 EV上位10</button><button type="button" data-rank-metric="edgePct">乖離率上位10</button><button type="button" data-rank-metric="odds">オッズ上位10</button><button type="button" data-rank-metric="modelP">想定確率上位10</button><button type="button" data-rank-metric="marketP">市場確率上位10</button><button type="button" class="rankClear" hidden>上位表示へ戻す</button></div>
+        <div class="msv2-rank-presets"><button type="button" data-rank-metric="ev">🎯 買い目・全券種EV上位10</button><button type="button" data-rank-metric="edgePct">乖離率上位10</button><button type="button" data-rank-metric="odds">オッズ上位10</button><button type="button" data-rank-metric="modelP">想定確率上位10</button><button type="button" data-rank-metric="marketP">市場確率上位10</button><button type="button" class="rankClear" hidden>上位表示へ戻す</button></div>
         <div class="msv2-rank-summary"></div><div class="msv2-rank-status"></div><div class="msv2-gap-status" role="status"></div>
         <div class="msv2-chart"><canvas aria-label="このレースの時系列オッズ"></canvas><div class="msv2-chart-empty"></div></div>
         <div class="msv2-foot"></div><details class="msv2-diagnostics"><summary>券種別の取得状況</summary><div></div></details>
         <div class="msv2-rank-scroll" tabindex="0" aria-label="順位表・横スクロールできます"><table class="msv2-rank-table" aria-label="全券種対応の指標ランキング"></table></div>
-        <details class="msv2-rank-help"><summary>指標の意味・順位の基準</summary>オッズは低い順、その他は高い順です。市場確率＝1÷オッズ（損益分岐の確率・控除補正なし）。EV＝想定確率×オッズ。乖離率＝(EV−1)×100％。確率差＝(想定確率−市場確率)×100ポイント。EVと乖離率の順位は同じです。Kellyは負値を0にします。想定確率は既存の画面用簡易モデル（単勝オッズ・人気から計算）です。未取得・計算不能の値は順位に入れません。複勝・ワイドは下限オッズを使用します。表示時点で選んだ上位買い目の過去の推移を描画します。表の買い目を押すと1点に絞れます。</details>
+        <details class="msv2-rank-help"><summary>指標の意味・順位の基準</summary>オッズは低い順、その他は高い順です。市場確率＝1÷オッズ（損益分岐の確率・控除補正なし）。EV＝想定確率×オッズ。乖離率＝(EV−1)×100％。確率差＝(想定確率−市場確率)×100ポイント。EVと乖離率の順位は同じです。Kellyは負値を0にします。3分前比は締切3分前の保存オッズに対する現在オッズの変化率です。想定確率は既存の画面用簡易モデル（単勝オッズ・人気から計算）です。未取得・計算不能の値は順位に入れません。複勝・ワイドは下限オッズを使用します。表示時点で選んだ上位買い目の過去の推移を描画します。表の買い目を押すと1点に絞れます。</details>
         <div class="msv2-legend"></div><p class="msv2-note">受信した値だけを記録します。複勝・ワイドのグラフは下限値です。10秒は再取得の基準で、通信中は重複取得しません。JSON自動補完は画面表示中の当日レースを110秒ごとに確認します。ブラウザ復帰時も保存履歴を重ねて読み直します。収集元にも存在しない値は作りません。横ドラッグで時刻移動・縦スワイプでこの画面をスクロールできます。</p></div>`;
       this.$('.msv2-grid').appendChild(root);const $=s=>root.querySelector(s);
       $('.dateInput').value=p.date;$('.sourceSelect').value=p.source;$('.ticketSelect').value=p.ticket;$('.metricSelect').value=p.metric;$('.rankSizeSelect').value=String(p.topN);$('.repairCheck').checked=p.autoRepair;
@@ -25910,6 +25944,8 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       $('.betSelect').onchange=()=>{p.selectedBet=$('.betSelect').value;this.render(p);this.save();};
       $('.rankSizeSelect').onchange=()=>{p.topN=Number($('.rankSizeSelect').value);p.selectedBet='';this.render(p);this.save();};
       root.querySelectorAll('[data-rank-metric]').forEach(b=>b.onclick=()=>this.rankPreset5216(p,b.dataset.rankMetric));
+      $('.crossBet52340').onclick=()=>{this.rankPreset5216(p,'ev');setTimeout(()=>p.root.querySelector('.msv2-rank-scroll')?.scrollIntoView({block:'nearest',behavior:'smooth'}),20);};
+      $('.archiveGithub52340').onclick=()=>this.archiveGithub52340(p);
       $('.rankClear').onclick=()=>{p.selectedBet='';this.render(p);this.save();};
       $('.msv2-rank-table').onclick=e=>{const b=e.target.closest('[data-rank-key]');if(!b)return;p.selectedBet=p.selectedBet===b.dataset.rankKey?'':b.dataset.rankKey;this.render(p);this.save();};
       $('.windowSelect').onchange=()=>{p.windowMs=Number($('.windowSelect').value);this.draw(p);this.save();};
@@ -25968,7 +26004,8 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     async selectRace(id,rid){
       const p=this.panes[id];const race=p?.races.find(r=>r.raceId===rid&&r.source===p.source&&r.date===p.date&&r.venue===p.venue);
       if(!race){if(p){p.status='選択中の区分・開催場にこのレースはありません';p.tone='warn';this.render(p);}return;}
-      this.clearRace(p);p.ticket='単勝';p.metric='odds';p.topN=20;p.selectedBet='';p.windowMs=3600000;p.log=false;p.raceId=rid;p.race=clone(race);p.status='保存履歴を読み込み中…';p.tone='';
+      const view52340={ticket:p.ticket,customMarkets:Array.isArray(p.customMarkets)?p.customMarkets.slice():MARKETS.slice(),metric:p.metric,topN:p.topN,windowMs:p.windowMs,log:p.log};
+      this.clearRace(p);Object.assign(p,view52340);p.selectedBet='';p.raceId=rid;p.race=clone(race);p.status='保存履歴を読み込み中…';p.tone='';
       const c=this.context(p);this.renderSelectors(p);this.render(p);this.save();
       const history=this.loadHistory(id);
       const horses=(async()=>{try{const rows=await this.providers[c.source].getHorses(clone(race),{signal:c.signal});if(this.valid(p,c)){p.transport.card=String(rows.transport||'');if(rows.startTime&&!p.race?.startTime){p.race.startTime=rows.startTime;p.race.postMs=Date.parse(p.date+'T'+rows.startTime.padStart(5,'0')+':00+09:00')||0;const rr=p.races.find(x=>x.raceId===p.raceId);if(rr)rr.startTime=rows.startTime;}if(rows.raceName){const rn=safeRaceName52315(rows.raceName,p.race?.raceNo);if(rn){p.race.name=rn;const rr=p.races.find(x=>x.raceId===p.raceId);if(rr)rr.name=rn;this.renderSelectors(p);}}p.horses=clone(rows);p.cardWarning='';this.render(p);}}catch(e){if(this.valid(p,c)){p.cardWarning='馬名：'+e.message;this.render(p);}}})();
@@ -26089,6 +26126,21 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       }catch(e){if(this.valid(p,c)){p.transport.odds=p.history.length?'保存履歴':'取得失敗';p.status='取得失敗：'+e.message+(p.history.length?' ／ 保存済み履歴を継続表示':'');p.tone='error';}}
       finally{if(this.valid(p,c)){p.busy=false;this.render(p);this.schedule(p,Math.max(0,10000-(Date.now()-started)));}}
     }
+    async archiveGithub52340(p){
+      if(!p?.raceId){p.status='GitHub退避：レースを選択してください';p.tone='warn';this.render(p);return;}
+      const cfg=readConfig(),base=String(cfg.worker||'').replace(/\/+$/,'');
+      if(!base){p.status='GitHub退避：時系列Workerが未設定です';p.tone='error';this.render(p);return;}
+      const btn=p.root?.querySelector('.archiveGithub52340');if(btn)btn.disabled=true;
+      p.status='☁️ GitHubへ保存済み履歴を退避中…';p.tone='';this.renderStatus(p);
+      try{
+        const headers={'Content-Type':'application/json'};if(cfg.token)headers['X-Timeline-Token']=cfg.token;
+        const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),30000);
+        let r;try{r=await fetch(`${base}/timeline/archive?race_id=${encodeURIComponent(p.raceId)}&kind=${encodeURIComponent(p.source)}`,{method:'POST',headers,body:JSON.stringify({race_id:p.raceId,kind:p.source}),signal:ctl.signal,cache:'no-store'});}finally{clearTimeout(timer);}
+        const j=await r.json().catch(()=>({}));if(!r.ok||j.ok===false)throw new Error(j.error||j.detail||`HTTP ${r.status}`);
+        p.status=`☁️ GitHub退避完了：${clock(Date.now())} ／ ${j.meta?.last_github_path||j.archive_path||'Archive更新'}`;p.tone='ok';
+      }catch(e){p.status='GitHub退避失敗：'+String(e?.message||e);p.tone='error';}
+      finally{if(btn)btn.disabled=false;this.render(p);}
+    }
     schedule(p,delay=10000){
       clearTimeout(p.timer);p.timer=null;
       if(!this.opened||!p.visible||!p.raceId||document.hidden)return;
@@ -26164,8 +26216,11 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       const notes=[];if(s.missing.length)notes.push('未取得: '+s.missing.join('・'));if(s.stale.length)notes.push('時刻差30秒超で除外: '+s.stale.join('・'));if(s.invalid)notes.push('指標を計算できない '+s.invalid+'点を除外');
       $('.msv2-rank-status').textContent=(s.end?'比較基準 '+clock(s.end)+'（日本時間）。':'')+'基準以前30秒以内の受信値を比較。'+notes.join(' ／ ');
       $('.msv2-foot').textContent=`${p.history.length}記録 ／ ${ticketLabel5216(p.ticket)} ／ ${p.follow?'最新時点':'表示右端の時点'}の上位買い目を追跡 ／ 日本時間`;
-      const cols=[['odds','オッズ'],['marketP','市場確率'],['modelP','想定確率'],['ev','EV'],['edgePct','乖離率'],['edge','確率差'],['kelly','Kelly']];
-      $('.msv2-rank-table').innerHTML=`<thead><tr><th>順位</th><th>券種・買い目</th>${cols.map(([m,label])=>`<th class="${m===p.metric?'rank-focus':''}">${label}</th>`).join('')}<th>受信</th></tr></thead><tbody>`+(s.ranked.length?s.ranked.map(r=>`<tr class="${p.selectedBet===r.key?'is-selected':''}"><td><span style="color:${color(r)}">●</span> ${r.rank}</td><td><button type="button" data-rank-key="${esc(r.key)}" aria-pressed="${p.selectedBet===r.key}"><small>${esc(r.market)}</small>${esc(this.label(p,r.row,r.market))}</button></td>${cols.map(([m])=>`<td class="${m===p.metric?'rank-focus':''}">${esc(paneMetricFmt520(r.metrics[m],m))}</td>`).join('')}<td>${clock(r.record.captured_ms)}</td></tr>`).join(''):`<tr><td colspan="10">${p.raceId?'比較できるデータがありません。券種別の取得状況を確認してください。':'開催場とレースを選択してください。'}</td></tr>`)+`</tbody>`;
+      const cols=[['odds','オッズ'],['marketP','市場確率'],['modelP','想定確率'],['ev','EV'],['edgePct','乖離率'],['edge','確率差'],['kelly','Kelly'],['preclose','3分前比']];
+      const cell=(r,m)=>m==='preclose'?(()=>{const v=panePrecloseChange52340(p,r.market,r.row.combination,r.metrics.odds);return Number.isFinite(v)?(v>=0?'+':'')+v.toFixed(1)+'%':'—';})():paneMetricFmt520(r.metrics[m],m);
+      $('.msv2-rank-table').innerHTML=`<thead><tr><th>順位</th><th>券種・買い目</th>${cols.map(([m,label])=>`<th class="${m===p.metric?'rank-focus':''}">${label}</th>`).join('')}<th>受信</th></tr></thead><tbody>`+(s.ranked.length?s.ranked.map(r=>`<tr class="${p.selectedBet===r.key?'is-selected':''}"><td><span style="color:${color(r)}">●</span> ${r.rank}</td><td><button type="button" data-rank-key="${esc(r.key)}" aria-pressed="${p.selectedBet===r.key}"><small>${esc(r.market)}</small>${esc(this.label(p,r.row,r.market))}</button></td>${cols.map(([m])=>`<td class="${m===p.metric?'rank-focus':''}">${esc(cell(r,m))}</td>`).join('')}<td>${clock(r.record.captured_ms)}</td></tr>`).join(''):`<tr><td colspan="11">${p.raceId?'比較できるデータがありません。券種別の取得状況を確認してください。':'開催場とレースを選択してください。'}</td></tr>`)+`</tbody>`;
+      const best=paneBestCrossBet52340(p,s.end),top=$('.topBet52340');
+      if(top){if(best){const label=this.label(p,best.row,best.market),pre=panePrecloseChange52340(p,best.market,best.row.combination,best.metrics.odds);top.textContent=`🎯 ${best.market} ${label} / EV ${best.metrics.ev.toFixed(2)} / ${best.metrics.odds.toFixed(1)}倍${Number.isFinite(pre)?` / 3分前比 ${pre>=0?'+':''}${pre.toFixed(1)}%`:''}`;top.dataset.state=best.metrics.ev>=1.1?'strong':best.metrics.ev>=1?'plus':'normal';}else{top.textContent='🎯 --';top.dataset.state='normal';}}
       $('.rankClear').hidden=!p.selectedBet;
     }
     renderMarketFilter52318(p){
@@ -29372,7 +29427,7 @@ html[data-theme="light"] .live-hist215{border-bottom-color:#dbe3ec!important;col
 (function(){
 'use strict';
 if(window.__THEKEIBA_52322_PATCH__)return;window.__THEKEIBA_52322_PATCH__=true;
-const VERSION='v5.23.40 GitHubArchive CrossMarket';
+const VERSION='v5.23.40 CrossBetArchive';
 const KEY='thekeiba-theme-v52322';
 const root=document.documentElement;
 function preferred(){try{const s=localStorage.getItem(KEY);if(s==='light'||s==='dark')return s;}catch(_){}return matchMedia?.('(prefers-color-scheme: light)').matches?'light':'dark';}
@@ -29587,7 +29642,7 @@ html[data-theme="light"] .msv2-worker-live[data-state="stale"],html[data-theme="
 if(window.__THEKEIBA_TIMELINE_WORKER_LIVE_52326__)return;
 window.__THEKEIBA_TIMELINE_WORKER_LIVE_52326__=true;
 
-const VERSION='v5.23.40 GitHubArchive CrossMarket 10s';
+const VERSION='v5.23.40 CrossBetArchive 10sWorkerLive';
 const DEFAULT_WORKER='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
 const INTERVAL=10000;
 const perPane=new Map();
@@ -30035,7 +30090,7 @@ body.right-analysis-active #rightAnalysisPane{min-height:0;overflow:hidden}
 <script id="right-scroll52336-js">
 (function(){
 'use strict';
-const version='v5.23.40 GitHubArchive CrossMarket 10s';
+const version='v5.23.40 CrossBetArchive 10sWorkerLive';
 function stamp(){
  window.APP_VERSION=version;
  document.title='The競馬 EV分析 '+version;
@@ -30066,7 +30121,7 @@ window.RightPaneScroll52336=Object.freeze({install,version});
 
 
 
-<!-- v5.23.40 GitHubArchive CrossMarket: right workspace no-overlap / iPad landscape readability -->
+<!-- v5.23.40 CrossBetArchive: right workspace no-overlap / iPad landscape readability -->
 <style id="clean-split52339">
 :root{
   --clean-split-left:58%;
@@ -30190,7 +30245,7 @@ window.RightPaneScroll52336=Object.freeze({install,version});
 <script id="clean-split52339-js">
 (function(){
   'use strict';
-  const VERSION='v5.23.40 GitHubArchive CrossMarket 10s';
+  const VERSION='v5.23.40 CrossBetArchive 10sWorkerLive';
   function syncTop(){
     try{
       const h=document.querySelector('.header');
@@ -30219,111 +30274,225 @@ window.RightPaneScroll52336=Object.freeze({install,version});
 })();
 </script>
 
-
-<!-- v5.23.40: GitHub archive affordance + one-tap cross-market bet ranking -->
-<style id="github-archive-crossmarket-v52340-css">
-.cross-bet-quick52340{display:inline-flex;align-items:center;gap:3px;min-height:29px;padding:4px 7px!important;border-color:#0e7490!important;background:#083344!important;color:#cffafe!important;font-weight:800;white-space:nowrap}
-.cross-bet-quick52340[data-active="yes"]{border-color:#22c55e!important;background:#052e2b!important;color:#bbf7d0!important}
-.msv2-cross-global52340{border-color:#0e7490!important;background:#083344!important;color:#cffafe!important;font-weight:800}
-.msv2-gh-history52340{border-color:#2563eb!important;background:#0b2748!important;color:#dbeafe!important}
-.msv2-archive-hint52340{display:inline-flex;align-items:center;gap:4px;font-size:10px;color:#a7f3d0;white-space:nowrap;margin-left:auto}
-html[data-theme="light"] .cross-bet-quick52340,html[data-theme="light"] .msv2-cross-global52340{background:#ecfeff!important;color:#155e75!important;border-color:#67e8f9!important}
-html[data-theme="light"] .msv2-gh-history52340{background:#eff6ff!important;color:#1d4ed8!important;border-color:#93c5fd!important}
-html[data-theme="light"] .msv2-archive-hint52340{color:#047857!important}
-@media(max-width:800px){.cross-bet-quick52340{font-size:9px!important;padding:3px 5px!important}.msv2-archive-hint52340{width:100%;margin-left:0}.msv2-cross-global52340,.msv2-gh-history52340{font-size:10px!important;padding:5px 6px!important}}
+<style id="cross-bet-archive-v52340-css">
+.crossBet52340{flex:0 0 auto;padding:3px 7px;min-height:26px;border:1px solid #f59e0b!important;border-radius:7px;background:rgba(245,158,11,.13)!important;color:#fde68a!important;font-size:10px;font-weight:900;white-space:nowrap}
+.topBet52340{flex:1 1 180px;min-width:0;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:3px 7px;border:1px solid #334155;border-radius:999px;background:rgba(15,23,42,.72);color:#cbd5e1;font-size:10px;font-weight:800;font-variant-numeric:tabular-nums}
+.topBet52340[data-state="plus"]{border-color:rgba(52,211,153,.5);background:rgba(16,185,129,.10);color:#a7f3d0}
+.topBet52340[data-state="strong"]{border-color:rgba(74,222,128,.72);background:rgba(34,197,94,.15);color:#bbf7d0;box-shadow:0 0 0 1px rgba(34,197,94,.08)}
+.archiveGithub52340{border-color:#38bdf8!important;color:#bae6fd!important}
+html[data-theme="light"] .crossBet52340{background:#fffbeb!important;color:#92400e!important;border-color:#f59e0b!important}
+html[data-theme="light"] .topBet52340{background:#f8fafc;color:#334155;border-color:#cbd5e1}
+html[data-theme="light"] .topBet52340[data-state="plus"],html[data-theme="light"] .topBet52340[data-state="strong"]{background:#ecfdf5;color:#047857;border-color:#86efac}
+@media(max-width:1100px){.topBet52340{max-width:230px}.crossBet52340{padding:3px 5px}}
+@media(max-width:760px){.topBet52340{flex-basis:120px;max-width:180px;font-size:9px}}
 </style>
-<script id="github-archive-crossmarket-v52340">
+
+<!-- ============================================================
+     v5.23.41 Odds ↔ Payout Audit
+     - 確定払戻を100円換算して保存済み最終オッズと照合
+     - 締切3分前スナップショット → 保存履歴最終 → 払戻換算を横並び表示
+     - GitHub差分Archive / Worker履歴のどちらでも最後の既知値を検索
+     ============================================================ -->
+<style id="odds-payout-audit52341-css">
+.oddsAudit52341{margin-top:8px;border:1px solid rgba(56,189,248,.32);border-radius:9px;background:rgba(8,47,73,.16);overflow:hidden}
+.oddsAudit52341>summary{cursor:pointer;list-style:none;padding:7px 9px;font-size:10px;font-weight:900;color:#bae6fd;display:flex;align-items:center;gap:7px;min-height:28px}
+.oddsAudit52341>summary::-webkit-details-marker{display:none}
+.oddsAudit52341>summary:before{content:'▶';font-size:8px;color:#7dd3fc;transform-origin:center;transition:transform .12s ease}
+.oddsAudit52341[open]>summary:before{transform:rotate(90deg)}
+.oddsAudit52341 .auditLead52341{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.oddsAudit52341 .auditCount52341{flex:none;padding:2px 6px;border-radius:999px;border:1px solid rgba(148,163,184,.35);color:#cbd5e1;background:rgba(15,23,42,.42);font-variant-numeric:tabular-nums}
+.oddsAudit52341 .auditCount52341.ok{border-color:rgba(52,211,153,.48);color:#a7f3d0;background:rgba(16,185,129,.11)}
+.oddsAudit52341 .auditCount52341.warn{border-color:rgba(251,191,36,.48);color:#fde68a;background:rgba(245,158,11,.10)}
+.auditBody52341{padding:0 8px 8px}
+.auditMeta52341{font-size:9px;color:#93a4ba;line-height:1.55;margin:0 0 6px;padding:5px 6px;border-top:1px solid rgba(148,163,184,.13)}
+.auditScroll52341{overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid rgba(148,163,184,.18);border-radius:7px}
+.auditTable52341{width:100%;border-collapse:collapse;font-size:10px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.auditTable52341 th,.auditTable52341 td{padding:5px 6px;border-bottom:1px solid rgba(148,163,184,.12);text-align:right}
+.auditTable52341 th{font-size:9px;color:#9fb0c4;background:rgba(15,23,42,.52);font-weight:700}
+.auditTable52341 th:nth-child(1),.auditTable52341 td:nth-child(1),.auditTable52341 th:nth-child(2),.auditTable52341 td:nth-child(2){text-align:left}
+.auditTable52341 tbody tr:last-child td{border-bottom:0}
+.auditTable52341 .auditOk52341{color:#86efac;font-weight:900}.auditTable52341 .auditBad52341{color:#fca5a5;font-weight:900}.auditTable52341 .auditNA52341{color:#94a3b8}
+.auditFoot52341{font-size:9px;color:#8191a5;line-height:1.5;margin-top:6px}
+html[data-theme="light"] .oddsAudit52341{background:#f0f9ff;border-color:#7dd3fc}
+html[data-theme="light"] .oddsAudit52341>summary{color:#075985}
+html[data-theme="light"] .oddsAudit52341 .auditCount52341{background:#fff;color:#334155}
+html[data-theme="light"] .auditTable52341 th{background:#eaf6ff;color:#475569}
+html[data-theme="light"] .auditMeta52341,html[data-theme="light"] .auditFoot52341{color:#64748b}
+html[data-theme="light"] .auditTable52341 .auditOk52341{color:#047857}html[data-theme="light"] .auditTable52341 .auditBad52341{color:#b91c1c}
+@media(max-width:1100px){.oddsAudit52341>summary{padding:6px 7px;font-size:9px}.auditTable52341{font-size:9px}.auditTable52341 th,.auditTable52341 td{padding:4px 5px}}
+</style>
+<script id="odds-payout-audit52341-js">
 (function(){
-'use strict';
-if(window.__THEKEIBA_GH_CROSSMARKET_52340__)return;
-window.__THEKEIBA_GH_CROSSMARKET_52340__=true;
-const VERSION='v5.23.40 GitHubArchive CrossMarket 10s';
-const ALL='__ALL__';
-let wrapped=false;
-function workspace(){return window.TheKeibaMultiV2?.workspace||null;}
-function stamp(){
-  try{
-    window.APP_VERSION=VERSION;
-    document.title='The競馬 EV分析 '+VERSION;
-    document.querySelectorAll('.ver').forEach(el=>el.textContent=VERSION+' ☁️ GitHub退避');
-  }catch(e){}
-}
-function scrollRanking(p){
-  try{
-    const sc=p.root?.querySelector('.msv2-scroll'),target=p.root?.querySelector('.msv2-rank-presets');
-    if(sc&&target)sc.scrollTo({top:Math.max(0,target.offsetTop-12),behavior:'smooth'});
-  }catch(e){}
-}
-function activate(p,doScroll=true){
-  const ws=workspace();if(!ws||!p)return;
-  try{
-    ws.active=p.id;
-    ws.rankPreset5216?.(p,'ev');
-    p.ticket=ALL;p.metric='ev';p.topN=10;p.selectedBet='';
-    const ticket=p.root?.querySelector('.ticketSelect'),metric=p.root?.querySelector('.metricSelect'),size=p.root?.querySelector('.rankSizeSelect');
-    if(ticket)ticket.value=ALL;if(metric)metric.value='ev';if(size)size.value='10';
-    ws.render?.(p);ws.save?.();
-    if(doScroll)setTimeout(()=>scrollRanking(p),30);
-  }catch(e){console.warn('[v5.23.40] cross-market',e);}
-}
-function updatePane(p){
-  if(!p?.root)return;
-  const select=p.root.querySelector('.ticketSelect');
-  const allOpt=select?.querySelector('option[value="'+ALL+'"]');
-  if(allOpt)allOpt.textContent='🎯 買い目・全券種横断';
-  const h=p.root.querySelector('.msv2-pane-heading');
-  if(h&&!h.querySelector('.cross-bet-quick52340')){
-    const b=document.createElement('button');
-    b.type='button';b.className='cross-bet-quick52340';b.textContent='🎯 全券種';
-    b.title='単勝〜3連単をEVで横断し、上位10点の買い目を表示';
-    b.onclick=e=>{e.stopPropagation();activate(p,true);};
-    const prev=h.querySelector('.prevRace');
-    if(prev)h.insertBefore(b,prev);else h.appendChild(b);
+  'use strict';
+  if(window.__ODDS_PAYOUT_AUDIT_52341__) return;
+  window.__ODDS_PAYOUT_AUDIT_52341__=true;
+
+  const VERSION='v5.23.41 OddsPayoutAudit';
+  const TYPES=['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
+  const UNORDERED=new Set(['枠連','ワイド','馬連','3連複']);
+  const num=v=>{const n=Number(v);return Number.isFinite(n)?n:NaN;};
+  const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const clock=ms=>{try{return new Date(ms).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit'});}catch(_){return '--:--:--';}};
+  const fmt=v=>Number.isFinite(v)?v.toFixed(1):'—';
+
+  function stamp(){
+    try{
+      window.APP_VERSION=VERSION;
+      document.title='The競馬 EV分析 '+VERSION;
+      document.querySelectorAll('.ver').forEach(el=>el.textContent=VERSION+' ☁️ 10s LIVE');
+    }catch(_){ }
   }
-  const b=h?.querySelector('.cross-bet-quick52340');
-  if(b)b.dataset.active=(p.ticket===ALL&&p.metric==='ev')?'yes':'no';
-}
-function updateAll(){
-  const ws=workspace();if(!ws?.root)return false;
-  const bar=ws.root.querySelector('.msv2-toolbar');
-  if(bar&&!bar.querySelector('.msv2-cross-global52340')){
-    const b=document.createElement('button');b.type='button';b.className='msv2-cross-global52340';b.textContent='🎯 買い目・全券種横断';
-    b.title='表示中の全画面を、全8券種のEV上位10点へ切替';
-    b.onclick=()=>{const visible=ws.panes.filter(p=>p.visible);visible.forEach(p=>activate(p,false));const p=ws.panes[ws.active]||visible[0];if(p)setTimeout(()=>scrollRanking(p),30);};
-    const planner=bar.querySelector('[data-action="planner"]');if(planner)bar.insertBefore(b,planner);else bar.appendChild(b);
+
+  function normalizeCombo(type,raw){
+    let s=String(raw??'').normalize('NFKC').replace(/\s+/g,'').replace(/[→＞>]/g,'-').replace(/[－–—−ー]/g,'-');
+    const a=(s.match(/\d+/g)||[]).map(Number).filter(n=>Number.isFinite(n));
+    if(!a.length) return s;
+    if(UNORDERED.has(type)) a.sort((x,y)=>x-y);
+    return a.join('-');
   }
-  if(bar&&!bar.querySelector('.msv2-gh-history52340')){
-    const b=document.createElement('button');b.type='button';b.className='msv2-gh-history52340';b.textContent='☁️ GitHub履歴';
-    b.title='GitHubへ退避済みの過去レースを日付・開催場・レースから再生';
-    b.onclick=()=>{if(typeof window.openGithubSavedRacePicker52330==='function')window.openGithubSavedRacePicker52330();else alert('GitHub保存履歴の初期化中です。数秒後にもう一度押してください。');};
-    const planner=bar.querySelector('[data-action="planner"]');if(planner)bar.insertBefore(b,planner);else bar.appendChild(b);
+
+  function payoutRows(data){
+    const out=[];
+    for(const [key,rawAmount] of Object.entries(data?.payouts||{})){
+      const i=key.indexOf(':'); if(i<1) continue;
+      const type=key.slice(0,i),comboRaw=key.slice(i+1),amount=Number(rawAmount);
+      if(!TYPES.includes(type)||!(amount>0)) continue;
+      out.push({type,combo:normalizeCombo(type,comboRaw),comboRaw,amount,payoutOdds:amount/100});
+    }
+    out.sort((a,b)=>TYPES.indexOf(a.type)-TYPES.indexOf(b.type)||a.combo.localeCompare(b.combo,'ja',{numeric:true}));
+    return out;
   }
-  const planbar=ws.root.querySelector('.msv2-planbar');
-  if(planbar&&!planbar.querySelector('.msv2-archive-hint52340')){
-    const s=document.createElement('span');s.className='msv2-archive-hint52340';s.textContent='☁️ 確定・過去履歴はGitHubへ退避 / LIVEは直近履歴';planbar.appendChild(s);
+
+  function latestSaved(p,type,combo){
+    const rows=Array.isArray(p?.history)?p.history:[];
+    const post=Number(p?.race?.postMs||0),limit=post>0?post+180000:Infinity;
+    for(let i=rows.length-1;i>=0;i--){
+      const rec=rows[i]; if(!rec) continue;
+      const ms=Number(rec.captured_ms||0); if(ms>limit) continue;
+      const market=rec.markets?.[type]; if(!Array.isArray(market)) continue;
+      for(const r of market){
+        if(normalizeCombo(type,r?.combination)!==combo) continue;
+        const odds=Number(r?.odds);
+        if(Number.isFinite(odds)&&odds>=1) return {odds,ms,archive:!!rec.archive_change_only};
+      }
+    }
+    return null;
   }
-  ws.panes.forEach(updatePane);
-  return true;
-}
-function wrapRender(){
-  const ws=workspace();if(!ws||wrapped)return;
-  wrapped=true;
-  const original=ws.render?.bind(ws);
-  if(original){
-    ws.render=function(p){const r=original(p);try{updatePane(p);}catch(e){}return r;};
+
+  function precloseValue(snap,type,combo){
+    if(!snap) return null;
+    let rows=[];
+    if(type==='単勝'){
+      rows=(snap.odds||[]).map(r=>({combination:String(r?.horse_no??r?.num??''),odds:r?.odds}));
+      if(!rows.length && Array.isArray(snap.additional_markets?.[type])) rows=snap.additional_markets[type];
+    }else if(Array.isArray(snap.additional_markets?.[type])) rows=snap.additional_markets[type];
+    for(const r of rows){
+      if(normalizeCombo(type,r?.combination)!==combo) continue;
+      const odds=Number(r?.odds??r?.odds_min);
+      if(Number.isFinite(odds)&&odds>=1) return odds;
+    }
+    return null;
   }
-}
-function boot(){
-  stamp();
-  if(updateAll()){wrapRender();return;}
-  setTimeout(boot,250);
-}
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
-[800,1800,4500,9000,22000,42000,67000,92000,122000,182000].forEach(ms=>setTimeout(()=>{stamp();updateAll();wrapRender();},ms));
-document.addEventListener('visibilitychange',()=>{if(!document.hidden){stamp();updateAll();}});
-window.addEventListener('pageshow',()=>{stamp();updateAll();});
-window.openCrossMarketBets52340=()=>{const ws=workspace();if(!ws)return;const visible=ws.panes.filter(p=>p.visible);visible.forEach(p=>activate(p,false));const p=ws.panes[ws.active]||visible[0];if(p)scrollRanking(p);};
+
+  function sourceLabel(p){
+    const t=String(p?.transport?.timeline||'');
+    if(/github/i.test(t)||p?.history?.some?.(r=>r?.archive_change_only)) return 'GitHub保存履歴';
+    if(/worker/i.test(t)) return 'Timeline Worker';
+    if(p?.history?.length) return '保存履歴';
+    return '履歴なし';
+  }
+
+  function summaryLead(rows,snap){
+    const win=rows.find(r=>r.type==='単勝')||rows[0];
+    if(!win) return '払戻データを照合できません';
+    const a=Number.isFinite(win.preclose)?fmt(win.preclose):'—';
+    const b=win.latest?fmt(win.latest.odds):'—';
+    const c=fmt(win.payoutOdds);
+    return `${win.type} ${win.combo}: 3分前 ${a} → 保存最終 ${b} → 払戻 ${c}${win.match===true?' ✅':win.match===false?' ⚠️':''}`;
+  }
+
+  function buildAuditHtml(p,snap){
+    const base=payoutRows(p?.result5202);
+    const rows=base.map(x=>{
+      const latest=latestSaved(p,x.type,x.combo);
+      const preclose=precloseValue(snap,x.type,x.combo);
+      const match=latest?Math.round(latest.odds*10)===Math.round(x.payoutOdds*10):null;
+      return {...x,latest,preclose,match};
+    });
+    const comparable=rows.filter(r=>r.latest),matched=rows.filter(r=>r.match===true),different=rows.filter(r=>r.match===false);
+    const verified=!!(snap&&(snap.preclose3m_verified===true||snap.timing_verified===true));
+    const source=sourceLabel(p);
+    const lead=summaryLead(rows,snap);
+    const badgeClass=different.length?'warn':(comparable.length&&matched.length===comparable.length?'ok':'');
+    const badge=comparable.length?`${matched.length}/${comparable.length}一致`:'比較待ち';
+    const table=rows.length?rows.map(r=>{
+      const latestText=r.latest?`${fmt(r.latest.odds)} <small>${clock(r.latest.ms)}</small>`:'—';
+      const diff=r.latest?(r.latest.odds-r.payoutOdds):NaN;
+      const diffText=Number.isFinite(diff)?`${diff>=0?'+':''}${diff.toFixed(1)}`:'—';
+      const state=r.match===true?'<span class="auditOk52341">✅ 一致</span>':r.match===false?'<span class="auditBad52341">⚠️ 差あり</span>':'<span class="auditNA52341">未比較</span>';
+      return `<tr><td>${esc(r.type)}</td><td><b>${esc(r.combo)}</b></td><td>${Number.isFinite(r.preclose)?fmt(r.preclose)+(verified?' ✓':' *'):'—'}</td><td>${latestText}</td><td><b>${fmt(r.payoutOdds)}</b><small> (${Math.round(r.amount).toLocaleString('ja-JP')}円)</small></td><td>${diffText}</td><td>${state}</td></tr>`;
+    }).join(''):'<tr><td colspan="7" class="auditNA52341">確定払戻をまだ取得できていません。</td></tr>';
+    const snapMeta=snap?`${verified?'締切3分前 VERIFIED':'締切3分前 CHECK'}${snap.captured_at?' / '+esc(new Date(snap.captured_at).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit'})):''}`:'締切3分前スナップショットなし';
+    return `<details class="oddsAudit52341"><summary><span class="auditLead52341">🔎 ${esc(lead)}</span><span class="auditCount52341 ${badgeClass}">${esc(badge)}</span></summary><div class="auditBody52341"><div class="auditMeta52341">${esc(source)} ／ ${snapMeta} ／ 払戻換算 = 払戻金 ÷ 100</div><div class="auditScroll52341"><table class="auditTable52341"><thead><tr><th>券種</th><th>的中組合せ</th><th>締切3分前</th><th>保存最終</th><th>払戻換算</th><th>差</th><th>判定</th></tr></thead><tbody>${table}</tbody></table></div><div class="auditFoot52341">「保存最終」はGitHub/Worker時系列で最後に確認できた独立オッズです。差ありは即データ不正とは限りませんが、取得欠測・更新遅延・払戻側とのキーずれを疑う目印になります。${snap&&!verified?' * 3分前スナップショットは取得時刻未検証です。':''}</div></div></details>`;
+  }
+
+  async function ensurePreclose(p){
+    const rid=String(p?.raceId||''); if(!rid) return null;
+    const now=Date.now();
+    if(p.__auditPrecloseRid52341===rid && p.__auditPreclose52341) return p.__auditPreclose52341;
+    if(p.__auditPrecloseRid52341===rid && p.__auditPreclosePromise52341) return p.__auditPreclosePromise52341;
+    if(p.__auditPrecloseRid52341===rid && p.__auditPrecloseAt52341 && now-p.__auditPrecloseAt52341<30000) return p.__auditPreclose52341||null;
+    p.__auditPrecloseRid52341=rid;p.__auditPrecloseAt52341=now;
+    p.__auditPreclosePromise52341=(async()=>{
+      let s=null;
+      try{if(typeof window.__precloseGetSnapshot==='function') s=await window.__precloseGetSnapshot(rid);}catch(_){s=null;}
+      if(String(p.raceId||'')===rid){p.__auditPreclose52341=s||null;p.__auditPrecloseAt52341=Date.now();}
+      return s||null;
+    })().finally(()=>{if(String(p.raceId||'')===rid)p.__auditPreclosePromise52341=null;});
+    return p.__auditPreclosePromise52341;
+  }
+
+  function renderAudit(p){
+    const body=p?.root?.querySelector('.msv2-result-body5202');
+    if(!body) return;
+    body.querySelector('.oddsAudit52341')?.remove();
+    if(!p?.result5202?.finalized) return;
+    const snap=(p.__auditPrecloseRid52341===String(p.raceId||''))?p.__auditPreclose52341:null;
+    body.insertAdjacentHTML('beforeend',buildAuditHtml(p,snap));
+    const rid=String(p.raceId||'');
+    ensurePreclose(p).then(s=>{
+      if(String(p.raceId||'')!==rid||!p.result5202?.finalized) return;
+      const current=body.querySelector('.oddsAudit52341');
+      if(current) current.outerHTML=buildAuditHtml(p,s);
+    }).catch(()=>{});
+  }
+
+  function install(){
+    const api=window.TheKeibaMultiV2,Proto=api?.MultiPaneWorkspace?.prototype;
+    if(!Proto) return false;
+    if(!Proto.__oddsPayoutAudit52341){
+      Proto.__oddsPayoutAudit52341=true;
+      const oldResult=Proto.renderResult5202;
+      if(typeof oldResult==='function'){
+        Proto.renderResult5202=function(p){const r=oldResult.call(this,p);renderAudit(p);return r;};
+      }
+      const oldRender=Proto.render;
+      if(typeof oldRender==='function'){
+        Proto.render=function(p){const r=oldRender.call(this,p);if(p?.result5202?.finalized)renderAudit(p);return r;};
+      }
+      const oldClear=Proto.clearRace;
+      if(typeof oldClear==='function'){
+        Proto.clearRace=function(p){const r=oldClear.call(this,p);if(p){p.__auditPreclose52341=null;p.__auditPreclosePromise52341=null;p.__auditPrecloseRid52341='';p.__auditPrecloseAt52341=0;}return r;};
+      }
+    }
+    try{for(const p of api.workspace?.panes||[]) if(p?.result5202?.finalized) renderAudit(p);}catch(_){ }
+    return true;
+  }
+
+  function boot(){stamp();install();[250,900,2000,4500,8000].forEach(ms=>setTimeout(()=>{stamp();install();},ms));}
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
 })();
 </script>
+
 </body>
 </html>

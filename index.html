@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script id="thekeiba-build-version">
 // One release identity shared by all legacy and current display patches.
-window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.48 SnapshotDeadline',number:'5.23.48'});
+window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.49 RangeFailureAudit',number:'5.23.49'});
 window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
@@ -46,7 +46,7 @@ window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.48 SnapshotDeadline</title>
+<title>The競馬 EV分析 v5.23.49 RangeFailureAudit</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -409,7 +409,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.23.48 SnapshotDeadline ☁️ 10s</span>
+    <span class="ver">v5.23.49 RangeFailureAudit ☁️ 10s</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -11124,6 +11124,24 @@ if(horses.length === 0){
   };
   // 構造的な失敗（出走頭数不足・公式払戻欠落）は再試行しても直らず、連続失敗判定にも数えない
   const rsIsStructuralError = msg => /2頭未満|精算除外|公式払戻/.test(String(msg || ''));
+  function rsFailureInfo(error, stage){
+    const msg = String(error?.message || error || '');
+    const m = msg.match(/HTTP\s*[:：]?\s*(\d{3})/i);
+    const httpStatus = Number(error?.status || (m && m[1])) || null;
+    let failureKind = '解析・データ不整合';
+    if(/スナップショット|時系列データがありません|保存済み.*(?:なし|無い)|PRE.?RACE.*(?:なし|未保存)/i.test(msg)) failureKind = 'スナップショット未保存';
+    else if(/未確定|確定着順|払戻|精算除外/.test(msg)) failureKind = '結果未確定・結果データ不足';
+    else if((httpStatus && [401,403,408,429].includes(httpStatus)) || httpStatus >= 500 || /timeout|timed out|タイムアウト|Failed to fetch|NetworkError|ネットワーク|通信不良|ブロック|アクセス拒否|Bridge未接続|ブリッジ未接続|遮断/i.test(msg)) failureKind = '通信エラー';
+    else if(httpStatus) failureKind = 'ページ未公開・HTTP応答エラー';
+    return {failureKind, failureStage:stage || '不明', httpStatus};
+  }
+  function rsDiagnosticsHtml(rows){
+    const list=rows.filter(r=>r && (r.status==='error'||r.status==='excluded'));
+    if(!list.length)return '';
+    const counts={};list.forEach(r=>{const k=r.failureKind||rsFailureInfo(r.error,r.failureStage).failureKind;counts[k]=(counts[k]||0)+1;});
+    return '<details open style="margin:8px 0"><summary>取得・監査診断：'+Object.entries(counts).map(([k,v])=>asw_esc(k)+' '+v+'件').join(' / ')+'</summary><div style="max-height:300px;overflow:auto"><table style="font-size:11px"><tr><th>race_id</th><th>段階</th><th>HTTP</th><th>分類・理由</th></tr>'+list.map(r=>'<tr><td>'+asw_esc(r.rid||'不明')+'</td><td>'+asw_esc(r.failureStage||'不明')+'</td><td>'+asw_esc(r.httpStatus||'未確認')+'</td><td>'+asw_esc((r.failureKind||rsFailureInfo(r.error).failureKind)+'：'+(r.error||r.auditReason||''))+'</td></tr>').join('')+'</table></div></details>';
+  }
+
 
   // ── 画面スリープ防止（iPad Safari 16.4+）──
   let rsWakeLock = null;
@@ -11701,7 +11719,7 @@ if(horses.length === 0){
     const box = $('rsTable');
     if(!box) return;
     const agg = rsAggregate(rows);
-    if(!agg.length){ box.innerHTML = ''; return; }
+    if(!agg.length){ box.innerHTML = rsDiagnosticsHtml(rows); return; }
     const prevDetailOpen = !!box.querySelector('details[data-rs="detail"][open]');
     const prevBreakOpen = !!box.querySelector('details[data-rs="break"][open]');
 
@@ -11804,7 +11822,7 @@ if(horses.length === 0){
                + rsBreakdownTable('🎫 券種別（買い目単位）', '点', bd.ticket, 'bet');
       if(bh) h += `<details data-rs="break"${prevBreakOpen ? ' open' : ''} style="margin-top:10px"><summary style="cursor:pointer;font-size:12px;color:var(--muted)">📐 内訳（場別・月別・券種別）</summary>${bh}</details>`;
     }catch(e){ console.warn('[rsBreakdown]', e); }
-    box.innerHTML = h;
+    box.innerHTML = h + rsDiagnosticsHtml(rows);
   }
 
   // ── 期間内 累計収支グラフ（rsChart）──
@@ -11925,6 +11943,7 @@ if(horses.length === 0){
                           raceName: r.name || (r.no + 'R'), status: 'pending',
                           count: 0, bet: 0, ret: 0, profit: 0, roi: 0, hit: 0, hasFinish: false, finishTop: [] };
             let tsPrepared = null;
+            let failureStage = "出馬表・オッズ取得";
             try{
               window.__rsValidationRaceDate = date;
               const loaded = await asw_loadHorses(kind, r.rid);
@@ -11937,6 +11956,13 @@ if(horses.length === 0){
               row.postTimeText = loaded.postTimeText || '';
               row.auditEligible = row.preRaceTimestampVerified === true;
               row.auditReason = row.auditEligible ? '' : (row.oddsSnapshotType === 'FINAL' ? 'FINAL_ODDS（確定後の最終オッズ）' : '発走前市場時点を時刻で証明できない');
+              if(validationMode === 'PRE_RACE_STRICT' && !row.auditEligible){
+                row.status = 'excluded'; row.failureKind = 'スナップショット未保存';
+                row.failureStage = 'PRE-RACE監査';
+                row.auditReason = '発走前時点を証明できる保存済みオッズなし：' + row.auditReason;
+                return row;
+              }
+              failureStage = '買い目生成・時系列準備';
               currentRaceId = r.rid;
               currentRaceName = loaded.raceName || r.name || (r.no + 'R');
               row.raceName = currentRaceName;
@@ -11957,6 +11983,7 @@ if(horses.length === 0){
               simTickets = lastTickets.map(t => ({ ...t, nums: [...t.nums] }));
               row.count = lastTickets.length;
 
+              failureStage = "結果・払戻取得";
               const resultPack = await asw_getResult(kind, r.rid, loaded.resultDoc);
               const finish = resultPack.finish, payouts = resultPack.payouts;
               try{ pgjCacheRaceMeta(r.rid, resultPack.doc || loaded.resultDoc, currentRaceName); }catch(e){}
@@ -11992,6 +12019,7 @@ if(horses.length === 0){
             }catch(e){
               row.status = 'error';
               row.error = (e && e.message) || String(e);
+              Object.assign(row, rsFailureInfo(e, failureStage));
               if(tsEnabled) row.tsExcluded = row.error;
             }
     return row;
@@ -11999,7 +12027,7 @@ if(horses.length === 0){
   async function rsProcessRaceWithRetry(env, date, vc, vn, r, onRetry){
     let row = await rsProcessRaceOnce(env, date, vc, vn, r);
     const max = env.tsEnabled ? 0 : RS_RETRY_MAX;   // 時系列モードは学習状態を持つため自動リトライしない
-    for(let a = 1; a <= max && row.status === 'error' && !rsAbort && !rsIsStructuralError(row.error); a++){
+    for(let a = 1; a <= max && row.status === 'error' && !rsAbort && row.failureKind === '通信エラー'; a++){
       if(onRetry) onRetry(a, row.error);
       await rsSleep(1500 * a);
       if(rsAbort) break;
@@ -12266,9 +12294,10 @@ if(horses.length === 0){
             rows.push(row);
             try{ window.__rightAnalysisLiveLabel = `${date} ${vn} ${r.no}R`; }catch(e){}
             if(row.status === 'ok') rsConsecErr = 0;
-            else if(row.status === 'error' && !rsIsStructuralError(row.error)){
+            else if(row.status === 'error' && row.failureKind === '通信エラー'){
               if(++rsConsecErr >= RS_BREAKER_LIMIT){ rsTripped = true; rsAbort = true; try{ window.TheKeibaRangeTS?.abort(); }catch(e){} }
             }
+            else rsConsecErr = 0;
             rsRenderThrottled(rows, tsEnabled, false);
           }
           // 開催場日が全レース失敗なく終わったら途中保存（中断・失敗を含む場合は保存せず、再開時にやり直す）
@@ -12287,7 +12316,7 @@ if(horses.length === 0){
       if(ck && ck.enabled && !rsAbort) await ck.markDone();
       const ckNote = ck ? (ck.failed ? ' ⚠️途中保存に失敗したため再開機能は無効です。' : (ck.restoredU ? ` 💾保存済み${ck.restoredU}開催場日(${ck.restoredR}R)を再利用。` : '')) : '';
       if(rsTripped){
-        if(prog) prog.innerHTML = `<div class="url-status err">⛔ 連続${RS_BREAKER_LIMIT}レースで取得に失敗したため自動停止しました（通信不良・ブロック・Bridge未接続の可能性）。時間を置いてからもう一度「実行」を押すと、保存済みの開催場日はスキップして続きから再開できます。${ckNote}</div>`;
+        if(prog) prog.innerHTML = `<div class="url-status err">⛔ 連続${RS_BREAKER_LIMIT}レースで通信エラーを確認したため自動停止しました（理由は取得・監査診断を確認）。時間を置いてからもう一度「実行」を押すと、保存済みの開催場日はスキップして続きから再開できます。${ckNote}</div>`;
       }else if(kind === 'JRA' && rsJraPlan && rsJraPlan.size === 0 && okCount === 0 && !rsAbort){
         const venLabel = selVenues.length ? selVenues.map(c => venueName('JRA', c)).join('・') : 'JRA';
         if(prog) prog.innerHTML = `<div class="url-status ok">✅ 完了：${venLabel} はこの期間に開催がありませんでした（非開催日はサーチせずスキップ）。</div>`;
@@ -12296,7 +12325,7 @@ if(horses.length === 0){
         // 「開催なし」と誤認させず実際のエラー内容を表示する。
         if(prog) prog.innerHTML = `<div class="url-status err">❌ 完了：0レース（${rsOpenVenuesFailCount}日すべてで開催場一覧の取得に失敗）。原因: ${asw_esc(rsLastOpenVenuesError || '不明')}<br><span style="font-size:11px;opacity:.85">🌉Userscriptブリッジが未接続の可能性があります。バッジに🌉マークが出ているか確認してください。</span></div>`;
       }else if(prog){
-        prog.innerHTML = `<div class="url-status ok">✅ 完了：${okCount}レースをシミュレーションしました${rsAbort ? '（中断）' : ''}${truncated ? `（⚠️期間が${RS_MAX_DAYS}日を超えたため先頭${RS_MAX_DAYS}日のみ）` : ''}。${errCnt ? ` ⚠️失敗${errCnt}件（集計の「🔁 失敗だけ再試行」で再実行できます）。` : ''}${ckNote}${rsAbort && ck && ck.enabled ? ' 💾中断しても、次回「実行」で続きから再開できます。' : ''}</div>`;
+        prog.innerHTML = `<div class="url-status ok">✅ 完了：${okCount}レースをシミュレーションしました${rsAbort ? '（中断）' : ''}${truncated ? `（⚠️期間が${RS_MAX_DAYS}日を超えたため先頭${RS_MAX_DAYS}日のみ）` : ''}。${rows.filter(x=>x.status==='excluded').length ? ` 監査対象外${rows.filter(x=>x.status==='excluded').length}件（保存済み発走前オッズなし）。` : ''}${errCnt ? ` ⚠️失敗${errCnt}件（集計の「🔁 失敗だけ再試行」で再実行できます）。` : ''}${ckNote}${rsAbort && ck && ck.enabled ? ' 💾中断しても、次回「実行」で続きから再開できます。' : ''}</div>`;
       }
     }catch(e){
       console.error('[runRangeVenueSimulation]', e);

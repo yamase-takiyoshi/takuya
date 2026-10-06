@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script id="thekeiba-build-version">
 // One release identity shared by all legacy and current display patches.
-window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.45 Settlement Recovery',number:'5.23.45'});
+window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.46 Settlement Recovery',number:'5.23.45'});
 window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
@@ -46,7 +46,7 @@ window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.45 Settlement Recovery</title>
+<title>The競馬 EV分析 v5.23.46 Settlement Recovery</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -409,7 +409,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.23.45 Settlement Recovery ☁️ 10s</span>
+    <span class="ver">v5.23.46 Settlement Recovery ☁️ 10s</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -17829,7 +17829,8 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
           if(!post) throw new Error('発走時刻を取得できません');
           const explicitCutoff = extractExplicitCutoff(doc);
           const postMs = timeOnDate(date, post);
-          let cutoffMs = explicitCutoff ? timeOnDate(date, explicitCutoff) : (postMs - c.closeLeadSec*1000);
+          let cutoffMs = explicitCutoff ? timeOnDate(date, explicitCutoff) : (window.KeibaClose629?.close({raceId:r.rid})||0);
+          if(!(cutoffMs>0))throw new Error('投票締切時刻が未取得。各画面の締切入力欄で指定してください');
           if(!Number.isFinite(cutoffMs)) throw new Error('締切基準時刻を計算できません');
           const targetMs = cutoffMs - CAPTURE_BEFORE_CLOSE_SEC*1000;
           let hs = [];
@@ -17838,8 +17839,8 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
             date, kind, venueCode, venueName:(typeof venueName==='function'?venueName(kind,venueCode):''),
             rid:r.rid, no:r.no, name:r.name || '', url, horses:hs,
             postTime:post, postMs, cutoffTime:explicitCutoff || isoLocalLabel(cutoffMs).slice(0,5), cutoffMs,
-            cutoffBasis:explicitCutoff ? 'EXPLICIT_CUTOFF' : 'POST_TIME_MINUS_CONFIGURED_LEAD',
-            closeLeadSec:explicitCutoff ? null : c.closeLeadSec,
+            cutoffBasis:explicitCutoff ? 'EXPLICIT_CUTOFF' : 'USER_BETTING_CLOSE',
+            closeLeadSec:null,
             targetMs, captured:false, missed:false
           });
         }catch(e){
@@ -20067,7 +20068,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     const stopState221=timelineCollectionState221(rid);
     if(stopState221.stopped){
       updateTimelineStopUi221(stopState221);
-      setStatus202(`🏁 ${rid} は発走+3分で時系列収集を終了・固定済みです。新しい点は追加しません。`,'ok');
+      setStatus202(`🏁 ${rid} は発走+1分で時系列収集を終了・固定済みです。新しい点は追加しません。`,'ok');
       return;
     }
     if(!force && document.hidden) return;
@@ -20148,7 +20149,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     const stopState221=timelineCollectionState221(activeRid);
     updateTimelineStopUi221(stopState221);
     if(activeRid && stopState221.stopped){
-      setStatus202(`🏁 ${activeKind} ${activeRid}：発走+3分で固定済み / ${n}点`,'ok');
+      setStatus202(`🏁 ${activeKind} ${activeRid}：発走+1分で固定済み / ${n}点`,'ok');
     }else{
       setStatus202(activeRid ? `📚 ${activeKind} ${activeRid}：保存済み ${n} 点` : 'レースを選択してください。', n?'ok':'wait');
     }
@@ -20467,7 +20468,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
 
 
   const TIMELINE_META_KEY220='thekeiba_timeline_meta_v220';
-  const POST_GRAPH_TAIL_MS202=3*60*1000;
+  const POST_GRAPH_TAIL_MS202=60*1000;
 
   function savedTimelineMeta202(rid){
     try{
@@ -20605,11 +20606,11 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     const nowBtn=$('oddsTsNow');
     if(nowBtn){
       nowBtn.disabled=stopped;
-      nowBtn.title=stopped?'発走+3分で時系列を固定済みです':'全8券種を取得';
+      nowBtn.title=stopped?'発走+1分で時系列を固定済みです':'全8券種を取得';
     }
     const meta=$('oddsTsMeta');
     if(stopped && meta && !/固定済/.test(meta.textContent||'')){
-      meta.textContent=(meta.textContent||'')+' / 🏁 発走+3分で固定済';
+      meta.textContent=(meta.textContent||'')+' / 🏁 発走+1分で固定済';
     }
     return stopped;
   }
@@ -20691,7 +20692,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     }
     ctx.restore();
 
-    // v5.18.222: 発走+3分で収集・更新を停止し、後から見ても同じ完成形を表示。
+    // v5.18.222: 発走+1分で収集・更新を停止し、後から見ても同じ完成形を表示。
     const timeMarker=(ms,label,stroke,fill,dash=[5,4])=>{
       if(!(Number.isFinite(ms)&&ms>=t0&&ms<=t1)) return;
       const xx=xOf(ms); ctx.save(); ctx.strokeStyle=stroke; ctx.fillStyle=fill; ctx.lineWidth=1.25; ctx.setLineDash(dash);
@@ -20700,7 +20701,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
       ctx.fillText(label,xx,T+H-4); ctx.restore();
     };
     if(Number.isFinite(graph.postMs)){
-      timeMarker(graph.postMs-3*60*1000,'3分前','rgba(251,191,36,.72)','#fbbf24',[4,4]);
+      timeMarker((window.KeibaClose629?.close({raceId:graph.raceId})||0)-180000,'締切3分前','rgba(251,191,36,.72)','#fbbf24',[4,4]);
       timeMarker(graph.postMs,'発走','rgba(248,113,113,.82)','#f87171',[6,4]);
     }
     if(Number.isFinite(graph.endMs)) timeMarker(graph.endMs,'+3分','rgba(148,163,184,.66)','#94a3b8',[2,4]);
@@ -20749,7 +20750,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     if(meta){
       const first=graphRows[0]?.captured_ms,last=graphRows[graphRows.length-1]?.captured_ms;
       const scope=cross?'全券種横断':market;
-      const cap=graph.capped?' / 🏁 発走+3分で固定済':(Number.isFinite(graph.endMs)?' / 発走+3分で自動停止':'');
+      const cap=graph.capped?' / 🏁 発走+1分で固定済':(Number.isFinite(graph.endMs)?' / 発走+1分で自動停止':'');
       const view=Number.isFinite(graph.viewSpan)?` / ${Math.round(graph.viewSpan/60000)}分窓${graph.follow?' 追従':''}`:' / 全期間';
       meta.textContent=graphRows.length?`${graphRows.length}点 / ${new Date(first).toLocaleTimeString('ja-JP')}〜${new Date(last).toLocaleTimeString('ja-JP')} / ${scope} ${metricLabel202(mode)}${view}${cap}`:'0点';
     }
@@ -20992,11 +20993,11 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
         const st221=timelineCollectionState221(currentRaceId202());
         if(st221.stopped){
           updateTimelineStopUi221(st221);
-          setStatus202('🏁 このレースは発走+3分で固定済みです。10秒自動ONは次のレースでそのまま使えます。グラフを左右にタップまたはドラッグできます。','ok');
+          setStatus202('🏁 このレースは発走+1分で固定済みです。10秒自動ONは次のレースでそのまま使えます。グラフを左右にタップまたはドラッグできます。','ok');
           return;
         }
         if(!document.hidden) capture202(true);
-        setStatus202('▶️ 10秒自動を開始（発走+3分で自動停止 / デバイス未接続時はWorker直結）','ok');
+        setStatus202('▶️ 10秒自動を開始（発走+1分で自動停止 / デバイス未接続時はWorker直結）','ok');
       }else{
         setStatus202('⏸ 10秒自動を停止','wait');
       }
@@ -23224,19 +23225,23 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     const rid=currentRid219();if(!/^\d{10,14}$/.test(rid)){if(!silent)status219('⚠️ レースを選択してください','err');return null;}
     const postMs=uiPostMs219(rid);
     let saved=null;try{const all=JSON.parse(localStorage.getItem(META_KEY220)||'{}')||{};saved=all[String(rid)]||null;}catch(e){}
-    const endAt=Number(saved?.end_at_ms||0)>0?Number(saved.end_at_ms):(Number.isFinite(postMs)?postMs+3*60*1000:Date.now()+3*60*60*1000);
+    const endAt=Number(saved?.end_at_ms||0)>0?Number(saved.end_at_ms):(Number.isFinite(postMs)?postMs+60*1000:Date.now()+3*60*60*1000);
     if(endAt>0 && Date.now()>=endAt){
-      if(!silent)status219(`🏁 ${rid} は発走+3分で収集終了・固定済みです。再開しません。`,'ok');
-      return {ok:true,skipped:true,reason:'POST_PLUS_3M_FIXED',race_id:rid,end_at_ms:endAt};
+      if(!silent)status219(`🏁 ${rid} は発走+1分で収集終了・固定済みです。再開しません。`,'ok');
+      return {ok:true,skipped:true,reason:'POST_PLUS_1M_FIXED',race_id:rid,end_at_ms:endAt};
     }
     const opt219=$219('raceSelect')?.selectedOptions?.[0];
     const raceDate219=String($219('pickDate')?.value||'').trim();
     const postTime219=String(opt219?.dataset?.postTime||'').trim();
-    const body={race_id:rid,kind:kind219(rid),race_label:label219(),race_date:raceDate219,post_time:postTime219,post_ms:Number.isFinite(postMs)?postMs:0,upstream_proxy:upstream219(),interval_ms:10000,end_at_ms:endAt};
+    const body={race_id:rid,kind:kind219(rid),race_label:label219(),race_date:raceDate219,post_time:postTime219,post_ms:Number.isFinite(postMs)?postMs:0,close_ms:window.KeibaClose629?.close({raceId:rid})||0,upstream_proxy:upstream219(),interval_ms:10000,end_at_ms:endAt};
     const j=await fetch219('/timeline/start',{method:'POST',headers:headers219(true),body:JSON.stringify(body)});
     if(j?.meta){ if(Number.isFinite(postMs))j.meta.post_ms=postMs; rememberMeta219(rid,j.meta); }
-    status219(`☁️ ${rid} 常時収集ON（発走+3分で完全停止・固定 / デバイス0台）`,'ok');return j;
+    status219(`☁️ ${rid} 常時収集ON（発走+1分で完全停止・固定 / デバイス0台）`,'ok');return j;
   }
+  window.keibaSetDeadline629=async function(p,closeMs){
+    if(!base219())return {ok:false,error:'Timeline Worker URL未設定'};
+    return fetch219('/timeline/start',{method:'POST',headers:headers219(true),body:JSON.stringify({race_id:p.raceId,kind:p.source,race_date:p.date,post_time:p.race?.startTime||'',post_ms:Number(p.race?.postMs||0),close_ms:closeMs,interval_ms:10000,upstream_proxy:upstream219()})});
+  };
   async function syncCurrent219(silent=false,forceFull=false,ridOverride=''){
     if(window.bridgeOnly252()) return {ok:false,skipped:true,reason:'bridge-only'};
     const rid=String(ridOverride||currentRid219());
@@ -23318,7 +23323,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     if(settingsTab&&!$219('timelineCloudCard219')){
       const c=cfg219(),card=document.createElement('div');card.className='card';card.id='timelineCloudCard219';card.innerHTML=`
         <div class="section-header"><h2>☁️ 常時時系列オッズ（デバイス0台）</h2><span class="nar-badge">v5.18.255</span></div>
-        <div style="font-size:11px;color:var(--muted);line-height:1.65;margin-bottom:10px">Durable Object Workerが全8券種を確認します。発走30分前から10秒、それ以前は60秒間隔。変化時と10分ごとの確認点だけ保存し、大きな履歴は圧縮します。別デバイス未接続・iPad/PCを閉じた状態でも継続し、次回起動時にWorker全履歴をIndexedDBへ復元します。Workerは発走3分前、端末は発走+3分に達したら収集をそのレースについて終了し、その時点の時系列を完成形として固定します。以後は新しい点を追加せず、後から同じグラフを閲覧できます。3分前・発走・+3分の基準線も固定表示します。</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.65;margin-bottom:10px">Durable Object Workerが全8券種を確認します。発走30分前から10秒、それ以前は60秒間隔。変化時と10分ごとの確認点だけ保存し、大きな履歴は圧縮します。別デバイス未接続・iPad/PCを閉じた状態でも継続し、次回起動時にWorker全履歴をIndexedDBへ復元します。Workerは発走3分前、端末は発走+1分に達したら収集をそのレースについて終了し、その時点の時系列を完成形として固定します。以後は新しい点を追加せず、後から同じグラフを閲覧できます。3分前・発走・+3分の基準線も固定表示します。</div>
         <div class="field"><label>常時時系列Worker URL</label><input id="timelineCloudUrl219" type="url" value="${esc219(c.workerUrl)}" placeholder="https://the-keiba-timeline-collector.xxxxx.workers.dev"></div>
         <div class="field"><label>Token（Workerに設定した場合のみ）</label><input id="timelineCloudToken219" type="password" value="${esc219(c.token)}" autocomplete="off"></div>
         <label style="display:flex;gap:8px;align-items:center;font-size:12px;margin:7px 0"><input id="timelineCloudAutoReg219" type="checkbox" ${c.autoRegister?'checked':''}> レース選択時に常時収集を自動開始</label>
@@ -25709,7 +25714,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
           }finally{clearTimeout(timeout);signal?.removeEventListener('abort',abort);}
         };
         // Completed races are restored from the server's GitHub archive.
-        const finished=(race.postMs>0&&Date.now()>=race.postMs+180000)||race.date<today();
+        const finished=(race.postMs>0&&Date.now()>=race.postMs+60000)||race.date<today();
         if(finished || !race.postMs){
           const [y,m,d]=race.date.split('-');
           const archiveUrls=[
@@ -25840,7 +25845,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     return String(v);
   }
   function panePrecloseChange52340(p,market,combination,currentOdds){
-    const post=Number(p?.race?.postMs||0),nowOdds=Number(currentOdds);
+    const post=window.KeibaClose629?.close(p)||0,nowOdds=Number(currentOdds);
     if(!(post>0)||!(nowOdds>=1)||!Array.isArray(p?.history)||!p.history.length)return NaN;
     const target=post-180000;
     // 3分前時点より前の最後の保存値。change-only Archive は次の変化まで有効。
@@ -26239,6 +26244,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
         p.transport.timeline=String(got.transport||(got.disabled?'端末履歴':'Timeline Worker'));
         const safe=(got.rows||[]).map(r=>normalizeRecord(r,c.source,c.raceId,c.date)).filter(Boolean);
         if(safe.length!==(got.rows||[]).length)throw new Error('別レースの履歴が含まれるため受理しません');
+        if(got.meta && p.race){p.race.close_ms=got.meta.close_ms||got.meta.deadline_ms||p.race.close_ms||0;}
         const known=new Set(p.history.map(r=>r.id)),added=safe.filter(r=>!known.has(r.id)).length;
         if(got.github){
           const meta=got.meta||{},tm=String(meta.post_time||meta.start_time||'').match(/(?:[01]?\d|2[0-3]):[0-5]\d/);
@@ -26266,7 +26272,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       if(q('.windowSelect'))q('.windowSelect').value='3600000';
       if(q('.logCheck')){q('.logCheck').checked=false;q('.logCheck').disabled=false;}
     }
-    stopped(p){return p.race?.postMs>0&&Date.now()>=p.race.postMs+180000 || p.date<today();}
+    stopped(p){return p.race?.postMs>0&&Date.now()>=p.race.postMs+60000 || p.date<today();}
     async loadOdds(id){
       const p=this.panes[id];if(!p?.raceId||p.busy)return;
       if(this.stopped(p)){p.status='収集終了：保存済み履歴の最後の1時間を表示します';p.tone='';this.render(p);return;}
@@ -26426,7 +26432,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       if(!p.follow)return p.viewEnd||Date.now();
       const post=Number(p.race?.postMs||0);
       if(this.stopped(p)){
-        const within=p.history.filter(r=>post>0?r.captured_ms<=post+180000:true);
+        const within=p.history.filter(r=>post>0?r.captured_ms<=post+60000:true);
         if(within.length)return Math.max(...within.map(r=>r.captured_ms));
         return post>0?post:Date.parse(p.date+'T23:59:59+09:00');
       }
@@ -27970,7 +27976,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     const meta={
       race_id:rid, kind:race.kind||data.kind||'', race_label:race.race_label||data.race_label||rid,
       raw_capture_count:Number(data?.stats?.raw_capture_count||0), delta_event_count:Number(data?.stats?.delta_event_count||0),
-      race_date:String(race.race_date||''), post_time:String(race.post_time||''), post_ms:msOf(race.post_ms)
+      race_date:String(race.race_date||''), post_time:String(race.post_time||''), post_ms:msOf(race.post_ms),close_ms:msOf(race.close_ms)
     };
     let markets=normalizeMarkets(init.markets||{});
     const base=[makeRecord(meta,firstMs,markets,{market_status:init.market_status||{}})];
@@ -27990,7 +27996,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       for(let i=1;i<base.length;i++){
         const prev=base[i-1],cur=base[i];
         if(cur.captured_ms-prev.captured_ms>1000){
-          stepped.push({...deepClone(prev),id:`${rid}:${cur.captured_ms-1}`,captured_ms:cur.captured_ms-1,captured_at:new Date(cur.captured_ms-1).toISOString(),archive_hold_point:true});
+          stepped.push({...deepClone(prev),id:`${rid}:${cur.captured_ms-1}`,original_captured_ms:Number(prev.original_captured_ms||prev.captured_ms),captured_ms:cur.captured_ms-1,captured_at:new Date(cur.captured_ms-1).toISOString(),archive_hold_point:true});
         }
         stepped.push(cur);
       }
@@ -27999,7 +28005,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     const lastMs=msOf(data?.stats?.last_capture_ms);
     if(lastMs>0 && records.length && lastMs>records[records.length-1].captured_ms){
       const last=records[records.length-1];
-      records.push({...deepClone(last),id:`${rid}:${lastMs}`,captured_ms:lastMs,captured_at:new Date(lastMs).toISOString(),archive_hold_point:true});
+      records.push({...deepClone(last),id:`${rid}:${lastMs}`,original_captured_ms:Number(last.original_captured_ms||last.captured_ms),captured_ms:lastMs,captured_at:new Date(lastMs).toISOString(),archive_hold_point:true});
     }
     if(records.length>5000){
       const first=records[0],last=records[records.length-1];
@@ -28041,7 +28047,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     }
     records.sort((a,b)=>a.captured_ms-b.captured_ms);
     if(!records.length) return null;
-    return {meta:{race_id:rid,kind:records[0].kind||'',race_label:records[0].race_label||rid},records:records.slice(-5000),compressed:false,rawCaptureCount:records.length,deltaEventCount:0,sourceSchema:String(data?.schema||'raw-captures')};
+    return {meta:{...(data?.race||data?.meta||{}),race_id:rid,kind:records[0].kind||'',race_label:records[0].race_label||rid},records:records.slice(-5000),compressed:false,rawCaptureCount:records.length,deltaEventCount:0,sourceSchema:String(data?.schema||'raw-captures')};
   }
 
   function parseArchive(data){
@@ -28985,7 +28991,7 @@ Proto.installReplay52317=function(p){
   box.querySelector('.replayPlay52317').onclick=()=>this.toggleReplayPlay52317(p);
   box.querySelector('.replaySpeed52317').onchange=e=>{const s=state(p);s.speed=Math.max(1,Number(e.target.value)||1);if(s.playing){if(s.timer)clearTimeout(s.timer);s.timer=null;this.scheduleReplay52317(p);}this.updateReplayUi52317(p);};
   box.querySelector('.replayRange52317').oninput=e=>{stop(p);this.setReplayIndex52317(p,Number(e.target.value)||0,true);};
-  box.querySelector('.replayPreclose52317').onclick=()=>{const a=rows(p);if(!a.length)return;stop(p);const post=Number(p.race?.postMs||0),target=post>0?post-180000:Number(a[a.length-1].captured_ms);this.setReplayIndex52317(p,nearestIndex(a,target),true);};
+  box.querySelector('.replayPreclose52317').onclick=()=>{const a=rows(p);if(!a.length)return;stop(p);const close=window.KeibaClose629?.close(p)||0;if(!close){alert('投票締切時刻を入力してください');return;}const target=close-180000,ix=a.findLastIndex(r=>Number(r.captured_ms)<=target);if(ix<0){alert('目標時刻以前の記録がありません');return;}this.setReplayIndex52317(p,ix,true);};
   this.updateReplayUi52317(p);
 };
 const oldBuild=Proto.buildPane;Proto.buildPane=function(p){const r=oldBuild.call(this,p);this.installReplay52317(p);return r;};
@@ -29107,8 +29113,8 @@ function marketStatus(rec){const out={};for(const t of MARKETS){const n=Array.is
 function expand5(pack,horses){const src=(pack?.records||[]).filter(r=>num(r?.captured_ms)>0&&r?.markets&&Object.keys(r.markets).length).slice().sort((a,b)=>num(a.captured_ms)-num(b.captured_ms));if(!src.length)return [];
   const first=num(src[0].captured_ms),last=num(src[src.length-1].captured_ms);if(!(first>0&&last>=first))return [];
   const maxPoints=5000,rawPoints=Math.floor((last-first)/5000)+1,step=rawPoints>maxPoints?Math.ceil((last-first)/(maxPoints-1)/5000)*5000:5000;
-  let i=0,cur=src[0],out=[];for(let t=first;t<=last;t+=step){while(i+1<src.length&&num(src[i+1].captured_ms)<=t){i++;cur=src[i];}const r=clone(cur);r.id=`${pack.meta.race_id}:${t}:archive5s`;r.captured_ms=t;r.captured_at=new Date(t).toISOString();r.source='archive-full-replay';r.collector_origin='archive-full-replay-v5.23.20';r.archive_import=true;r.archive_virtual_5s=true;r.archive_step_ms=step;r.horses=horses.length?clone(horses):(Array.isArray(r.horses)?r.horses:[]);r.market_status=marketStatus(r);out.push(r);}
-  if(out.length&&out[out.length-1].captured_ms<last){let curLast=src[src.length-1];const r=clone(curLast);r.id=`${pack.meta.race_id}:${last}:archive5s`;r.captured_ms=last;r.captured_at=new Date(last).toISOString();r.source='archive-full-replay';r.collector_origin='archive-full-replay-v5.23.20';r.archive_import=true;r.archive_virtual_5s=true;r.archive_step_ms=step;r.horses=horses.length?clone(horses):(Array.isArray(r.horses)?r.horses:[]);r.market_status=marketStatus(r);out.push(r);}
+  let i=0,cur=src[0],out=[];for(let t=first;t<=last;t+=step){while(i+1<src.length&&num(src[i+1].captured_ms)<=t){i++;cur=src[i];}const r=clone(cur);r.id=`${pack.meta.race_id}:${t}:archive5s`;r.original_captured_ms=num(cur.original_captured_ms||cur.captured_ms);r.captured_ms=t;r.captured_at=new Date(t).toISOString();r.source='archive-full-replay';r.collector_origin='archive-full-replay-v5.23.20';r.archive_import=true;r.archive_virtual_5s=true;r.archive_step_ms=step;r.horses=horses.length?clone(horses):(Array.isArray(r.horses)?r.horses:[]);r.market_status=marketStatus(r);out.push(r);}
+  if(out.length&&out[out.length-1].captured_ms<last){let curLast=src[src.length-1];const r=clone(curLast);r.id=`${pack.meta.race_id}:${last}:archive5s`;r.original_captured_ms=num(curLast.original_captured_ms||curLast.captured_ms);r.captured_ms=last;r.captured_at=new Date(last).toISOString();r.source='archive-full-replay';r.collector_origin='archive-full-replay-v5.23.20';r.archive_import=true;r.archive_virtual_5s=true;r.archive_step_ms=step;r.horses=horses.length?clone(horses):(Array.isArray(r.horses)?r.horses:[]);r.market_status=marketStatus(r);out.push(r);}
   out.stepMs=step;return out;
 }
 const typeMap={'三連複':'3連複','三連単':'3連単','３連複':'3連複','３連単':'3連単','単勝':'単勝','複勝':'複勝','枠連':'枠連','枠単':'枠単','ワイド':'ワイド','馬連':'馬連','馬単':'馬単','3連複':'3連複','3連単':'3連単'};
@@ -29123,15 +29129,15 @@ function resultFromRaw(raw,rid,kind,horses){const c=raw?.result||raw?.race_resul
 }
 function nearest(a,target){if(!a.length)return 0;let lo=0,hi=a.length-1;while(lo<hi){const m=Math.floor((lo+hi+1)/2);if(num(a[m].captured_ms)<=target)lo=m;else hi=m-1;}if(lo<a.length-1&&Math.abs(num(a[lo+1].captured_ms)-target)<Math.abs(num(a[lo].captured_ms)-target))return lo+1;return lo;}
 function jump(ws,p,target){const a=p.history||[];if(!a.length)return;ws.setReplayIndex52317?.(p,nearest(a,target),true);}
-function paneInfo(ws,p,pack,meta){if(!p.root)return;let box=p.root.querySelector('.archive-full-info52320');if(!box){box=document.createElement('div');box.className='archive-full-info52320';const id=p.root.querySelector('.msv2-identity');id?.parentNode?.insertBefore(box,id.nextSibling);}box.hidden=false;const first=num(p.history?.[0]?.captured_ms),last=num(p.history?.[p.history.length-1]?.captured_ms),types=MARKETS.filter(t=>p.history?.some(r=>r.markets?.[t]?.length));const step=num(meta.stepMs)||5000,post=num(p.race?.postMs);box.innerHTML=`<div class="archive-full-head52320"><span class="archive-full-badge52320">📦 Archive Full Replay</span><b>${meta.compressed?'初回完全値＋差分':'保存時系列'} → ${Math.round(step/1000)}秒タイムライン</b></div><div class="archive-full-stats52320">${clock(first)}〜${clock(last)} / 復元 ${p.history.length.toLocaleString()}点 / 元10秒記録 ${num(pack.rawCaptureCount).toLocaleString()}点 / 差分 ${num(pack.deltaEventCount).toLocaleString()}件 / 券種 ${types.length}/8</div><div class="archive-full-actions52320"><button type="button" data-arjump="first">⏮ 最初</button><button type="button" data-arjump="pre">締切3分前</button><button type="button" data-arjump="post">発走</button><button type="button" data-arjump="post3">発走+3分</button><button type="button" data-arjump="last">最後 ⏭</button><button type="button" data-ar-ev>全券種EV</button><button type="button" data-ar-graph>📊 保存JSONグラフ</button></div><div class="archive-full-note52320">オッズ・市場確率・人気順は保存値から復元。<strong>想定確率・EV・Kelly・乖離率は現行の画面モデルで再計算</strong>します。${meta.result?'着順・払戻はArchive内の保存結果を表示。':'着順・払戻はArchive内に無ければ「結果・払戻」ボタンで別途取得できます。'} ネット再取得・JSON自動補完はArchive再生中OFFです。</div>`;
-  box.querySelectorAll('[data-arjump]').forEach(b=>b.onclick=()=>{const k=b.dataset.arjump,a=p.history||[];if(!a.length)return;let t=k==='first'?num(a[0].captured_ms):k==='last'?num(a[a.length-1].captured_ms):post>0?(k==='pre'?post-180000:k==='post3'?post+180000:post):num(a[a.length-1].captured_ms);jump(ws,p,t);});
+function paneInfo(ws,p,pack,meta){if(!p.root)return;let box=p.root.querySelector('.archive-full-info52320');if(!box){box=document.createElement('div');box.className='archive-full-info52320';const id=p.root.querySelector('.msv2-identity');id?.parentNode?.insertBefore(box,id.nextSibling);}box.hidden=false;const first=num(p.history?.[0]?.captured_ms),last=num(p.history?.[p.history.length-1]?.captured_ms),types=MARKETS.filter(t=>p.history?.some(r=>r.markets?.[t]?.length));const step=num(meta.stepMs)||5000,post=num(p.race?.postMs);box.innerHTML=`<div class="archive-full-head52320"><span class="archive-full-badge52320">📦 Archive Full Replay</span><b>${meta.compressed?'初回完全値＋差分':'保存時系列'} → ${Math.round(step/1000)}秒タイムライン</b></div><div class="archive-full-stats52320">${clock(first)}〜${clock(last)} / 復元 ${p.history.length.toLocaleString()}点 / 元10秒記録 ${num(pack.rawCaptureCount).toLocaleString()}点 / 差分 ${num(pack.deltaEventCount).toLocaleString()}件 / 券種 ${types.length}/8</div><div class="archive-full-actions52320"><button type="button" data-arjump="first">⏮ 最初</button><button type="button" data-arjump="pre">締切3分前</button><button type="button" data-arjump="post">発走</button><button type="button" data-arjump="post3">発走+1分</button><button type="button" data-arjump="last">最後 ⏭</button><button type="button" data-ar-ev>全券種EV</button><button type="button" data-ar-graph>📊 保存JSONグラフ</button></div><div class="archive-full-note52320">オッズ・市場確率・人気順は保存値から復元。<strong>想定確率・EV・Kelly・乖離率は現行の画面モデルで再計算</strong>します。${meta.result?'着順・払戻はArchive内の保存結果を表示。':'着順・払戻はArchive内に無ければ「結果・払戻」ボタンで別途取得できます。'} ネット再取得・JSON自動補完はArchive再生中OFFです。</div>`;
+  box.querySelectorAll('[data-arjump]').forEach(b=>b.onclick=()=>{const k=b.dataset.arjump,a=p.history||[];if(!a.length)return;let t=k==='first'?num(a[0].captured_ms):k==='last'?num(a[a.length-1].captured_ms):post>0?(k==='pre'?post-180000:k==='post3'?post+60000:post):num(a[a.length-1].captured_ms);if(k==='pre'){const c=window.KeibaClose629?.close(p)||0;if(!c){alert('投票締切時刻を入力してください');return;}t=c-180000;const before=a.filter(r=>num(r.captured_ms)<=t);if(!before.length){alert('目標時刻以前の記録がありません');return;}t=num(before.at(-1).captured_ms);}jump(ws,p,t);});
   box.querySelector('[data-ar-ev]').onclick=()=>{p.ticket=ALL;p.metric='ev';p.topN=10;p.selectedBet='';const q=s=>p.root.querySelector(s);q('.ticketSelect').value=ALL;q('.metricSelect').value='ev';q('.rankSizeSelect').value='10';q('.logCheck').checked=false;q('.logCheck').disabled=true;ws.render(p);};
   box.querySelector('[data-ar-graph]').onclick=()=>window.openSavedArchiveGraph5214?.();
 }
 async function prepare(pack,raw={}){if(!pack?.records?.length)throw new Error('Archiveの時系列データがありません');const ws=window.TheKeibaMultiV2?.workspace;if(!ws)throw new Error('マルチ画面が初期化されていません');ws.open();await new Promise(r=>setTimeout(r,90));const id=Math.max(0,Math.min(5,num(ws.active))),p=ws.panes[id];if(!p)throw new Error('表示画面を選択できません');
   p.listController?.abort?.();p.listRevision=(p.listRevision||0)+1;ws.cancel?.(p);
   const rid=String(pack.meta?.race_id||'').replace(/\D/g,'');if(!/^\d{12}$/.test(rid))throw new Error('12桁のrace_idを確認できません');const first=num(pack.records[0]?.captured_ms),last=num(pack.records[pack.records.length-1]?.captured_ms),date=normDate(pack.meta?.race_date||raw?.race?.race_date||raw?.race_date)||jstDate(first||last),kind=kindFrom(rid,pack.meta,raw),venue=rid.slice(4,6),raceNo=num(rid.slice(-2))||1,post=postMsOf(raw,pack,date),startTime=post?clock(post).slice(0,5):String(pack.meta?.post_time||raw?.race?.post_time||'').slice(0,5),name=String(pack.meta?.race_label||raw?.race?.race_label||raw?.race?.name||`${raceNo}R`),horses=horseRows(raw,pack),rows=expand5(pack,horses);if(!rows.length)throw new Error('10秒タイムラインを復元できません');
-  const race={source:kind,date,venue,raceId:rid,raceNo,startTime,postMs:post,name};p.source=kind;p.date=date;p.preferredVenue=venue;p.venue=venue;p.races=[race];p.raceId=rid;p.race=clone(race);p.horses=clone(horses);p.history=[];p.odds=[];p.diagnostics={};p.transport={list:'Archive JSON',card:horses.length?'Archive JSON':'Archive JSON（馬名なし）',odds:'Archive JSON',timeline:'Archive Full Replay'};p.initialized=true;p.loading=false;p.busy=false;p.historyBusy=false;p.historyWarning='';p.cardWarning=horses.length?'':'Archiveに馬名・枠番が無い場合、枠連の想定確率は再計算できません';p.storageWarning='';p.workerCursor=0;p.lastWorkerPoll=0;p.lastHistoryAttempt=0;p.repairStatus='Archive再生中';p.auto=false;p.autoRepair=false;p.ticket='単勝';p.customMarkets=MARKETS.slice();p.metric='odds';p.topN=20;p.selectedBet='';p.windowMs=3600000;p.follow=false;p.viewEnd=num(rows[0].captured_ms);p.log=false;
+  const race={source:kind,date,venue,raceId:rid,raceNo,startTime,postMs:post,close_ms:pack.meta?.close_ms||raw?.race?.close_ms||raw?.close_ms||0,name};p.source=kind;p.date=date;p.preferredVenue=venue;p.venue=venue;p.races=[race];p.raceId=rid;p.race=clone(race);p.horses=clone(horses);p.history=[];p.odds=[];p.diagnostics={};p.transport={list:'Archive JSON',card:horses.length?'Archive JSON':'Archive JSON（馬名なし）',odds:'Archive JSON',timeline:'Archive Full Replay'};p.initialized=true;p.loading=false;p.busy=false;p.historyBusy=false;p.historyWarning='';p.cardWarning=horses.length?'':'Archiveに馬名・枠番が無い場合、枠連の想定確率は再計算できません';p.storageWarning='';p.workerCursor=0;p.lastWorkerPoll=0;p.lastHistoryAttempt=0;p.repairStatus='Archive再生中';p.auto=false;p.autoRepair=false;p.ticket='単勝';p.customMarkets=MARKETS.slice();p.metric='odds';p.topN=20;p.selectedBet='';p.windowMs=3600000;p.follow=false;p.viewEnd=num(rows[0].captured_ms);p.log=false;
   ws.merge(p,rows);const latest=p.history[p.history.length-1]||{};p.diagnostics=marketStatus(latest);p.status=`📦 Archive Full Replay：${p.history.length.toLocaleString()}点を${Math.round((rows.stepMs||5000)/1000)}秒基準で復元`;p.tone='ok';p.archive52320={active:true,pack,raw,stepMs:rows.stepMs||5000};
   const result=resultFromRaw(raw,rid,kind,horses);if(result)p.result5202=result;else p.result5202=null;p.resultError5202='';p.resultBusy5202=false;
   if(p.root){const q=s=>p.root.querySelector(s);q('.sourceSelect').value=kind;q('.dateInput').value=date;q('.ticketSelect').value=ALL;q('.metricSelect').value='ev';q('.rankSizeSelect').value='10';q('.windowSelect').value='3600000';q('.autoCheck').checked=false;q('.repairCheck').checked=false;q('.logCheck').checked=false;q('.logCheck').disabled=true;}
@@ -30534,7 +30540,7 @@ html[data-theme="light"] .auditTable52341 .auditOk52341{color:#047857}html[data-
 
   function latestSaved(p,type,combo){
     const rows=Array.isArray(p?.history)?p.history:[];
-    const post=Number(p?.race?.postMs||0),limit=post>0?post+180000:Infinity;
+    const post=Number(p?.race?.postMs||0),limit=post>0?post+60000:Infinity;
     for(let i=rows.length-1;i>=0;i--){
       const rec=rows[i]; if(!rec) continue;
       const ms=Number(rec.captured_ms||0); if(ms>limit) continue;
@@ -30590,6 +30596,8 @@ html[data-theme="light"] .auditTable52341 .auditOk52341{color:#047857}html[data-
     });
     const comparable=rows.filter(r=>r.latest),matched=rows.filter(r=>r.match===true),different=rows.filter(r=>r.match===false);
     const verified=!!(snap&&(snap.preclose3m_verified===true||snap.timing_verified===true));
+    const actualClose=window.KeibaClose629?.close(p)||0;
+    snap=window.KeibaClose629?.recover(p)||(actualClose&&Number(snap?.close_ms||snap?.cutoff_ms)===actualClose&&Date.parse(snap?.captured_at||'')<=actualClose-180000?snap:null);
     const source=sourceLabel(p);
     const lead=summaryLead(rows,snap);
     const badgeClass=different.length?'warn':(comparable.length&&matched.length===comparable.length?'ok':'');
@@ -30601,7 +30609,7 @@ html[data-theme="light"] .auditTable52341 .auditOk52341{color:#047857}html[data-
       const state=r.match===true?'<span class="auditOk52341">✅ 一致</span>':r.match===false?'<span class="auditBad52341">⚠️ 差あり</span>':'<span class="auditNA52341">未比較</span>';
       return `<tr><td>${esc(r.type)}</td><td><b>${esc(r.combo)}</b></td><td>${Number.isFinite(r.preclose)?fmt(r.preclose)+(verified?' ✓':' *'):'—'}</td><td>${latestText}</td><td><b>${fmt(r.payoutOdds)}</b><small> (${Math.round(r.amount).toLocaleString('ja-JP')}円)</small></td><td>${diffText}</td><td>${state}</td></tr>`;
     }).join(''):'<tr><td colspan="7" class="auditNA52341">確定払戻をまだ取得できていません。</td></tr>';
-    const snapMeta=snap?`${verified?'締切3分前 VERIFIED':'締切3分前 CHECK'}${snap.captured_at?' / '+esc(new Date(snap.captured_at).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit'})):''}`:'締切3分前スナップショットなし';
+    const snapMeta=snap?.recovered?`締切3分前：履歴から復元 / 目標 ${clock(snap.target_ms)} / ${TYPES.map(t=>snap.market_times?.[t]?t+' '+clock(snap.market_times[t])+'（差'+Math.round((snap.target_ms-snap.market_times[t])/1000)+'秒）':t+' 未取得').join('・')}`:snap?`${verified?'締切3分前 VERIFIED':'締切3分前 CHECK'}${snap.captured_at?' / '+esc(new Date(snap.captured_at).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit'})):''}`:(window.KeibaClose629?.close(p)?'締切3分前以前の保存記録なし':'投票締切時刻が不明：下の入力欄で指定すると過去履歴から復元');
     return `<details class="oddsAudit52341"><summary><span class="auditLead52341">🔎 ${esc(lead)}</span><span class="auditCount52341 ${badgeClass}">${esc(badge)}</span></summary><div class="auditBody52341"><div class="auditMeta52341">${esc(source)} ／ ${snapMeta} ／ 払戻換算 = 払戻金 ÷ 100</div><div class="auditScroll52341"><table class="auditTable52341"><thead><tr><th>券種</th><th>的中組合せ</th><th>締切3分前</th><th>保存最終</th><th>払戻換算</th><th>差</th><th>判定</th></tr></thead><tbody>${table}</tbody></table></div><div class="auditFoot52341">「保存最終」はGitHub/Worker時系列で最後に確認できた独立オッズです。差ありは即データ不正とは限りませんが、取得欠測・更新遅延・払戻側とのキーずれを疑う目印になります。${snap&&!verified?' * 3分前スナップショットは取得時刻未検証です。':''}</div></div></details>`;
   }
 
@@ -30663,6 +30671,70 @@ html[data-theme="light"] .auditTable52341 .auditOk52341{color:#047857}html[data-
 })();
 </script>
 
+<script>
+/* v5.23.46: explicit betting deadline, historical recovery, eight market charts */
+(()=>{'use strict';
+const TYPES=['単勝','複勝','枠連','馬連','馬単','ワイド','3連複','3連単'];
+const stamp=v=>{const n=Number(v);if(Number.isFinite(n)&&n>0)return n<1e11?n*1000:n;const d=Date.parse(String(v||''));return Number.isFinite(d)?d:0;};
+const clock=v=>v?new Date(v).toLocaleTimeString('ja-JP',{timeZone:'Asia/Tokyo',hour12:false}):'—';
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function close(p){
+ const sources=[p?.race,p?.archive52320?.raw?.race,p?.archive52320?.pack?.meta,...(p?.history||[]).slice(-1)];
+ for(const x of sources){const n=stamp(x?.close_ms||x?.closeMs||x?.deadline_ms||x?.betting_close_ms||x?.close_at||x?.betting_close_at);if(n)return n;}
+ try{return stamp(JSON.parse(localStorage.getItem('keiba_deadlines629')||'{}')[p?.raceId]);}catch(_){return 0;}
+}
+function recover(p){
+ const c=close(p);if(!c)return null;const target=c-180000;
+ if(Date.now()<target)return null;
+ const rows=(p.archive52320?.pack?.records||p.history||[]).filter(r=>!(r.archive_virtual_5s||r.archive_hold_point)||r.original_captured_ms).map(r=>({...r,captured_ms:Number(r.original_captured_ms||r.captured_ms)})).filter(r=>r.captured_ms>0&&r.captured_ms<=target).sort((a,b)=>b.captured_ms-a.captured_ms);
+ const markets={},times={};
+ for(const t of TYPES){const r=rows.find(r=>Array.isArray(r.markets?.[t])&&r.markets[t].length);if(r){markets[t]=r.markets[t];times[t]=r.captured_ms;}}
+ if(!Object.keys(markets).length)return null;
+ const latest=Math.max(...Object.values(times));
+ return {race_id:p.raceId,recovered:true,source:'HISTORY_CLOSE_MINUS_3M',close_ms:c,target_ms:target,captured_ms:latest,captured_at:new Date(latest).toISOString(),markets,additional_markets:markets,odds:(markets['単勝']||[]).map(r=>({horse_no:r.combination,odds:r.odds})),market_times:times,preclose3m_verified:Object.keys(markets).length===8&&Object.values(times).every(t=>target-t<=60000),missing_types:TYPES.filter(t=>!markets[t]?.length)};
+}
+window.KeibaClose629={close,recover,TYPES,stamp};
+function graph(canvas,p,type){
+ const ctx=canvas.getContext('2d'),w=Math.max(280,canvas.clientWidth||400),h=210,dpr=Math.min(2,devicePixelRatio||1);canvas.width=w*dpr;canvas.height=h*dpr;ctx.scale(dpr,dpr);
+ const post=Number(p.race?.postMs||0),stop=post?post+60000:Infinity;
+ const history=(p.archive52320?.pack?.records||p.history||[]).filter(r=>!(r.archive_virtual_5s||r.archive_hold_point)||r.original_captured_ms).map(r=>({...r,captured_ms:Number(r.original_captured_ms||r.captured_ms)})).filter(r=>r.captured_ms<=stop).sort((a,b)=>a.captured_ms-b.captured_ms);
+ const end=Math.min(stop,Date.now()),start=Math.max(history[0]?.captured_ms||end-3600000,end-3600000);
+ const recs=history.filter(r=>r.captured_ms>=start&&r.captured_ms<=end);
+ const last=recs.filter(r=>r.markets?.[type]?.length).at(-1);
+ ctx.fillStyle='#0b1727';ctx.fillRect(0,0,w,h);ctx.font='11px sans-serif';ctx.fillStyle='#a8bbce';
+ if(!last){ctx.fillText(type+'：この時間帯の保存記録なし（欠測）',12,38);return;}
+ const odds=r=>Number(r?.odds??r?.odds_min??0);
+ const picks=[...last.markets[type]].filter(r=>odds(r)>=1).sort((a,b)=>odds(a)-odds(b)).slice(0,20);
+ const series=picks.map(row=>({key:String(row.combination),points:recs.map(rec=>{const r=rec.markets?.[type]?.find(r=>String(r.combination)===String(row.combination));return r&&odds(r)>=1?{t:rec.captured_ms,v:odds(r)}:null;})}));
+ const all=series.flatMap(s=>s.points.filter(Boolean)),max=Math.max(1,...all.map(pt=>pt.v))*1.1;
+ const left=48,right=w-10,top=18,bottom=h-40,x=t=>left+(right-left)*(t-start)/Math.max(1,end-start),y=v=>bottom-(bottom-top)*v/max;
+ ctx.strokeStyle='#293b50';ctx.lineWidth=1;
+ for(let i=0;i<=4;i++){const yy=top+(bottom-top)*i/4;ctx.beginPath();ctx.moveTo(left,yy);ctx.lineTo(right,yy);ctx.stroke();ctx.fillText((max*(4-i)/4).toFixed(1),2,yy+4);const tt=start+(end-start)*i/4;ctx.fillText(clock(tt).slice(0,5),Math.min(w-38,x(tt)-14),h-22);}
+ for(let n=0;n<series.length;n++){const line=series[n];ctx.strokeStyle=`hsl(${n*137.5%360} 75% 63%)`;ctx.lineWidth=1.5;let prev=null;for(const pt of line.points){if(!pt){prev=null;continue;}if(prev&&pt.t-prev.t<=30000){ctx.beginPath();ctx.moveTo(x(prev.t),y(prev.v));ctx.lineTo(x(pt.t),y(prev.v));ctx.lineTo(x(pt.t),y(pt.v));ctx.stroke();}ctx.fillStyle=ctx.strokeStyle;ctx.fillRect(x(pt.t)-1,y(pt.v)-1,2,2);prev=pt;}}
+ for(const [t,label,color] of [[close(p)-180000,'締切−3分','#ffcc66'],[post,'発走','#8adeff']]){if(t>0&&t>=start&&t<=end){ctx.strokeStyle=color;ctx.setLineDash([4,3]);ctx.beginPath();ctx.moveTo(x(t),top);ctx.lineTo(x(t),bottom);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle=color;ctx.fillText(label,Math.min(w-75,x(t)+3),13);}}
+ ctx.fillStyle='#a8bbce';ctx.fillText('取得 '+clock(last.captured_ms)+' ／ 上位'+picks.length+'点 ／ 複勝・ワイドは下限',10,h-5);
+}
+function panel(ws,p){
+ if(!p?.root||!p.raceId)return;
+ let box=p.root.querySelector('.close629');
+ if(!box){box=document.createElement('section');box.className='close629';box.style.cssText='margin:12px;padding:12px;border:1px solid #328782;border-radius:10px;min-width:0';box.innerHTML='<b>⏱ 締切3分前・全8券種の保存履歴</b><div style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0"><label>投票締切（日本時間） <input type="time" step="1" class="deadline629"></label><button type="button" class="apply629">締切を保存・復元</button><button type="button" class="export629">復元JSON保存</button></div><div class="note629" style="font-size:12px;line-height:1.7"></div><details class="snapshot629"><summary>締切3分前オッズ（全8券種）</summary><div class="tables629"></div></details><details class="graphs629"><summary>📈 全8券種グラフ・発走後1分まで</summary><div class="grid629" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px"></div></details>';(p.root.querySelector('.msv2-scroll')||p.root).appendChild(box);
+ box.querySelector('.apply629').onclick=()=>{const value=box.querySelector('input').value;if(!value)return;const c=Date.parse(p.date+'T'+value+(value.length===5?':00':'')+'+09:00');if(!Number.isFinite(c))return;try{const all=JSON.parse(localStorage.getItem('keiba_deadlines629')||'{}');all[p.raceId]=c;localStorage.setItem('keiba_deadlines629',JSON.stringify(all));}catch(e){alert('締切の端末保存に失敗：'+e.message);return;}p.race.close_ms=c;p.__auditPreclose52341=null;ws.render(p);ws.renderResult5202?.(p);if(Number(p.race.postMs)>Date.now()){window.keibaSetDeadline629?.(p,c).then(j=>{if(!j?.ok)alert('締切は端末に保存済み。Worker反映失敗：'+(j?.error||'不明'));}).catch(e=>alert('締切は端末に保存済み。Worker反映失敗：'+e.message));}};
+ box.querySelector('.export629').onclick=()=>{const s=recover(p);if(!s){alert(close(p)?'目標時刻以前の履歴がありません':'投票締切時刻を入力してください');return;}const a=document.createElement('a'),url=URL.createObjectURL(new Blob([JSON.stringify(s,null,2)],{type:'application/json'}));a.href=url;a.download=p.raceId+'_close_minus3m.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+ box.querySelector('.graphs629').ontoggle=()=>{if(box.querySelector('.graphs629').open)drawAll();};
+ box.querySelector('.snapshot629').ontoggle=()=>{if(box.querySelector('.snapshot629').open)tables();};
+ }
+ const drawAll=()=>{const grid=box.querySelector('.grid629');grid.replaceChildren();for(const type of TYPES){const div=document.createElement('div'),title=document.createElement('b'),canvas=document.createElement('canvas');title.textContent=type;canvas.style.cssText='display:block;width:100%;height:210px';div.append(title,canvas);grid.append(div);graph(canvas,p,type);}};
+ const tables=()=>{const snap=recover(p);box.querySelector('.tables629').innerHTML=TYPES.map(t=>`<details><summary>${esc(t)} ／ ${snap?.markets[t]?.length||0}点 ／ ${clock(snap?.market_times[t])}${snap?.market_times[t]?' ／ 目標との差 '+Math.round((snap.target_ms-snap.market_times[t])/1000)+'秒':''}</summary><div style="max-height:240px;overflow:auto"><table style="width:100%"><tr><th>組合せ</th><th>オッズ</th></tr>${(snap?.markets[t]||[]).map(r=>`<tr><td>${esc(r.combination)}</td><td>${esc(r.odds??r.odds_min)}${r.odds_max?'〜'+esc(r.odds_max):''}</td></tr>`).join('')||'<tr><td colspan="2">未取得</td></tr>'}</table></div></details>`).join('');};
+ const c=close(p),snap=recover(p),post=Number(p.race?.postMs||0);
+ if(box.dataset.rid!==p.raceId){box.dataset.rid=p.raceId;box.querySelector('input').value=c?clock(c):'';}
+ box.querySelector('.note629').textContent=(c?'締切 '+clock(c)+' ／ 3分前 '+clock(c-180000)+(snap?' ／ 履歴から '+Object.keys(snap.markets).length+'/8券種を復元':' ／ 目標以前の履歴なし・または目標時刻前'):'投票締切時刻が未取得。正しい締切を入力すると、過去の保存履歴から復元します。')+(post?' ／ 収集終了 '+clock(post+60000):' ／ 発走時刻未取得')+'。古い記録も時刻差を明記。グラフは最後の1時間・上位20点、30秒超の間隔は線を切ります。履歴がない部分は補間しません。';
+ if(box.querySelector('.graphs629').open)drawAll();if(box.querySelector('.snapshot629').open)tables();
+}
+function install(){const proto=window.TheKeibaMultiV2?.MultiPaneWorkspace?.prototype;if(!proto)return false;if(proto.__close629)return true;proto.__close629=true;const old=proto.render;proto.render=function(p){const r=old.call(this,p);panel(this,p);return r;};for(const p of window.TheKeibaMultiV2.workspace?.panes||[])panel(window.TheKeibaMultiV2.workspace,p);return true;}
+if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearInterval(timer);},500);}
+})();
+
+</script>
 </body>
 </html>
 

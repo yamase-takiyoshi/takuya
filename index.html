@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script id="thekeiba-build-version">
 // One release identity shared by all legacy and current display patches.
-window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.47 RangeSim Robust',number:'5.23.47'});
+window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.48 SnapshotDeadline',number:'5.23.48'});
 window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
@@ -46,7 +46,7 @@ window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.47 RangeSim Robust</title>
+<title>The競馬 EV分析 v5.23.48 SnapshotDeadline</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -409,7 +409,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.23.47 RangeSim Robust ☁️ 10s</span>
+    <span class="ver">v5.23.48 SnapshotDeadline ☁️ 10s</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -31074,7 +31074,20 @@ if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearI
    let close=0,post=0;
    for(const x of sources){if(!x)continue;if(!close)close=ms(x.close_ms||x.closeMs||x.deadline_ms||x.betting_close_ms||x.close_at||x.betting_close_at);if(!post)post=ms(x.post_ms||x.postMs);}
    if(close){if(new Date(close+9*3600000).toISOString().slice(0,10)!==date)throw new Error('保存締切時刻の開催日が不一致');return {close,cutoff:close-180000,reference:false,basis:'保存締切時刻'};}
-   if(cfg.clock==='CLOSE')throw new Error('保存締切時刻なし。参考検証には「発走から仮締切を設定」を選択してください');
+    // v5.23.48: DBに蓄積された「締切3分前オッズ」(PRE_CLOSE_3MIN)の時刻を仮締切の基準にする。
+    // snapshot.target_at = 締切3分前の目標時刻 → 採用上限(cutoff)、仮締切(close) = target_at + 3分。
+    const ps=loaded?.precloseSnapshot;
+    if(ps){
+      const verified=ps.timing_verified===true||ps.preclose3m_verified===true;
+      let cut=ms(ps.target_at);
+      if(!cut&&verified)cut=ms(ps.captured_at);
+      if(cut){
+        const c=cut+180000;
+        if(new Date(c+9*3600000).toISOString().slice(0,10)!==date)throw new Error('保存済み締切3分前スナップショットの開催日が不一致');
+        return {close:c,cutoff:cut,reference:!verified,basis:verified?'保存済み締切3分前スナップショット（時刻検証済み）':'保存済み締切3分前スナップショット（時刻未検証・参考）'};
+      }
+    }
+   if(cfg.clock==='CLOSE')throw new Error('保存締切時刻なし。保存済みの締切3分前スナップショットも無いため、参考検証には「発走から仮締切を設定」を選択してください');
    const text=String(meta?.post_time||loaded?.postTimeText||'').match(/(\d{1,2}):(\d{2})/);
    if(!post&&text)post=Date.parse(`${date}T${text[1].padStart(2,'0')}:${text[2]}:00+09:00`);
    if(!post)throw new Error('発走時刻も未取得のため時系列予測を除外');
@@ -31199,7 +31212,7 @@ if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearI
  }
  function init(){
    const target=$('rsValidationNote');if(!target||$('rsTsMode'))return;
-   target.insertAdjacentHTML('afterend',`<div style="border:1px solid var(--border);border-radius:9px;padding:10px;margin-bottom:10px;line-height:1.6"><b>🧠 時系列オッズ予測・3方式比較</b><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><label>予測方式<select id="rsTsMode"><option value="OFF">現行方式（時系列OFF）</option><option value="TREND" selected>時系列ルール＋全券種横断</option><option value="LEARN">過去日学習＋全券種横断</option><option value="STATIC">同時点・静的PL＋全券種横断</option></select></label><label>締切の基準<select id="rsTsClock"><option value="CLOSE" selected>保存締切時刻（無ければ除外）</option><option value="POST_REFERENCE">発走から仮締切を設定（参考）</option></select></label><label>仮締切：発走の何分前<input id="rsTsOffset" type="number" min="0" max="10" step="1" value="1" style="width:80px"></label><label>採用EV下限<input id="rsTsEv" type="number" min="0.5" max="5" step="0.01" value="1.10" style="width:80px"></label><label>記録の古さ上限（秒）<input id="rsTsAge" type="number" min="10" max="300" value="60" style="width:80px"></label><label>学習開始に必要な過去R<input id="rsTsMin" type="number" min="10" max="1000" value="30" style="width:80px"></label></div><p style="font-size:12px;color:var(--muted);margin:8px 0 0">保存履歴の締切3分前までを使い、支持率の変化・勢い・変動・複勝との一致を分析します。学習は選択期間の前日以前のレースだけで日毎に更新。初期${30}Rは学習準備です。全8券種は保存実オッズがある買い目だけ採用し、点数・1点額・予算は現在の設定を使います。10分以上の単勝履歴が必要です。締切時刻が保存されていない従来データは、仮締切の参考検証を選べます。発走時刻と実際の締切時刻は別です。馬柱補正・現行モードの係数はこの3方式には使いません。</p><button class="btn-sm" type="button" id="rsTsExport">🧠 時系列比較JSON</button></div><div id="rsTsReport" style="margin-bottom:12px"></div>`);
+   target.insertAdjacentHTML('afterend',`<div style="border:1px solid var(--border);border-radius:9px;padding:10px;margin-bottom:10px;line-height:1.6"><b>🧠 時系列オッズ予測・3方式比較</b><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><label>予測方式<select id="rsTsMode"><option value="OFF">現行方式（時系列OFF）</option><option value="TREND" selected>時系列ルール＋全券種横断</option><option value="LEARN">過去日学習＋全券種横断</option><option value="STATIC">同時点・静的PL＋全券種横断</option></select></label><label>締切の基準<select id="rsTsClock"><option value="CLOSE" selected>保存締切時刻（無ければ除外）</option><option value="POST_REFERENCE">発走から仮締切を設定（参考）</option></select></label><label title="保存済み締切3分前スナップショットがあるレースはそちらを優先し、無いレースだけこの値で仮締切を置きます">仮締切(スナップショット無し時)：発走の何分前<input id="rsTsOffset" type="number" min="0" max="10" step="1" value="1" style="width:80px"></label><label>採用EV下限<input id="rsTsEv" type="number" min="0.5" max="5" step="0.01" value="1.10" style="width:80px"></label><label>記録の古さ上限（秒）<input id="rsTsAge" type="number" min="10" max="300" value="60" style="width:80px"></label><label>学習開始に必要な過去R<input id="rsTsMin" type="number" min="10" max="1000" value="30" style="width:80px"></label></div><p style="font-size:12px;color:var(--muted);margin:8px 0 0">保存履歴の締切3分前までを使い、支持率の変化・勢い・変動・複勝との一致を分析します。学習は選択期間の前日以前のレースだけで日毎に更新。初期${30}Rは学習準備です。全8券種は保存実オッズがある買い目だけ採用し、点数・1点額・予算は現在の設定を使います。10分以上の単勝履歴が必要です。締切時刻が保存されていない従来データは、仮締切の参考検証を選べます。発走時刻と実際の締切時刻は別です。馬柱補正・現行モードの係数はこの3方式には使いません。</p><button class="btn-sm" type="button" id="rsTsExport">🧠 時系列比較JSON</button></div><div id="rsTsReport" style="margin-bottom:12px"></div>`);
    $('rsTsExport').onclick=()=>{if(!session?.results?.length){alert('先に時系列モードで期間横断シミュレーションを実行してください');return;}const data={version:window.THEKEIBA_BUILD.number,config:session.cfg,featureNames,training:'選択期間内の前日以前。同日と未来を除外。JRA/NAR分離。',rows:session.rows};const a=document.createElement('a'),url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));a.href=url;a.download='TheKeiba_TimeseriesComparison_'+new Date().toISOString().slice(0,10)+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
  }
  function stamp(){const text=window.THEKEIBA_BUILD.version+' ☁️ 10s';window.APP_VERSION=window.THEKEIBA_BUILD.version;document.querySelectorAll('.ver').forEach(e=>{if(e.textContent!==text)e.textContent=text;});}

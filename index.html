@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script id="thekeiba-build-version">
 // One release identity shared by all legacy and current display patches.
-window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.52 VersionSync',number:'5.23.52'});
+window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.53 LedgerFix',number:'5.23.53'});
 window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
@@ -154,7 +154,7 @@ window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.52 VersionSync</title>
+<title>The競馬 EV分析 v5.23.53 LedgerFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -517,7 +517,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.23.52 VersionSync ☁️ 10s</span>
+    <span class="ver">v5.23.53 LedgerFix ☁️ 10s</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -16661,13 +16661,14 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
   function $(id){ return document.getElementById(id); }
   function cleanText(v){ return String(v == null ? '' : v).replace(/\s+/g,' ').trim(); }
   function toNumber(v){
+    // v5.23.53: 負数の符号を保持（旧実装は '-' を '0' に置換し、-500 が 500 になっていた）
     if(v == null) return 0;
+    if(typeof v === 'number') return Number.isFinite(v) ? v : 0;
     var s = String(v)
       .replace(/[,+円￥\s]/g,'')
-      .replace(/^▲/,'-')
-      .replace(/^\+/,'')
       .replace(/%$/,'')
-      .replace(/-/g,'0');
+      .replace(/^[\u25B2\u2212\u2010\u2011\u2013\u2014]/,'-');
+    if(s === '' || /^-+$/.test(s) || /^[\u2015]+$/.test(s)) return 0;   // 「-」「―」だけの空欄表記は0
     var n = Number(s);
     return Number.isFinite(n) ? n : 0;
   }
@@ -16767,8 +16768,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       var ret = r.ret != null ? r.ret : r.return;
       var bet = toNumber(r.bet);
       ret = toNumber(ret);
-      var profit = r.profit != null ? toNumber(r.profit) : ret - bet;
-      var hasFinish = (r.hasFinish != null) ? !!r.hasFinish : (ret || profit || bet);
+      var hasFinish = (r.hasFinish != null) ? !!r.hasFinish : !!(ret || bet);
+      var profit = ret - bet;   // v5.23.53: 収支は必ず 払戻−投資（符号付き）。保存値・表示文字列は使わない
       return {
         source: r.source || 'runtime',
         index: i + 1,
@@ -16817,7 +16818,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
       if(!map.has(k)) map.set(k, {key:k, races:0, hitRaces:0, bet:0, return:0, profit:0});
       var x = map.get(k);
       x.races += 1;
-      if(toNumber(r.hitCount) > 0 || toNumber(r.profit) > 0) x.hitRaces += 1;
+      if(toNumber(r.hitCount) > 0 || toNumber(r.return) > 0) x.hitRaces += 1;   // v5.23.53: 収支>0 での的中判定を廃止
       x.bet += toNumber(r.bet);
       x.return += toNumber(r.return);
       x.profit += toNumber(r.profit);
@@ -16862,6 +16863,9 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         return {
           records: all.length,
           settledRaces: profitRecords.length,
+          hitRaces: profitRecords.filter(function(r){ return toNumber(r.hitCount) > 0 || toNumber(r.return) > 0; }).length,
+          hitRate: profitRecords.length ? Math.round(profitRecords.filter(function(r){ return toNumber(r.hitCount) > 0 || toNumber(r.return) > 0; }).length / profitRecords.length * 1000) / 10 : 0,
+          integrity: { profitEqualsReturnMinusBet: Math.abs(totalProfit - (totalReturn - totalBet)) < 1, rowsWithNegativeProfit: profitRecords.filter(function(r){ return toNumber(r.profit) < 0; }).length },
           research: { bet:totalBet, return:totalReturn, profit:totalProfit, roi:totalBet ? Math.round(totalReturn / totalBet * 1000) / 10 : 0 },
           audited: { races:audited.length, bet:aBet, return:aRet, profit:aRet-aBet, roi:aBet ? Math.round(aRet / aBet * 1000) / 10 : 0 }
         };

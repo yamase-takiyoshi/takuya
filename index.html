@@ -11171,6 +11171,7 @@ if(horses.length === 0){
   }
 
   // ── メイン：全レース一括シミュレーション ──
+  let aswRunning = false;
   async function runAllRacesSimulation(){
     const btn  = $('allSimBtn');
     const prog = $('allSimProgress');
@@ -11184,6 +11185,8 @@ if(horses.length === 0){
     if(!settings.proxyUrl){ alert('先にプロキシタブでCloudflare WorkersのURLを設定してください。'); return; }
     if(!venueCode){ alert('馬データタブで開催場を選択してください。'); return; }
 
+    aswRunning = true;
+    try{ rsSuspendAutoCard52355(); }catch(e){}
     if(btn){ btn.disabled = true; btn.textContent = '⏳ 実行中...'; }
     if(prog) prog.innerHTML = '<div class="url-status">📅 レース一覧を取得中...</div>';
     $('allSimSummary').innerHTML = '';
@@ -11252,6 +11255,7 @@ if(horses.length === 0){
         }catch(e){}
         asw_renderSummary(rows);
         asw_renderTable(rows);
+        try{ rsSuspendAutoCard52355(); }catch(e){}
       }
 
       const okCount = rows.filter(x => x.status === 'ok').length;
@@ -11260,6 +11264,8 @@ if(horses.length === 0){
       console.error('[runAllRacesSimulation]', e);
       if(prog) prog.innerHTML = `<div class="url-status err">❌ 一括シミュレーション失敗: ${asw_esc((e && e.message) || e)}</div>`;
     }finally{
+      try{ rsSuspendAutoCard52355(); }catch(e){}
+      aswRunning = false;
       if(btn){ btn.disabled = false; btn.textContent = '🏟️ 全レースを一括シミュレーション'; }
     }
   }
@@ -11282,7 +11288,9 @@ if(horses.length === 0){
   // ============================================================
   let rsRunning = false, rsTripped = false, rsLastEnv = null, rsCk = null;
   // Expose the batch state without allowing UI code to mutate it.
-  window.isRangeSimulationRunning52355 = () => rsRunning;
+  // v5.23.xx: 全レース一括シミュレーション(aswRunning)も実行中として扱う。
+  // 未対応だと処理中のレース切替で出馬表の自動取得が走り、左画面が馬データタブへ遷移していた。
+  window.isRangeSimulationRunning52355 = () => rsRunning || aswRunning;
   function rsSuspendAutoCard52355(){
     window.__rangeViewEpoch52355 = (window.__rangeViewEpoch52355 || 0) + 1;
     window.TheKeibaRaceCardAuto52351?.cancel();

@@ -4,8 +4,116 @@
 <meta charset="UTF-8">
 <script id="thekeiba-build-version">
 // One release identity shared by all legacy and current display patches.
-window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.49 RangeFailureAudit',number:'5.23.49'});
+window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.50 UnifiedProbability',number:'5.23.50'});
 window.APP_VERSION=window.THEKEIBA_BUILD.version;
+</script>
+
+<script id="unified-probability52350">
+// v5.23.50: one probability engine for prediction, commentary and every chart.
+(function(){
+ 'use strict';
+ const VERSION='UNIFIED-PL-5.23.50';
+ const TYPES=['単勝','複勝','枠連','馬連','ワイド','馬単','3連複','3連単'];
+ const INDEX=['speedIndex','formIndex','last3Index','distanceScore','courseScore','surfaceScore','classScore','jockeyScore','trainerScore','runningStyleScore'];
+ const num=(v,d=0)=>Number.isFinite(Number(v))?Number(v):d;
+ const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+ const index=v=>(typeof v==='number'||typeof v==='string'&&v.trim())&&Number.isFinite(Number(v))?Number(v):NaN;
+ const key=(type,ns)=>['枠連','馬連','ワイド','3連複'].includes(type)?ns.slice().sort((a,b)=>a-b).join('-'):ns.join('-');
+ function enabled(){try{return window.settings?.independentBlend5211!==false;}catch(e){return true;}}
+ function currentContext(){
+  let rid='',kind='JRA';
+  try{rid=String(window.currentRaceId||'');kind=window.settings?.nar?'NAR':'JRA';}catch(e){}
+  const last=window.__narPastAdjLast;
+  return {raceId:rid,kind,enabled:enabled(),pastMult:last&&rid&&String(last.rid)===rid?last.mult:null};
+ }
+ function weights(horses,ctx={}){
+  const hs=(horses||[]).filter(h=>num(h?.num)>0),n=hs.length;
+  if(!n)return {rows:[],n:0,weights:{market:1,pop:0,independent:0},oddsCoverage:0,popCoverage:0,marketOverround:0,independentApplied:false};
+  const rank=new Map(hs.filter(h=>num(h.odds)>=1).slice().sort((a,b)=>num(a.odds)-num(b.odds)||num(a.num)-num(b.num)).map((h,i)=>[num(h.num),i+1]));
+  const over=hs.reduce((s,h)=>s+(num(h.odds)>=1?1/num(h.odds):0),0);
+  const rankSum=Array.from({length:n},(_,i)=>1/(i+1)**1.08).reduce((a,b)=>a+b,0);
+  const useBlend=ctx.enabled!==false;
+  const past=h=>{
+   const m=ctx.pastMult;const v=m instanceof Map?m.get(num(h.num)):m?.[String(num(h.num))];
+   return Number.isFinite(index(v))?clamp(Number(v),.76,1.32):1;
+  };
+  const scores=hs.map(h=>{
+   const f=num(h.frame),scale=n>=14?1:n>=10?.70:.45;
+   let frame=1;
+   if(f>=1&&f<=8)frame=ctx.kind==='NAR'?(f<=2?1.030:f<=5?1.012:f===6?.998:.982):(f<=2?1.012:f<=6?1.006:.992);
+   frame=1+(frame-1)*scale;
+   const vals=INDEX.map(k=>index(h[k])).filter(Number.isFinite);
+   const opt=vals.length?clamp(1+clamp((vals.reduce((a,b)=>a+b,0)/vals.length-50)/10,-2.5,2.5)*.045,.86,1.16):1;
+   return clamp(frame*past(h)*opt,.70,1.45);
+  });
+  const strong=hs.some(h=>Math.abs(past(h)-1)>.015||INDEX.some(k=>Number.isFinite(index(h[k]))));
+  const weak=!strong&&hs.some(h=>num(h.frame)>=1&&num(h.frame)<=8);
+  const w=strong?{market:.65,pop:.13,independent:.22}:weak?{market:.72,pop:.18,independent:.10}:{market:.80,pop:.20,independent:0};
+  const market=hs.map(h=>num(h.odds)>=1?(1/num(h.odds))**(useBlend?.94:1):0),marketSum=market.reduce((a,b)=>a+b,0)||1,indSum=scores.reduce((a,b)=>a+b,0)||1;
+  const coverage=rank.size/n;
+  const rows=hs.map((h,i)=>{
+   const pop=num(h.pop)>=1&&num(h.pop)<=n?num(h.pop):rank.get(num(h.num));
+   const pMarket=market[i]/marketSum,pPop=pop?1/pop**1.08/rankSum:0,pIndependent=scores[i]/indSum;
+   let raw;
+   if(useBlend){
+    const parts=[[pMarket,w.market],[pPop,w.pop],[pIndependent,w.independent]].filter(x=>x[0]>0&&x[1]>0);
+    const sw=parts.reduce((s,x)=>s+x[1],0);
+    raw=sw?Math.exp(parts.reduce((s,x)=>s+Math.log(x[0])*x[1],0)/sw):1/n;
+   }else raw=pMarket>0?(coverage>=.8?.93*pMarket+.07*pPop:.80*pMarket+.20*pPop):(pPop||1/n);
+   return {h,no:num(h.num),num:num(h.num),raw,p:raw,fair:pMarket,rank:pPop,pMarket,pPop,pIndependent,independentScore:scores[i],weights:w};
+  });
+  const total=rows.reduce((s,r)=>s+r.raw,0)||1;rows.forEach(r=>r.p=r.raw/total);
+  return {rows,n,weights:w,strongEvidence:strong,weakEvidence:weak,oddsCoverage:coverage,popCoverage:hs.filter(h=>num(h.pop)>0&&num(h.pop)<=n).length/n,marketOverround:over,independentApplied:useBlend};
+ }
+ function distribution(horses,probabilities){
+  const maps=Object.fromEntries(TYPES.map(t=>[t,new Map()]));
+  const sum=probabilities.reduce((s,p)=>s+Math.max(0,num(p)),0)||1;
+  const p=probabilities.map(x=>Math.max(0,num(x))/sum),n=horses.length,slots=n>=8?3:Math.min(2,n);
+  const add=(t,ns,v)=>{const k=key(t,ns);maps[t].set(k,(maps[t].get(k)||0)+v);};
+  p.forEach((v,i)=>add('単勝',[num(horses[i].num)],v));
+  if(n===1)add('複勝',[num(horses[0].num)],1);
+  for(let i=0;i<n;i++)for(let j=0;j<n;j++)if(i!==j){
+   const a=horses[i],b=horses[j],pair=p[i]*p[j]/Math.max(1e-12,1-p[i]);
+   add('馬単',[num(a.num),num(b.num)],pair);add('馬連',[num(a.num),num(b.num)],pair);
+   if(num(a.frame)>0&&num(b.frame)>0)add('枠連',[num(a.frame),num(b.frame)],pair);
+   if(slots===2){add('複勝',[num(a.num)],pair);add('複勝',[num(b.num)],pair);}
+   for(let k=0;k<n;k++)if(k!==i&&k!==j){
+    const c=horses[k],q=pair*p[k]/Math.max(1e-12,1-p[i]-p[j]);
+    add('3連単',[num(a.num),num(b.num),num(c.num)],q);add('3連複',[num(a.num),num(b.num),num(c.num)],q);
+    if(slots===3)for(const h of [a,b,c])add('複勝',[num(h.num)],q);
+    for(const ns of [[a.num,b.num],[a.num,c.num],[b.num,c.num]])add('ワイド',ns.map(Number),q);
+   }
+  }
+  return {maps,slots};
+ }
+ function calculate(horses,ctx=currentContext()){
+  const pack=weights(horses,ctx),d=distribution(pack.rows.map(r=>r.h),pack.rows.map(r=>r.p)),m=d.maps;
+  const numeric=t=>new Map([...m[t]].map(([k,p])=>[Number(k),p]));
+  const win=numeric('単勝'),place=numeric('複勝');
+  const rated=new Map(pack.rows.map(r=>[r.no,{...r.h,winP:r.p,placeP:place.get(r.no)||0,renP:[...m['馬連']].reduce((s,[k,p])=>s+(k.split('-').map(Number).includes(r.no)?p:0),0)}]));
+  return {pack,maps:m,rated,win,place,exacta:m['馬単'],quinella:m['馬連'],wide:m['ワイド'],trio:m['3連複'],trifecta:m['3連単'],frameQ:m['枠連'],slots:d.slots,version:VERSION};
+ }
+ const cache=new WeakMap();
+ function record(rec,opts={}){
+  if(!rec)return calculate([],{});
+  const kind=String(rec.kind||opts.kind||'JRA'),rid=String(rec.race_id||opts.raceId||'');
+  // Historical probability inputs come from that record. External metadata is
+  // restricted to immutable identity (name/frame), never current odds/indices.
+  const fallback=new Map((opts.horses||[]).map(h=>[num(h.num),h]));
+  const meta=new Map((rec.horses||[]).map(h=>[num(h.num||h.horse_no),h]));
+  const hs=(rec.markets?.['単勝']||[]).map(x=>{
+   const no=num(x.combination),h=meta.get(no)||{},f=fallback.get(no)||{};
+   return {...h,num:no,odds:num(x.odds),name:f.name||h.name||'',frame:num(h.frame||h.frame_no||f.frame),pop:num(h.pop||h.popularity)};
+  }).filter(h=>h.num>0&&h.odds>=1);
+  const ctx={kind,raceId:rid,enabled:enabled(),pastMult:rec.probability_context?.pastMult||null};
+  const sig=JSON.stringify([kind,rid,ctx.enabled,hs,ctx.pastMult]);
+  const old=cache.get(rec);if(old?.sig===sig)return old.value;
+  const value=calculate(hs,ctx);cache.set(rec,{sig,value});return value;
+ }
+ function probability(rec,type,combination,opts){const ns=String(combination).split('-').map(Number);return record(rec,opts).maps[type]?.get(key(type,ns))??NaN;}
+ window.TheKeibaProbability={version:VERSION,types:TYPES,weights,distribution,calculate,currentContext,record,probability,key};
+})();
+
 </script>
 
 <script id="bridge-only-network252">
@@ -46,7 +154,7 @@ window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.49 RangeFailureAudit</title>
+<title>The競馬 EV分析 v5.23.50 UnifiedProbability</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -409,7 +517,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.23.49 RangeFailureAudit ☁️ 10s</span>
+    <span class="ver">v5.23.50 UnifiedProbability ☁️ 10s</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -2104,21 +2212,9 @@ function evProbRaw(h, allHorses){
 }
 
 function normalizeRatedHorses(allHorses){
-  const raw = allHorses.map(h => ({ ...h, raw: evProbRaw(h, allHorses) }));
-  const total = raw.reduce((a,b) => a + Number(b.raw||0), 0) || 1;
-  const n = Math.max(1, allHorses.length);
-  const placeMult = Math.min(3.0, 2.0 + n * 0.045);
-  const renMult   = Math.min(2.4, 1.6 + n * 0.038);
-  return raw.map(h => {
-    const winP = Number(h.raw||0) / total;
-    const rawPlaceP = winP * placeMult + 0.015;
-    const favAdj = Math.max(0, winP - 0.25) * 0.7;
-    const longAdj = winP < 0.08 ? (0.08 - winP) * 0.8 : 0;
-    const placeP = Math.min(0.90, rawPlaceP * (1 - favAdj) * (1 - longAdj));
-    const renP   = Math.min(0.82, winP * renMult + 0.015);
-    return { ...h, winP, placeP, renP, quinellaP: renP };
-  }).sort((a,b) => b.winP - a.winP);
+ return [...window.TheKeibaProbability.calculate(allHorses).rated.values()].sort((a,b)=>b.winP-a.winP);
 }
+
 
 function generateCandidates(allHorses){
   // v5.20: 全馬・全組合せを候補化。買い目の採用は buildTickets/selectByMode 側で絞る。
@@ -20709,7 +20805,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   }
 
   // v5.18.208: 時系列オッズを「想定確率 / 市場確率 / EV / 乖離」に切替。
-  // 想定確率は本体の現行EVモデルに合わせ、単勝オッズ80% + 人気20%を基礎に正規化する。
+  // 想定確率は TheKeibaProbability の共通勝率・着順モデルを使用する。
   // 過去レコードに人気が保存されていない場合は、その時点の単勝オッズ順位を人気順位として補完する。
   function metricMode202(){ return $('oddsTsMetric')?.value || 'odds'; }
   function syncMetricUi202(){
@@ -20722,71 +20818,13 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   }
   function nums202(key){ return String(key||'').split('-').map(Number).filter(n=>Number.isFinite(n)&&n>0); }
   function captureRated202(rec){
-    if(!rec) return new Map();
-    const wins=(rec.markets?.['単勝']||[]).map(x=>({num:Number(x.combination),odds:Number(x.odds)})).filter(x=>x.num>0&&x.odds>1);
-    if(!wins.length) return new Map();
-    const meta=new Map();
-    (rec.horses||[]).forEach(h=>meta.set(Number(h.num),h));
-    if(String(rec.race_id||'')===String(currentRaceId202()||'')){
-      expectedHorses202().forEach(h=>{
-        const old=meta.get(Number(h.num))||{};
-        meta.set(Number(h.num),{...h,...old,frame:Number(old.frame||h.frame||0),pop:Number(old.pop||h.pop||0)});
-      });
-    }
-    const oddsRank=wins.slice().sort((a,b)=>a.odds-b.odds).map((x,i)=>[x.num,i+1]);
-    const rankMap=new Map(oddsRank);
-    const n=Math.max(1,wins.length), takeback=String(rec.kind||activeKind)==='NAR'?0.30:0.225;
-    const overround=wins.reduce((s,x)=>s+1/x.odds,0) || (1/Math.max(.01,1-takeback));
-    const popRaw=Array.from({length:n},(_,i)=>1/Math.pow(i+1,1.08));
-    const popSum=popRaw.reduce((a,b)=>a+b,0)||1;
-    const raw=wins.map(x=>{
-      const h=meta.get(x.num)||{};
-      let pop=Number(h.pop||0); if(!(pop>=1&&pop<=n)) pop=rankMap.get(x.num)||0;
-      const pOdds=(1/x.odds)/Math.max(overround,1/(1-takeback));
-      const pPop=(pop>=1&&pop<=n)?(1/Math.pow(pop,1.08))/popSum:0;
-      const rp=pOdds>0&&pPop>0?pOdds*.80+pPop*.20:(pOdds||pPop||1/n);
-      return {num:x.num,odds:x.odds,pop,frame:Number(h.frame||0),raw:rp};
-    });
-    const total=raw.reduce((s,x)=>s+x.raw,0)||1;
-    const placeMult=Math.min(3.0,2.0+n*.045), renMult=Math.min(2.4,1.6+n*.038);
-    const out=new Map();
-    raw.forEach(h=>{
-      const winP=h.raw/total;
-      const rawPlaceP=winP*placeMult+.015;
-      const favAdj=Math.max(0,winP-.25)*.7;
-      const longAdj=winP<.08?(.08-winP)*.8:0;
-      const placeP=Math.min(.90,rawPlaceP*(1-favAdj)*(1-longAdj));
-      const renP=Math.min(.82,winP*renMult+.015);
-      out.set(h.num,{...h,winP,placeP,renP});
-    });
-    return out;
-  }
+ return window.TheKeibaProbability.record(rec,{kind:rec?.kind||activeKind}).rated;
+}
+
   function modelP202(rec,market,key){
-    const rated=captureRated202(rec), ns=nums202(key); if(!rated.size||!ns.length) return NaN;
-    const hs=ns.map(n=>rated.get(n));
-    if(market==='単勝') return hs[0]?.winP ?? NaN;
-    if(market==='複勝') return hs[0]?.placeP ?? NaN;
-    if(market==='枠連'){
-      const frames=ns;
-      const fp=frames.map(f=>{
-        const arr=[...rated.values()].filter(h=>Number(h.frame)===Number(f));
-        if(!arr.length) return NaN;
-        const win=Math.min(.95,arr.reduce((s,h)=>s+h.winP,0));
-        return Math.min(.90,win*1.8+.015);
-      });
-      return fp.every(Number.isFinite)?Math.min(.34,fp[0]*fp[1]*1.10):NaN;
-    }
-    if(hs.some(h=>!h)) return NaN;
-    if(market==='ワイド') return Math.min(.50,hs[0].placeP*hs[1].placeP*1.30);
-    if(market==='馬連') return Math.min(.30,hs[0].winP*hs[1].winP*3.80);
-    if(market==='馬単') return Math.min(.22,hs[0].winP*hs[1].winP*2.40);
-    if(market==='3連複') return Math.min(.16,hs[0].placeP*hs[1].placeP*hs[2].placeP*1.45);
-    if(market==='3連単'){
-      const p=Math.min(.16,hs[0].placeP*hs[1].placeP*hs[2].placeP*1.45);
-      return Math.max(.0001,p*.22);
-    }
-    return NaN;
-  }
+ return window.TheKeibaProbability.probability(rec,market,key,{kind:rec?.kind||activeKind});
+}
+
   function metricValue202(rec,market,key,mode=metricMode202()){
     const o=findOdds202(rec,market,key); if(!Number.isFinite(o)||o<=0) return NaN;
     if(mode==='odds') return o;
@@ -21195,7 +21233,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   }
   async function exportJson202(){
     if(!activeRid || !history.length){ setStatus202('⚠️ 保存済み履歴がありません。','err'); return; }
-    const obj={schema:'thekeiba-odds-timeline-export-v1',version:VERSION202,exported_at:new Date().toISOString(),race_id:activeRid,kind:activeKind,race_label:activeRaceLabel,count:history.length,metric_definitions:{odds:'現在オッズ',model_probability:'現行EVモデル（単勝オッズ80%＋人気20%を基礎に正規化し、券種別式へ展開）',market_probability:'1 / 実オッズ',ev:'想定確率 × 実オッズ',kelly:'Kelly基準（負値は0）',edge_pp:'想定確率 - 市場確率（percentage points）'},captures:history};
+    const obj={schema:'thekeiba-odds-timeline-export-v1',version:VERSION202,exported_at:new Date().toISOString(),race_id:activeRid,kind:activeKind,race_label:activeRaceLabel,count:history.length,metric_definitions:{odds:'現在オッズ',model_probability:'共通勝率モデル＋着順確率（UNIFIED-PL-5.23.50）',market_probability:'1 / 実オッズ',ev:'想定確率 × 実オッズ',kelly:'Kelly基準（負値は0）',edge_pp:'想定確率 - 市場確率（percentage points）'},captures:history};
     await saveTimelineFile202(`odds_timeline_${activeRid}.json`,JSON.stringify(obj,null,2),'application/json');
   }
   async function exportCsv202(){
@@ -21252,7 +21290,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
         <div id="oddsTsFresh247" class="odds-ts-status wait" role="status">オッズの再取得待ち</div>
         <div class="odds-ts-metric-note">10秒ごとに再取得を試行（通信中は重複実行しません）。記録件数と値が変化した点数は別です。配信元が同じ値を返す間は横線になります。</div>
         <details id="oddsTsMarkets243" style="font-size:11px;line-height:1.6;margin:6px 0"><summary>全券種取得状況（8券種）</summary>「全8券種取得」で確認します。</details>
-        <div class="odds-ts-metric-note">想定確率＝現行EVモデル / 市場確率＝1÷実オッズ / EV＝想定確率×実オッズ / 乖離＝想定確率−市場確率 / 複勝・ワイドのグラフはオッズ下限（上下限を保存） / 「表示」は選択指標に連動</div>
+        <div class="odds-ts-metric-note">想定確率＝共通勝率・着順モデル / 市場確率＝1÷実オッズ / EV＝想定確率×実オッズ / 乖離＝想定確率−市場確率 / 複勝・ワイドのグラフはオッズ下限（上下限を保存） / 「表示」は選択指標に連動</div>
         <div class="odds-ts-metric-note" style="color:#8bd9ae">v5.18.222: 最新値を右端に固定し、更新ごとに履歴が左へ流れます。グラフの左半分をタップすると過去へ15分、右半分をタップすると新しい時刻へ15分移動します。左右ドラッグでも移動でき、追従を一時停止します。「▶ 最新へ」で最新時刻への追従を再開します。</div>
       </div>
       <div class="odds-ts-chart-wrap"><canvas id="oddsTsCanvas"></canvas></div>
@@ -22286,7 +22324,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   const STORE_KEY = 'keiba-edge-top10-v213';
   const METRICS = {
     ev:      {label:'EV',             get:r=>Number(r?.ev||0),       def:1.20, step:0.01, fmt:v=>v.toFixed(2)},
-    p:       {label:'想定勝率',       get:r=>Number(r?.p||0)*100,    def:20,   step:0.1,  fmt:v=>v.toFixed(1)+'%'},
+    p:       {label:'想定確率',       get:r=>Number(r?.p||0)*100,    def:20,   step:0.1,  fmt:v=>v.toFixed(1)+'%'},
     kelly:   {label:'Kelly',          get:r=>Number(r?.kelly||0)*100,def:5,    step:0.1,  fmt:v=>v.toFixed(1)+'%'},
     odds:    {label:'オッズ',         get:r=>Number(r?.odds||0),     def:5.0,  step:0.1,  fmt:v=>v.toFixed(1)+'倍'},
     marketP: {label:'市場確率', get:r=>Number(r?.odds||0)>0?100/Number(r.odds):NaN, def:5, step:0.1, fmt:v=>v.toFixed(1)+'%'},
@@ -22596,75 +22634,12 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     return x?Number(x.odds):NaN;
   }
   function rated215(rec){
-    const wins=(rec?.markets?.['単勝']||[]).map(x=>({num:Number(x.combination),odds:Number(x.odds)})).filter(x=>x.num>0&&x.odds>1);
-    if(!wins.length) return new Map();
-    const meta=new Map(); (rec.horses||[]).forEach(h=>meta.set(Number(h.num),h));
-    // v5.18.216: 現在レースは左側の実馬名/枠を最優先で上書き。
-    // 時系列DBに過去のサンプル名が残っていても実況へ露出させない。pop/oddsは当時値を維持する。
-    try{
-      if(String(window.__horseDataRaceId||'')===String(rec?.race_id||'')){
-        const live=(typeof horses!=='undefined'&&Array.isArray(horses))?horses:[];
-        live.forEach(h=>{
-          const n=Number(h?.num||0); if(!(n>0)) return;
-          const nm=String(h?.name||'').trim();
-          if(!nm || /^サンプル[A-ZＡ-Ｚ0-9]*$/i.test(nm) || /^sample[A-Z0-9]*$/i.test(nm)) return;
-          const prev=meta.get(n)||{num:n};
-          meta.set(n,{...prev,name:nm,frame:Number(h?.frame||prev.frame||0)});
-        });
-      }
-    }catch(e){}
-    const rankMap=new Map(wins.slice().sort((a,b)=>a.odds-b.odds).map((x,i)=>[x.num,i+1]));
-    const n=Math.max(1,wins.length), takeback=String(rec.kind||kind215(rec.race_id))==='NAR'?.30:.225;
-    const overround=wins.reduce((s,x)=>s+1/x.odds,0)||(1/Math.max(.01,1-takeback));
-    const popRaw=Array.from({length:n},(_,i)=>1/Math.pow(i+1,1.08));
-    const popSum=popRaw.reduce((a,b)=>a+b,0)||1;
-    const raw=wins.map(x=>{
-      const h=meta.get(x.num)||{};
-      let pop=Number(h.pop||0); if(!(pop>=1&&pop<=n)) pop=rankMap.get(x.num)||0;
-      const pOdds=(1/x.odds)/Math.max(overround,1/(1-takeback));
-      const pPop=(pop>=1&&pop<=n)?(1/Math.pow(pop,1.08))/popSum:0;
-      const rp=pOdds>0&&pPop>0?pOdds*.80+pPop*.20:(pOdds||pPop||1/n);
-      return {num:x.num,name:String(h.name||''),frame:Number(h.frame||0),pop,odds:x.odds,raw:rp};
-    });
-    const total=raw.reduce((s,x)=>s+x.raw,0)||1;
-    const placeMult=Math.min(3.0,2.0+n*.045), renMult=Math.min(2.4,1.6+n*.038);
-    const out=new Map();
-    raw.forEach(h=>{
-      const winP=h.raw/total;
-      const rawPlaceP=winP*placeMult+.015;
-      const favAdj=Math.max(0,winP-.25)*.7;
-      const longAdj=winP<.08?(.08-winP)*.8:0;
-      const placeP=Math.min(.90,rawPlaceP*(1-favAdj)*(1-longAdj));
-      const renP=Math.min(.82,winP*renMult+.015);
-      out.set(h.num,{...h,winP,placeP,renP});
-    });
-    return out;
-  }
+ return window.TheKeibaProbability.record(rec,{kind:rec?.kind||kind215(rec?.race_id)}).rated;
+}
+
   function modelP215(rec,type,key){
-    const rated=rated215(rec), ns=nums215(key); if(!rated.size||!ns.length) return NaN;
-    const hs=ns.map(n=>rated.get(n));
-    if(type==='単勝') return hs[0]?.winP??NaN;
-    if(type==='複勝') return hs[0]?.placeP??NaN;
-    if(type==='枠連'){
-      const fp=ns.map(f=>{
-        const arr=[...rated.values()].filter(h=>Number(h.frame)===Number(f));
-        if(!arr.length) return NaN;
-        const win=Math.min(.95,arr.reduce((s,h)=>s+h.winP,0));
-        return Math.min(.90,win*1.8+.015);
-      });
-      return fp.every(Number.isFinite)?Math.min(.34,fp[0]*fp[1]*1.10):NaN;
-    }
-    if(hs.some(h=>!h)) return NaN;
-    if(type==='ワイド') return Math.min(.50,hs[0].placeP*hs[1].placeP*1.30);
-    if(type==='馬連') return Math.min(.30,hs[0].winP*hs[1].winP*3.80);
-    if(type==='馬単') return Math.min(.22,hs[0].winP*hs[1].winP*2.40);
-    if(type==='3連複') return Math.min(.16,hs[0].placeP*hs[1].placeP*hs[2].placeP*1.45);
-    if(type==='3連単'){
-      const p=Math.min(.16,hs[0].placeP*hs[1].placeP*hs[2].placeP*1.45);
-      return Math.max(.0001,p*.22);
-    }
-    return NaN;
-  }
+ return window.TheKeibaProbability.probability(rec,type,key,{kind:rec?.kind||kind215(rec?.race_id)});
+}
 
   function minEv215(type){
     try{
@@ -22949,7 +22924,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     out.push(`データ時刻：${stamp(fc.capturedMs)}（日本時間）。`);
     if(prev && Number(fc.capturedMs)>Number(prev.capturedMs)) out.push(`比較対象は ${stamp(prev.capturedMs)}。間隔は ${Math.round((fc.capturedMs-prev.capturedMs)/1000)}秒です。長期トレンドではなく、この2時点の比較です。`);
     else out.push('比較用の前回データがないため、変化や勢いはまだ判定しません。');
-    if(mark && fc.marks[1]) out.push(`印は市場ベースの想定勝率順です。◎${mark.num}番と○${fc.marks[1].num}番の差は ${((mark.winP-fc.marks[1].winP)*100).toFixed(1)}ポイント。◎は的中や利益を保証する印ではありません。`);
+    if(mark && fc.marks[1]) out.push(`印は共通モデルの想定勝率順です。◎${mark.num}番と○${fc.marks[1].num}番の差は ${((mark.winP-fc.marks[1].winP)*100).toFixed(1)}ポイント。◎は的中や利益を保証する印ではありません。`);
     if(top && top.p>0 && top.odds>0){
       const breakeven=1/top.p, market=1/top.odds;
       out.push(`推奨の根拠：${top.type} ${top.combo} の想定確率 ${(top.p*100).toFixed(2)}% × オッズ ${top.odds.toFixed(1)}倍 = EV ${top.ev.toFixed(2)}。券種別の採用下限 ${Number(top.minEv).toFixed(2)} を満たしています。`);
@@ -22969,7 +22944,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
       out.push(`取得範囲：${counts.filter(x=>x.count).map(x=>x.type+' '+x.count+'組').join(' / ')||'市場データなし'}。${missing.length?'未取得：'+missing.join('・')+'。全8券種の比較は未完了です。':'全8券種に記録がありますが、全組合せの網羅を保証するものではありません。'}`);
     }
     if(String(rec?.source||'').startsWith('画面の取得済み'))out.push('軽量モード補完：時系列履歴がないため、左側の取得済み単勝だけから参考予想を作成しています。時刻は画面データの記録時刻で、配信元の更新時刻ではありません。');
-    out.push('この実況は無料のデータ解説です。想定確率は単勝オッズ・人気などを使う既存モデルの推定で、ChatGPTの回答や学習済みの的中率ではありません。調教・馬場・展開は取得データから確認できません。');
+    out.push('この実況は無料のデータ解説です。想定確率は単勝オッズ・人気・保存済み補正材料を使う共通モデルの推定で、ChatGPTの回答や学習済みの的中率ではありません。調教・馬場・展開は取得データから確認できません。');
     return out;
   }
   function activeContext244(){
@@ -23026,7 +23001,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     hs=hs.filter(h=>Number(h.num)>0&&Number(h.odds)>1&&!h.provisionalOdds);
     if(!hs.length)return null;
     const select=$215('raceSelect'),label=select?.selectedOptions?.[0]?.textContent||rid,now=Date.now();
-    return {race_id:rid,kind:kind215(rid),race_label:label,captured_ms:now,captured_at:new Date(now).toISOString(),source:'画面の取得済み単勝・記録時刻',horses:hs,markets:{'単勝':hs.map(h=>({combination:String(h.num),odds:Number(h.odds)}))}};
+    return {race_id:rid,kind:kind215(rid),race_label:label,captured_ms:now,captured_at:new Date(now).toISOString(),source:'画面の取得済み単勝・記録時刻',probability_context:{model:window.TheKeibaProbability.version,pastMult:(()=>{const m=window.TheKeibaProbability.currentContext().pastMult;return m instanceof Map?Object.fromEntries(m):m;})()},horses:hs,markets:{'単勝':hs.map(h=>({combination:String(h.num),odds:Number(h.odds)}))}};
   }
 
   async function refreshLive215(force=false){
@@ -26120,35 +26095,23 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     });
   }
   function paneNums520(key){return String(key||'').split('-').map(Number).filter(n=>n>0);}
-  function paneRated520(p,rec){
-    if(!rec)return new Map();
-    let cache=paneRatedCache5216.get(p);
-    if(!cache||cache.horses!==p.horses||cache.raceId!==p.raceId||cache.history!==p.history){cache={horses:p.horses,raceId:p.raceId,history:p.history,records:new WeakMap()};paneRatedCache5216.set(p,cache);}
-    if(cache.records.has(rec))return cache.records.get(rec);
-    let modelRecord=rec;
-    if(!rec.markets?.['単勝']?.length){
-      for(let i=p.history.length-1;i>=0;i--){const r=p.history[i];if(r.captured_ms>rec.captured_ms)continue;if(rec.captured_ms-r.captured_ms>RANK_MAX_AGE)break;if(r.markets?.['単勝']?.length){modelRecord=r;break;}}
-    }
-    const wins=(modelRecord?.markets?.['単勝']||[]).map(x=>({num:Number(x.combination),odds:Number(x.odds)})).filter(x=>x.num>0&&x.odds>=1);
-    if(!wins.length){const empty=new Map();cache.records.set(rec,empty);return empty;}
-    const meta=new Map((modelRecord.horses?.length?modelRecord.horses:(p.horses||[]).map(h=>({num:h.num,frame:h.frame}))).map(h=>[Number(h.num),h]));
-    const rank=new Map(wins.slice().sort((a,b)=>a.odds-b.odds).map((x,i)=>[x.num,i+1]));
-    const n=Math.max(1,wins.length),takeback=p.source==='NAR'?.30:.225,over=wins.reduce((s,x)=>s+1/x.odds,0)||1/(1-takeback);
-    const popRaw=Array.from({length:n},(_,i)=>1/Math.pow(i+1,1.08)),popSum=popRaw.reduce((a,b)=>a+b,0)||1;
-    const raw=wins.map(x=>{const h=meta.get(x.num)||{};let pop=Number(h.pop||0);if(!(pop>=1&&pop<=n))pop=rank.get(x.num)||0;const po=(1/x.odds)/Math.max(over,1/(1-takeback));const pp=pop?(1/Math.pow(pop,1.08))/popSum:0;return {num:x.num,odds:x.odds,frame:Number(h.frame||0),raw:po&&pp?po*.8+pp*.2:(po||pp||1/n)};});
-    const total=raw.reduce((s,x)=>s+x.raw,0)||1,placeMult=Math.min(3,2+n*.045),renMult=Math.min(2.4,1.6+n*.038),out=new Map();
-    raw.forEach(h=>{const winP=h.raw/total,rawPlace=winP*placeMult+.015,fav=Math.max(0,winP-.25)*.7,long=winP<.08?(.08-winP)*.8:0;out.set(h.num,{...h,winP,placeP:Math.min(.90,rawPlace*(1-fav)*(1-long)),renP:Math.min(.82,winP*renMult+.015)});});cache.records.set(rec,out);return out;
+  function paneProbabilityPack52350(p,rec){
+ let modelRecord=rec;
+ if(rec&&!rec.markets?.['単勝']?.length){
+  for(let i=p.history.length-1;i>=0;i--){const r=p.history[i];
+   if(r.captured_ms>rec.captured_ms)continue;
+   if(rec.captured_ms-r.captured_ms>RANK_MAX_AGE&&!r.archive_change_only)break;
+   if(r.markets?.['単勝']?.length){modelRecord=r;break;}
   }
-  function paneModelP520(p,rec,market,key){
-    const rated=paneRated520(p,rec),ns=paneNums520(key);if(!rated.size||!ns.length)return NaN;
-    const hs=ns.map(n=>rated.get(n));
-    if(market==='単勝')return hs[0]?.winP??NaN;if(market==='複勝')return hs[0]?.placeP??NaN;
-    if(market==='枠連'){const fp=ns.map(f=>{const arr=[...rated.values()].filter(h=>h.frame===Number(f));if(!arr.length)return NaN;const win=Math.min(.95,arr.reduce((s,h)=>s+h.winP,0));return Math.min(.90,win*1.8+.015);});return fp.every(Number.isFinite)?Math.min(.34,fp[0]*fp[1]*1.10):NaN;}
-    if(hs.some(h=>!h))return NaN;if(market==='ワイド')return Math.min(.50,hs[0].placeP*hs[1].placeP*1.30);if(market==='馬連')return Math.min(.30,hs[0].winP*hs[1].winP*3.80);
-    if(market==='馬単'){const pair=Math.min(.30,hs[0].winP*hs[1].winP*3.80),den=Math.max(.0001,hs[0].winP+hs[1].winP);return Math.min(.22,pair*(hs[0].winP/den));}
-    if(market==='3連複')return Math.min(.16,hs[0].placeP*hs[1].placeP*hs[2].placeP*1.45);
-    if(market==='3連単'){const trio=Math.min(.16,hs[0].placeP*hs[1].placeP*hs[2].placeP*1.45),s1=Math.max(.0001,hs[0].winP+hs[1].winP+hs[2].winP),s2=Math.max(.0001,hs[1].winP+hs[2].winP);return Math.max(.0001,trio*(hs[0].winP/s1)*(hs[1].winP/s2));}return NaN;
-  }
+ }
+ return window.TheKeibaProbability.record(modelRecord,{kind:p.source,raceId:p.raceId,horses:p.horses});
+}
+function paneRated520(p,rec){return paneProbabilityPack52350(p,rec).rated;}
+function paneModelP520(p,rec,market,key){
+ const ns=String(key).split('-').map(Number);
+ return paneProbabilityPack52350(p,rec).maps[market]?.get(window.TheKeibaProbability.key(market,ns))??NaN;
+}
+
   // A market and its combination form one identity; e.g. 馬連|1-2 != 馬単|1-2.
   const RANK_MAX_AGE=30000, RANK_SIZES=[5,10,20];
   const paneRatedCache5216=new WeakMap(), paneRowCache5216=new WeakMap();
@@ -26204,7 +26167,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
   }
   function paneBestCrossBet52340(p,end){
     const cached=p?.topBetCache52340;
-    if(cached&&cached.history===p.history&&cached.horses===p.horses&&cached.end===end)return cached.best;
+    if(cached&&cached.history===p.history&&cached.horses===p.horses&&cached.end===end&&cached.blend===(window.settings?.independentBlend5211!==false))return cached.best;
     const found=new Map();
     for(let i=(p?.history?.length||0)-1;i>=0&&found.size<MARKETS.length;i--){
       const rec=p.history[i];if(Number(rec?.captured_ms||0)>end)continue;
@@ -26220,7 +26183,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
         if(!best||metrics.ev>best.metrics.ev||(metrics.ev===best.metrics.ev&&metrics.kelly>best.metrics.kelly))best={market,row,record:rec,metrics};
       }
     }
-    if(p)p.topBetCache52340={history:p.history,horses:p.horses,end,best};
+    if(p)p.topBetCache52340={history:p.history,horses:p.horses,end,best,blend:window.settings?.independentBlend5211!==false};
     return best;
   }
 
@@ -26437,7 +26400,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
         <div class="msv2-chart"><canvas aria-label="このレースの時系列オッズ"></canvas><div class="msv2-chart-empty"></div></div>
         <div class="msv2-foot"></div><details class="msv2-diagnostics"><summary>券種別の取得状況</summary><div></div></details>
         <div class="msv2-rank-scroll" tabindex="0" aria-label="順位表・横スクロールできます"><table class="msv2-rank-table" aria-label="全券種対応の指標ランキング"></table></div>
-        <details class="msv2-rank-help"><summary>指標の意味・順位の基準</summary>オッズは低い順、その他は高い順です。市場確率＝1÷オッズ（損益分岐の確率・控除補正なし）。EV＝想定確率×オッズ。乖離率＝(EV−1)×100％。確率差＝(想定確率−市場確率)×100ポイント。EVと乖離率の順位は同じです。Kellyは負値を0にします。3分前比は締切3分前の保存オッズに対する現在オッズの変化率です。想定確率は既存の画面用簡易モデル（単勝オッズ・人気から計算）です。未取得・計算不能の値は順位に入れません。複勝・ワイドは下限オッズを使用します。表示時点で選んだ上位買い目の過去の推移を描画します。表の買い目を押すと1点に絞れます。</details>
+        <details class="msv2-rank-help"><summary>指標の意味・順位の基準</summary>オッズは低い順、その他は高い順です。市場確率＝1÷オッズ（損益分岐の確率・控除補正なし）。EV＝想定確率×オッズ。乖離率＝(EV−1)×100％。確率差＝(想定確率−市場確率)×100ポイント。EVと乖離率の順位は同じです。Kellyは負値を0にします。3分前比は締切3分前の保存オッズに対する現在オッズの変化率です。想定確率は通常EV計算と共通の勝率・着順モデルです。同じ入力・設定なら同じ値になります。保存履歴にない補正材料は使用しません。未取得・計算不能の値は順位に入れません。複勝・ワイドは下限オッズを使用します。表示時点で選んだ上位買い目の過去の推移を描画します。表の買い目を押すと1点に絞れます。</details>
         <div class="msv2-legend"></div><p class="msv2-note">受信した値だけを記録します。複勝・ワイドのグラフは下限値です。10秒は再取得の基準で、通信中は重複取得しません。JSON自動補完は画面表示中の当日レースを110秒ごとに確認します。ブラウザ復帰時も保存履歴を重ねて読み直します。収集元にも存在しない値は作りません。横ドラッグで時刻移動・縦スワイプでこの画面をスクロールできます。</p></div>`;
       this.$('.msv2-grid').appendChild(root);const $=s=>root.querySelector(s);
       $('.dateInput').value=p.date;$('.sourceSelect').value=p.source;$('.ticketSelect').value=p.ticket;$('.metricSelect').value=p.metric;$('.rankSizeSelect').value=String(p.topN);$('.repairCheck').checked=p.autoRepair;
@@ -26684,7 +26647,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     }
     rankSelection5216(p){
       const end=this.endTime(p),size=RANK_SIZES.includes(p.topN)?p.topN:10;
-      const signature=[p.ticket,p.metric,size,end,p.selectedBet].join('/'),cached=p.rankCache5216;
+      const signature=[p.ticket,p.metric,size,end,p.selectedBet,window.settings?.independentBlend5211!==false].join('/'),cached=p.rankCache5216;
       if(cached&&cached.history===p.history&&cached.horses===p.horses&&cached.signature===signature)return cached.value;
       const requested=p.ticket===ALL_TICKETS?MARKETS:(p.ticket===CUSTOM_TICKETS?p.customMarkets.filter(t=>MARKETS.includes(t)):[p.ticket]),found=new Map();
       for(let i=p.history.length-1;i>=0&&found.size<requested.length;i--){
@@ -26712,7 +26675,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       if(p.selectedBet&&!selected)p.selectedBet='';
       const ranked=candidates.slice(0,size),shown=selected?[selected]:ranked;
       const value={end,size,candidates,ranked,shown,missing,stale,invalid,usable,requested:[...requested]};
-      p.rankCache5216={history:p.history,horses:p.horses,signature:[p.ticket,p.metric,size,end,p.selectedBet].join('/'),value};
+      p.rankCache5216={history:p.history,horses:p.horses,signature:[p.ticket,p.metric,size,end,p.selectedBet,window.settings?.independentBlend5211!==false].join('/'),value};
       return value;
     }
     label(p,row,market=p.ticket){
@@ -27407,112 +27370,13 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
   }
 
   function modelHorseWeights(horses){
-    const hs=(horses||[]).filter(h=>num(h?.num)>0);
-    const n=hs.length;
-    const oddsRows=hs.filter(h=>num(h.odds)>1.01);
-    const oddsCoverage=n?oddsRows.length/n:0;
-    const popRows=hs.filter(h=>num(h.pop)>0 && num(h.pop)<=n);
-    const popCoverage=n?popRows.length/n:0;
-
-    const inv=new Map(); let invSum=0;
-    for(const h of oddsRows){ const v=1/num(h.odds); inv.set(num(h.num),v); invSum+=v; }
-    const rankRaw=Array.from({length:n},(_,i)=>1/Math.pow(i+1,1.08));
-    const rankSum=rankRaw.reduce((a,b)=>a+b,0)||1;
-
-    const rows=hs.map((h,idx)=>{
-      const no=num(h.num), pop=num(h.pop);
-      const fair=(invSum>0 && inv.has(no))?inv.get(no)/invSum:0;
-      const rank=(pop>=1&&pop<=n)?rankRaw[pop-1]/rankSum:rankRaw[Math.min(idx,n-1)]/rankSum;
-      let p;
-      if(oddsCoverage>=0.80 && fair>0){
-        // Market is the strongest prior. Popularity only nudges 7%; this suppresses self-generated false edges.
-        p=0.93*fair+0.07*rank;
-      }else if(fair>0){
-        p=0.80*fair+0.20*rank;
-      }else{
-        p=rank;
-      }
-      return {h,no,p,fair,rank};
-    });
-    // v5.21.2: all ticket probabilities must consume the same blended weights.
-    // Changing evProbRaw alone does not reach this closed-over prediction core.
-    let independentApplied=false;
-    try{
-      const blend=window.__independentBlend5211;
-      if(blend && typeof blend.enabled==='function' && blend.enabled() && typeof blend.rowsFor==='function'){
-        const blended=blend.rowsFor(hs);
-        const byNumber=new Map((blended||[]).map(r=>[Number(r.num),Number(r.raw)]));
-        const weights=rows.map(r=>byNumber.get(r.no));
-        if(rows.length && weights.every(p=>Number.isFinite(p)&&p>0)){
-          rows.forEach((r,i)=>{r.p=weights[i];});
-          independentApplied=true;
-        }
-      }
-    }catch(e){ console.warn('[v5.21.2] blend unavailable; using core prior',e); }
-    let s=rows.reduce((a,r)=>a+r.p,0)||1;
-    rows.forEach(r=>r.p/=s);
-    return {rows,n,oddsCoverage,popCoverage,marketOverround:invSum,independentApplied};
-  }
+ return window.TheKeibaProbability.weights(horses,window.TheKeibaProbability.currentContext());
+}
 
   function coherentProbabilities(horses){
-    const pack=modelHorseWeights(horses), rows=pack.rows, n=rows.length;
-    const byNo=new Map(rows.map(r=>[r.no,r]));
-    const win=new Map(), place=new Map(), exacta=new Map(), quinella=new Map(), wide=new Map(), trio=new Map(), trifecta=new Map(), frameQ=new Map();
-    rows.forEach(r=>{win.set(r.no,r.p);place.set(r.no,0);});
-
-    // Ordered top-2 distribution (sums to 1 for n>=2)
-    if(n>=2){
-      for(const a of rows){
-        const rem1=Math.max(1e-12,1-a.p);
-        for(const b of rows){ if(a.no===b.no) continue;
-          const p2=a.p*(b.p/rem1);
-          exacta.set(`${a.no}-${b.no}`,p2);
-          const qk=pairKey(a.no,b.no); quinella.set(qk,num(quinella.get(qk))+p2);
-        }
-      }
-    }
-
-    const slots=n>=8?3:Math.min(2,n);
-    if(slots===2){
-      for(const [k,p] of exacta){
-        const [a,b]=k.split('-').map(Number);
-        place.set(a,num(place.get(a))+p); place.set(b,num(place.get(b))+p);
-
-      }
-    }
-
-    // Wide uses top-3 even when place pays only top-2 in a small field.
-    if(n>=3){
-      for(const a of rows){
-        const rem1=Math.max(1e-12,1-a.p);
-        for(const b of rows){ if(b.no===a.no) continue;
-          const p2=a.p*(b.p/rem1);
-          const rem2=Math.max(1e-12,1-a.p-b.p);
-          for(const c of rows){ if(c.no===a.no||c.no===b.no) continue;
-            const p3=p2*(c.p/rem2);
-            const ok=`${a.no}-${b.no}-${c.no}`;
-            trifecta.set(ok,p3);
-            const tk=tripleKey(a.no,b.no,c.no); trio.set(tk,num(trio.get(tk))+p3);
-            if(slots===3){
-              place.set(a.no,num(place.get(a.no))+p3); place.set(b.no,num(place.get(b.no))+p3); place.set(c.no,num(place.get(c.no))+p3);
-            }
-            const ab=pairKey(a.no,b.no), ac=pairKey(a.no,c.no), bc=pairKey(b.no,c.no);
-            wide.set(ab,num(wide.get(ab))+p3); wide.set(ac,num(wide.get(ac))+p3); wide.set(bc,num(wide.get(bc))+p3);
-          }
-        }
-      }
-    }
-
-    // 枠連 is aggregated from horse quinella probabilities. Same-frame combinations are retained when 2+ horses share a frame.
-    for(const [k,p] of quinella){
-      const [a,b]=k.split('-').map(Number);
-      const fa=num(byNo.get(a)?.h?.frame), fb=num(byNo.get(b)?.h?.frame);
-      if(!(fa>0&&fb>0)) continue;
-      const fk=pairKey(fa,fb); frameQ.set(fk,num(frameQ.get(fk))+p);
-    }
-
-    return {pack,win,place,exacta,quinella,wide,trio,trifecta,frameQ,slots};
-  }
+ window.__independentBlend5211?.rowsFor(horses);
+ return window.TheKeibaProbability.calculate(horses,window.TheKeibaProbability.currentContext());
+}
 
   function priorMapFrom(made){
     const m=new Map();
@@ -27550,7 +27414,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
   }
 
   function makeRec(type,nums,p,oddsInfo,prior,base){
-    const prob=clamp(num(p),0.0000001,0.9999999), odds=Math.max(1.01,num(oddsInfo.odds,1.01));
+    const prob=clamp(num(p),0,1), odds=Math.max(1.01,num(oddsInfo.odds,1.01));
     const ev=prob*odds;
     const kelly=Math.max(0,((odds-1)*prob-(1-prob))/Math.max(0.01,odds-1));
     const allowed=!!(oddsInfo.verified && !oddsInfo.stale && antiLookaheadAllowed(oddsInfo));
@@ -27561,7 +27425,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       expectedReturn:ev*(num(settings?.unit,100)||100),
       oddsSource:oddsInfo.source, oddsVerified:!!oddsInfo.verified, oddsStale:!!oddsInfo.stale, precloseVerified:!!oddsInfo.preclose,
       recommendationEligible:allowed, researchOnly:!allowed,
-      modelQuality:qualityLabel(base,oddsInfo), modelVersion:'PL-COHERENT-v5.21.2',
+      modelQuality:qualityLabel(base,oddsInfo), modelVersion:window.TheKeibaProbability.version,
       probabilitySource:base.independentApplied?'independent-blend':'core-prior',
       oddsProvider:oddsInfo.provider||'', oddsCapturedMs:num(oddsInfo.ts,0)
     };
@@ -27659,8 +27523,8 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
   const newGenerate=function(allHorses){
     let priorMade=null;
     try{ priorMade=typeof prevGenerate==='function'?prevGenerate.apply(this,arguments):null; }catch(e){ priorMade=null; }
-    // Preserve the dedicated strict-edge mode, which has its own market-shrinkage audit logic.
-    try{ if(String(settings?.mode||'')==='edge29' && priorMade?.recs?.length) return priorMade; }catch(e){}
+    // Keep strict-edge selection diagnostics without replacing the common displayed probabilities.
+    // Strict-edge diagnostics remain available; p/EV always use the shared model.
     return rebuildCandidates(allHorses,priorMade||{recs:[]});
   };
   window.generateCandidates=newGenerate; try{generateCandidates=newGenerate;}catch(e){}
@@ -27698,7 +27562,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
     const strict=d.validationMode==='PRE_RACE_STRICT';
     const past=d.date&&d.today&&d.date<d.today;
     el.innerHTML=`
-      <div><b style="color:${d.allInvariant?'var(--green)':'var(--yellow)'}">${ok}</b>：勝率・馬連/馬単・3連複/3連単・複勝/ワイドを同一の着順確率モデルから算出。</div>
+      <div><b style="color:${d.allInvariant?'var(--green)':'var(--yellow)'}">${ok}</b>：通常EV・予想印・実況・グラフは共通の勝率／着順確率モデルです。同じ入力・設定なら一致します。履歴にない補正材料は使いません。時系列の傾向・学習モードは共通基礎勝率への追加補正です。</div>
       <div>実オッズ確認 <b>${d.real}/${d.total}</b>候補 ／ 推奨可能 <b style="color:var(--green)">${d.eligible}</b> ／ 推定オッズのみ <b>${d.estimated}</b> ／ stale <b>${d.stale}</b></div>
       <div>共通モデルへの補正反映：${d.independentApplied?'ON':'OFF（従来の基礎勝率）'}</div>
       <div>単勝オッズ網羅率 ${(d.oddsCoverage*100).toFixed(0)}% ／ 人気網羅率 ${(d.popCoverage*100).toFixed(0)}% ／ 単勝overround ${d.overround?d.overround.toFixed(3):'-'}</div>
@@ -27942,138 +27806,21 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
   }
 
   function buildRows(all){
-    const hs = (Array.isArray(all) ? all : []).filter(h => num(h.num, 0) > 0);
-    const n = Math.max(1, hs.length);
-    const takeback = takebackRate();
+ const pack=window.TheKeibaProbability.weights(all,window.TheKeibaProbability.currentContext());
+ lastDiag={version:VERSION,raceId:raceIdNow(),enabled:independentBlendEnabled(),strongEvidence:pack.strongEvidence,
+ weakEvidence:pack.weakEvidence,weights:pack.weights,overround:pack.marketOverround,count:pack.n,
+ topIndependent:pack.rows.slice().sort((a,b)=>b.independentScore-a.independentScore).slice(0,5).map(r=>({num:r.no,score:Number(r.independentScore.toFixed(3)),pIndependent:Number((r.pIndependent*100).toFixed(2))}))};
+ window.__independentBlend5211.lastDiag=lastDiag;
+ return pack.rows;
+}
 
-    const validOdds = hs.map(h => num(h.odds, 0)).filter(o => o > 1);
-
-    const overround = validOdds.length > 1
-      ? validOdds.reduce((s, o) => s + 1 / o, 0)
-      : 1 / Math.max(0.01, 1 - takeback);
-
-    const marketRaw = hs.map(h => {
-      const o = num(h.odds, 0);
-      return o > 1
-        ? (1 / o) / Math.max(overround, 1 / Math.max(0.01, 1 - takeback))
-        : 0;
-    });
-
-    const marketPow = marketRaw.map(p => p > 0 ? Math.pow(p, 0.94) : 0);
-    const marketSum = marketPow.reduce((a, b) => a + b, 0) || 0;
-
-    const popRawTable = Array.from({length:n}, (_, i) => 1 / Math.pow(i + 1, 1.08));
-    const popSumTable = popRawTable.reduce((a, b) => a + b, 0) || 1;
-
-    const rankByOdds = new Map(
-      hs.slice()
-        .filter(h => num(h.odds, 0) > 1)
-        .sort((a, b) => num(a.odds, 9999) - num(b.odds, 9999))
-        .map((h, i) => [Number(h.num), i + 1])
-    );
-
-    const indScores = hs.map(h => independentScore(h, hs));
-    const indSum = indScores.reduce((a, b) => a + b, 0) || n;
-
-    const strong = hasStrongIndependentEvidence(hs);
-    const weak = !strong && hasWeakIndependentEvidence(hs);
-
-    let weights;
-    if(strong){
-      weights = { market:0.65, pop:0.13, independent:0.22 };
-    }else if(weak){
-      weights = { market:0.72, pop:0.18, independent:0.10 };
-    }else{
-      weights = { market:0.80, pop:0.20, independent:0.00 };
-    }
-
-    const rows = hs.map((h, i) => {
-      const pop = num(h.pop, 0);
-      const pMarket = marketSum > 0 ? marketPow[i] / marketSum : 0;
-
-      const usePop = pop >= 1 && pop <= n ? pop : num(rankByOdds.get(Number(h.num)), 0);
-      const pPop = usePop >= 1 && usePop <= n
-        ? (1 / Math.pow(usePop, 1.08)) / popSumTable
-        : 0;
-
-      const pIndependent = indScores[i] / indSum;
-
-      let parts = [];
-      if(pMarket > 0 && weights.market > 0) parts.push([pMarket, weights.market]);
-      if(pPop > 0 && weights.pop > 0) parts.push([pPop, weights.pop]);
-      if(pIndependent > 0 && weights.independent > 0) parts.push([pIndependent, weights.independent]);
-
-      if(!parts.length) parts = [[1 / n, 1]];
-
-      const wsum = parts.reduce((s, x) => s + x[1], 0) || 1;
-      const raw = Math.exp(parts.reduce((s, x) => s + safeLog(x[0]) * x[1], 0) / wsum);
-
-      return {
-        num:Number(h.num),
-        raw,
-        pMarket,
-        pPop,
-        pIndependent,
-        independentScore:indScores[i],
-        weights
-      };
-    });
-
-    lastDiag = {
-      version: VERSION,
-      raceId: raceIdNow(),
-      enabled: independentBlendEnabled(),
-      strongEvidence: strong,
-      weakEvidence: weak,
-      weights,
-      overround,
-      count: n,
-      topIndependent: rows.slice()
-        .sort((a,b) => b.independentScore - a.independentScore)
-        .slice(0, 5)
-        .map(r => ({
-          num:r.num,
-          score:Number(r.independentScore.toFixed(3)),
-          pIndependent:Number((r.pIndependent * 100).toFixed(2))
-        }))
-    };
-
-    window.__independentBlend5211.lastDiag = lastDiag;
-    return rows;
-  }
-
-  function rowsFor(all){
-    const sig = makeSignature(all);
-    if(sig === cacheSig && cacheRows) return cacheRows;
-    cacheSig = sig;
-    cacheRows = buildRows(all);
-    return cacheRows;
-  }
+  function rowsFor(all){return buildRows(all);}
 
   const prevEvProbRaw = window.evProbRaw || (typeof evProbRaw === 'function' ? evProbRaw : null);
 
-  function improvedEvProbRaw(h, allHorses){
-    try{
-      if(!independentBlendEnabled()){
-        return typeof prevEvProbRaw === 'function'
-          ? prevEvProbRaw.apply(this, arguments)
-          : 1 / Math.max(1, (allHorses || []).length);
-      }
-
-      const rows = rowsFor(allHorses);
-      const row = rows.find(x => Number(x.num) === Number(h.num));
-
-      if(row && Number.isFinite(row.raw) && row.raw > 0) return row.raw;
-
-      return typeof prevEvProbRaw === 'function'
-        ? prevEvProbRaw.apply(this, arguments)
-        : 1 / Math.max(1, (allHorses || []).length);
-    }catch(e){
-      return typeof prevEvProbRaw === 'function'
-        ? prevEvProbRaw.apply(this, arguments)
-        : 1 / Math.max(1, (allHorses || []).length);
-    }
-  }
+  function improvedEvProbRaw(h,allHorses){
+ const rows=rowsFor(allHorses);return rows.find(r=>r.no===Number(h.num))?.p||0;
+}
 
   window.evProbRaw = improvedEvProbRaw;
   try{ evProbRaw = improvedEvProbRaw; }catch(e){}
@@ -28103,7 +27850,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       p.innerHTML =
         '<label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer">' +
           '<input id="indBlend5211Toggle" type="checkbox" style="width:18px;height:18px;accent-color:var(--green)">' +
-          '<span><b style="color:var(--text)">🧠 独立補正 v5.21.2</b><br>' +
+          '<span><b style="color:var(--text)">🧠 共通モデルの独立補正</b><br>' +
           '市場オッズだけに寄せず、枠・NAR馬柱補正・任意指数を基礎勝率へ混合します。' +
           '強い独立材料あり: 市場65% / 人気13% / 条件22%。弱い材料のみ: 市場72% / 人気18% / 条件10%。</span>' +
         '</label>' +
@@ -28132,7 +27879,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
       const d = window.__independentBlend5211.lastDiag;
       if(!el) return;
       if(!independentBlendEnabled()){
-        el.textContent='診断: 独立補正OFF。次回のEV計算から従来の基礎勝率を使用します。';
+        el.textContent='診断: 独立補正OFF。共通モデルの市場・人気ベースを使用します（各画面の再計算時に反映）。';
         return;
       }
       if(!d){ el.textContent='診断: 未計算。EV計算で反映します。'; return; }
@@ -31175,26 +30922,7 @@ if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearI
  function probabilities(models,w){const scores=models.map(h=>Math.log(Math.max(1e-12,h.base))+h.features.reduce((s,x,i)=>s+x*w[i],0));const max=Math.max(...scores),a=scores.map(x=>Math.exp(x-max)),z=a.reduce((s,x)=>s+x,0);return a.map(x=>x/z);}
  function fit(examples){let w=Array(7).fill(0);for(let iter=0;iter<100;iter++){const g=w.map(v=>.08*v);for(const ex of examples){const p=probabilities(ex.models,w);ex.models.forEach((h,j)=>h.features.forEach((x,k)=>{g[k]+=(p[j]-(h.num===ex.winner?1:0))*x/examples.length;}));}w=w.map((v,k)=>clip(v-.35*g[k],-2,2));}return w;}
  function trainBefore(date,kind){if(session.fitDate===date&&session.kind===kind)return;const ex=session.examples.filter(x=>x.date<date&&x.kind===kind).slice(-2000);session.weights=ex.length>=session.cfg.min?fit(ex):Array(7).fill(0);session.trainingCount=ex.length;session.fitDate=date;session.kind=kind;}
- function distribution(models,p){
-   const maps=Object.fromEntries(TYPES.map(t=>[t,new Map()]));
-   const add=(t,ns,v)=>{const key=combo(t,ns.join('-'));maps[t].set(key,(maps[t].get(key)||0)+v);};
-   const n=models.length,placeN=n<8?2:3;
-   p.forEach((v,i)=>add('単勝',[models[i].num],v));
-   // Exact Plackett–Luce enumeration; no independent multiplication of win probabilities.
-   for(let i=0;i<n;i++)for(let j=0;j<n;j++)if(j!==i){
-     const pair=p[i]*p[j]/Math.max(1e-12,1-p[i]),a=models[i],b=models[j];
-     add('馬単',[a.num,b.num],pair);add('馬連',[a.num,b.num],pair);
-     if(a.frame&&b.frame&&(a.frame!==b.frame||models.filter(h=>h.frame===a.frame).length>=2))add('枠連',[a.frame,b.frame],pair);
-     if(placeN===2){add('複勝',[a.num],pair);add('複勝',[b.num],pair);}
-     if(n<3)continue;
-     for(let k=0;k<n;k++)if(k!==i&&k!==j){const c=models[k],q=pair*p[k]/Math.max(1e-12,1-p[i]-p[j]);
-       add('3連単',[a.num,b.num,c.num],q);add('3連複',[a.num,b.num,c.num],q);
-       if(placeN===3){for(const h of [a,b,c])add('複勝',[h.num],q);}
-       {add('ワイド',[a.num,b.num],q);add('ワイド',[a.num,c.num],q);add('ワイド',[b.num,c.num],q);}
-     }
-   }
-   return maps;
- }
+ function distribution(models,p){return window.TheKeibaProbability.distribution(models,p).maps;}
  function candidates(pack,p,cutoff,cfg){const probs=distribution(pack.models,p),out=[];for(const t of TYPES)for(const [key,prob] of probs[t]){const q=pack.latest.get(t+'|'+key);if(!q||cutoff-q.ms>cfg.age)continue;const odds=q.odds,ev=prob*odds;out.push({type:t,nums:key.split('-').map(Number),p:prob,odds,ev,kelly:Math.max(0,(ev-1)/Math.max(.01,odds-1)),marketP:1/odds,edgePP:(prob-1/odds)*100,oddsSource:'saved-timeseries-real',oddsCapturedAt:new Date(q.ms).toISOString()});}return out.sort((a,b)=>b.ev-a.ev||a.type.localeCompare(b.type)||a.nums.join('-').localeCompare(b.nums.join('-')));}
  function select(recs,cfg,settings){const unit=Math.max(100,Math.floor((num(settings.unit)||100)/100)*100),budget=Math.max(0,num(settings.budget)||500),max=Math.max(1,num(settings.maxTickets)||1);return recs.filter(r=>r.ev>=cfg.ev).slice(0,Math.min(max,Math.floor(budget/unit))).map(r=>({...r,amount:unit,stake:unit,unit}));}
  async function prepare(kind,rid,date,loaded,row,settings){
@@ -31206,6 +30934,10 @@ if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearI
    const timing=deadline(date,loaded,meta,raw,cfg),pack=buildFeatures(raw,timing.cutoff,cfg);
    const finalRoster=new Set((loaded.horses||[]).map(h=>Number(h.num)).filter(n=>n>0));
    if(finalRoster.size!==pack.models.length||pack.models.some(h=>!finalRoster.has(h.num)))throw new Error('予測時点と精算時点の出走構成が異なるため除外（取消・除外の返還は未対応）');
+   // Use only the cutoff snapshot, never final odds or later indices, for the common static baseline.
+   const cutoffRecord=raw.filter(r=>!r.archive_hold_point&&!r.synthetic&&!r.interpolated&&Number(r.captured_ms)>0&&Number(r.captured_ms)<=timing.cutoff&&r.markets?.['単勝']?.length).sort((a,b)=>a.captured_ms-b.captured_ms).at(-1);
+   const baseline=window.TheKeibaProbability.record(cutoffRecord,{kind,raceId:rid});
+   pack.models.forEach(h=>{const rated=baseline.rated.get(h.num);if(!rated)throw new Error('共通モデルの締切前データが不足');h.base=rated.winP;});
    trainBefore(date,kind);
    const vectors={static:Array(7).fill(0),trend:[.08,.18,.12,.08,-.12,.08,.10],learn:session.weights.slice()};
    const variants={};for(const [name,w] of Object.entries(vectors)){const p=probabilities(pack.models,w),recs=candidates(pack,p,timing.cutoff,cfg);variants[name]={probabilities:p,recs,tickets:name==='learn'&&session.trainingCount<cfg.min?[]:select(recs,cfg,settings)};}

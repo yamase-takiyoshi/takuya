@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script id="thekeiba-build-version">
 // One release identity shared by all legacy and current display patches.
-window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.56 OddsNameJoin',number:'5.23.56'});
+window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.55 RangeViewFix',number:'5.23.55'});
 window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
@@ -154,7 +154,7 @@ window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.56 OddsNameJoin</title>
+<title>The競馬 EV分析 v5.23.55 RangeViewFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -517,7 +517,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.23.56 OddsNameJoin ☁️ 10s</span>
+    <span class="ver">v5.23.55 RangeViewFix ☁️ 10s</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1170,7 +1170,7 @@ body.right-analysis-active #rightAnalysisPane{
 </script>
 <script>
 // ============================================================
-// The競馬 EV分析 HTML版 v5.23.56
+// The競馬 EV分析 HTML版 v5.15.3
 // EV計算・確率モデル・推奨ロジックを結合版.jsから移植
 // ============================================================
 
@@ -7067,6 +7067,9 @@ async function narRescueFetch217(raceId, isResult){
 }
 
 async function fetchRace(){
+    if(window.isRangeSimulationRunning52355?.()) return;
+    const rangeViewEpoch52355 = window.__rangeViewEpoch52355 || 0;
+
   window.__raceCardRendered226 = false;
   const rawUrl = document.getElementById('raceUrl').value.trim();
   if(!rawUrl){ alert('URLを入力してください。'); return; }
@@ -7329,10 +7332,12 @@ async function fetchRace(){
     }
 
     // 取得後すぐにタブを馬データへ
+    if(!window.isRangeSimulationRunning52355?.() && rangeViewEpoch52355 === (window.__rangeViewEpoch52355 || 0)){
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     document.querySelector('[data-tab="horses"]').classList.add('active');
     document.querySelectorAll('[id^="tab-"]').forEach(t => t.style.display = 'none');
     document.getElementById('tab-horses').style.display = '';
+    }
 
   } catch(e) {
     console.error(e);
@@ -11276,6 +11281,13 @@ if(horses.length === 0){
   //  ・連続失敗の自動停止 ・KPI/内訳(場別・月別・券種別)の追加
   // ============================================================
   let rsRunning = false, rsTripped = false, rsLastEnv = null, rsCk = null;
+  // Expose the batch state without allowing UI code to mutate it.
+  window.isRangeSimulationRunning52355 = () => rsRunning;
+  function rsSuspendAutoCard52355(){
+    window.__rangeViewEpoch52355 = (window.__rangeViewEpoch52355 || 0) + 1;
+    window.TheKeibaRaceCardAuto52351?.cancel();
+  }
+
   const RS_BREAKER_LIMIT = 12;   // 連続失敗がこの件数に達したら自動停止（通信不良/ブロック対策）
   const RS_RETRY_MAX = 2;        // 1レースあたりの自動リトライ回数
   const RS_DETAIL_CAP = 300;     // 画面に出すレース別明細の上限（コピーは全件）
@@ -12233,6 +12245,7 @@ if(horses.length === 0){
     const env = { kind: env0.kind, validationMode: env0.validationMode, tsEnabled: false, recordToChart: env0.recordToChart, requireFinal: env0.requireFinal === true };
     window.__rsNarEstOk = env0.narEstOk === true;
     rsAbort = false; rsTripped = false; rsRunning = true;
+    rsSuspendAutoCard52355();
     await rsAcquireWake();
     if(btn){ btn.disabled = true; btn.textContent = '⏳ 再試行中...'; }
     if(stopBtn) stopBtn.style.display = '';
@@ -12271,6 +12284,7 @@ if(horses.length === 0){
   }
 
   async function runRangeVenueSimulation(){
+    if(rsRunning) return;
     const btn = $('rsRunBtn'), stopBtn = $('rsStopBtn'), prog = $('rsProgress');
     const kind = $('rsKind')?.value || 'JRA';
     const start = $('rsStart')?.value || '';
@@ -12297,6 +12311,7 @@ if(horses.length === 0){
 
     const tsEnabled = window.TheKeibaRangeTS?.begin() === true;
     rsAbort = false; rsTripped = false; rsRunning = true;
+    rsSuspendAutoCard52355();
     rsLastRows = [];
     try{ window.__rsLastRows = []; }catch(e){}
     try{
@@ -12512,7 +12527,7 @@ if(horses.length === 0){
       console.error('[runRangeVenueSimulation]', e);
       if(prog) prog.innerHTML = `<div class="url-status err">❌ 期間横断シミュレーション失敗: ${asw_esc((e && e.message) || e)}</div>`;
     }finally{
-      rsRunning = false; rsReleaseWake();
+      rsReleaseWake();
       window.__rsNarEstOk = false;
       try{ rsFlushRender(rows, tsEnabled); }catch(e){}
       // 馬データタブの選択を元に戻す
@@ -12521,6 +12536,7 @@ if(horses.length === 0){
       try{ if(typeof loadActiveVenuesForDate === 'function') await loadActiveVenuesForDate(); }catch(e){}
       const vEl = $('pickVenue');
       if(vEl && save.venue && [...vEl.options].some(o => o.value === save.venue)) vEl.value = save.venue;
+      rsRunning = false;
 
       if(btn){ btn.disabled = false; btn.textContent = '📆 期間横断シミュレーション実行'; }
       if(stopBtn) stopBtn.style.display = 'none';
@@ -15403,7 +15419,7 @@ function json(obj, status = 200) {
   try{
     window.APP_VERSION = V;
     document.title = 'The競馬 EV分析 ' + V;
-    document.querySelectorAll('.ver').forEach(el => el.textContent = V + ' ☁️ 10s');
+    document.querySelectorAll('.ver').forEach(el => el.textContent = V + ' 🗓');
   }catch(e){}
 
   const VENUE_CODE_BY_NAME_161 = {
@@ -22578,7 +22594,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     const entered=window.prompt(`保存する${ext.toUpperCase()}ファイル名を入力してください（拡張子は自動で付きます）`,base); if(entered===null)return;
     const filename=(safeName520(String(entered).replace(/\.(csv|json)$/i,''))||base)+'.'+ext;
     if(ext==='json'){
-      const obj={schema:'thekeiba-multimetric-alltickets-v1',version:(window.APP_VERSION||window.THEKEIBA_BUILD.version),exported_at:new Date().toISOString(),race_id:rid,race_name:(typeof currentRaceName!=='undefined'?currentRaceName:''),
+      const obj={schema:'thekeiba-multimetric-alltickets-v1',version:(window.APP_VERSION||'v5.20.1'),exported_at:new Date().toISOString(),race_id:rid,race_name:(typeof currentRaceName!=='undefined'?currentRaceName:''),
         metric_definitions:{odds:'現在オッズ',market_probability_pct:'1/オッズ',model_probability_pct:'想定確率',ev:'想定確率×オッズ',kelly_pct:'Kelly基準（負値は0）',edge_pp:'想定確率-市場確率'},count:rows.length,rows};
       await saveBlob520(filename,JSON.stringify(obj,null,2),'application/json','json');
     }else{
@@ -24309,6 +24325,9 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   }
 
   async function fetchRace227(){
+    if(window.isRangeSimulationRunning52355?.()) return;
+    const rangeViewEpoch52355 = window.__rangeViewEpoch52355 || 0;
+
     const rawUrl = String(el227('raceUrl')?.value || '').trim();
     if(!rawUrl){ alert('URLを入力してください。'); return; }
     if(!settings.proxyUrl){
@@ -24393,10 +24412,12 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
 
       // 馬データタブへ戻す
       try{
+        if(!window.isRangeSimulationRunning52355?.() && rangeViewEpoch52355 === (window.__rangeViewEpoch52355 || 0)){
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
         document.querySelector('[data-tab="horses"]')?.classList.add('active');
         document.querySelectorAll('[id^="tab-"]').forEach(t => t.style.display = 'none');
         const htab = el227('tab-horses'); if(htab) htab.style.display = '';
+        }
       }catch(e){}
 
     }catch(e){
@@ -25040,9 +25061,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     try{
       const doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
       if(typeof parseWinOddsPopularityFromDoc === 'function') map = parseWinOddsPopularityFromDoc(doc) || new Map();
-      // v5.23.56: 位置ベースの取得結果は人気順の行位置を馬番と誤読することがあるため、
-      // 馬名JOINが取れるなら常にそちらを優先する（従来は位置ベースが2件未満のときだけ試していた）。
-      if(typeof parseOddsByNameFromOddsDoc === 'function' && Array.isArray(expected) && expected.length){
+      if((!map || map.size < 2) && typeof parseOddsByNameFromOddsDoc === 'function' && Array.isArray(expected)){
         const byName = parseOddsByNameFromOddsDoc(doc);
         if(byName && byName.size >= 2){
           const m2 = new Map();
@@ -25050,7 +25069,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
             const nm = (typeof normalizeNameForJoin === 'function') ? normalizeNameForJoin(h.name) : h.name;
             if(byName.has(nm)) m2.set(Number(h.num), { odds:Number(byName.get(nm)), pop:0 });
           });
-          if(m2.size >= 2 && (!map || map.size < 2 || m2.size >= expected.length - 1)) map = m2;
+          if(m2.size >= 2) map = m2;
         }
       }
     }catch(e){}
@@ -25365,7 +25384,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
       if(typeof oddsLookMisKeyedByUmaban === 'function' && oddsLookMisKeyedByUmaban(horses)){
         horses = horses.map(h => ({ ...h, odds:0, pop:0, provisionalOdds:false }));
         window.renderHorseRows();
-        oddsStatus('⚠️ オッズの馬番対応に異常を検出したため、オッズ・人気だけ破棄しました（出馬表は保持）。<br>取得元: ' + String(usedUrl || '確定結果ページ').replace(/^https?:\/\//,'').replace(/[<>&"]/g,''), 'err');
+        oddsStatus('⚠️ オッズの馬番対応に異常を検出したため、オッズ・人気だけ破棄しました（出馬表は保持）。', 'err');
         return;
       }
       window.renderHorseRows();
@@ -25386,6 +25405,9 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
 
   const prevFetchRace = window.fetchRace;
   async function fetchRace232(){
+    if(window.isRangeSimulationRunning52355?.()) return;
+    const rangeViewEpoch52355 = window.__rangeViewEpoch52355 || 0;
+
     const raw = String($('raceUrl')?.value || '').trim();
     const rid = ridOf(raw) || selectedRid();
     if(!rid){
@@ -25463,10 +25485,12 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
       if(progress) progress.classList.remove('show');
 
       try{
+        if(!window.isRangeSimulationRunning52355?.() && rangeViewEpoch52355 === (window.__rangeViewEpoch52355 || 0)){
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
         document.querySelector('[data-tab="horses"]')?.classList.add('active');
         document.querySelectorAll('[id^="tab-"]').forEach(t => t.style.display = 'none');
         const ht = $('tab-horses'); if(ht) ht.style.display = '';
+        }
       }catch(e){}
 
       if(!horses.some(h => h.provisionalNum)){
@@ -28627,7 +28651,7 @@ function paneModelP520(p,rec,market,key){
   'use strict';
   const V=window.THEKEIBA_BUILD.version;
   function mark(){
-    try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;const el=document.querySelector('.ver');if(el)el.textContent=V+(window.__NAR_BRIDGE_READY__?' 🌉':'')+' ☁️ 10s';}catch(e){}
+    try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;const el=document.querySelector('.ver');if(el)el.textContent=V+(window.__NAR_BRIDGE_READY__?' 🌉':'')+' ☁️';}catch(e){}
   }
   mark();[300,1200,5000,12000,30000,60000].forEach(ms=>setTimeout(mark,ms));
   // The existing canonical version observer owns the label and title. No second observer.
@@ -28673,7 +28697,7 @@ function boot(){const st=$('urlStatus');if(st)mo.observe(st,{childList:true,subt
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
 // JRA確認失敗でも、URLを直接貼った場合の「レースデータ取得」は使えるようにする。
 document.addEventListener('input',e=>{if(e.target?.id!=='raceUrl')return;const u=String(e.target.value||'');const b=$('fetchBtn');if(b&&/race_id=\d{10,14}/.test(u)){b.disabled=false;b.style.opacity='';b.title='URL直接取得';}},true);
-function mark(){try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;const e=document.querySelector('.ver');if(e)e.textContent=V+(window.__NAR_BRIDGE_READY__?' 🌉':'')+' ☁️ 10s';}catch(e){}}
+function mark(){try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;const e=document.querySelector('.ver');if(e)e.textContent=V+(window.__NAR_BRIDGE_READY__?' 🌉':'')+' ☁️';}catch(e){}}
 [0,500,1500,5000,12000,30000].forEach(ms=>setTimeout(mark,ms));
 })();
 </script>
@@ -29684,7 +29708,7 @@ function install(){
   ['raceSelect','raceUrl','pickKind','pickVenue'].forEach(id=>$(id)?.addEventListener(id==='raceUrl'?'input':'change',()=>{setTimeout(()=>{const r=currentRid();if(r!==activeRid)loadRace(r).then(()=>{if(auto.checked)check(true);});},300);}));
   window.addEventListener('resize',()=>draw());
 }
-function stamp(){try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;document.querySelectorAll('.ver').forEach(e=>e.textContent=V+' ☁️ 10s');}catch(e){}}
+function stamp(){try{window.APP_VERSION=V;document.title='The競馬 EV分析 '+V;document.querySelectorAll('.ver').forEach(e=>e.textContent=V+' ☁️ 10s Δ');}catch(e){}}
 function boot(){
   install();stamp();const r=currentRid();
   loadRace(r).then(()=>{if($('forecastAuto52321')?.checked&&/^\d{10,14}$/.test(r))check(true);});
@@ -29811,7 +29835,7 @@ function setTheme(v){v=v==='light'?'light':'dark';root.dataset.theme=v;try{local
 function toggle(){setTheme(root.dataset.theme==='light'?'dark':'light');}
 function installMain(){const h=document.querySelector('.header>div:last-child');if(h&&!document.getElementById('themeToggle52322')){const b=document.createElement('button');b.id='themeToggle52322';b.type='button';b.className='btn-sm theme-toggle52322';b.onclick=toggle;h.insertBefore(b,h.firstChild);}}
 function installMulti(){const ws=window.TheKeibaMultiV2?.workspace;if(!ws?.root)return;const bar=ws.root.querySelector('.msv2-toolbar');if(bar&&!bar.querySelector('.msv2-theme-toggle52322')){const b=document.createElement('button');b.type='button';b.className='msv2-theme-toggle52322';b.onclick=toggle;const close=bar.querySelector('[data-action="close"]');bar.insertBefore(b,close);}}
-function stamp(){document.title='The競馬 EV分析 '+VERSION;document.querySelectorAll('.ver').forEach(e=>e.textContent=VERSION+' ☁️ 10s');window.APP_VERSION=VERSION;}
+function stamp(){document.title='The競馬 EV分析 '+VERSION;document.querySelectorAll('.ver').forEach(e=>e.textContent=VERSION+' ☁️ 10s Δ');window.APP_VERSION=VERSION;}
 setTheme(preferred());
 function boot(){installMain();installMulti();stamp();const f=document.getElementById('rightAnalysisFrame');if(f&&!f.__theme52323Bound){f.__theme52323Bound=true;f.addEventListener('load',()=>syncRightTheme52323(root.dataset.theme||'dark'));}syncRightTheme52323(root.dataset.theme||'dark');}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
@@ -29841,7 +29865,7 @@ window.addEventListener('pageshow',repairTimes);document.addEventListener('visib
   function stamp(){
     try{
       window.APP_VERSION=V;
-      const v=document.querySelector('.ver'); if(v)v.textContent=V+' ☁️ 10s';
+      const v=document.querySelector('.ver'); if(v)v.textContent=V+' ☁️ 10s Δ';
       document.title='The競馬 EV分析 '+V;
       const b=document.querySelector('#bridgeModeBar252 b'); if(b&&!/v1\.7\.19/.test(b.textContent||'')){}
     }catch(e){}
@@ -29910,7 +29934,7 @@ function stamp(){
   try{
     window.APP_VERSION=VERSION;
     document.title='The競馬 EV分析 '+VERSION;
-    document.querySelectorAll('.ver').forEach(e=>e.textContent=VERSION+' ☁️ 10s');
+    document.querySelectorAll('.ver').forEach(e=>e.textContent=VERSION+' ☁️ 10s Δ');
   }catch(e){}
 }
 function buttonText(light,header=false){
@@ -30020,7 +30044,7 @@ function stamp(){
   try{
     window.APP_VERSION=VERSION;
     document.title='The競馬 EV分析 '+VERSION;
-    document.querySelectorAll('.ver').forEach(e=>e.textContent=VERSION+' ☁️ 10s');
+    document.querySelectorAll('.ver').forEach(e=>e.textContent=VERSION+' ☁️ 10s LIVE');
   }catch(e){}
 }
 function cfg(){
@@ -30462,7 +30486,7 @@ const version=window.THEKEIBA_BUILD.version;
 function stamp(){
  window.APP_VERSION=version;
  document.title='The競馬 EV分析 '+version;
- document.querySelectorAll('.ver').forEach(el=>{if(el.textContent!==version+' ☁️ 10s')el.textContent=version+' ☁️ 10s';});
+ document.querySelectorAll('.ver').forEach(el=>{if(el.textContent!==version+' ☁️ 10s LIVE')el.textContent=version+' ☁️ 10s LIVE';});
 }
 function install(){
  stamp();
@@ -30625,7 +30649,7 @@ window.RightPaneScroll52336=Object.freeze({install,version});
     try{
       window.APP_VERSION=VERSION;
       document.title='The競馬 EV分析 '+VERSION;
-      document.querySelectorAll('.ver').forEach(el=>el.textContent=VERSION+' ☁️ 10s');
+      document.querySelectorAll('.ver').forEach(el=>el.textContent=VERSION+' ☁️ 10s LIVE');
     }catch(e){}
   }
   function boot(){
@@ -30707,7 +30731,7 @@ html[data-theme="light"] .auditTable52341 .auditOk52341{color:#047857}html[data-
     try{
       window.APP_VERSION=VERSION;
       document.title='The競馬 EV分析 '+VERSION;
-      document.querySelectorAll('.ver').forEach(el=>el.textContent=VERSION+' ☁️ 10s');
+      document.querySelectorAll('.ver').forEach(el=>el.textContent=VERSION+' ☁️ 10s LIVE');
     }catch(_){ }
   }
 
@@ -31093,7 +31117,9 @@ if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearI
  const rid=()=> (String($('raceUrl')?.value||'').match(/race_id=(\d{12})/)||String($('raceUrl')?.value||'').match(/\/race\/(\d{12})/)||[])[1]||'';
  let timer=null, lastKey='';
  const key=()=>[$('pickDate')?.value,$('pickKind')?.value,$('pickVenue')?.value,rid()].join('|');
+ function cancel(){clearTimeout(timer);timer=null;lastKey='';}
  function schedule(){
+   if(window.isRangeSimulationRunning52355?.()){cancel();return;}
    const r=rid(), k=key();
    if(!r){clearTimeout(timer);lastKey='';return;}
    if(k===lastKey)return;
@@ -31108,6 +31134,7 @@ if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearI
      if(box)box.textContent='🐎 出馬表の自動取得を準備中… '+r;
    }
    timer=setTimeout(async()=>{
+     if(window.isRangeSimulationRunning52355?.()){cancel();return;}
      if(key()!==k || window.__raceCardBusy254?.rid===r)return;
      try{await window.fetchRace();}
      catch(e){
@@ -31125,7 +31152,7 @@ if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearI
  $('raceSelect')?.addEventListener('change',schedule);
  // A manual request takes precedence over the pending automatic one.
  $('fetchBtn')?.addEventListener('click',()=>clearTimeout(timer));
- window.TheKeibaRaceCardAuto52351={schedule};
+ window.TheKeibaRaceCardAuto52351={schedule,cancel};
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',schedule,{once:true});else schedule();
 })();
 </script>

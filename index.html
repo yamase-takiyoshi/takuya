@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script id="thekeiba-build-version">
 // One release identity shared by all legacy and current display patches.
-window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.55 VersionUnify',number:'5.23.55'});
+window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.56 OddsNameJoin',number:'5.23.56'});
 window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
@@ -154,7 +154,7 @@ window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.55 VersionUnify</title>
+<title>The競馬 EV分析 v5.23.56 OddsNameJoin</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -517,7 +517,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.23.55 VersionUnify ☁️ 10s</span>
+    <span class="ver">v5.23.56 OddsNameJoin ☁️ 10s</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -1170,7 +1170,7 @@ body.right-analysis-active #rightAnalysisPane{
 </script>
 <script>
 // ============================================================
-// The競馬 EV分析 HTML版 v5.23.55
+// The競馬 EV分析 HTML版 v5.23.56
 // EV計算・確率モデル・推奨ロジックを結合版.jsから移植
 // ============================================================
 
@@ -25040,7 +25040,9 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     try{
       const doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
       if(typeof parseWinOddsPopularityFromDoc === 'function') map = parseWinOddsPopularityFromDoc(doc) || new Map();
-      if((!map || map.size < 2) && typeof parseOddsByNameFromOddsDoc === 'function' && Array.isArray(expected)){
+      // v5.23.56: 位置ベースの取得結果は人気順の行位置を馬番と誤読することがあるため、
+      // 馬名JOINが取れるなら常にそちらを優先する（従来は位置ベースが2件未満のときだけ試していた）。
+      if(typeof parseOddsByNameFromOddsDoc === 'function' && Array.isArray(expected) && expected.length){
         const byName = parseOddsByNameFromOddsDoc(doc);
         if(byName && byName.size >= 2){
           const m2 = new Map();
@@ -25048,7 +25050,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
             const nm = (typeof normalizeNameForJoin === 'function') ? normalizeNameForJoin(h.name) : h.name;
             if(byName.has(nm)) m2.set(Number(h.num), { odds:Number(byName.get(nm)), pop:0 });
           });
-          if(m2.size >= 2) map = m2;
+          if(m2.size >= 2 && (!map || map.size < 2 || m2.size >= expected.length - 1)) map = m2;
         }
       }
     }catch(e){}
@@ -25363,7 +25365,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
       if(typeof oddsLookMisKeyedByUmaban === 'function' && oddsLookMisKeyedByUmaban(horses)){
         horses = horses.map(h => ({ ...h, odds:0, pop:0, provisionalOdds:false }));
         window.renderHorseRows();
-        oddsStatus('⚠️ オッズの馬番対応に異常を検出したため、オッズ・人気だけ破棄しました（出馬表は保持）。', 'err');
+        oddsStatus('⚠️ オッズの馬番対応に異常を検出したため、オッズ・人気だけ破棄しました（出馬表は保持）。<br>取得元: ' + String(usedUrl || '確定結果ページ').replace(/^https?:\/\//,'').replace(/[<>&"]/g,''), 'err');
         return;
       }
       window.renderHorseRows();

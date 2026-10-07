@@ -763,6 +763,14 @@ body.right-analysis-active #rightAnalysisPane{
         <span>🐴 馬柱補正を使って予想する（NAR実験：転入・組替わり・場替わりで勝率を補正。レース毎に馬柱を1回追加取得）</span>
       </label>
       <div id="rsPastAdjStat" style="display:none;font-size:11px;color:var(--muted);margin:0 0 10px 26px"></div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px;cursor:pointer;user-select:none">
+        <input type="checkbox" id="rsReqFinal" checked style="width:18px;height:18px;accent-color:var(--green)">
+        <span>📌 確定オッズ必須（確定後のオッズが取れないレースは、現在オッズで続行せず理由つきで除外）</span>
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:10px;cursor:pointer;user-select:none">
+        <input type="checkbox" id="rsNarEstOdds" checked style="width:18px;height:18px;accent-color:var(--green)">
+        <span>🔬 NARでも単勝以外の券種を推定オッズで買う（JRAと同条件で比較する研究用。OFFで従来のNAR制限）</span>
+      </label>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-primary" id="rsRunBtn" onclick="runRangeVenueSimulation()">📆 期間横断シミュレーション実行</button>
         <button class="btn-sm" id="rsStopBtn" onclick="stopRangeVenueSimulation()" style="display:none">⏹ 中断</button>
@@ -10804,6 +10812,7 @@ if(horses.length === 0){
     let doc = parser.parseFromString(html, 'text/html');
     let isResultPage = /\/race\/result\.html/i.test(activeUrl);
     let resultDoc = isResultPage ? doc : null;
+    let finalOddsDiag = '';   // 確定オッズ読み取りの診断（除外理由に使う）
 
     // 出馬表のままでも確定済みなら結果ページの最終値を本体にする（fetchRace と同じ判断）
     if(/\/race\/shutuba\.html/i.test(activeUrl)){
@@ -10816,8 +10825,10 @@ if(horses.length === 0){
         resultDoc = rDoc; // 精算で使い回す
         if(rHorses.length >= 2 && rOdds.size >= 2){
           activeUrl = rUrl; html = rHtml; doc = rDoc; isResultPage = true;
+        }else{
+          finalOddsDiag = `結果ページ解析: 馬${rHorses.length}頭/確定オッズ${rOdds.size}頭`;
         }
-      }catch(e){ /* 未確定レースは結果なし */ }
+      }catch(e){ /* 未確定レースは結果なし */ finalOddsDiag = '結果ページ取得失敗: ' + String((e && e.message) || e).slice(0, 80); }
     }
 
     let hs = parseHorsesFromDoc(doc, activeUrl);
@@ -10906,10 +10917,17 @@ if(horses.length === 0){
         }
       }catch(e){}
     }
+    // 過去日のレースは、オッズ画面の値も発走後の確定値とみなす（未検証の前提。別ラベルで区別）。
+    let pastRaceOddsPage = false;
+    try{
+      const rd = String(window.__rsValidationRaceDate || '');
+      pastRaceOddsPage = /^\d{4}-\d{2}-\d{2}$/.test(rd) && rd < todayYmd();
+    }catch(e){}
     const oddsSnapshotType = savedPreclose
       ? 'PRE_CLOSE_3MIN'
-      : (isResultPage ? 'FINAL' : (preRaceVerified ? 'PRE_RACE_VERIFIED' : 'CURRENT_UNVERIFIED'));
+      : (isResultPage ? 'FINAL' : (preRaceVerified ? 'PRE_RACE_VERIFIED' : (pastRaceOddsPage ? 'FINAL_ODDS_PAGE_PAST' : 'CURRENT_UNVERIFIED')));
     return {
+      finalOddsDiag,
       horses: hs,
       raceName,
       isResultPage,
@@ -11389,7 +11407,8 @@ if(horses.length === 0){
     let s = {};
     try{ s = JSON.parse(JSON.stringify(settings)); delete s.proxyUrl; }catch(e){}
     return JSON.stringify({ b: (window.THEKEIBA_BUILD || {}).number, vm: validationMode, rec: !!recordToChart,
-      adj: !!($('rsPastAdj') && $('rsPastAdj').checked), s });
+      adj: !!($('rsPastAdj') && $('rsPastAdj').checked),
+      rf: !!($('rsReqFinal') && $('rsReqFinal').checked), ne: !!($('rsNarEstOdds') && $('rsNarEstOdds').checked), s });
   }
 
   function rsValidationMode(){
@@ -12053,6 +12072,14 @@ if(horses.length === 0){
               row.postTimeText = loaded.postTimeText || '';
               row.auditEligible = row.preRaceTimestampVerified === true;
               row.auditReason = row.auditEligible ? '' : (row.oddsSnapshotType === 'FINAL' ? 'FINAL_ODDS（確定後の最終オッズ）' : '発走前市場時点を時刻で証明できない');
+              row.finalOddsDiag = loaded.finalOddsDiag || '';
+              if(validationMode !== 'PRE_RACE_STRICT' && env.requireFinal &&
+                 row.oddsSnapshotType !== 'FINAL' && row.oddsSnapshotType !== 'FINAL_ODDS_PAGE_PAST'){
+                row.status = 'excluded'; row.failureKind = '確定オッズ未取得';
+                row.failureStage = '確定オッズ必須';
+                row.auditReason = '確定オッズを確認できないため除外（' + row.oddsSnapshotType + '）' + (row.finalOddsDiag ? '：' + row.finalOddsDiag : '');
+                return row;
+              }
               if(validationMode === 'PRE_RACE_STRICT' && !row.auditEligible){
                 row.status = 'excluded'; row.failureKind = 'スナップショット未保存';
                 row.failureStage = 'PRE-RACE監査';
@@ -12149,7 +12176,8 @@ if(horses.length === 0){
        !confirm('前回の実行から設定が変わっています。変更後の設定で失敗レースだけ再計算すると、他のレースと条件が混ざります。続行しますか？')) return;
 
     const btn = $('rsRunBtn'), stopBtn = $('rsStopBtn'), prog = $('rsProgress');
-    const env = { kind: env0.kind, validationMode: env0.validationMode, tsEnabled: false, recordToChart: env0.recordToChart };
+    const env = { kind: env0.kind, validationMode: env0.validationMode, tsEnabled: false, recordToChart: env0.recordToChart, requireFinal: env0.requireFinal === true };
+    window.__rsNarEstOk = env0.narEstOk === true;
     rsAbort = false; rsTripped = false; rsRunning = true;
     await rsAcquireWake();
     if(btn){ btn.disabled = true; btn.textContent = '⏳ 再試行中...'; }
@@ -12181,6 +12209,7 @@ if(horses.length === 0){
       if(prog) prog.innerHTML = `<div class="url-status err">❌ 再試行に失敗: ${asw_esc((e && e.message) || e)}</div>`;
     }finally{
       rsRunning = false; rsReleaseWake();
+      window.__rsNarEstOk = false;
       rsFlushRender(rows, false);
       if(btn){ btn.disabled = false; btn.textContent = '📆 期間横断シミュレーション実行'; }
       if(stopBtn) stopBtn.style.display = 'none';
@@ -12232,7 +12261,8 @@ if(horses.length === 0){
     if(truncated && prog) prog.innerHTML = `<div class="url-status err">⚠️ 期間が${RS_MAX_DAYS}日を超えるため先頭${RS_MAX_DAYS}日のみ対象にします。</div>`;
 
     const rows = [];
-    const env = { kind, validationMode, tsEnabled, recordToChart: !!recordToChart };
+    const env = { kind, validationMode, tsEnabled, recordToChart: !!recordToChart, requireFinal: !!($('rsReqFinal') && $('rsReqFinal').checked) };
+    window.__rsNarEstOk = !!($('rsNarEstOdds') && $('rsNarEstOdds').checked);
     const settingsSig = rsSettingsSig(validationMode, !!recordToChart);
     let rsConsecErr = 0;
     let ck = null;
@@ -12408,7 +12438,7 @@ if(horses.length === 0){
 
       const okCount = rows.filter(x => x.status === 'ok').length;
       // v5.18.146: JRAで到達OK・plan空(選択場が期間内に開催なし)＝全日スキップ。0レースの理由を明示する。
-      rsLastEnv = { kind, validationMode, tsEnabled, recordToChart: !!recordToChart, settingsSig };
+      rsLastEnv = { kind, validationMode, tsEnabled, recordToChart: !!recordToChart, settingsSig, requireFinal: env.requireFinal, narEstOk: window.__rsNarEstOk === true };
       const errCnt = rows.filter(x => x && x.status === 'error').length;
       if(ck && ck.enabled && !rsAbort) await ck.markDone();
       const ckNote = ck ? (ck.failed ? ' ⚠️途中保存に失敗したため再開機能は無効です。' : (ck.restoredU ? ` 💾保存済み${ck.restoredU}開催場日(${ck.restoredR}R)を再利用。` : '')) : '';
@@ -12429,6 +12459,7 @@ if(horses.length === 0){
       if(prog) prog.innerHTML = `<div class="url-status err">❌ 期間横断シミュレーション失敗: ${asw_esc((e && e.message) || e)}</div>`;
     }finally{
       rsRunning = false; rsReleaseWake();
+      window.__rsNarEstOk = false;
       try{ rsFlushRender(rows, tsEnabled); }catch(e){}
       // 馬データタブの選択を元に戻す
       if(save.kind != null && $('pickKind')) $('pickKind').value = save.kind;
@@ -16798,6 +16829,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         oddsFetchedAt: String(r.oddsFetchedAt || ''),
         oddsSourceUrl: String(r.oddsSourceUrl || ''),
         officialPayoutComplete: r.officialPayoutComplete !== false,
+        finalOddsDiag: String(r.finalOddsDiag || ''),
+        ticketDetails: Array.isArray(r.ticketDetails) ? r.ticketDetails : [],
         error: String(r.error || '')
       };
     });
@@ -16854,6 +16887,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         endDate: $('rsEnd') ? $('rsEnd').value : '',
         pastPerformanceAdjustment: !!($('rsPastAdj') && $('rsPastAdj').checked),
         recordToProfitGraph: !!($('rsRecord') && $('rsRecord').checked),
+        requireFinalOdds: !!($('rsReqFinal') && $('rsReqFinal').checked),
+        narEstimatedOddsForNonWin: !!($('rsNarEstOdds') && $('rsNarEstOdds').checked),
         validationMode: $('rsValidationMode') ? $('rsValidationMode').value : 'FINAL_RESEARCH'
       },
       summary: (() => {
@@ -17683,7 +17718,7 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
         const floor = Math.max(narEvFloor(), mode === 'roi120' ? 1.30 : 0, mode === 'roi150' ? 1.50 : 0, mode === 'roi200' ? 2.00 : 0, mode === 'roi_max' ? 1.55 : 0);
         if(Number(r?.ev || 0) < floor) return -9999;
         // NARの複合券は推定オッズで選ばない。実オッズが取れない場合は見送り。
-        if(r?.type !== '単勝' && String(r?.oddsSource || '') !== 'real') return -9999;
+        if(window.__rsNarEstOk !== true && r?.type !== '単勝' && String(r?.oddsSource || '') !== 'real') return -9999;
       }
       return prevScore191.apply(this, arguments);
     };

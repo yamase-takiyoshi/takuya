@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script id="thekeiba-build-version">
 // One release identity shared by all legacy and current display patches.
-window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.53 LedgerFix',number:'5.23.53'});
+window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.54 SettlementAudit',number:'5.23.54'});
 window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
@@ -154,7 +154,7 @@ window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.53 LedgerFix</title>
+<title>The競馬 EV分析 v5.23.54 SettlementAudit</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -517,7 +517,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.23.53 LedgerFix ☁️ 10s</span>
+    <span class="ver">v5.23.54 SettlementAudit ☁️ 10s</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -3626,10 +3626,10 @@ function parsePayoutsFromResultDoc(doc){
     if(!amounts.length) return;
     let combos = [];
     if(type === '単勝' || type === '複勝'){
-      const nums = [...block.matchAll(/(?:^|[^0-9])([1-9]|1[0-8])(?:[^0-9]|$)/g)].map(m=>Number(m[1]));
+      const nums = [...block.matchAll(/(?:^|[^0-9])(1[0-8]|[1-9])(?:[^0-9]|$)/g)].map(m=>Number(m[1]));
       combos = [...new Set(nums)].slice(0, amounts.length).map(n=>[n]);
     }else{
-      [...block.matchAll(/([1-9]|1[0-8])\s*-\s*([1-9]|1[0-8])(?:\s*-\s*([1-9]|1[0-8]))?/g)].forEach(m=>{
+      [...block.matchAll(/(1[0-8]|[1-9])\s*-\s*(1[0-8]|[1-9])(?:\s*-\s*(1[0-8]|[1-9]))?/g)].forEach(m=>{
         const a=[Number(m[1]),Number(m[2])];
         if(m[3]) a.push(Number(m[3]));
         combos.push(a);
@@ -3682,9 +3682,9 @@ function parsePayoutsFromResultDoc(doc){
       const comboText = normSimDigits(comboCells.map(c=>c.textContent||'').join(' '));
       const combos = [];
       if(currentType === '単勝' || currentType === '複勝'){
-        [...comboText.matchAll(/(?:^|[^0-9])([1-9]|1[0-8])(?=[^0-9]|$)/g)].forEach(m=>combos.push([Number(m[1])]));
+        [...comboText.matchAll(/(?:^|[^0-9])(1[0-8]|[1-9])(?=[^0-9]|$)/g)].forEach(m=>combos.push([Number(m[1])]));
       }else{
-        [...comboText.matchAll(/([1-9]|1[0-8])\s*(?:-|－|―|–|→|⇒)\s*([1-9]|1[0-8])(?:\s*(?:-|－|―|–|→|⇒)\s*([1-9]|1[0-8]))?/g)].forEach(m=>{
+        [...comboText.matchAll(/(1[0-8]|[1-9])\s*(?:-|－|―|–|→|⇒)\s*(1[0-8]|[1-9])(?:\s*(?:-|－|―|–|→|⇒)\s*(1[0-8]|[1-9]))?/g)].forEach(m=>{
           const nums=[Number(m[1]),Number(m[2])]; if(m[3]) nums.push(Number(m[3])); combos.push(nums);
         });
       }
@@ -10823,7 +10823,7 @@ if(horses.length === 0){
         const rHorses = parseHorsesFromDoc(rDoc, rUrl);
         const rOdds = parseFinalOddsPopularityFromResultDoc(rDoc, rHorses);
         resultDoc = rDoc; // 精算で使い回す
-        if(rHorses.length >= 2 && rOdds.size >= 2){
+        if(rHorses.length >= 2 && rHorses.every(h => Number(rOdds.get(Number(h.num))?.odds) >= 1)){
           activeUrl = rUrl; html = rHtml; doc = rDoc; isResultPage = true;
         }else{
           finalOddsDiag = `結果ページ解析: 馬${rHorses.length}頭/確定オッズ${rOdds.size}頭`;
@@ -10878,7 +10878,9 @@ if(horses.length === 0){
       if(!resultPageFull) hs = fillNarPopularityFromOdds(hs);
       if(!resultPageFull) hs = fillProvisionalOddsPopularityForPrediction(hs);
     } else {
-      const oddsMap = await fetchWinOddsPopularity(kind, rid, hs);
+      const finalMap = isResultPage ? parseFinalOddsPopularityFromResultDoc(doc, hs) : new Map();
+      const fetchedMap = await fetchWinOddsPopularity(kind, rid, hs); // 全券種キャッシュの取得も維持
+      const oddsMap = finalMap.size >= 2 ? finalMap : fetchedMap;
       if(oddsMap.size >= 2){
         hs = mergeOddsPopularityIntoHorses(hs, oddsMap);
       } else {
@@ -10917,15 +10919,17 @@ if(horses.length === 0){
         }
       }catch(e){}
     }
-    // 過去日のレースは、オッズ画面の値も発走後の確定値とみなす（未検証の前提。別ラベルで区別）。
+    // 過去日だけでは確定値を証明できない。結果ページで全馬の値を確認できなければ未検証。
     let pastRaceOddsPage = false;
     try{
       const rd = String(window.__rsValidationRaceDate || '');
       pastRaceOddsPage = /^\d{4}-\d{2}-\d{2}$/.test(rd) && rd < todayYmd();
     }catch(e){}
+    const finalCheck = isResultPage ? parseFinalOddsPopularityFromResultDoc(doc, hs) : new Map();
+    const finalVerified = isResultPage && hs.length >= 2 && hs.every(h => Number(finalCheck.get(Number(h.num))?.odds) >= 1);
     const oddsSnapshotType = savedPreclose
       ? 'PRE_CLOSE_3MIN'
-      : (isResultPage ? 'FINAL' : (preRaceVerified ? 'PRE_RACE_VERIFIED' : (pastRaceOddsPage ? 'FINAL_ODDS_PAGE_PAST' : 'CURRENT_UNVERIFIED')));
+      : (finalVerified ? 'FINAL' : (preRaceVerified ? 'PRE_RACE_VERIFIED' : (pastRaceOddsPage ? 'PAST_ODDS_UNVERIFIED' : 'CURRENT_UNVERIFIED')));
     return {
       finalOddsDiag,
       horses: hs,
@@ -10942,24 +10946,61 @@ if(horses.length === 0){
   }
 
   // ── 着順・払戻の取得（結果docを使い回せれば再フェッチしない）──
-  async function asw_getResult(kind, rid, resultDoc){
+  // v5.23.54: never infer a loss from an incomplete payout market.
+  function asw_payoutCoverage(finish, payouts, tickets){
+    const issues = [], expected = {};
+    const f = (finish || []).slice().sort((a,b)=>Number(a.rank)-Number(b.rank));
+    const types = new Set([...(tickets || []).map(t=>t.type), ...Object.keys(payouts || {}).map(k=>k.split(':')[0])]);
+    const known = new Set(['単勝','複勝','枠連','枠単','馬連','ワイド','馬単','3連複','3連単']);
+    if(f.length < 2) issues.push('確定着順不足');
+    const ranks = f.map(x=>Number(x.rank));
+    if(new Set(ranks).size !== ranks.length) issues.push('同着：複数的中組の追加確認が必要');
+    if(f.length && (ranks[0] !== 1 || ranks[1] !== 2)) issues.push('上位着順の欠落');
+    const ns=f.map(x=>Number(x.horseNo)), fs=f.map(x=>Number(x.frame));
+    const n=(typeof horses!=='undefined' && horses.length) || f.length;
+    const place=n>=8?3:2;
+    for(const type of types){
+      if(!known.has(type)){issues.push('未対応券種:'+type);continue;}
+      let combos=[];
+      if(type==='単勝') combos=[[ns[0]]];
+      if(type==='複勝') combos=ns.slice(0,place).map(x=>[x]);
+      if(type==='馬連'||type==='馬単') combos=[ns.slice(0,2)];
+      if(type==='枠連'||type==='枠単') combos=[fs.slice(0,2)];
+      if(type==='3連複'||type==='3連単') combos=[ns.slice(0,3)];
+      if(type==='ワイド') combos=[[ns[0],ns[1]],[ns[0],ns[2]],[ns[1],ns[2]]];
+      if((['ワイド','3連複','3連単'].includes(type)||type==='複勝'&&place===3) && (ns.length<3 || ranks[2]!==3)) issues.push(type+':3着不足');
+      if(type==='複勝' && combos.length<place) issues.push('複勝:着順不足');
+      expected[type]=combos.map(a=>type+':'+comboKey(type,a));
+      for(let i=0;i<combos.length;i++){
+        const a=combos[i], k=expected[type][i];
+        if(a.some(x=>!Number.isInteger(x)||x<1)) issues.push(type+':馬番・枠番不足');
+        else if(!(Number(payouts?.[k])>0)) issues.push('払戻不足:'+k);
+      }
+    }
+    return {complete:issues.length===0,issues:[...new Set(issues)],expected,scope:'購入券種と取得済み券種の的中組'};
+  }
+
+  async function asw_getResult(kind, rid, resultDoc, tickets){
     // resultDoc が実は出馬表（旧SPフォールバックの種別混同）でも、
     // 空着順のまま「未確定」で成功扱いせず、正しい結果URLを再取得する。
     const parser = new DOMParser();
-    let best = { finish: [], payouts: {}, score: -1, doc: null };
-    const inspect = doc => {
+    let best = { finish: [], payouts: {}, score: -1, doc: null, sourceUrl:'', coverage:{complete:false,issues:['未取得']} };
+    const attempts = [];
+    const inspect = (doc, sourceUrl='loaded_result') => {
       if(!doc) return;
       let finish = [], payouts = {};
       try{ finish = parseFinishFromResultDoc(doc) || []; }catch(e){}
       try{ payouts = parsePayoutsFromResultDoc(doc) || {}; }catch(e){}
-      const score = (finish.length >= 2 ? 1000 : 0) + Object.keys(payouts).length;
-      if(score > best.score) best = { finish, payouts, score, doc };
+      const coverage = asw_payoutCoverage(finish,payouts,tickets);
+      const score = (coverage.complete ? 100000 : 0) + (finish.length >= 2 ? 1000 : 0) + Object.keys(payouts).length;
+      attempts.push({sourceUrl,coverage});
+      if(score > best.score) best = { finish, payouts, score, doc, sourceUrl, coverage };
     };
 
     inspect(resultDoc);
     // JRAは既取得結果を再利用。NARはSP側が一部払戻だけ返す版もあるため、
     // 公式RaceMarkTableを必ず一度確認して全券種を揃える。
-    if(kind !== 'NAR' && best.finish.length >= 2 && Object.keys(best.payouts).length) return best;
+    if(kind !== 'NAR' && best.coverage.complete && Object.keys(best.payouts).length) return {...best,attempts};
 
     const urls = kind === 'NAR'
       ? (() => {
@@ -10984,11 +11025,11 @@ if(horses.length === 0){
     for(const url of [...new Set(urls)]){
       try{
         const html = await fetchHtmlViaProxy(url);
-        inspect(parser.parseFromString(html, 'text/html'));
-        if(best.finish.length >= 2 && Object.keys(best.payouts).length) break;
+        inspect(parser.parseFromString(html, 'text/html'), url);
+        if(best.coverage.complete && Object.keys(best.payouts).length) break;
       }catch(e){ /* 次の正規結果URLを試す */ }
     }
-    return { finish: best.finish, payouts: best.payouts, doc: best.doc };
+    return {...best,attempts};
   }
 
   // ── 現在の global horses 前提で買い目を精算（renderSimulation の計算部分を流用）──
@@ -10996,10 +11037,16 @@ if(horses.length === 0){
     let bet = 0, ret = 0, hit = 0;
     const ticketDetails = [];
     const hasFinish = finish && finish.length >= 2;
+    if(hasFinish && tickets.length){
+      const audit=asw_payoutCoverage(finish,payouts,tickets);
+      if(!audit.complete) throw new Error('払戻照合未完了：'+audit.issues.join(' / '));
+    }
     tickets.forEach(t => {
       const a = Number(t.amount || 0);
       bet += a;
       const isHit = hasFinish ? judgeTicketHit(t, finish) : false;
+      const payoutKey=String(t.type)+':'+comboKey(t.type,t.nums);
+      if(hasFinish && isHit !== (Number(payouts?.[payoutKey])>0)) throw new Error('着順と払戻の的中判定不一致：'+payoutKey);
       const pay  = isHit ? payoutForTicket(t, payouts) : { amount: 0 };
       const r    = isHit ? Math.floor(a / 100) * Number(pay.amount || 0) : 0;
       if(isHit) hit++;
@@ -11009,6 +11056,7 @@ if(horses.length === 0){
         券種名:String(t.type || '不明'), 買い目:Array.isArray(t.nums) ? t.nums.join('-') : String(t.nums || ''),
         馬名:String(popOdds.馬名 || ''), 点数:1, 購入額:a, 払戻額:r, 的中:isHit ? 1 : 0,
         想定オッズ:Number(popOdds.想定オッズ || 0), 想定確率:Number(t.p || 0) * 100, EV:Number(t.ev || 0), 平均人気:Number(popOdds.平均人気 || 0),
+        判定:isHit?'的中':'不的中', 払戻キー:payoutKey, 公式払戻100円:Number(payouts?.[payoutKey]||0), オッズ出所:String(t.oddsSource||''),
         人気帯:typeof pgjPopBand === 'function' ? pgjPopBand(popOdds.平均人気) : '',
         オッズ帯:typeof pgjOddsBand === 'function' ? pgjOddsBand(popOdds.想定オッズ) : ''
       });
@@ -11170,7 +11218,7 @@ if(horses.length === 0){
           row.count = lastTickets.length;
 
           // 3) 結果取得（loadHorsesで掴んだ結果docを使い回す）
-          const resultPack = await asw_getResult(kind, r.rid, loaded.resultDoc);
+          const resultPack = await asw_getResult(kind, r.rid, loaded.resultDoc, simTickets);
           const finish = resultPack.finish, payouts = resultPack.payouts;
           try{ pgjCacheRaceMeta(r.rid, resultPack.doc || loaded.resultDoc, currentRaceName); }catch(e){}
           try{ pgjApplyRaceMetaToRow(row, r.rid, currentRaceName); }catch(e){}
@@ -12061,6 +12109,8 @@ if(horses.length === 0){
             let tsPrepared = null;
             let failureStage = "出馬表・オッズ取得";
             try{
+              currentRaceId = r.rid;
+              window.currentRaceId = r.rid;
               window.__rsValidationRaceDate = date;
               const loaded = await asw_loadHorses(kind, r.rid);
               horses = loaded.horses;
@@ -12074,7 +12124,7 @@ if(horses.length === 0){
               row.auditReason = row.auditEligible ? '' : (row.oddsSnapshotType === 'FINAL' ? 'FINAL_ODDS（確定後の最終オッズ）' : '発走前市場時点を時刻で証明できない');
               row.finalOddsDiag = loaded.finalOddsDiag || '';
               if(validationMode !== 'PRE_RACE_STRICT' && env.requireFinal &&
-                 row.oddsSnapshotType !== 'FINAL' && row.oddsSnapshotType !== 'FINAL_ODDS_PAGE_PAST'){
+                 row.oddsSnapshotType !== 'FINAL'){
                 row.status = 'excluded'; row.failureKind = '確定オッズ未取得';
                 row.failureStage = '確定オッズ必須';
                 row.auditReason = '確定オッズを確認できないため除外（' + row.oddsSnapshotType + '）' + (row.finalOddsDiag ? '：' + row.finalOddsDiag : '');
@@ -12108,8 +12158,11 @@ if(horses.length === 0){
               row.count = lastTickets.length;
 
               failureStage = "結果・払戻取得";
-              const resultPack = await asw_getResult(kind, r.rid, loaded.resultDoc);
+              const resultPack = await asw_getResult(kind, r.rid, loaded.resultDoc, simTickets);
               const finish = resultPack.finish, payouts = resultPack.payouts;
+              row.resultAudit = {sourceUrl:resultPack.sourceUrl,attempts:resultPack.attempts,finish,payouts,coverage:resultPack.coverage};
+              row.officialPayoutComplete = resultPack.coverage?.complete === true;
+              row.ticketDetails = simTickets.map(t=>({券種名:t.type,買い目:t.nums.join('-'),購入額:Number(t.amount||0),想定オッズ:Number(t.odds||0),想定確率:Number(t.p||0)*100,EV:Number(t.ev||0),オッズ出所:t.oddsSource||'',判定:'未精算'}));
               try{ pgjCacheRaceMeta(r.rid, resultPack.doc || loaded.resultDoc, currentRaceName); }catch(e){}
               try{ pgjApplyRaceMetaToRow(row, r.rid, currentRaceName); }catch(e){}
               row.hasFinish = finish && finish.length >= 2;
@@ -12125,11 +12178,12 @@ if(horses.length === 0){
                 throw new Error('過去レースの払戻を取得できません（結果ページ構造を確認してください）');
               }
 
+              if(row.hasFinish && simTickets.length && !row.officialPayoutComplete) throw new Error('払戻照合未完了：' + (resultPack.coverage?.issues || ['未確認']).join(' / '));
               const s = (tsPrepared && row.hasFinish)
                 ? window.TheKeibaRangeTS.complete(tsPrepared,row,finish,payouts,asw_settle)
                 : asw_settle(simTickets, finish, payouts);
               const missingOfficialHits = (s.ticketDetails || []).filter(d => Number(d.的中 || 0) > 0 && Number(d.払戻額 || 0) <= 0);
-              row.officialPayoutComplete = missingOfficialHits.length === 0;
+              row.officialPayoutComplete = row.officialPayoutComplete && missingOfficialHits.length === 0;
               if(missingOfficialHits.length){
                 throw new Error('的中買い目の公式払戻を取得できないため精算除外: ' + missingOfficialHits.map(d => `${d.券種名}:${d.買い目}`).join(', '));
               }
@@ -16828,7 +16882,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         auditReason: String(r.auditReason || ''),
         oddsFetchedAt: String(r.oddsFetchedAt || ''),
         oddsSourceUrl: String(r.oddsSourceUrl || ''),
-        officialPayoutComplete: r.officialPayoutComplete !== false,
+        officialPayoutComplete: r.officialPayoutComplete === true,
+        resultAudit: r.resultAudit || null,
         finalOddsDiag: String(r.finalOddsDiag || ''),
         ticketDetails: Array.isArray(r.ticketDetails) ? r.ticketDetails : [],
         error: String(r.error || '')
@@ -28821,7 +28876,7 @@ function robustP(doc){
  }
  return p;
 }
-function mergedP(doc){let p={};try{if(oldP)p=oldP(doc)||{}}catch(e){};try{Object.assign(p,robustP(doc))}catch(e){};return p}
+function mergedP(doc){let p={};try{if(oldP)p=oldP(doc)||{}}catch(e){};return p}
 window.parsePayoutsFromResultDoc=mergedP;try{parsePayoutsFromResultDoc=mergedP}catch(e){}
 // Keep original finish parser, but add horse names from result rows when available.
 function finishNames(doc){const map=new Map();for(const tr of doc.querySelectorAll('tr')){const a=tr.querySelector('a[href*="horse"],a[href*="/horse/"]');if(!a)continue;const tx=norm(tr.innerText||tr.textContent||'');const m=tx.match(/(?:^|\s)(1[0-8]|[1-9])(?:\s)/);if(m){const name=norm(a.textContent).trim();if(name)map.set(+m[1],name)}}return map}

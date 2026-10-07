@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script id="thekeiba-build-version">
 // One release identity shared by all legacy and current display patches.
-window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.50 UnifiedProbability',number:'5.23.50'});
+window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.51 RaceCardAutoLoad',number:'5.23.51'});
 window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
@@ -154,7 +154,7 @@ window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.50 UnifiedProbability</title>
+<title>The競馬 EV分析 v5.23.51 RaceCardAutoLoad</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -517,7 +517,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.23.50 UnifiedProbability ☁️ 10s</span>
+    <span class="ver">v5.23.51 RaceCardAutoLoad ☁️ 10s</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -602,6 +602,7 @@ body.right-analysis-active #rightAnalysisPane{
         <span style="width:52px;font-size:10px;color:var(--muted);text-align:center">人気</span>
         <span style="width:28px"></span>
       </div>
+      <div id="raceCardStatus52351" role="status" aria-live="polite" style="margin:8px 0;font-size:12px;line-height:1.7">レースを選ぶと出馬表を自動取得します。</div>
       <div id="horseRows"></div>
       <div id="popDupWarn" style="display:none;margin-top:6px;padding:8px 10px;border-radius:8px;font-size:12px;color:var(--red);background:rgba(248,113,113,0.1);border:1px solid rgba(248,113,113,0.3)"></div>
       <div id="raceResult5202" class="race-result5202" data-state="idle">
@@ -23785,6 +23786,8 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     n.innerHTML = `<div class="url-status ${cls || ''}" style="font-size:11px">${msg}</div>`;
   }
   function cardStatus227(msg, cls){
+    const own = el227('raceCardStatus52351');
+    if(own) own.innerHTML = `<div class="url-status ${cls || ''}">${msg}</div>`;
     const n = el227('urlStatus');
     if(n) n.innerHTML = `<div class="url-status ${cls || ''}">${msg}</div>`;
   }
@@ -24972,6 +24975,8 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     n.innerHTML = msg ? `<div class="url-status ${cls || ''}" style="font-size:11px">${msg}</div>` : '';
   }
   function cardStatus(msg, cls){
+    const own = $('raceCardStatus52351');
+    if(own) own.innerHTML = `<div class="url-status ${cls || ''}">${msg}</div>`;
     const n = $('urlStatus');
     if(n) n.innerHTML = `<div class="url-status ${cls || ''}">${msg}</div>`;
   }
@@ -25170,13 +25175,13 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
       if(card) return card;
       throw new Error('Bridgeで出馬表を取得できませんでした。'+errs.join(' / '));
     }
+    try{ return await fetchCardJson235(kind, rid); }
+    catch(e){ failures.push('Worker出馬表JSON:' + (e.message || e)); }
     if(window.__NAR_BRIDGE_READY__ && typeof window.bridgeText246==='function'){
       const {card, errs}=await bridgeCard255();
       if(card) return card;
       errs.forEach(x=>failures.push('Bridge出馬表:'+x));
     }
-    try{ return await fetchCardJson235(kind, rid); }
-    catch(e){ failures.push('Worker出馬表JSON:' + (e.message || e)); }
     // JSONが失敗した時だけ従来のWorker/Userscript HTML経路を試す。
     for(const url of urls){
       try{
@@ -30983,4 +30988,48 @@ if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearI
  [500,1500,5000,15000,35000,70000,110000,155000,185000].forEach(t=>setTimeout(stamp,t));
 })();
 
+</script>
+
+<script id="race-card-autoload52351">
+(function(){
+ 'use strict';
+ const $=id=>document.getElementById(id);
+ const rid=()=> (String($('raceUrl')?.value||'').match(/race_id=(\d{12})/)||String($('raceUrl')?.value||'').match(/\/race\/(\d{12})/)||[])[1]||'';
+ let timer=null, lastKey='';
+ const key=()=>[$('pickDate')?.value,$('pickKind')?.value,$('pickVenue')?.value,rid()].join('|');
+ function schedule(){
+   const r=rid(), k=key();
+   if(!r){clearTimeout(timer);lastKey='';return;}
+   if(k===lastKey)return;
+   clearTimeout(timer);
+   lastKey=k;
+   // Never show the previous race's runners under a newly selected title.
+   if(String(window.__horseDataRaceId||'')!==r){
+     horses=[];window.__horseDataRaceId='';
+     window.__raceCardRendered226=false;window.__raceCardRendered227=false;
+     window.renderHorseRows?.();
+     const box=$('raceCardStatus52351');
+     if(box)box.textContent='🐎 出馬表の自動取得を準備中… '+r;
+   }
+   timer=setTimeout(async()=>{
+     if(key()!==k || window.__raceCardBusy254?.rid===r)return;
+     try{await window.fetchRace();}
+     catch(e){
+       if(key()!==k)return;
+       const box=$('raceCardStatus52351');
+       if(box)box.textContent='出馬表取得失敗：'+String(e?.message||e)+'。「レースデータ取得」で再試行できます。';
+     }
+   },350);
+ }
+ const prev=window.applySelectedRaceUrl;
+ window.applySelectedRaceUrl=function(){const result=prev?.apply(this,arguments);schedule();return result;};
+ try{applySelectedRaceUrl=window.applySelectedRaceUrl;}catch(_){}
+ $('raceUrl')?.addEventListener('input',schedule);
+ $('raceUrl')?.addEventListener('change',schedule);
+ $('raceSelect')?.addEventListener('change',schedule);
+ // A manual request takes precedence over the pending automatic one.
+ $('fetchBtn')?.addEventListener('click',()=>clearTimeout(timer));
+ window.TheKeibaRaceCardAuto52351={schedule};
+ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',schedule,{once:true});else schedule();
+})();
 </script>

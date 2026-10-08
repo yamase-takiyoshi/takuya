@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script id="thekeiba-build-version">
 // One release identity shared by all legacy and current display patches.
-window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.59 ArchiveSafe',number:'5.23.59'});
+window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.60 WaitState RangeAudit VersionSync',number:'5.23.60'});
 window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
@@ -154,7 +154,7 @@ window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.59 ArchiveSafe</title>
+<title>The競馬 EV分析 v5.23.60 WaitState RangeAudit VersionSync</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -536,7 +536,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver" aria-label="HTML本体バージョン">v5.23.59 ArchiveSafe ☁️ 10s</span>
+    <span class="ver" aria-label="HTML本体バージョン">v5.23.60 ☁️ 10s</span>
     <button id="keibaVersionButton52358" type="button" class="btn-sm" aria-expanded="false" aria-controls="keibaVersionPanel52358" title="HTMLと稼働Workerの版を確認">📦 版確認</button>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
@@ -546,9 +546,11 @@ body.right-analysis-active #rightAnalysisPane{
   <strong>📦 バージョン情報</strong>
   <div>HTML本体：<span id="keibaHtmlVersion52358"></span></div>
   <div>対応Worker：<span>v6.2.12 ArchiveSafe ReplayBackfill</span></div>
-  <div>稼働Worker：<span id="keibaWorkerVersion52358" role="status" aria-live="polite">未照合（稼働版は未確認）</span></div>
+  <div>稼働Timeline Worker：<span id="keibaWorkerVersion52358" role="status" aria-live="polite">未照合（稼働版は未確認）</span></div>
+  <div>対応abc Cron Worker：<span>v6.1.23 cpu-budget-guard</span></div>
+  <div>稼働abc Cron Worker：<span id="keibaAbcVersion52360" role="status" aria-live="polite">未照合（稼働版は未確認）</span></div>
   <div class="keiba-version-url52358" id="keibaWorkerUrl52358"></div>
-  <div class="keiba-version-actions52358"><button id="keibaCheckWorker52358" type="button" class="btn-sm">☁️ Worker /health を照合</button><button id="keibaCloseVersion52358" type="button" class="btn-sm">閉じる</button></div>
+  <div class="keiba-version-actions52358"><button id="keibaCheckWorker52358" type="button" class="btn-sm">☁️ Timeline /health</button><button id="keibaCheckAbc52360" type="button" class="btn-sm">📅 abc /health</button><button id="keibaCloseVersion52358" type="button" class="btn-sm">閉じる</button></div>
   <small>HTMLの版とクラウドへ配備済みのWorkerの版は別です。「照合」を押すとWorkerの応答を直接調べます。</small>
 </section>
 
@@ -804,7 +806,7 @@ body.right-analysis-active #rightAnalysisPane{
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-primary" id="rsRunBtn" onclick="runRangeVenueSimulation()">📆 期間横断シミュレーション実行</button>
         <button class="btn-sm" id="rsStopBtn" onclick="stopRangeVenueSimulation()" style="display:none">⏹ 中断</button>
-        <button class="btn-sm" id="rsJsonExportBtn" onclick="exportRangeVenueSimulationJSON()" type="button">📊 期間横断JSON出力</button>
+        <button class="btn-sm" id="rsJsonExportBtn" onclick="exportRangeVenueSimulationJSON()" type="button">📊 期間横断JSON出力</button><button class="btn-sm" id="rsDebugExport52360" type="button">🐞 失敗診断JSON</button>
       </div>
       <div id="rsProgress" style="margin-top:10px"></div>
       <div id="rsSummary" style="margin-top:10px"></div>
@@ -11542,6 +11544,7 @@ if(horses.length === 0){
   let rsLastOpenVenuesError = null;
   let rsOpenVenuesFailCount = 0;
   let rsOpenVenuesOkCount = 0;
+  let rsLastRaceListError = ''; // v5.23.60 keep transport failure separate from real non-event
   async function rsOpenVenues(kind, date){
     try{
       if(kind === 'JRA'){
@@ -12492,15 +12495,25 @@ if(horses.length === 0){
           if(prog) prog.innerHTML = `<div class="url-status">📅 ${date} ${vn} のレース一覧を取得中...${tail()}</div>`;
 
           let races = [];
+          rsLastRaceListError='';
           if(rsJraPlan){
             const v = (rsJraPlan.get(date) || []).find(x => x.venueCode === vc);
             races = v ? v.races.slice() : [];
           }else{
+            rsLastRaceListError='';
             try{ races = await rsCollectRaces(kind, date, vc); }
-            catch(e){ races = []; }
+            catch(e){ races = [];rsLastRaceListError=String(e?.message||e); }
           }
 
           if(!races.length){
+            if(rsLastRaceListError){
+              const msg='レース一覧取得失敗：'+rsLastRaceListError;
+              rows.push({date,venueCode:vc,venueName:vn,no:0,status:'error',error:msg,
+                failureStage:'レース一覧取得',...rsFailureInfo(new Error(msg),'レース一覧取得')});
+              if(prog)prog.innerHTML='<div class="url-status err">⚠️ '+asw_esc(date+' '+vn+' '+msg)+'</div>';
+              rsRenderThrottled(rows,tsEnabled,false);
+              continue;
+            }
             // v5.18.168: NARのチェック済み開催場を直接確認している場合、
             // その日その場にレースが無いのは通常の「非開催日」として静かにスキップする。
             // エラー行を量産せず、次の日へ進める。
@@ -30177,6 +30190,22 @@ async function pollPane(ws,p){
     return;
   }
   const raceId=String(p.raceId),state=(perPane.get(p.id)?.raceId===raceId?perPane.get(p.id):{raceId,lastMs:0,lastSeen:0});
+  // Far before post, no odds is expected. Retain lightweight probes so first actual
+  // capture immediately switches the UI back to the normal 10-second live cadence.
+  let post=Number(p.race?.postMs||0);
+  if(!post && p.date && /^\d{1,2}:\d{2}$/.test(String(p.race?.startTime||''))){
+    post=Date.parse(p.date+'T'+p.race.startTime+':00+09:00')||0;
+  }
+  const untilPost=post>0?post-Date.now():0;
+  const earlyWait=untilPost>90*60*1000;
+  const longWait=untilPost>6*60*60*1000;
+  if(earlyWait && state.nextPollMs>Date.now() && !state.liveObserved){
+    paint(p,'wait','☁️10秒<span class="twl-long">Worker</span> ⏳ 配信待ち',
+      '発走まで時間があります。取得状態の確認は'+(longWait?'約5分':'約1分')+'間隔、実測オッズ確認後は10秒表示へ移行します。');
+    return;
+  }
+  state.nextPollMs=earlyWait?Date.now()+(longWait?300000:60000):0;
+  perPane.set(p.id,state);
   const c=cfg();
   if(!/^https?:\/\//i.test(c.url)){paint(p,'error','☁️10秒<span class="twl-long">Worker</span> URL','常時時系列Worker URLを確認してください');return;}
   const headers={};if(c.token)headers['X-Timeline-Token']=c.token;
@@ -30206,7 +30235,7 @@ async function pollPane(ws,p){
       }catch(e){console.warn('[10sWorkerLive] merge',e);}
       state.lastMs=Number(cap.captured_ms)||state.lastMs;
     }
-    state.lastSeen=Date.now();state.phase=phase;state.count=count;perPane.set(p.id,state);
+    state.lastSeen=Date.now();state.phase=phase;state.count=count;state.liveObserved=ms>0;perPane.set(p.id,state);
     if(ws.stopped?.(p)&&ms>0){
       paint(p,'done',`${/GitHub/.test(p.transport?.timeline||'')&&!/未確認/.test(p.transport?.timeline||'')?'☁️ GitHub':'💾 履歴'} ${p.history?.length||0}点`,`収集終了 / 最終記録 ${hhmmss(ms)} / ${count}保存記録`);
     }else if(ms>0&&age<=Math.max(30000,Number(meta.effective_interval_ms||10000)*2+10000)){
@@ -30218,8 +30247,13 @@ async function pollPane(ws,p){
       const ended=!!ws.stopped?.(p)||(post>0&&Date.now()>=post)||(p.date&&p.date<new Date(Date.now()+9*3600000).toISOString().slice(0,10));
       const historyCount=p.history?.length||0;
       const err=String(meta.last_error||meta.last_release_probe_error||'');
-      const txt=ended?(historyCount?`履歴 ${historyCount}点`:'終了・履歴0点'):(err||/PROBE_ERROR/.test(phase)?'取得エラー':/WAIT_ODDS/i.test(phase)?'発売待ち':(meta.active===true?'起動待ち':'未収集'));
-      paint(p,ended?'done':err?'error':'wait',`☁️10秒<span class="twl-long">Worker</span> ${txt}`,`${phase||txt} / race_id=${raceId}${err?' / '+err:''}`);
+      const noOdds=/WAIT_ODDS|未発売|未配信|発売前|有効オッズなし|no valid odds|not released/i.test(err+' '+phase);
+      const waiting=earlyWait||noOdds||/WAIT_ODDS/i.test(phase);
+      const txt=ended?(historyCount?`履歴 ${historyCount}点`:'終了・履歴0点'):
+        waiting?'配信待ち':(err||/PROBE_ERROR/.test(phase)?'取得エラー':meta.active===true?'起動待ち':'未収集');
+      paint(p,ended?'done':waiting?'wait':err?'error':'wait',
+        `☁️10秒<span class="twl-long">Worker</span> ${txt}`,
+        `${phase||txt} / race_id=${raceId}${err?' / 最終取得診断: '+err:''}${earlyWait?' / 発走まで余裕あり':''}`);
     }
   }catch(e){
     if(String(p.raceId)!==raceId)return;
@@ -31038,11 +31072,32 @@ if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearI
 })();
 
 </script>
+<script id="range-sim-audit-v52360">
+(function(){
+  'use strict';
+  const btn=document.getElementById('rsDebugExport52360');if(!btn)return;
+  btn.addEventListener('click',()=>{
+    const rows=Array.isArray(window.__rsLastRows)?window.__rsLastRows:[];
+    const failures=rows.filter(r=>r && (r.status==='error'||r.status==='excluded'));
+    const all=failures.map(r=>({date:r.date,venue:r.venueName||r.venueCode||'',race_id:r.rid||null,
+      race_no:r.no||null,status:r.status,stage:r.failureStage||null,http_status:r.httpStatus||null,
+      failure_kind:r.failureKind||null,retries:r.retries||0,reason:String(r.error||r.auditReason||'').slice(0,400)}));
+    const summary={total:rows.filter(r=>r&&!r.header).length,success:rows.filter(r=>r?.status==='ok').length,
+      excluded:rows.filter(r=>r?.status==='excluded').length,errors:rows.filter(r=>r?.status==='error').length};
+    const data={schema:'thekeiba-range-diagnostics-v1',html_version:window.THEKEIBA_BUILD?.version||'unknown',
+      exported_at:new Date().toISOString(),summary,failures:all,
+      note:'取得値・再試行・失敗原因のみ。期待ROIや締切3分前オッズの真正性を証明しません。'};
+    const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
+    const a=document.createElement('a');a.href=url;a.download='TheKeiba_RangeDebug_'+new Date().toISOString().slice(0,10)+'.json';
+    a.click();setTimeout(()=>URL.revokeObjectURL(url),5000);
+  });
+})();
+</script>
 <script id="version-info-fix-v52358">
 (function(){
   'use strict';
   const build=window.THEKEIBA_BUILD;
-  if(!build || build.number!=='5.23.59') return;
+  if(!build || build.number!=='5.23.60') return;
   const $=id=>document.getElementById(id);
   const label=document.querySelector('.header .ver');
   const button=$('keibaVersionButton52358');
@@ -31055,7 +31110,7 @@ if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearI
     try{
       window.APP_VERSION=build.version;
       const marker=(window.__NAR_BRIDGE_READY__?' 🌉':'')+' ☁️ 10s';
-      const desired=build.version+marker;
+      const desired='v'+build.number+marker;
       if(label && label.textContent!==desired)label.textContent=desired;
       const title='The競馬 EV分析 '+build.version;
       if(document.title!==title)document.title=title;
@@ -31070,7 +31125,7 @@ if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearI
     new MutationObserver(()=>stamp()).observe(label,{childList:true,characterData:true,subtree:true});
   }
   window.setAppVersionLabel=stamp;
-  window.getTheKeibaBuild52358=()=>({html:build.version,workerBundled:expected});
+  window.getTheKeibaBuild52358=()=>({html:build.version,timelineWorkerExpected:expected,abcWorkerExpected:'6.1.23-cpu-budget-guard'});
   function safeConfig(key){
     try{const val=JSON.parse(localStorage.getItem(key)||'{}');return val && typeof val==='object'?val:{};}catch(_){return {};}
   }
@@ -31111,11 +31166,27 @@ if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearI
     }catch(e){if(out)out.textContent='照合失敗：'+String(e?.name==='AbortError'?'応答がタイムアウトしました':e?.message||e)+'（稼働版は未確認）';}
     finally{clearTimeout(timer);chk.disabled=false;}
   });
+  $('keibaCheckAbc52360')?.addEventListener('click',async()=>{
+    const out=$('keibaAbcVersion52360'),btn=$('keibaCheckAbc52360');
+    const ctrl=new AbortController(),timeout=setTimeout(()=>ctrl.abort(),9000);
+    btn.disabled=true;if(out)out.textContent='照合中…';
+    try{
+      const getter=window.__nativeFetch252||window.fetch.bind(window);
+      const r=await getter('https://abc.nitta-katsuhiko.workers.dev/health?_version_check='+Date.now(),{cache:'no-store',signal:ctrl.signal});
+      if(!r.ok)throw new Error('HTTP '+r.status);
+      const data=await r.json();
+      if(data?.ok!==true||!data.version)throw new Error('不正なhealth応答');
+      const ver=String(data.version).trim();
+      if(out)out.textContent=ver+(ver==='6.1.23-cpu-budget-guard'?' ✅ 対応版':' ⚠️ 対応版と異なります');
+    }catch(e){if(out)out.textContent='照合不可：'+(e?.name==='AbortError'?'タイムアウト':String(e?.message||e))+'（稼働版未確認）';}
+    finally{clearTimeout(timeout);btn.disabled=false;}
+  });
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)stamp();});
   window.addEventListener('pageshow',stamp);
   stamp();
 })();
 </script>
+
 </body>
 </html>
 

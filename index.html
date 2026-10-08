@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script id="thekeiba-build-version">
 // One release identity shared by all legacy and current display patches.
-window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.62 VersionSingleSource',number:'5.23.62'});
+window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.62 FinalOddsModeFix StrictPreclose PayoutRepair',number:'5.23.62'});
 window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
@@ -154,7 +154,7 @@ window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.62 VersionSingleSource</title>
+<title>The競馬 EV分析 v5.23.62 FinalOddsModeFix StrictPreclose PayoutRepair</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -544,7 +544,7 @@ body.right-analysis-active #rightAnalysisPane{
 
 <section id="keibaVersionPanel52358" class="keiba-version-panel52358" hidden aria-label="バージョン情報">
   <strong>📦 バージョン情報</strong>
-  <div>HTML本体：<span id="keibaHtmlVersion52358">v5.23.62 VersionSingleSource</span></div>
+  <div>HTML本体：<span id="keibaHtmlVersion52358">v5.23.62 FinalOddsModeFix StrictPreclose PayoutRepair</span></div>
   <div>対応Worker：<span>v6.2.12 ArchiveSafe ReplayBackfill</span></div>
   <div>稼働Timeline Worker：<span id="keibaWorkerVersion52358" role="status" aria-live="polite">未照合（稼働版は未確認）</span></div>
   <div>対応abc Cron Worker：<span>v6.1.23 cpu-budget-guard</span></div>
@@ -10831,7 +10831,7 @@ if(horses.length === 0){
   function asw_host(kind){ return kind === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com'; }
   function asw_chip(type){ return (typeof CHIP_CLASS !== 'undefined' && CHIP_CLASS[type]) || ''; }
 
-  // v5.23.61 PRE-RACE監査：発走前という現在時刻のみでは監査合格にしない。
+  // v5.23.62 PRE-RACE監査：発走前という現在時刻のみでは監査合格にしない。
   // 保存済みの検証フラグとrace_id、実測時刻/目標時刻、単勝データを照合する。
   function asw_precloseEvidence(s, rid){
     const no = reason => ({verified:false,reason,targetMs:0,capturedMs:0});
@@ -10857,6 +10857,22 @@ if(horses.length === 0){
     }).map(x=>Number(x.horse_no??x.num??x.combination)));
     if(valid.size<2)return no('検証済み単勝オッズが2頭未満');
     return {verified:true,reason:'',targetMs:target,capturedMs:captured,deltaSeconds:Math.round((captured-target)/1000)};
+  }
+
+  // v5.23.62: result.html に出る「取消・除外」馬は、有効な確定単勝オッズを持たない。
+  // 全馬一律のevery()は健全な確定レースを誤除外するため、発売対象馬だけを検査する。
+  function asw_finalCoverage(resultDoc, parsedHorses, oddsMap){
+    const withdrawnNames = new Set();
+    if(resultDoc){
+      resultDoc.querySelectorAll('tr').forEach(tr => {
+        const a = tr.querySelector('a[href*="/horse/"]');
+        if(!a || !/取消|除外/.test(String(tr.textContent||''))) return;
+        withdrawnNames.add(String(a.textContent||'').replace(/\s+/g,'').trim());
+      });
+    }
+    const runners = (parsedHorses||[]).filter(h => !withdrawnNames.has(String(h.name||'').replace(/\s+/g,'').trim()));
+    const covered = runners.filter(h => Number(oddsMap?.get(Number(h.num))?.odds) >= 1).length;
+    return {verified:runners.length>=2 && covered===runners.length, runners:runners.length, covered, withdrawn:(parsedHorses||[]).length-runners.length};
   }
 
   // ── 1レース分の出走馬＋オッズ取得（fetchRace のコア部分を副作用なしで再現）──
@@ -10888,10 +10904,11 @@ if(horses.length === 0){
         const rHorses = parseHorsesFromDoc(rDoc, rUrl);
         const rOdds = parseFinalOddsPopularityFromResultDoc(rDoc, rHorses);
         resultDoc = rDoc; // 精算で使い回す
-        if(rHorses.length >= 2 && rHorses.every(h => Number(rOdds.get(Number(h.num))?.odds) >= 1)){
+        const rc = asw_finalCoverage(rDoc, rHorses, rOdds);
+        if(rc.verified){
           activeUrl = rUrl; html = rHtml; doc = rDoc; isResultPage = true;
         }else{
-          finalOddsDiag = `結果ページ解析: 馬${rHorses.length}頭/確定オッズ${rOdds.size}頭`;
+          finalOddsDiag = `結果ページ解析: 発売対象${rc.runners}頭/確定単勝${rc.covered}頭（取消除外${rc.withdrawn}頭）`;
         }
       }catch(e){ /* 未確定レースは結果なし */ finalOddsDiag = '結果ページ取得失敗: ' + String((e && e.message) || e).slice(0, 80); }
     }
@@ -10905,7 +10922,9 @@ if(horses.length === 0){
     // PRE-RACE監査では確定後ページの最終オッズよりこちらを優先する。
     let savedPreclose = null;
     try{
-      if(typeof window.__precloseGetSnapshot === 'function'){
+      // v5.23.62: FINAL研究ではPRE_CLOSE_3MINを確定値として流用しない。
+      // PRE-RACE監査のみ、保存済み締切3分前スナップショットを使用する。
+      if(validationMode === 'PRE_RACE_STRICT' && typeof window.__precloseGetSnapshot === 'function'){
         savedPreclose = await window.__precloseGetSnapshot(rid);
       }
     }catch(e){ savedPreclose = null; }
@@ -10999,7 +11018,11 @@ if(horses.length === 0){
       pastRaceOddsPage = /^\d{4}-\d{2}-\d{2}$/.test(rd) && rd < todayYmd();
     }catch(e){}
     const finalCheck = isResultPage ? parseFinalOddsPopularityFromResultDoc(doc, hs) : new Map();
-    const finalVerified = isResultPage && hs.length >= 2 && hs.every(h => Number(finalCheck.get(Number(h.num))?.odds) >= 1);
+    const finalCoverage = isResultPage ? asw_finalCoverage(doc, hs, finalCheck) : {verified:false,runners:hs.length,covered:0,withdrawn:0};
+    const finalVerified = isResultPage && finalCoverage.verified;
+    if(isResultPage && !finalVerified && !finalOddsDiag){
+      finalOddsDiag = `結果ページ解析: 発売対象${finalCoverage.runners}頭/確定単勝${finalCoverage.covered}頭（取消除外${finalCoverage.withdrawn}頭）`;
+    }
     const oddsSnapshotType = savedPreclose
       ? 'PRE_CLOSE_3MIN'
       : (finalVerified ? 'FINAL' : (preRaceVerified ? 'PRE_RACE_VERIFIED' : (pastRaceOddsPage ? 'PAST_ODDS_UNVERIFIED' : 'CURRENT_UNVERIFIED')));
@@ -31157,7 +31180,7 @@ if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearI
 (function(){
   'use strict';
   const build=window.THEKEIBA_BUILD;
-  if(!build || !/^\d+\.\d+\.\d+$/.test(String(build.number))) return; // v5.23.62: 版数のハードコード照合を廃止（THEKEIBA_BUILD を唯一の版数源にする）
+  if(!build || build.number!=='5.23.62') return;
   const $=id=>document.getElementById(id);
   const label=document.querySelector('.header .ver');
   const button=$('keibaVersionButton52358');

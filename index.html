@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script id="thekeiba-build-version">
 // One release identity shared by all legacy and current display patches.
-window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.57 TimelinePrecloseLink',number:'5.23.57'});
+window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.58 VersionInfoFix',number:'5.23.58'});
 window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
@@ -154,7 +154,7 @@ window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.57 TimelinePrecloseLink</title>
+<title>The競馬 EV分析 v5.23.58 VersionInfoFix</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -507,6 +507,25 @@ body.right-analysis-active #rightAnalysisPane{
 
 .msv2-gap-status{font-size:10px;color:#a7f3d0;line-height:1.6;padding:5px 8px;border-radius:5px;background:#102b32;margin-bottom:4px}.msv2-gap-status[data-gaps=yes]{color:#fde68a;background:#332a17}
 </style>
+
+<style id="version-visibility-v52358">
+/* Override the legacy mobile rule that hides .header .ver. */
+.header .ver{display:inline-block!important;max-width:240px;overflow-wrap:anywhere;white-space:normal;line-height:1.4;font-size:10px!important;}
+#keibaVersionButton52358{font-size:11px;flex-shrink:0;white-space:nowrap;min-height:28px;padding:4px 7px;}
+@media(max-width:780px){
+ .header{flex-wrap:wrap;gap:5px 10px;padding:8px 10px;}
+ .header h1{font-size:14px;}
+ .header>div:last-child{display:flex!important;gap:4px!important;flex-wrap:wrap;align-items:center;justify-content:flex-end;flex:1 1 210px;min-width:0;}
+ .header .ver{display:inline-block!important;font-size:10px!important;max-width:100%;order:2;}
+ #keibaVersionButton52358{order:1;}
+}
+.keiba-version-panel52358{position:fixed;z-index:150;right:10px;top:64px;max-width:min(440px,calc(100vw - 20px));box-sizing:border-box;border:1px solid #5a8bb4;border-radius:12px;padding:12px 14px;background:#112237;color:#e8f3ff;box-shadow:0 12px 36px rgba(0,0,0,.55);font-size:12px;line-height:1.8;}
+.keiba-version-panel52358[hidden]{display:none!important;}
+.keiba-version-panel52358 strong{display:block;font-size:14px;margin-bottom:6px;}
+.keiba-version-panel52358 small{display:block;opacity:.86;margin-top:8px;line-height:1.6;}
+.keiba-version-actions52358{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;}
+.keiba-version-url52358{font-size:10px;word-break:break-all;opacity:.85;margin-top:4px;}
+</style>
 </head>
 <body>
 
@@ -517,10 +536,21 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.23.57 TimelinePrecloseLink ☁️ 10s</span>
+    <span class="ver" aria-label="HTML本体バージョン">v5.23.58 VersionInfoFix ☁️ 10s</span>
+    <button id="keibaVersionButton52358" type="button" class="btn-sm" aria-expanded="false" aria-controls="keibaVersionPanel52358" title="HTMLと稼働Workerの版を確認">📦 版確認</button>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
+
+<section id="keibaVersionPanel52358" class="keiba-version-panel52358" hidden aria-label="バージョン情報">
+  <strong>📦 バージョン情報</strong>
+  <div>HTML本体：<span id="keibaHtmlVersion52358"></span></div>
+  <div>ZIP同梱Worker：<span>v6.2.11 ReceiptTime AllMarkets Preclose</span></div>
+  <div>稼働Worker：<span id="keibaWorkerVersion52358" role="status" aria-live="polite">未照合（稼働版は未確認）</span></div>
+  <div class="keiba-version-url52358" id="keibaWorkerUrl52358"></div>
+  <div class="keiba-version-actions52358"><button id="keibaCheckWorker52358" type="button" class="btn-sm">☁️ Worker /health を照合</button><button id="keibaCloseVersion52358" type="button" class="btn-sm">閉じる</button></div>
+  <small>HTMLの版とクラウドへ配備済みのWorkerの版は別です。「照合」を押すとWorkerの応答を直接調べます。</small>
+</section>
 
 <div class="main">
 
@@ -18294,15 +18324,9 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     return null;
   }
 
-  window.__precloseGetSnapshot = async function(rid, force=false){
+  window.__precloseGetSnapshot = async function(rid){
     rid = String(rid || '').replace(/[^0-9]/g,'');
     if(!rid) return null;
-    try{
-      const timeline=await window.timelinePrecloseRead6211?.(rid,force);
-      window.__timelinePrecloseInfo6211={race_id:rid,...timeline};
-      if(timeline?.snapshot)return timeline.snapshot;
-    }catch(e){window.__timelinePrecloseInfo6211={race_id:rid,error:String(e?.message||e)};}
-    if(force){const fresh=await getRemote(rid);if(fresh)return fresh;}
     let s = null;
     try{ s = await dbGetByRace(rid); }catch(e){}
     if(s) return s;
@@ -20376,14 +20400,14 @@ function parseTicketJson243(raw,def,rid){
   return [...byKey.values()].sort((a,b)=>a.odds-b.odds||a.combination.localeCompare(b.combination,'ja',{numeric:true}));
 }
 
-async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred=''){
+async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred='',only=null){
   if(!/^\d{12}$/.test(String(rid))) throw new Error('race_idは12桁で指定してください');
   const nar=kind==='NAR';
   const endpoint=nar?'https://nar.netkeiba.com/api/api_get_nar_odds.html':'https://race.netkeiba.com/api/api_get_jra_odds.html';
   const markets={},diagnostics={};
   const sources=[];
   const priority=def=>def.name===preferred?0:def.name==='単勝'?1:2;
-  const order=TICKET_DEFS243.slice().sort((a,b)=>priority(a)-priority(b));
+  const order=TICKET_DEFS243.filter(d=>!Array.isArray(only)||only.includes(d.name)).sort((a,b)=>priority(a)-priority(b));
   let cursor=0,done=0;
   async function run(){
     while(cursor<order.length){
@@ -20546,6 +20570,54 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     }
     progress();
 
+    // v5.23.57 NarMissingMarketRescue: 単勝/複勝だけ取れて残り6券種が空になる件の修正。
+    // 従来のJSON救済は「1券種も取れなかった時」しか動かず、b0が単複しか返さないと枠連〜3連単が永久に未取得だった。
+    // 不足券種だけを (A) netkeiba JSON API → (B) 券種別ページ(type=b3〜b8) の順で個別に取り直す。
+    {
+      const lacking=()=>MARKET_TYPES.filter(t=>!(markets[t]?.length));
+      let miss=lacking();
+      if(miss.length){
+        try{
+          const legacy=await fetchAllTickets243('NAR',rid,url=>context?.read?context.read(url):window.liveOdds247.fetch(url),()=>{},'',miss);
+          for(const type of miss){
+            const rows=legacy.markets?.[type];
+            if(rows?.length){ markets[type]=rows; diagnostics[type]=legacy.diagnostics[type]||{state:'ok',count:rows.length,message:'NAR JSON API(不足券種救済)'}; }
+            else if(legacy.diagnostics?.[type]?.message) errors.push(type+': '+legacy.diagnostics[type].message);
+          }
+          if(legacy.source) sources.push(legacy.source);
+        }catch(e){ errors.push('JSON救済: '+String(e?.message||e)); }
+      }
+      miss=lacking();
+      if(miss.length){
+        const TYPE_CODE={'枠連':'b3','馬連':'b4','ワイド':'b5','馬単':'b6','3連複':'b7','3連単':'b8'};
+        await Promise.all(miss.filter(t=>TYPE_CODE[t]).map(async type=>{
+          const code=TYPE_CODE[type];
+          for(const url of [`https://nar.sp.netkeiba.com/odds/?race_id=${rid}&type=${code}`,`https://nar.netkeiba.com/odds/index.html?race_id=${rid}&type=${code}`]){
+            try{
+              const receipt=await read(url,'NAR '+type);
+              if(blockedOdds202(receipt.text)) throw new Error('遮断/空ページ');
+              const doc=new DOMParser().parseFromString(receipt.text,'text/html');
+              const maps=parseAllMarkets202(doc,expected);
+              const rows=rowsFromMap257(type,maps?.[type]);
+              if(rows.length){
+                markets[type]=rows;
+                diagnostics[type]={state:'ok',count:rows.length,message:'NAR券種別ページ '+code,
+                  fetched_ms:receipt.fetched_ms,source_updated_ms:null,source_time_label:'',path:receipt.path};
+                sources.push(url);
+                return;
+              }
+            }catch(e){ errors.push(type+' '+code+': '+String(e?.message||e)); }
+          }
+        }));
+      }
+      for(const type of MARKET_TYPES){
+        if(markets[type]?.length || diagnostics[type]?.count>0) continue;
+        diagnostics[type]={state:'empty',count:0,
+          message:'NAR公式/b0/JSON/券種別ページのいずれでも有効オッズなし（未発売・売止・発走後に配信終了等）'};
+      }
+      progress();
+    }
+
     // If neither HTML route produced a single value, retain the legacy JSON API as the final rescue.
     // This branch is deliberately last so a broken JSON endpoint cannot block the normal 5-second path.
     if(!Object.keys(markets).length){
@@ -20570,22 +20642,21 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     // v257: NAR is HTML/official-first; JRA keeps the JSON API route.
     renderMarketStatus243({},0);
     let batch=null;
-    if((kind==='JRA'||kind==='NAR')&&!window.bridgeOnly252()){
+    if(kind==='JRA'&&!window.bridgeOnly252()){
       try{
         const date=String(document.getElementById('pickDate')?.value||'');
         if(/^\d{4}-\d{2}-\d{2}$/.test(date)){
-          batch=await window.TheKeibaMultiV2.providers[kind].getAllMarkets({raceId:rid,date},undefined);
+          batch=await window.TheKeibaMultiV2.providers.JRA.getAllMarkets({raceId:rid,date},undefined);
         }
       }catch(e){console.warn('[5.23.36] JRA batch unavailable; preserve existing fallback',e.message);}
     }
-    const got=batch&&Object.keys(batch.markets||{}).length===8?batch:await (async()=>{try{return kind==='NAR'
+    const got=batch&&Object.keys(batch.markets||{}).length===8?batch:kind==='NAR'
       ? await fetchNarMarkets257(rid,expected,(done,diagnostics)=>{
           if(activeRid===rid && currentRaceId202()===rid) renderMarketStatus243(diagnostics,done);
         })
       : await fetchAllTickets243(kind,rid,url=>window.liveOdds247.fetch(url),(done,diagnostics)=>{
           if(activeRid===rid && currentRaceId202()===rid) renderMarketStatus243(diagnostics,done);
         },preferred);
-      }catch(e){if(batch&&Object.keys(batch.markets||{}).length)return batch;throw e;}})();
     if(batch&&got!==batch){
       for(const [type,rows] of Object.entries(batch.markets||{})){
         if(!got.markets[type]?.length){got.markets[type]=rows;got.diagnostics[type]=batch.diagnostics[type];}
@@ -21600,26 +21671,6 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   // or writes another screen's DOM, odds, horse cache, or history.
   window.TheKeibaTimelinePrimitives=Object.freeze({
     readLegacy:rid=>dbRace202(String(rid)),
-    postMs:rid=>uiPostMs202(rid),
-    mergeSaved:async(rid,rows)=>{
-      const safe=rows.filter(r=>String(r.race_id)===String(rid)&&Number(r.captured_ms)>0&&!r.archive_virtual_5s&&!r.archive_hold_point);
-      return dbRetry202(db=>new Promise((resolve,reject)=>{
-        const tx=db.transaction(STORE,'readwrite'),st=tx.objectStore(STORE);
-        for(const row of safe){
-          const id=String(rid)+':'+Number(row.captured_ms),q=st.get(id);
-          q.onsuccess=()=>{
-            const old=q.result||{},markets={...(old.markets||{})},status={...(old.market_status||{})};
-            for(const [t,a] of Object.entries(row.markets||{})){
-              if(Array.isArray(a)&&a.length&&!markets[t]?.length){markets[t]=a;if(row.market_status?.[t])status[t]=row.market_status[t];}
-            }
-            st.put({...row,...old,id,race_id:String(rid),captured_ms:Number(row.captured_ms),markets,market_status:status});
-          };
-        }
-        tx.oncomplete=()=>resolve(safe.length);
-        tx.onerror=tx.onabort=()=>reject(tx.error||new Error('保存履歴の統合に失敗'));
-      }));
-    },
-
     getOdds:async(source,rid,horses,context)=>{
       const got=source==='NAR'
         ? await fetchNarMarkets257(rid,horses,context.onProgress,context)
@@ -22051,21 +22102,18 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     const rid=currentRid(), s=currentSnap, market=$('pc3Market')?.value||'単勝';
     if($('pc3Race'))$('pc3Race').textContent=raceLabel(); if($('pc3Rid'))$('pc3Rid').textContent=rid||'';
     const sel=$('pc3Market');
-    if(sel&&!s)Array.from(sel.options).forEach(o=>{o.disabled=false;});
     if(sel && s){ Array.from(sel.options).forEach(o=>{o.disabled=!available(o.value);}); if(sel.selectedOptions[0]?.disabled){const ok=Array.from(sel.options).find(o=>!o.disabled);if(ok)sel.value=ok.value;} }
     const chosen=sel?.value||market, rows=snapRows(chosen);
     const status=$('pc3Status'), meta=$('pc3Meta'), wrap=$('pc3TableWrap');
     if(!s){ if(meta)meta.style.display='none'; if(status){status.className='pc3-status warn';status.innerHTML='⚠️ このレースの締切3分前スナップショットはまだ保存されていません。';} if(wrap)wrap.innerHTML='<div class="pc3-empty">保存済みの「締切3分前オッズ」がありません。<br>本番監視では取得時刻が検証されたスナップショットだけを3分前データとして扱います。</div>'; return; }
     const verified=s.preclose3m_verified===true||s.timing_verified===true;
-    const displayCaptured=s.market_times?.[chosen]||s.captured_at;
-    const delta=s.market_times?.[chosen]?Math.round((s.market_times[chosen]-s.target_ms)/1000):(s.capture_delta_sec==null?NaN:Number(s.capture_delta_sec));
+    const delta=Number(s.capture_delta_sec);
     if(status){status.className='pc3-status '+(verified?'ok':'warn');status.innerHTML=`${verified?'✅':'⚠️'} <b>${verified?'締切3分前・時刻検証済み':'スナップショットあり・時刻要確認'}</b>　${esc(String(s.venue_name||''))} ${esc(String(s.race_no||''))}R ${esc(String(s.race_name||''))}`;}
     if(meta){meta.style.display='grid';meta.innerHTML=`
       <div><b>${esc(localTime(s.target_at))}</b><span>目標時刻（締切3分前）</span></div>
-      <div><b>${esc(localTime(displayCaptured))}</b><span>実取得時刻</span></div>
+      <div><b>${esc(localTime(s.captured_at))}</b><span>実取得時刻</span></div>
       <div><b class="${verified?'pc3-verified':'pc3-unverified'}">${Number.isFinite(delta)?(delta>=0?'+':'')+delta+'秒':'-'}</b><span>取得誤差</span></div>
       <div><b class="${verified?'pc3-verified':'pc3-unverified'}">${verified?'VERIFIED':'CHECK'}</b><span>時刻検証</span></div>`;}
-    window.ClassicHistory52356?.describe(rid,s);
     if(!rows.length){ if(wrap)wrap.innerHTML=`<div class="pc3-empty">${esc(chosen)} の3分前オッズはこのスナップショットにありません。<br>単勝以外は、Worker側で all-markets 保存された場合に表示されます。</div>`; return; }
     rows.sort((a,b)=>a.odds-b.odds);
     const single=(chosen==='単勝'||chosen==='複勝');
@@ -22077,10 +22125,8 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     const st=$('pc3Status'); if(st){st.className='pc3-status';st.textContent='🔄 保存済みの締切3分前スナップショットを確認中…';}
     try{
       let s=null;
-      if(typeof window.__precloseGetSnapshot==='function') s=await window.__precloseGetSnapshot(rid,!!force);
-      if(!s && window.ClassicHistory52356) s=await window.ClassicHistory52356.snapshot(rid);
+      if(typeof window.__precloseGetSnapshot==='function') s=await window.__precloseGetSnapshot(rid);
       if(seq!==refreshSeq)return; currentSnap=s||null; render206();
-      window.ClassicHistory52356?.describe(rid,s);
     }catch(e){ if(seq!==refreshSeq)return; currentSnap=null; render206(); if(st){st.className='pc3-status err';st.textContent='⚠️ 3分前スナップショット読込失敗: '+String(e?.message||e);} }
   }
   function show206(mode){
@@ -22110,7 +22156,6 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   // 古い遅延パッチの後でも、表示ラベルとオッズ専用右側を維持。MutationObserverは作らず競合ループを避ける。
   [200,1000,3000,7000,12000,22000,36000,56000].forEach(ms=>setTimeout(()=>{markVersion();install();const f=$('rightAnalysisFrame');if(f&&f.src!=='about:blank')f.src='about:blank';},ms));
   window.showPreClose3mOdds=()=>show206('preclose');
-  window.refreshPreclose52356=refresh206;
   window.showOddsTimeline206=()=>show206('timeline');
 })();
 </script>
@@ -23795,7 +23840,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     if(settingsTab&&!$219('timelineCloudCard219')){
       const c=cfg219(),card=document.createElement('div');card.className='card';card.id='timelineCloudCard219';card.innerHTML=`
         <div class="section-header"><h2>☁️ 常時時系列オッズ（デバイス0台）</h2><span class="nar-badge">${esc219(window.APP_VERSION||'')}</span></div>
-        <div style="font-size:11px;color:var(--muted);line-height:1.65;margin-bottom:10px">Durable Object Workerが全8券種を確認します。発走30分前から10秒、それ以前は60秒間隔。変化時と10分ごとの確認点だけ保存し、大きな履歴は圧縮します。別デバイス未接続・iPad/PCを閉じた状態でも継続し、次回起動時にWorker全履歴をIndexedDBへ復元します。Worker・端末とも発走+1分に達したら収集をそのレースについて終了し、その時点の時系列を完成形として固定します。以後は新しい点を追加せず、後から同じグラフを閲覧できます。3分前・発走・+3分の基準線も固定表示します。</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.65;margin-bottom:10px">Durable Object Workerが全8券種を確認します。発走30分前から10秒、それ以前は60秒間隔。変化時と10分ごとの確認点だけ保存し、大きな履歴は圧縮します。別デバイス未接続・iPad/PCを閉じた状態でも継続し、次回起動時にWorker全履歴をIndexedDBへ復元します。Workerは発走3分前、端末は発走+1分に達したら収集をそのレースについて終了し、その時点の時系列を完成形として固定します。以後は新しい点を追加せず、後から同じグラフを閲覧できます。3分前・発走・+3分の基準線も固定表示します。</div>
         <div class="field"><label>常時時系列Worker URL</label><input id="timelineCloudUrl219" type="url" value="${esc219(c.workerUrl)}" placeholder="https://the-keiba-timeline-collector.xxxxx.workers.dev"></div>
         <div class="field"><label>Token（Workerに設定した場合のみ）</label><input id="timelineCloudToken219" type="password" value="${esc219(c.token)}" autocomplete="off"></div>
         <label style="display:flex;gap:8px;align-items:center;font-size:12px;margin:7px 0"><input id="timelineCloudAutoReg219" type="checkbox" ${c.autoRegister?'checked':''}> レース選択時に常時収集を自動開始</label>
@@ -23858,56 +23903,6 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot219,{once:true});else boot219();
   [300,1200,3000,7000,15000,30000,60000].forEach(ms=>setTimeout(()=>{installUi219();setVersion219();},ms));
-
-  // Read-only snapshot loading remains available in Bridge mode.
-  const precloseCache6211=new Map();
-  async function precloseRequest6211(path,body){
-    const cfg=cfg219(),base=String(cfg.workerUrl||'').replace(/\/+$/,'');
-    if(!base)throw new Error('常時時系列Worker URL未設定');
-    const target=new URL(base+path),origin=new URL(base).origin;
-    const headers={Accept:'application/json'};
-    if(cfg.token&&target.origin===origin)headers['X-Timeline-Token']=cfg.token;
-    if(body)headers['Content-Type']='application/json';
-    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);
-    try{
-      const native=window.__nativeFetch252||window.fetch.bind(window);
-      const r=await native(target.href,{method:body?'POST':'GET',headers,body:body?JSON.stringify(body):undefined,signal:controller.signal,cache:'no-store'});
-      const j=await r.json();
-      if(!r.ok||j.ok===false)throw new Error(j.error||'Timeline HTTP '+r.status);
-      return j;
-    }finally{clearTimeout(timer);}
-  }
-  window.timelinePrecloseRead6211=async(rid,force=false)=>{
-    const key=cfg219().workerUrl+'|'+String(rid),old=precloseCache6211.get(key);
-    if(!force&&old&&Date.now()-old.at<15000)return old.value;
-    const j=await precloseRequest6211('/timeline/preclose?race_id='+encodeURIComponent(rid));
-    if(j.meta?.race_id&&String(j.meta.race_id)!==String(rid))throw new Error('別レースの締切情報を破棄');
-    const raw=j.snapshot;
-    if(raw&&String(raw.race_id)!==String(rid))throw new Error('別レースの3分前オッズを破棄');
-    let snap=null;
-    if(raw){
-      const markets=raw.additional_markets||raw.markets||{};
-      const types=['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
-      const close=Number(raw.close_ms||j.meta?.close_ms||0),target=close?close-180000:Number(raw.target_ms||0);
-      const captured=Number(raw.captured_ms)||Date.parse(raw.captured_at||'');
-      const times=raw.market_times||{};
-      const knownBasis=raw.capture_time_basis==='per_market_response_complete'||raw.capture_time_basis==='response_complete';
-      const verified=knownBasis&&target>0&&types.every(t=>markets[t]?.length&&Number(times[t]||captured)>0&&Number(times[t]||captured)<=target&&target-Number(times[t]||captured)<=60000&&raw.market_timing_verified?.[t]===true);
-      snap={...raw,additional_markets:markets,markets,market_times:Object.fromEntries(types.filter(t=>markets[t]?.length).map(t=>[t,Number(times[t]||captured)])),close_ms:close,target_ms:target,
-        target_at:target?new Date(target).toISOString():'',
-        captured_ms:captured,captured_at:Number.isFinite(captured)?new Date(captured).toISOString():'',
-        capture_delta_sec:target&&Number.isFinite(captured)?(captured-target)/1000:null,
-        odds:Array.isArray(raw.odds)?raw.odds:(markets['単勝']||[]).map(r=>({horse_no:r.combination,odds:r.odds})),
-        preclose3m_verified:verified,timing_verified:verified,recovered:true,
-        missing_types:types.filter(t=>!markets[t]?.length),timeline_worker:true};
-    }
-    const value={snapshot:snap,meta:j.meta||{},reason:j.reason||'',version:j.version||''};
-    precloseCache6211.set(key,{at:Date.now(),value});return value;
-  };
-  window.timelineDeadlineSave6211=async(rid,closeMs)=>{
-    const result=await precloseRequest6211('/timeline/deadline?race_id='+encodeURIComponent(rid),{race_id:rid,close_ms:closeMs});
-    precloseCache6211.clear();return result;
-  };
 
   window.timelineCloudStart219=()=>startCurrent219(false);
   window.timelineCloudSync219=(silent=false)=>syncCurrent219(!!silent,false).catch(e=>({ok:false,error:String(e?.message||e)}));
@@ -30992,16 +30987,14 @@ function close(p){
  try{return stamp(JSON.parse(localStorage.getItem('keiba_deadlines629')||'{}')[p?.raceId]);}catch(_){return 0;}
 }
 function recover(p){
- const c=close(p);if(!c)return null;
- if(window.ClassicHistory52356?.recover)return window.ClassicHistory52356.recover(String(p.raceId),p.archive52320?.pack?.records||p.history||[],c);
- const target=c-180000;
+ const c=close(p);if(!c)return null;const target=c-180000;
  if(Date.now()<target)return null;
  const rows=(p.archive52320?.pack?.records||p.history||[]).filter(r=>!(r.archive_virtual_5s||r.archive_hold_point)||r.original_captured_ms).map(r=>({...r,captured_ms:Number(r.original_captured_ms||r.captured_ms)})).filter(r=>r.captured_ms>0&&r.captured_ms<=target).sort((a,b)=>b.captured_ms-a.captured_ms);
  const markets={},times={};
  for(const t of TYPES){const r=rows.find(r=>Array.isArray(r.markets?.[t])&&r.markets[t].length);if(r){markets[t]=r.markets[t];times[t]=r.captured_ms;}}
  if(!Object.keys(markets).length)return null;
  const latest=Math.max(...Object.values(times));
- return {race_id:p.raceId,recovered:true,source:'HISTORY_CLOSE_MINUS_3M',close_ms:c,target_ms:target,captured_ms:latest,captured_at:new Date(latest).toISOString(),markets,additional_markets:markets,odds:(markets['単勝']||[]).map(r=>({horse_no:r.combination,odds:r.odds})),market_times:times,preclose3m_verified:Object.keys(markets).length===8&&Object.values(times).every(t=>target-t<=60000)&&available.every(t=>verifiedTimes[t]),missing_types:TYPES.filter(t=>!markets[t]?.length)};
+ return {race_id:p.raceId,recovered:true,source:'HISTORY_CLOSE_MINUS_3M',close_ms:c,target_ms:target,captured_ms:latest,captured_at:new Date(latest).toISOString(),markets,additional_markets:markets,odds:(markets['単勝']||[]).map(r=>({horse_no:r.combination,odds:r.odds})),market_times:times,preclose3m_verified:Object.keys(markets).length===8&&Object.values(times).every(t=>target-t<=60000),missing_types:TYPES.filter(t=>!markets[t]?.length)};
 }
 window.KeibaClose629={close,recover,TYPES,stamp};
 function graph(canvas,p,type){
@@ -31044,6 +31037,84 @@ function install(){const proto=window.TheKeibaMultiV2?.MultiPaneWorkspace?.proto
 if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearInterval(timer);},500);}
 })();
 
+</script>
+<script id="version-info-fix-v52358">
+(function(){
+  'use strict';
+  const build=window.THEKEIBA_BUILD;
+  if(!build || build.number!=='5.23.58') return;
+  const $=id=>document.getElementById(id);
+  const label=document.querySelector('.header .ver');
+  const button=$('keibaVersionButton52358');
+  const panel=$('keibaVersionPanel52358');
+  const expected='v6.2.11';
+  let inStamp=false;
+  function stamp(){
+    if(inStamp)return;
+    inStamp=true;
+    try{
+      window.APP_VERSION=build.version;
+      const marker=(window.__NAR_BRIDGE_READY__?' 🌉':'')+' ☁️ 10s';
+      const desired=build.version+marker;
+      if(label && label.textContent!==desired)label.textContent=desired;
+      const title='The競馬 EV分析 '+build.version;
+      if(document.title!==title)document.title=title;
+      const hv=$('keibaHtmlVersion52358');
+      if(hv && hv.textContent!==build.version)hv.textContent=build.version;
+    }finally{inStamp=false;}
+    return build.version;
+  }
+  // Only watch the tiny version node: not the entire DOM, for iPad Safari performance.
+  // Legacy delayed labels are allowed to run; this corrects their display without a polling timer.
+  if(label && typeof MutationObserver==='function'){
+    new MutationObserver(()=>stamp()).observe(label,{childList:true,characterData:true,subtree:true});
+  }
+  window.setAppVersionLabel=stamp;
+  window.getTheKeibaBuild52358=()=>({html:build.version,workerBundled:expected});
+  function safeConfig(key){
+    try{const val=JSON.parse(localStorage.getItem(key)||'{}');return val && typeof val==='object'?val:{};}catch(_){return {};}
+  }
+  function workerUrl(){
+    const value=String($('timelineCloudUrl219')?.value||'').trim();
+    const globalCfg=safeConfig('thekeiba_timeline_cloud_global');
+    const localCfg=safeConfig('thekeiba_timeline_cloud_v219');
+    return String(value||globalCfg.workerUrl||localCfg.workerUrl||'https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev').trim().replace(/\/+$/,'');
+  }
+  function openPanel(on){
+    if(!panel || !button)return;
+    panel.hidden=!on;
+    button.setAttribute('aria-expanded',on?'true':'false');
+    if(on){stamp();const target=$('keibaWorkerUrl52358');if(target)target.textContent='接続先: '+workerUrl();}
+  }
+  button?.addEventListener('click',()=>openPanel(panel.hidden));
+  $('keibaCloseVersion52358')?.addEventListener('click',()=>openPanel(false));
+  $('keibaCheckWorker52358')?.addEventListener('click',async()=>{
+    const out=$('keibaWorkerVersion52358');
+    const chk=$('keibaCheckWorker52358');
+    const u=workerUrl();
+    if(out)out.textContent='照合中…';
+    chk.disabled=true;
+    const controller=new AbortController();
+    const timer=setTimeout(()=>controller.abort(),9000);
+    try{
+      const parsed=new URL(u);
+      if(parsed.protocol!=='https:' || parsed.username || parsed.password || parsed.search || parsed.hash)throw new Error('Worker URLはHTTPSのベースURLを設定してください');
+      const url=new URL('health',parsed.toString().replace(/\/+$/,'')+'/');
+      url.searchParams.set('_version_check',String(Date.now()));
+      const res=await (window.__nativeFetch252||window.fetch.bind(window))(url.toString(),{cache:'no-store',signal:controller.signal});
+      if(!res.ok)throw new Error('HTTP '+res.status);
+      const data=await res.json();
+      if(data?.ok!==true || typeof data.version!=='string' || !data.version.trim())throw new Error('正しい /health レスポンスを取得できません');
+      const deployed=data.version.trim();
+      const aligned=deployed===expected || deployed.startsWith(expected+' ');
+      if(out)out.textContent=deployed+(aligned?' ✅ 同梱版と一致':' ⚠️ 同梱版と不一致');
+    }catch(e){if(out)out.textContent='照合失敗：'+String(e?.name==='AbortError'?'応答がタイムアウトしました':e?.message||e)+'（稼働版は未確認）';}
+    finally{clearTimeout(timer);chk.disabled=false;}
+  });
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)stamp();});
+  window.addEventListener('pageshow',stamp);
+  stamp();
+})();
 </script>
 </body>
 </html>
@@ -31248,114 +31319,4 @@ if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearI
  window.TheKeibaRaceCardAuto52351={schedule,cancel};
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',schedule,{once:true});else schedule();
 })();
-</script>
-
-<script id="classic-history-recovery52356">
-(()=>{
-'use strict';
-const TYPES=['単勝','複勝','枠連','馬連','馬単','ワイド','3連複','3連単'];
-const $=id=>document.getElementById(id), meta=new Map(), notes=new Map();
-let busy=false;
-const rid=()=> (String($('raceUrl')?.value||'').match(/race_id=(\d{12})/)||[])[1]||'';
-const clock=t=>t?new Date(t).toLocaleTimeString('ja-JP',{timeZone:'Asia/Tokyo',hour12:false}):'—';
-const stamp=v=>window.KeibaClose629?.stamp(v)||0;
-function recover(id,history,closeMs,now=Date.now()){
- const target=closeMs-180000;if(!(closeMs>0)||now<target)return null;
- const markets={},times={},verifiedTimes={};
- for(const r of history){
-  if(String(r.race_id||r.raceId||'')!==id)continue;
-  if((r.archive_virtual_5s||r.archive_hold_point)&&!r.original_captured_ms)continue;
-  const captured=stamp(r.original_captured_ms||r.captured_ms||r.captured_at);
-  if(!captured||captured>target)continue;
-  for(const t of TYPES){
-   if(r.replay_reconstructed&&Array.isArray(r.observed_types)&&!r.observed_types.includes(t))continue;
-   const rows=r.markets?.[t];if(!Array.isArray(rows)||!rows.length)continue;
-   const d=r.market_status?.[t]||r.diagnostics?.[t]||{};
-   if(d.integrity_ok===false||d.state==='error')continue;
-   const source=stamp(d.source_updated_ms||d.source_updated_at);
-   const time=Math.min(captured,stamp(r.market_times?.[t]||d.fetched_ms)||captured,source||Infinity);
-   if(source>target)continue;
-   if(!times[t]||time>times[t]){markets[t]=rows;times[t]=time;
-    verifiedTimes[t]=!r.timing_unverified&&(r.capture_time_basis==='response_complete')&&d.receipt_verified===true;}
-  }
- }
- const available=TYPES.filter(t=>markets[t]?.length);if(!available.length)return null;
- const latest=Math.max(...Object.values(times));
- return {race_id:id,recovered:true,source:'SAVED_HISTORY_CLOSE_MINUS_3M',close_ms:closeMs,target_ms:target,
- target_at:new Date(target).toISOString(),captured_ms:latest,captured_at:new Date(latest).toISOString(),
- capture_delta_sec:(latest-target)/1000,markets,additional_markets:markets,market_times:times,
- odds:(markets['単勝']||[]).map(r=>({horse_no:r.combination,odds:r.odds})),
- preclose3m_verified:available.length===8&&Object.values(times).every(t=>target-t<=60000),
- missing_types:TYPES.filter(t=>!markets[t]?.length)};
-}
-async function snapshot(id){
- const rows=await window.TheKeibaTimelinePrimitives.readLegacy(id);
- const remote=window.__timelinePrecloseInfo6211;
- const race=meta.get(id)||(remote?.race_id===id?remote.meta:null);
- const c=window.KeibaClose629?.close({raceId:id,race,history:rows})||0;
- const result=recover(id,rows,c);
- notes.set(id,!c?'投票締切時刻が未取得です。実際の締切を入力して「締切を保存・復元」を押してください。発走時刻からは推測しません。':!result?'締切3分前以前の保存履歴がありません。':'');
- return result;
-}
-function describe(id,s){
- if(id!==rid())return;
- const e=$('pc3Status');if(!e)return;
- if(!s){const info=window.__timelinePrecloseInfo6211; e.textContent='⚠️ '+(info?.race_id===id&&info.error?'Worker読込エラー：'+info.error+' ／ ':'')+(notes.get(id)||'保存済みスナップショットなし。「保存履歴を再読込」で履歴も確認できます。');return;}
- if(s.recovered){
-  const count=TYPES.filter(t=>s.markets?.[t]?.length).length;
-  e.className='pc3-status '+(s.preclose3m_verified?'ok':'warn');
-  e.textContent='履歴から復元 '+count+'/8券種 ／ 締切 '+clock(s.close_ms)+' ／ 目標 '+clock(s.target_ms)+
-   ' ／ '+(s.preclose3m_verified?'全券種60秒以内・時刻検証済み':'参考値：欠落・古い記録・取得時刻未検証のいずれか')+'。'+
-   TYPES.map(t=>s.market_times[t]?t+' '+clock(s.market_times[t])+'（'+Math.round((s.target_ms-s.market_times[t])/1000)+'秒前）':t+' 未取得').join(' ／ ');
- }
-}
-async function reload(){
- if(busy)return;
- const id=rid(),date=String($('pickDate')?.value||'');
- if(!/^\d{12}$/.test(id)||!/^\d{4}-\d{2}-\d{2}$/.test(date))return;
- const kind=Number(id.slice(4,6))>10?'NAR':'JRA';
- busy=true;const b=$('pc3History52356'),out=$('historyResult52356');if(b)b.disabled=true;
- if(out)out.textContent='保存履歴を確認中…';
- try{
-  const pack=await window.TheKeibaMultiV2.providers[kind].getTimeline({raceId:id,date,postMs:window.TheKeibaTimelinePrimitives.postMs(id)||0});
-  await window.TheKeibaTimelinePrimitives.mergeSaved(id,pack.rows||[]);
-  meta.set(id,pack.meta||{});
-  const rows=await window.TheKeibaTimelinePrimitives.readLegacy(id);
-  const counts=TYPES.map(t=>[t,rows.filter(r=>r.markets?.[t]?.length).length]);
-  if(id!==rid())return;
-  await window.reloadOddsTimelineRace202?.(id);
-  await window.refreshPreclose52356?.(false);
-  if(out)out.textContent=pack.transport+' ／ 保存履歴 '+rows.length+'点 ／ '+counts.map(([t,n])=>t+' '+n+'点').join('・')+
-   '。0点の券種は保存先にもデータがない場合、過去分を復元できません。';
- }catch(e){if(id===rid()&&out)out.textContent='履歴読込失敗（端末の履歴は保持）：'+String(e?.message||e);}
- finally{busy=false;if(b)b.disabled=false;}
-}
-function install(){
- const parent=$('pc3Refresh')?.parentElement;if(!parent||$('pc3History52356'))return;
- const b=document.createElement('button');b.type='button';b.className='btn-sm';b.id='pc3History52356';b.textContent='☁ 保存履歴を再読込';b.onclick=reload;parent.appendChild(b);
- const label=document.createElement('label');label.textContent='実際の投票締切（日本時間）';
- const input=document.createElement('input');input.type='time';input.step='1';input.id='deadlineClassic52356';label.appendChild(input);parent.appendChild(label);
- const save=document.createElement('button');save.type='button';save.className='btn-sm';save.textContent='締切を保存・復元';
- save.onclick=async()=>{
-  const id=rid(),date=$('pickDate')?.value||'',time=input.value;
-  if(!id||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!/^\d{2}:\d{2}(:\d{2})?$/.test(time)){alert('レースと正しい投票締切時刻を指定してください');return;}
-  const closeMs=Date.parse(date+'T'+time+(time.length===5?':00':'')+'+09:00');
-  try{
-   const m=JSON.parse(localStorage.getItem('keiba_deadlines629')||'{}');m[id]=closeMs;localStorage.setItem('keiba_deadlines629',JSON.stringify(m));
-   meta.set(id,{...(meta.get(id)||{}),close_ms:closeMs});
-   let remoteError='';
-   try{await window.timelineDeadlineSave6211(id,closeMs);}catch(e){remoteError=String(e?.message||e);}
-   await window.refreshPreclose52356?.(true);
-   const result=$('historyResult52356');
-   if(result)result.textContent=remoteError?'締切は端末に保存済み。Workerへの保存は失敗：'+remoteError:'締切を端末とWorkerへ保存しました。収集停止済みのレースは再開しません。';
-  }catch(e){alert('締切保存失敗：'+String(e?.message||e));}
- };parent.appendChild(save);
- const out=document.createElement('div');out.id='historyResult52356';out.className='pc3-status';out.textContent='保存済みの時刻とオッズのみ使用します。未保存の券種は補間しません。';parent.after(out);
- for(const name of ['raceSelect','raceUrl','pickDate','pickKind','pickVenue'])$(name)?.addEventListener('change',()=>{input.value='';out.textContent='選択レースの保存履歴を再読込できます。';});
-}
-window.ClassicHistory52356={snapshot,describe,recover,reload};
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install);else install();
-[500,1800].forEach(ms=>setTimeout(install,ms));
-})();
-
 </script>

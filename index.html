@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script id="thekeiba-build-version">
 // One release identity shared by all legacy and current display patches.
-window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.55 RangeViewFix',number:'5.23.55'});
+window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.57 NarMissingMarketRescue',number:'5.23.57'});
 window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
@@ -154,7 +154,7 @@ window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.55 RangeViewFix</title>
+<title>The競馬 EV分析 v5.23.57 NarMissingMarketRescue</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -517,7 +517,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver">v5.23.55 RangeViewFix ☁️ 10s</span>
+    <span class="ver">v5.23.57 NarMissingMarketRescue ☁️ 10s</span>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
 </div>
@@ -20370,14 +20370,14 @@ function parseTicketJson243(raw,def,rid){
   return [...byKey.values()].sort((a,b)=>a.odds-b.odds||a.combination.localeCompare(b.combination,'ja',{numeric:true}));
 }
 
-async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred=''){
+async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred='',only=null){
   if(!/^\d{12}$/.test(String(rid))) throw new Error('race_idは12桁で指定してください');
   const nar=kind==='NAR';
   const endpoint=nar?'https://nar.netkeiba.com/api/api_get_nar_odds.html':'https://race.netkeiba.com/api/api_get_jra_odds.html';
   const markets={},diagnostics={};
   const sources=[];
   const priority=def=>def.name===preferred?0:def.name==='単勝'?1:2;
-  const order=TICKET_DEFS243.slice().sort((a,b)=>priority(a)-priority(b));
+  const order=TICKET_DEFS243.filter(d=>!Array.isArray(only)||only.includes(d.name)).sort((a,b)=>priority(a)-priority(b));
   let cursor=0,done=0;
   async function run(){
     while(cursor<order.length){
@@ -20539,6 +20539,54 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
         message:'NAR公式/b0ページで有効オッズなし（未発売・売止・未配信・未解析等）'};
     }
     progress();
+
+    // v5.23.57 NarMissingMarketRescue: 単勝/複勝だけ取れて残り6券種が空になる件の修正。
+    // 従来のJSON救済は「1券種も取れなかった時」しか動かず、b0が単複しか返さないと枠連〜3連単が永久に未取得だった。
+    // 不足券種だけを (A) netkeiba JSON API → (B) 券種別ページ(type=b3〜b8) の順で個別に取り直す。
+    {
+      const lacking=()=>MARKET_TYPES.filter(t=>!(markets[t]?.length));
+      let miss=lacking();
+      if(miss.length){
+        try{
+          const legacy=await fetchAllTickets243('NAR',rid,url=>context?.read?context.read(url):window.liveOdds247.fetch(url),()=>{},'',miss);
+          for(const type of miss){
+            const rows=legacy.markets?.[type];
+            if(rows?.length){ markets[type]=rows; diagnostics[type]=legacy.diagnostics[type]||{state:'ok',count:rows.length,message:'NAR JSON API(不足券種救済)'}; }
+            else if(legacy.diagnostics?.[type]?.message) errors.push(type+': '+legacy.diagnostics[type].message);
+          }
+          if(legacy.source) sources.push(legacy.source);
+        }catch(e){ errors.push('JSON救済: '+String(e?.message||e)); }
+      }
+      miss=lacking();
+      if(miss.length){
+        const TYPE_CODE={'枠連':'b3','馬連':'b4','ワイド':'b5','馬単':'b6','3連複':'b7','3連単':'b8'};
+        await Promise.all(miss.filter(t=>TYPE_CODE[t]).map(async type=>{
+          const code=TYPE_CODE[type];
+          for(const url of [`https://nar.sp.netkeiba.com/odds/?race_id=${rid}&type=${code}`,`https://nar.netkeiba.com/odds/index.html?race_id=${rid}&type=${code}`]){
+            try{
+              const receipt=await read(url,'NAR '+type);
+              if(blockedOdds202(receipt.text)) throw new Error('遮断/空ページ');
+              const doc=new DOMParser().parseFromString(receipt.text,'text/html');
+              const maps=parseAllMarkets202(doc,expected);
+              const rows=rowsFromMap257(type,maps?.[type]);
+              if(rows.length){
+                markets[type]=rows;
+                diagnostics[type]={state:'ok',count:rows.length,message:'NAR券種別ページ '+code,
+                  fetched_ms:receipt.fetched_ms,source_updated_ms:null,source_time_label:'',path:receipt.path};
+                sources.push(url);
+                return;
+              }
+            }catch(e){ errors.push(type+' '+code+': '+String(e?.message||e)); }
+          }
+        }));
+      }
+      for(const type of MARKET_TYPES){
+        if(markets[type]?.length || diagnostics[type]?.count>0) continue;
+        diagnostics[type]={state:'empty',count:0,
+          message:'NAR公式/b0/JSON/券種別ページのいずれでも有効オッズなし（未発売・売止・発走後に配信終了等）'};
+      }
+      progress();
+    }
 
     // If neither HTML route produced a single value, retain the legacy JSON API as the final rescue.
     // This branch is deliberately last so a broken JSON endpoint cannot block the normal 5-second path.

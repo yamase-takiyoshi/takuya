@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script id="thekeiba-build-version">
 // One release identity shared by all legacy and current display patches.
-window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.60 WaitState RangeAudit VersionSync',number:'5.23.60'});
+window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.61 StrictPreclose PayoutRepair',number:'5.23.61'});
 window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
@@ -154,7 +154,7 @@ window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.60 WaitState RangeAudit VersionSync</title>
+<title>The競馬 EV分析 v5.23.61 StrictPreclose PayoutRepair</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -536,7 +536,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver" aria-label="HTML本体バージョン">v5.23.60 ☁️ 10s</span>
+    <span class="ver" aria-label="HTML本体バージョン">v5.23.61 ☁️ 10s</span>
     <button id="keibaVersionButton52358" type="button" class="btn-sm" aria-expanded="false" aria-controls="keibaVersionPanel52358" title="HTMLと稼働Workerの版を確認">📦 版確認</button>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
@@ -544,7 +544,7 @@ body.right-analysis-active #rightAnalysisPane{
 
 <section id="keibaVersionPanel52358" class="keiba-version-panel52358" hidden aria-label="バージョン情報">
   <strong>📦 バージョン情報</strong>
-  <div>HTML本体：<span id="keibaHtmlVersion52358"></span></div>
+  <div>HTML本体：<span id="keibaHtmlVersion52358">v5.23.61 StrictPreclose PayoutRepair</span></div>
   <div>対応Worker：<span>v6.2.12 ArchiveSafe ReplayBackfill</span></div>
   <div>稼働Timeline Worker：<span id="keibaWorkerVersion52358" role="status" aria-live="polite">未照合（稼働版は未確認）</span></div>
   <div>対応abc Cron Worker：<span>v6.1.23 cpu-budget-guard</span></div>
@@ -10831,9 +10831,37 @@ if(horses.length === 0){
   function asw_host(kind){ return kind === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com'; }
   function asw_chip(type){ return (typeof CHIP_CLASS !== 'undefined' && CHIP_CLASS[type]) || ''; }
 
+  // v5.23.61 PRE-RACE監査：発走前という現在時刻のみでは監査合格にしない。
+  // 保存済みの検証フラグとrace_id、実測時刻/目標時刻、単勝データを照合する。
+  function asw_precloseEvidence(s, rid){
+    const no = reason => ({verified:false,reason,targetMs:0,capturedMs:0});
+    if(!s) return no('締切3分前スナップショット未保存');
+    if(String(s.race_id||'') !== String(rid)) return no('スナップショットのrace_id不一致');
+    if(s.preclose3m_verified !== true) return no('preclose3m_verified が true ではない');
+    const ms = v => {
+      const n=Number(v);
+      if(Number.isFinite(n) && n>0) return n<1e11?n*1000:n;
+      const d=Date.parse(String(v||''));return Number.isFinite(d)?d:0;
+    };
+    const close=ms(s.close_ms||s.cutoff_ms||s.close_at||s.cutoff_at);
+    const target=ms(s.target_at||s.target_ms)||(close?close-180000:0);
+    const captured=ms(s.captured_at||s.captured_ms);
+    if(!(target>0 && captured>0))return no('取得時刻または締切3分前の目標時刻が不明');
+    // 60秒の検証窓はWorkerのpreclose3m_verifiedと整合。未来の値を無条件に採用しない。
+    if(Math.abs(captured-target)>60000)return no('締切3分前の目標から実取得時刻が60秒超ずれている');
+    const od=Array.isArray(s.odds)&&s.odds.length?s.odds:(s.additional_markets?.['単勝']||s.markets?.['単勝']||[]);
+    const valid=new Set(od.filter(x=>{
+      const number=Number(x?.horse_no??x?.num??x?.combination);
+      const price=Number(x?.odds??x?.odds_min);
+      return Number.isInteger(number)&&number>=1&&number<=18&&Number.isFinite(price)&&price>=1;
+    }).map(x=>Number(x.horse_no??x.num??x.combination)));
+    if(valid.size<2)return no('検証済み単勝オッズが2頭未満');
+    return {verified:true,reason:'',targetMs:target,capturedMs:captured,deltaSeconds:Math.round((captured-target)/1000)};
+  }
+
   // ── 1レース分の出走馬＋オッズ取得（fetchRace のコア部分を副作用なしで再現）──
   // 戻り値: { horses, raceName, isResultPage, resultDoc(あれば結果docを使い回す) }
-  async function asw_loadHorses(kind, rid){
+  async function asw_loadHorses(kind, rid, validationMode){
     const host = asw_host(kind);
     const parser = new DOMParser();
 
@@ -10883,6 +10911,14 @@ if(horses.length === 0){
     }catch(e){ savedPreclose = null; }
 
     // ── オッズ・人気（fetchRace と同じ手順）──
+    const precloseAudit=asw_precloseEvidence(savedPreclose,rid);
+    // PRE_RACE_STRICTでは未検証レコードのオッズを決して予測入力にしない。
+    // その他のモードの既存フォールバック挙動は維持する。
+    if(validationMode==='PRE_RACE_STRICT' && !precloseAudit.verified)savedPreclose=null;
+    if(savedPreclose && (!Array.isArray(savedPreclose.odds)||savedPreclose.odds.length<2)){
+      const rows=savedPreclose.additional_markets?.['単勝']||savedPreclose.markets?.['単勝'];
+      if(Array.isArray(rows))savedPreclose={...savedPreclose,odds:rows.map(x=>({horse_no:x.horse_no??x.num??x.combination,odds:x.odds??x.odds_min,popularity:x.popularity??x.pop}))};
+    }
     if(savedPreclose && Array.isArray(savedPreclose.odds) && savedPreclose.odds.length >= 2){
       const savedMap = new Map();
       savedPreclose.odds.forEach(o => {
@@ -10938,7 +10974,7 @@ if(horses.length === 0){
     // v5.18.193 + v5.18.195: オッズ時点の監査情報。
     // 保存済みPRE_CLOSE_3MINがある場合は、その取得時刻と検証フラグを監査の真実の出所にする。
     let postTimeText = savedPreclose ? String(savedPreclose.post_time || '') : '';
-    let preRaceVerified = savedPreclose ? (savedPreclose.preclose3m_verified === true || savedPreclose.timing_verified === true) : false;
+    let preRaceVerified = !!(savedPreclose && precloseAudit.verified);
     if(!savedPreclose){
       try{
         const raceDate = String(window.__rsValidationRaceDate || '');
@@ -10951,7 +10987,7 @@ if(horses.length === 0){
           postTimeText = String(mt[1]).padStart(2,'0') + ':' + String(mt[2]).padStart(2,'0');
           if(/^\d{4}-\d{2}-\d{2}$/.test(raceDate)){
             const scheduled = new Date(`${raceDate}T${postTimeText}:00+09:00`).getTime();
-            if(Number.isFinite(scheduled) && Date.now() < scheduled && !isResultPage) preRaceVerified = true;
+            // 発走前という現在時刻だけでは監査を認定しない（参考用の時刻表示のみ）。
           }
         }
       }catch(e){}
@@ -10975,6 +11011,7 @@ if(horses.length === 0){
       resultDoc,
       oddsSnapshotType,
       preRaceVerified,
+      precloseAudit,
       oddsFetchedAt: savedPreclose ? String(savedPreclose.captured_at || '') : new Date().toISOString(),
       oddsSourceUrl: savedPreclose ? String(savedPreclose.source_url || 'saved_preclose_snapshot') : activeUrl,
       postTimeText,
@@ -11544,7 +11581,7 @@ if(horses.length === 0){
   let rsLastOpenVenuesError = null;
   let rsOpenVenuesFailCount = 0;
   let rsOpenVenuesOkCount = 0;
-  let rsLastRaceListError = ''; // v5.23.60 keep transport failure separate from real non-event
+  let rsLastRaceListError = ''; // Keep transport failure separate from real non-event
   async function rsOpenVenues(kind, date){
     try{
       if(kind === 'JRA'){
@@ -12165,7 +12202,7 @@ if(horses.length === 0){
               currentRaceId = r.rid;
               window.currentRaceId = r.rid;
               window.__rsValidationRaceDate = date;
-              const loaded = await asw_loadHorses(kind, r.rid);
+              const loaded = await asw_loadHorses(kind, r.rid, validationMode);
               horses = loaded.horses;
               row.validationMode = validationMode;
               row.oddsSnapshotType = loaded.oddsSnapshotType || (loaded.isResultPage ? 'FINAL' : 'CURRENT_UNVERIFIED');
@@ -12174,7 +12211,7 @@ if(horses.length === 0){
               row.oddsSourceUrl = loaded.oddsSourceUrl || '';
               row.postTimeText = loaded.postTimeText || '';
               row.auditEligible = row.preRaceTimestampVerified === true;
-              row.auditReason = row.auditEligible ? '' : (row.oddsSnapshotType === 'FINAL' ? 'FINAL_ODDS（確定後の最終オッズ）' : '発走前市場時点を時刻で証明できない');
+              row.auditReason = row.auditEligible ? '' : (loaded.precloseAudit?.reason || (row.oddsSnapshotType === 'FINAL' ? 'FINAL_ODDS（確定後の最終オッズ）' : '締切3分前の保存済み検証オッズなし'));
               row.finalOddsDiag = loaded.finalOddsDiag || '';
               if(validationMode !== 'PRE_RACE_STRICT' && env.requireFinal &&
                  row.oddsSnapshotType !== 'FINAL'){
@@ -12186,7 +12223,7 @@ if(horses.length === 0){
               if(validationMode === 'PRE_RACE_STRICT' && !row.auditEligible){
                 row.status = 'excluded'; row.failureKind = 'スナップショット未保存';
                 row.failureStage = 'PRE-RACE監査';
-                row.auditReason = '発走前時点を証明できる保存済みオッズなし：' + row.auditReason;
+                row.auditReason = 'preclose3m_verified=true の保存済みオッズで監査不合格：' + row.auditReason;
                 return row;
               }
               failureStage = '買い目生成・時系列準備';
@@ -28964,10 +29001,14 @@ const V=window.THEKEIBA_BUILD.version;
 const oldP=window.parsePayoutsFromResultDoc || (typeof parsePayoutsFromResultDoc==='function'?parsePayoutsFromResultDoc:null);
 const oldF=window.parseFinishFromResultDoc || (typeof parseFinishFromResultDoc==='function'?parseFinishFromResultDoc:null);
 const norm=s=>String(s||'').normalize('NFKC').replace(/[‐‑‒–—―−]/g,'-').replace(/\u00a0/g,' ');
-const typeOf=s=>{s=norm(s).replace(/\s+/g,''); if(/^単勝/.test(s))return'単勝';if(/^複勝/.test(s))return'複勝';if(/^枠連/.test(s))return'枠連';if(/^馬連単|^馬単/.test(s))return'馬単';if(/^馬連/.test(s))return'馬連';if(/^ワイド/.test(s))return'ワイド';if(/^(3|三)連複/.test(s))return'3連複';if(/^(3|三)連単/.test(s))return'3連単';return''};
+const typeOf=s=>{
+ s=norm(s).replace(/\s+/g,'');
+ const types={'単勝':'単勝','複勝':'複勝','枠連':'枠連','枠連複':'枠連','枠単':'枠単','枠連単':'枠単','馬連':'馬連','馬単':'馬単','馬連単':'馬単','ワイド':'ワイド','3連複':'3連複','三連複':'3連複','3連単':'3連単','三連単':'3連単'};
+ return types[s]||'';
+};
 const ck=(t,a)=>{a=a.map(Number);if(['複勝','単勝'].includes(t))return String(a[0]);if(['枠連','馬連','ワイド','3連複'].includes(t))a=[...a].sort((x,y)=>x-y);return a.join('-')};
 function numsFor(type,text){
- text=norm(text); const out=[];
+ text=norm(text);const out=[];
  if(type==='単勝'||type==='複勝'){
    for(const m of text.matchAll(/(?:^|\D)(1[0-8]|[1-9])(?=\D|$)/g))out.push([+m[1]]);
  }else{
@@ -28978,30 +29019,49 @@ function numsFor(type,text){
  return out;
 }
 function robustP(doc){
- const p={}; let current='';
- const scopes=[...doc.querySelectorAll('table, .Payout, .Refund, .払い戻し, [class*="Payout"], [class*="Refund"], [class*="PayBack"]')];
- const roots=scopes.length?scopes:[doc.body];
- for(const root of roots){
-   const rows=root.matches?.('tr')?[root]:[...root.querySelectorAll('tr')];
-   for(const tr of rows){
+ const p={};
+ // 補完は払戻表を明示するDOM、または券種セルが厳密に一致するtable行に限定。
+ // 人気・オッズ・馬体重等の数字を誤って払戻金と解釈しない。
+ const tables=[...doc.querySelectorAll('table')];
+ for(const table of tables){
+   const trusted=!!table.closest?.('.newRefundTable, .Payout, .Refund, [class*="Payout"], [class*="Refund"], [class*="PayBack"]');
+   let current='';
+   for(const tr of table.querySelectorAll('tr')){
      const cells=[...tr.querySelectorAll('th,td')]; if(!cells.length)continue;
      const texts=cells.map(c=>norm(c.innerText||c.textContent||'').trim());
-     const row=norm(texts.join(' | '));
-     let t=''; for(const x of texts){t=typeOf(x);if(t)break;} if(t)current=t; else t=current;
-     if(!t)continue;
-     const am=[]; for(const x of texts)for(const m of x.matchAll(/([0-9][0-9,]*)\s*円/g)){const n=+m[1].replace(/,/g,'');if(n>0)am.push(n)}
-     if(!am.length)continue;
-     // Remove yen amounts before searching combinations so 480円 cannot become horse no 4/8 etc.
-     const comboText=norm(texts.join(' ')).replace(/[0-9][0-9,]*\s*円/g,' ');
-     let cs=numsFor(t,comboText);
-     // Deduplicate while preserving order.
-     const seen=new Set();cs=cs.filter(a=>{const k=ck(t,a);if(seen.has(k))return false;seen.add(k);return true});
-     cs.slice(0,am.length).forEach((a,i)=>{p[t+':'+ck(t,a)]=am[i]});
+     const rowType=texts.map(typeOf).find(Boolean)||'';
+     if(rowType)current=rowType;
+     const t=rowType||(trusted?current:'');if(!t)continue;
+     const amounts=[];
+     for(const x of texts)for(const m of x.matchAll(/([1-9][0-9,]*)\s*円/g)){
+       const amount=Number(m[1].replace(/,/g,''));if(amount>0&&Number.isSafeInteger(amount))amounts.push(amount);
+     }
+     if(!amounts.length)continue;
+     const comboText=texts.filter(x=>!typeOf(x)).join(' ').replace(/[0-9][0-9,]*\s*円/g,' ');
+     const arity=['単勝','複勝'].includes(t)?1:['3連複','3連単'].includes(t)?3:2;
+     const maxNo=t.startsWith('枠')?8:18;
+     const combos=numsFor(t,comboText).filter(a=>a.length===arity&&a.every(n=>n>=1&&n<=maxNo)&&new Set(a).size===a.length);
+     // 行内の組番と払戻金額が一対一で対応した時だけ採用する。曖昧な行は欠測扱い。
+     if(combos.length!==amounts.length)continue;
+     const unique=new Set(combos.map(a=>ck(t,a)));
+     if(unique.size!==combos.length)continue;
+     combos.forEach((a,i)=>{p[t+':'+ck(t,a)]=amounts[i];});
    }
  }
  return p;
 }
-function mergedP(doc){let p={};try{if(oldP)p=oldP(doc)||{}}catch(e){};return p}
+function mergedP(doc){
+ let p={};try{if(oldP)p=oldP(doc)||{}}catch(e){}
+ if(!p||typeof p!=='object'||Array.isArray(p))p={};
+ try{
+   const extra=robustP(doc);
+   for(const [key,amount] of Object.entries(extra)){
+     // 既存の公式結果パーサの正値を優先。異なる金額で上書きしない。
+     if(!(Number(p[key])>0))p[key]=amount;
+   }
+ }catch(e){console.warn('[PayoutRepair] fallback unavailable',e);}
+ return p;
+}
 window.parsePayoutsFromResultDoc=mergedP;try{parsePayoutsFromResultDoc=mergedP}catch(e){}
 // Keep original finish parser, but add horse names from result rows when available.
 function finishNames(doc){const map=new Map();for(const tr of doc.querySelectorAll('tr')){const a=tr.querySelector('a[href*="horse"],a[href*="/horse/"]');if(!a)continue;const tx=norm(tr.innerText||tr.textContent||'');const m=tx.match(/(?:^|\s)(1[0-8]|[1-9])(?:\s)/);if(m){const name=norm(a.textContent).trim();if(name)map.set(+m[1],name)}}return map}
@@ -31097,7 +31157,7 @@ if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearI
 (function(){
   'use strict';
   const build=window.THEKEIBA_BUILD;
-  if(!build || build.number!=='5.23.60') return;
+  if(!build || build.number!=='5.23.61') return;
   const $=id=>document.getElementById(id);
   const label=document.querySelector('.header .ver');
   const button=$('keibaVersionButton52358');
@@ -31291,7 +31351,16 @@ if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearI
    let got;try{got=await api.providers[kind].getTimeline({raceId:rid,source:kind,date,postMs:0},{signal:abortController.signal,since:0});}catch(e){throw new Error('時系列保存履歴を取得できません: '+e.message);}
    const raw=got.rows||[],meta=got.meta||{};
    if(!raw.length)throw new Error('GitHub/Workerに時系列保存履歴なし');
-   const timing=deadline(date,loaded,meta,raw,cfg),pack=buildFeatures(raw,timing.cutoff,cfg);
+   const timing=deadline(date,loaded,meta,raw,cfg);
+   if(row.validationMode==='PRE_RACE_STRICT'){
+     const audit=loaded?.precloseAudit;
+     if(!audit?.verified)throw new Error('締切3分前スナップショットの検証フラグなし：時系列監査から除外');
+     if(timing.reference)throw new Error('仮締切はPRE-RACE監査の対象外');
+     if(Math.abs(timing.cutoff-audit.targetMs)>60000)throw new Error('保存締切と検証済みスナップショットの時刻不一致');
+     timing.cutoff=Math.min(timing.cutoff,audit.targetMs); // 3分前より後の履歴は入力禁止
+     timing.basis+='／検証済み3分前時刻で上限制限';
+   }
+   const pack=buildFeatures(raw,timing.cutoff,cfg);
    const finalRoster=new Set((loaded.horses||[]).map(h=>Number(h.num)).filter(n=>n>0));
    if(finalRoster.size!==pack.models.length||pack.models.some(h=>!finalRoster.has(h.num)))throw new Error('予測時点と精算時点の出走構成が異なるため除外（取消・除外の返還は未対応）');
    // Use only the cutoff snapshot, never final odds or later indices, for the common static baseline.

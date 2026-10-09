@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script id="thekeiba-build-version">
 // One release identity shared by all legacy and current display patches.
-window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.71 TimelineConnected',number:'5.23.71'});
+window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.72 NARRiskGuard',number:'5.23.72'});
 window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
@@ -154,7 +154,7 @@ window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.71 TimelineConnected</title>
+<title>The競馬 EV分析 v5.23.72 NARRiskGuard</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -536,7 +536,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver" aria-label="HTML本体バージョン">v5.23.71 ☁️ 10s</span>
+    <span class="ver" aria-label="HTML本体バージョン">v5.23.72 ☁️ 10s</span>
     <button id="keibaVersionButton52358" type="button" class="btn-sm" aria-expanded="false" aria-controls="keibaVersionPanel52358" title="HTMLと稼働Workerの版を確認">📦 版確認</button>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
@@ -544,7 +544,7 @@ body.right-analysis-active #rightAnalysisPane{
 
 <section id="keibaVersionPanel52358" class="keiba-version-panel52358" hidden aria-label="バージョン情報">
   <strong>📦 バージョン情報</strong>
-  <div>HTML本体：<span id="keibaHtmlVersion52358">v5.23.71 TimelineConnected</span></div>
+  <div>HTML本体：<span id="keibaHtmlVersion52358">v5.23.72 NARRiskGuard</span></div>
   <div>確定単勝・人気：netkeiba結果／DB（取得・照合できたレースのみ採用）</div>
   <div>対応Worker：<span>v6.2.12 ArchiveSafe ReplayBackfill</span></div>
   <div>稼働Timeline Worker：<span id="keibaWorkerVersion52358" role="status" aria-live="polite">未照合（稼働版は未確認）</span></div>
@@ -804,6 +804,19 @@ body.right-analysis-active #rightAnalysisPane{
         <input type="checkbox" id="rsNarEstOdds" checked style="width:18px;height:18px;accent-color:var(--green)">
         <span>🔬 NARでも単勝以外の券種を推定オッズで買う（JRAと同条件で比較する研究用。OFFで従来のNAR制限）</span>
       </label>
+
+      <!-- v5.23.72: NAR過大EV対策。過去履歴を変更せず新規実行時の買い目だけ制御 -->
+      <div id="rsRiskGuardPanel52372" style="margin:10px 0;padding:11px;border:1px solid var(--border);border-radius:9px;background:rgba(88,136,155,.09);font-size:12px;line-height:1.6">
+        <b>🛡️ NAR買い目リスク制限（v5.23.72）</b>
+        <div style="margin-top:5px;color:var(--muted)">高オッズ・過大EV・低い想定確率を除外します。的中・利益を保証しません。<b>この制限は期間横断の通常モードのみ適用</b>し、保存履歴と時系列学習の計算には触れません。</div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin-top:8px">
+          <label style="flex:2;min-width:175px">選択ルール<br><select id="rsGuardMode52372" style="max-width:100%"><option value="CONSERVATIVE" selected>NAR保守比較（推奨）</option><option value="LEGACY">旧方式（比較用）</option></select></label>
+          <label style="flex:1;min-width:100px">上限オッズ<br><input id="rsGuardMaxOdds52372" type="number" min="2" max="999" step="1" value="30" style="width:100%"></label>
+          <label style="flex:1;min-width:110px">EV上限<br><input id="rsGuardMaxEv52372" type="number" min="1.05" max="5" step="0.05" value="1.95" style="width:100%"></label>
+        </div>
+        <label style="display:flex;gap:7px;align-items:center;margin-top:8px;cursor:pointer"><input type="checkbox" id="rsGuardRealOdds52372" checked> 実オッズ確認済み券種だけ選ぶ（推定値での買い目は除外）</label>
+        <div style="font-size:11px;color:var(--muted)">注意：実オッズは取得ソースの区別です。FINAL研究は事後の確定値であり、締切前に利用できた証明にはなりません。PRE-RACE監査では検証済み3分前の単勝だけを許可します。条件を満たさなければ見送ります。</div>
+      </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-primary" id="rsRunBtn" onclick="runRangeVenueSimulation()">📆 期間横断シミュレーション実行</button>
         <button class="btn-sm" id="rsStopBtn" onclick="stopRangeVenueSimulation()" style="display:none">⏹ 中断</button>
@@ -11631,7 +11644,8 @@ if(horses.length === 0){
     try{ s = JSON.parse(JSON.stringify(settings)); delete s.proxyUrl; }catch(e){}
     return JSON.stringify({ b: (window.THEKEIBA_BUILD || {}).number, vm: validationMode, rec: !!recordToChart,
       adj: !!($('rsPastAdj') && $('rsPastAdj').checked),
-      rf: !!($('rsReqFinal') && $('rsReqFinal').checked), ne: !!($('rsNarEstOdds') && $('rsNarEstOdds').checked), s });
+      rf: !!($('rsReqFinal') && $('rsReqFinal').checked), ne: !!($('rsNarEstOdds') && $('rsNarEstOdds').checked),
+      guard:rsGuardConfig52372(), s });
   }
 
   function rsValidationMode(){
@@ -12020,6 +12034,9 @@ if(horses.length === 0){
     const auditHitRate = audited.length ? auditHit / audited.length * 100 : 0;
     const excluded = settled.length - audited.length;
     const rsx = rsCalcStreakDD(rows);
+    const guardRuns = ok.filter(r => r.selectionAudit52372?.policy === 'CONSERVATIVE');
+    const guardBets = guardRuns.filter(r => Number(r.bet)>0).length;
+    const guardSkipped = guardRuns.filter(r => Number(r.bet)===0).length;
     const errAll = rows.filter(r => r && r.status === 'error').length;
     const errRetry = rows.filter(r => r && r.status === 'error' && r.rid && r.no > 0).length;
     const passN = ok.filter(r => !r.count).length;
@@ -12027,6 +12044,7 @@ if(horses.length === 0){
     const modeText = mode === 'PRE_RACE_STRICT' ? 'PRE-RACE監査' : 'FINAL研究';
 
     box.innerHTML = `
+      ${guardRuns.length?`<div class="url-status" style="margin-bottom:8px">🛡️ 保守比較：${guardRuns.length}R中、購入${guardBets}R・見送り${guardSkipped}R。これはモデルの利益検証や事前オッズの証明ではありません。</div>`:''}
       <div class="url-status ${mode === 'PRE_RACE_STRICT' ? '' : 'err'}" style="margin-bottom:8px">
         検証モード: <b>${modeText}</b> ｜ FINAL研究ROIは最終オッズを使う参考値。監査済みROIは <b>pre_race_timestamp_verified=true</b> のレースだけで計算します。
       </div>
@@ -12275,6 +12293,66 @@ if(horses.length === 0){
     if(btn){ const o = btn.textContent; btn.textContent = `✅ ${series.length}件を転記しました`; setTimeout(()=>{ btn.textContent = o; }, 2500); }
   }
 
+
+  // v5.23.72 NAR guard: only the range-simulation normal candidate path.
+  // Crucial: no persistent storage is read, deleted, cleared or migrated here.
+  function rsGuardConfig52372(){
+    const maxOdds=Number($('rsGuardMaxOdds52372')?.value||30);
+    const maxEV=Number($('rsGuardMaxEv52372')?.value||1.95);
+    return {
+      mode:$('rsGuardMode52372')?.value||'CONSERVATIVE',
+      maxOdds:Math.min(999,Math.max(2,Number.isFinite(maxOdds)?maxOdds:30)),
+      maxEV:Math.min(5,Math.max(1.05,Number.isFinite(maxEV)?maxEV:1.95)),
+      minEV:1.05,realOddsOnly:$('rsGuardRealOdds52372')?.checked!==false,
+      maxTickets:3,probabilityHaircut:0.80
+    };
+  }
+  function rsGuardSelect52372(recs,kind,validationMode){
+    const cfg=rsGuardConfig52372();
+    const source=Array.isArray(recs)?recs:[];
+    if(kind!=='NAR'||cfg.mode==='LEGACY') return {tickets:buildTickets(source),audit:{policy:'LEGACY',candidateCount:source.length,filtered:0}};
+    const minP={'単勝':.06,'複勝':.26,'枠連':.08,'ワイド':.12,'馬連':.07,'馬単':.055,'3連複':.035,'3連単':.015};
+    const reasons={invalid:0,estimated:0,strictMarket:0,odds:0,probability:0,ev:0};
+    const kept=[];
+    for(const r of source){
+      const type=String(r?.type||''), src=String(r?.oddsSource||'');
+      const od=Number(r?.odds),p=Number(r?.p), ev=Number(r?.ev);
+      if(!Object.prototype.hasOwnProperty.call(minP,type)||!Number.isFinite(od)||!Number.isFinite(p)||!Number.isFinite(ev)||od<=1||p<=0||p>=1){reasons.invalid++;continue;}
+      if(validationMode==='PRE_RACE_STRICT' && (type!=='単勝'||src!=='real-win')){reasons.strictMarket++;continue;}
+      if(cfg.realOddsOnly&&!['real','real-win'].includes(src)){reasons.estimated++;continue;}
+      if(od>cfg.maxOdds){reasons.odds++;continue;}
+      if(p<minP[type]){reasons.probability++;continue;}
+      // Discount model confidence to address inflated in-sample EV; not a fitted probability model.
+      const conservativeP=p*cfg.probabilityHaircut,conservativeEV=conservativeP*od;
+      if(conservativeEV<cfg.minEV||conservativeEV>cfg.maxEV){reasons.ev++;continue;}
+      const adjusted={...r,p:conservativeP,ev:conservativeEV,
+        kelly:Math.max(0,(conservativeEV-1)/Math.max(0.01,od-1)),
+        expectedReturn:conservativeEV*Number(r.unit||settings.unit||100),
+        riskGuard52372:'20%確率安全係数（検証済み校正ではない）'};
+      // Balance confidence and the EV margin; do not maximize EV alone.
+      adjusted.__guardScore=Math.sqrt(conservativeP)*Math.max(0,conservativeEV-1);
+      kept.push(adjusted);
+    }
+    kept.sort((a,b)=>b.__guardScore-a.__guardScore||b.p-a.p);
+    const picks=[],byType=new Set();
+    const unit=Math.max(100,Number(settings.unit||100));
+    const budget=Math.max(0,Number(settings.budget||500));
+    const cap=Math.min(cfg.maxTickets,Math.max(1,Number(settings.maxTickets||5)),Math.floor(budget/unit));
+    for(const c of kept){
+      if(picks.length>=cap)break;
+      if(byType.has(c.type))continue;
+      byType.add(c.type);
+      const {__guardScore,...t}=c;
+      picks.push({...t,amount:unit,stake:unit});
+    }
+    return {tickets:picks,audit:{policy:'CONSERVATIVE',candidateCount:source.length,eligibleCount:kept.length,
+      purchased:picks.length,excludedReasons:reasons,
+      realOddsOnly:cfg.realOddsOnly,maxOdds:cfg.maxOdds,maxEV:cfg.maxEV,probabilityHaircut:cfg.probabilityHaircut,
+      strictMarket:validationMode==='PRE_RACE_STRICT',
+      researchOnlyEstimatedOdds:picks.some(t=>!['real','real-win'].includes(t.oddsSource))}};
+  }
+  window.TheKeibaRangeGuard52372={config:rsGuardConfig52372,select:rsGuardSelect52372};
+
   // ── メイン：期間×開催場 横断シミュレーション ──
   // v5.23.47: 1レース分の「取得→計算→精算」（従来の本体ループ内処理をそのまま関数化）
   async function rsProcessRaceOnce(env, date, vc, vn, r){
@@ -12327,7 +12405,11 @@ if(horses.length === 0){
                 lastTickets = tsPrepared.tickets;
               }else{
                 made = generateCandidates(valid);
-                lastTickets = buildTickets(made.recs);
+                const guarded52372 = rsGuardSelect52372(made.recs,kind,validationMode);
+                lastTickets = guarded52372.tickets;
+                row.selectionAudit52372 = guarded52372.audit;
+                if(!lastTickets.length && guarded52372.audit.policy==='CONSERVATIVE')
+                  row.noBetReason = 'リスク制限を満たす実オッズ・確率・EVの買い目なし（見送り）';
               }
               lastRecs = made.recs.slice().sort((a, b) => b.ev - a.ev);
               simTickets = lastTickets.map(t => ({ ...t, nums: [...t.nums] }));
@@ -17076,6 +17158,8 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         resultAudit: r.resultAudit || null,
         finalOddsDiag: String(r.finalOddsDiag || ''),
         ticketDetails: Array.isArray(r.ticketDetails) ? r.ticketDetails : [],
+        selectionAudit52372: r.selectionAudit52372 || null,
+        noBetReason: String(r.noBetReason || ''),
         error: String(r.error || '')
       };
     });
@@ -17134,6 +17218,7 @@ function json(obj,status=200){ return new Response(JSON.stringify(obj,null,2), {
         recordToProfitGraph: !!($('rsRecord') && $('rsRecord').checked),
         requireFinalOdds: !!($('rsReqFinal') && $('rsReqFinal').checked),
         narEstimatedOddsForNonWin: !!($('rsNarEstOdds') && $('rsNarEstOdds').checked),
+        narRiskGuard: window.TheKeibaRangeGuard52372?.config() || null,
         validationMode: $('rsValidationMode') ? $('rsValidationMode').value : 'FINAL_RESEARCH'
       },
       summary: (() => {
@@ -31624,7 +31709,7 @@ if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearI
 (function(){
   'use strict';
   const release=window.THEKEIBA_BUILD;
-  if(!release || release.number!=='5.23.71')return;
+  if(!release || release.number!=='5.23.72')return;
   const byId=id=>document.getElementById(id);
   const headerVersion=document.querySelector('.header .ver');
   const modalVersion=byId('keibaHtmlVersion52358');
@@ -31651,7 +31736,7 @@ if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearI
   // Share one stamping function with legacy callbacks; existing overlays keep
   // their event handlers and we do not start a polling loop on iPad Safari.
   window.setAppVersionLabel=stamp;
-  window.TheKeibaVersionInfo52371=Object.freeze({version:release.version,number:release.number,refresh:stamp});
+  window.TheKeibaVersionInfo52372=Object.freeze({version:release.version,number:release.number,refresh:stamp});
   const nodes=[headerVersion,modalVersion,titleNode].filter(Boolean);
   if(typeof MutationObserver==='function' && nodes.length){
     const observer=new MutationObserver(stamp);

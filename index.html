@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script id="thekeiba-build-version">
 // One release identity shared by all legacy and current display patches.
-window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.66 Top20VersionInfoFix',number:'5.23.66'});
+window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.67 HistoryGraphIntegrity',number:'5.23.67'});
 window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
@@ -154,7 +154,7 @@ window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.66 Top20VersionInfoFix</title>
+<title>The競馬 EV分析 v5.23.67 HistoryGraphIntegrity</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -536,7 +536,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver" aria-label="HTML本体バージョン">v5.23.66 ☁️ 10s</span>
+    <span class="ver" aria-label="HTML本体バージョン">v5.23.67 ☁️ 10s</span>
     <button id="keibaVersionButton52358" type="button" class="btn-sm" aria-expanded="false" aria-controls="keibaVersionPanel52358" title="HTMLと稼働Workerの版を確認">📦 版確認</button>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
@@ -544,7 +544,7 @@ body.right-analysis-active #rightAnalysisPane{
 
 <section id="keibaVersionPanel52358" class="keiba-version-panel52358" hidden aria-label="バージョン情報">
   <strong>📦 バージョン情報</strong>
-  <div>HTML本体：<span id="keibaHtmlVersion52358">v5.23.66 Top20VersionInfoFix</span></div>
+  <div>HTML本体：<span id="keibaHtmlVersion52358">v5.23.67 HistoryGraphIntegrity</span></div>
   <div>確定単勝・人気：netkeiba結果／DB（取得・照合できたレースのみ採用）</div>
   <div>対応Worker：<span>v6.2.12 ArchiveSafe ReplayBackfill</span></div>
   <div>稼働Timeline Worker：<span id="keibaWorkerVersion52358" role="status" aria-live="polite">未照合（稼働版は未確認）</span></div>
@@ -21423,11 +21423,15 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     if(Number.isFinite(graph.endMs)) timeMarker(graph.endMs,'+3分','rgba(148,163,184,.66)','#94a3b8',[2,4]);
 
     items.forEach((it,idx)=>{
-      ctx.strokeStyle=PALETTE[idx%PALETTE.length]; ctx.lineWidth=2; ctx.beginPath(); let started=false;
+      ctx.strokeStyle=PALETTE[idx%PALETTE.length]; ctx.lineWidth=2; ctx.beginPath(); let prevMs=NaN;
       graphRows.forEach(r=>{
         const v=metricValue202(r,it.market,it.key,mode);
-        if(!Number.isFinite(v)||(mode==='odds'&&v<=0)){started=false;return;}
-        const x=xOf(r.captured_ms), y=yOf(v); if(!started){ctx.moveTo(x,y); started=true;} else ctx.lineTo(x,y);
+        if(!Number.isFinite(v)||(mode==='odds'&&v<=0)){prevMs=NaN;return;}
+        const ms=Number(r.captured_ms),x=xOf(ms),y=yOf(v);
+        // An unsampled interval is not a constant odds value.
+        if(!Number.isFinite(prevMs)||ms-prevMs>30000)ctx.moveTo(x,y);
+        else ctx.lineTo(x,y);
+        prevMs=ms;
       });
       ctx.stroke();
       if(graphRows.length<=60){
@@ -21468,7 +21472,8 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
       const scope=cross?'全券種横断':market;
       const cap=graph.capped?' / 🏁 発走+1分で固定済':(Number.isFinite(graph.endMs)?' / 発走+1分で自動停止':'');
       const view=Number.isFinite(graph.viewSpan)?` / ${Math.round(graph.viewSpan/60000)}分窓${graph.follow?' 追従':''}`:' / 全期間';
-      meta.textContent=graphRows.length?`${graphRows.length}点 / ${new Date(first).toLocaleTimeString('ja-JP')}〜${new Date(last).toLocaleTimeString('ja-JP')} / ${scope} ${metricLabel202(mode)}${view}${cap}`:'0点';
+      const gaps=graphRows.reduce((n,r,i)=>i>0&&Number(r.captured_ms)-Number(graphRows[i-1].captured_ms)>30000?n+1:n,0);
+      meta.textContent=graphRows.length?`${graphRows.length}点 / ${new Date(first).toLocaleTimeString('ja-JP')}〜${new Date(last).toLocaleTimeString('ja-JP')} / ${scope} ${metricLabel202(mode)} / 記録間隔30秒超 ${gaps}箇所（線は切断）${view}${cap}`:'0点';
     }
   }
 
@@ -26402,9 +26407,18 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
                 ? window.parseSavedArchive52329?.(archive)?.records
                 : (archive.captures||archive.records||archive.history||[]);
               if(!Array.isArray(raw))throw new Error('保存JSONの復元機能が未準備');
-              const safe=raw.map(x=>normalizeRecord({...x,archive_change_only:true},source,rid,race.date,rid)).filter(Boolean);
+              // v5.23.67: only first-full-then-delta archives are change-only.
+              // Raw GitHub exports keep their original 10-second observations and provenance.
+              const compressed=!!archive.initial_snapshot&&Array.isArray(archive.deltas);
+              const verifiedEndMs=compressed?Number(archive.stats?.last_capture_ms||0):0;
+              const safe=raw.map(x=>normalizeRecord({...x,
+                archive_change_only:compressed||x.archive_change_only===true,
+                archive_verified_end_ms:verifiedEndMs||Number(x.archive_verified_end_ms||0),
+                archive_record_kind:compressed?'compressed-delta':String(x.archive_record_kind||'raw-capture')
+              },source,rid,race.date,rid)).filter(Boolean);
               if(!safe.length||safe.length!==raw.length)throw new Error('GitHub履歴を検証できません');
-              return {rows:safe,transport:'GitHub保存履歴',github:true,meta};
+              return {rows:safe,transport:'GitHub保存履歴',github:true,
+                meta:{...meta,_archiveLastCaptureMs:verifiedEndMs}};
             }catch(e){
               if(e.name==='AbortError')throw e;
               errors.push(String(e.message||e));
@@ -26748,7 +26762,7 @@ function paneModelP520(p,rec,market,key){
         <div class="msv2-foot"></div><details class="msv2-diagnostics"><summary>券種別の取得状況</summary><div></div></details>
         <div class="msv2-rank-scroll" tabindex="0" aria-label="順位表・横スクロールできます"><table class="msv2-rank-table" aria-label="全券種対応の指標ランキング"></table></div>
         <details class="msv2-rank-help"><summary>指標の意味・順位の基準</summary>オッズは低い順、その他は高い順です。市場確率＝1÷オッズ（損益分岐の確率・控除補正なし）。EV＝想定確率×オッズ。乖離率＝(EV−1)×100％。確率差＝(想定確率−市場確率)×100ポイント。EVと乖離率の順位は同じです。Kellyは負値を0にします。3分前比は締切3分前の保存オッズに対する現在オッズの変化率です。想定確率は通常EV計算と共通の勝率・着順モデルです。同じ入力・設定なら同じ値になります。保存履歴にない補正材料は使用しません。未取得・計算不能の値は順位に入れません。複勝・ワイドは下限オッズを使用します。表示時点で選んだ上位買い目の過去の推移を描画します。表の買い目を押すと1点に絞れます。</details>
-        <div class="msv2-legend"></div><p class="msv2-note">受信した値だけを記録します。複勝・ワイドのグラフは下限値です。10秒は再取得の基準で、通信中は重複取得しません。JSON自動補完は画面表示中の当日レースを110秒ごとに確認します。ブラウザ復帰時も保存履歴を重ねて読み直します。収集元にも存在しない値は作りません。横ドラッグで時刻移動・縦スワイプでこの画面をスクロールできます。</p></div>`;
+        <div class="msv2-legend"></div><p class="msv2-note">受信した値だけを記録します。複勝・ワイドのグラフは下限値です。10秒は再取得の基準で、通信中は重複取得しません。JSON自動補完は画面表示中の当日レースを110秒ごとに確認します。ブラウザ復帰時も保存履歴を重ねて読み直します。収集元にも存在しない値は作りません。直接取得は実線と●、GitHub差分による保持値は破線と○、保存根拠のない時間帯は空白です。圧縮Archiveの変化点だけでは10秒ごとの収集成功を証明しません。横ドラッグで時刻移動・縦スワイプでこの画面をスクロールできます。</p></div>`;
       this.$('.msv2-grid').appendChild(root);const $=s=>root.querySelector(s);
       $('.dateInput').value=p.date;$('.sourceSelect').value=p.source;$('.ticketSelect').value=p.ticket;$('.metricSelect').value=p.metric;$('.rankSizeSelect').value=String(p.topN);$('.repairCheck').checked=p.autoRepair;
       $('.windowSelect').value=String(p.windowMs);$('.autoCheck').checked=p.auto;$('.logCheck').checked=p.log;$('.logCheck').disabled=p.metric!=='odds';
@@ -26848,6 +26862,10 @@ function paneModelP520(p,rec,market,key){
         if(previous){
           r.markets={...previous.markets,...r.markets};r.market_status={...previous.market_status,...r.market_status};
           if(!r.horses.length)r.horses=previous.horses||[];
+          // An observed capture must never be downgraded to an inferred archive point.
+          r.archive_change_only=Boolean(previous.archive_change_only)&&Boolean(r.archive_change_only);
+          r.archive_hold_point=Boolean(previous.archive_hold_point)&&Boolean(r.archive_hold_point);
+          r.archive_verified_end_ms=Math.max(Number(previous.archive_verified_end_ms||0),Number(r.archive_verified_end_ms||0));
           r.merge_origins=[...new Set([...(previous.merge_origins||[]),previous.collector_origin,r.collector_origin].filter(Boolean))];
         }
         all.set(r.id,r);
@@ -26862,8 +26880,9 @@ function paneModelP520(p,rec,market,key){
         for(const market of markets){
           if(!rec.markets?.[market]?.length)continue;
           const before=previous.get(market);
-          if(before!=null&&!rec.archive_change_only&&rec.captured_ms-before>RANK_MAX_AGE&&rec.captured_ms>=start)gaps.push({market,from:before,to:rec.captured_ms});
-          previous.set(market,rec.captured_ms);
+          if(before!=null&&!before.archive&&!rec.archive_change_only&&rec.captured_ms-before.t>RANK_MAX_AGE&&rec.captured_ms>=start)
+            gaps.push({market,from:before.t,to:rec.captured_ms});
+          previous.set(market,{t:rec.captured_ms,archive:rec.archive_change_only===true});
         }
       }
       return gaps;
@@ -26881,9 +26900,12 @@ function paneModelP520(p,rec,market,key){
       const gaps=this.historyGaps5216(p,s.end-p.windowMs,s.end);
       const intervals=new Set(gaps.map(g=>g.from+'|'+g.to));
       const count=intervals.size;
-      box.textContent=(count?`欠測区間 ${count}（30秒超）。`:'表示期間に30秒超の記録の切れ目なし。')+
-        (p.history.some(r=>r.archive_change_only)?'GitHub差分履歴：次の変化まで保存値を維持':p.autoRepair?'JSON自動補完 ON（110秒ごと／直近30分）':'JSON自動補完 OFF')+(p.repairStatus?' ／ '+p.repairStatus:'')+
-        (count?'。保存記録を取得できた部分から復元します。':'');
+      const hasArchive=p.history.some(r=>r.archive_change_only&&r.captured_ms>=s.end-p.windowMs&&r.captured_ms<=s.end);
+      const actual=p.history.filter(r=>!r.archive_change_only&&!r.archive_hold_point&&r.captured_ms>=s.end-p.windowMs&&r.captured_ms<=s.end).length;
+      box.textContent=`直接取得 ${actual}時刻 ／ 直接取得の30秒超の間隔 ${count}箇所`+
+        (hasArchive?' ／ ○・破線＝GitHub差分からの保持値（10秒ごとの実測・収集継続は未保証）':'')+
+        ' ／ ●・実線＝直接取得（30秒超の間隔は線を切断）'+
+        (p.repairStatus?' ／ '+p.repairStatus:'');
       box.dataset.gaps=count?'yes':'no';
     }
 
@@ -26905,7 +26927,9 @@ function paneModelP520(p,rec,market,key){
           const meta=got.meta||{},tm=String(meta.post_time||meta.start_time||'').match(/(?:[01]?\d|2[0-3]):[0-5]\d/);
           const post=Number(meta.post_ms)|| (tm?Date.parse(p.date+'T'+tm[0].padStart(5,'0')+':00+09:00'):0);
           if(post>0){p.race.postMs=post;p.race.startTime=clock(post).slice(0,5);}
-          p.history=[];
+          // Do NOT clear IndexedDB-loaded/Worker-loaded history on GitHub import.
+          // Merge on stable race+timestamp identity, preserving both sources.
+          p.archiveCoverageEndMs=Math.max(Number(p.archiveCoverageEndMs||0),Number(meta._archiveLastCaptureMs||0));
         }this.merge(p,safe);this.completedGraph52328(p);p.lastWorkerPoll=Date.now();p.historyWarning='';
         p.repairStatus=got.disabled?got.transport:`${clock(Date.now())} ${got.transport||'Worker'}・追加${added}時刻`;
         const mergedById=new Map(p.history.map(r=>[r.id,r]));
@@ -27105,11 +27129,12 @@ function paneModelP520(p,rec,market,key){
       canvas.width=w*dpr;canvas.height=h*dpr;ctx.scale(dpr,dpr);ctx.clearRect(0,0,w,h);
       const left=72,right=w-14,top=25,bottom=h-34,end=s.end,start=end-p.windowMs;
       const trans=v=>(p.log&&p.metric==='odds')?Math.log10(v):v;
-      const records=p.history.filter(rec=>rec.captured_ms>=start&&rec.captured_ms<=end);
+      const records=p.history.filter(rec=>rec.captured_ms>=start&&rec.captured_ms<=end&&!rec.archive_hold_point);
       const points=rows.map(row=>records.flatMap(rec=>{
         const r=paneRow5216(rec,row.market,row.row.combination);if(!r)return [];
         const v=paneMetricValue520(p,rec,row.market,row.row.combination,r);
-        return Number.isFinite(v)?[{t:rec.captured_ms,v,archive:rec.archive_change_only===true}]:[];
+        return Number.isFinite(v)?[{t:rec.captured_ms,v,archive:rec.archive_change_only===true,
+          endMs:Number(rec.archive_verified_end_ms||0)}]:[];
       }));
       let low=Infinity,high=-Infinity;
       for(const line of points)for(const pt of line){const v=trans(pt.v);if(Number.isFinite(v)){low=Math.min(low,v);high=Math.max(high,v);}}
@@ -27133,12 +27158,40 @@ function paneModelP520(p,rec,market,key){
       }
       ctx.fillStyle='#d1e0ed';ctx.fillText(ticketLabel5216(p.ticket)+' '+paneMetricLabel520(p.metric)+(p.follow?' · 最新':' · 表示右端時点'),left,14);
       points.forEach((line,i)=>{
-        ctx.strokeStyle=COLORS[(rows[i].rank-1)%COLORS.length];ctx.fillStyle=ctx.strokeStyle;ctx.lineWidth=1.7;ctx.beginPath();let previous=null;
-        for(const pt of line){const x=left+(pt.t-start)/p.windowMs*(right-left),y=bottom-(trans(pt.v)-low)/(high-low)*(bottom-top);
-          if(!previous||(pt.t-previous.t>30000&&!(pt.archive&&previous.archive)))ctx.moveTo(x,y);else if(pt.archive&&previous.archive){const py=bottom-(trans(previous.v)-low)/(high-low)*(bottom-top);ctx.lineTo(x,py);ctx.lineTo(x,y);}else ctx.lineTo(x,y);previous=pt;
+        const color=COLORS[(rows[i].rank-1)%COLORS.length];
+        const xOf=pt=>left+(pt.t-start)/p.windowMs*(right-left);
+        const yOf=pt=>bottom-(trans(pt.v)-low)/(high-low)*(bottom-top);
+        let prev=null;
+        for(const pt of line){
+          if(prev){
+            const stepArchive=prev.archive&&pt.archive;
+            const continuousRaw=!prev.archive&&!pt.archive&&pt.t-prev.t<=RANK_MAX_AGE;
+            if(stepArchive||continuousRaw){
+              ctx.save();ctx.strokeStyle=color;ctx.lineWidth=stepArchive?1.4:1.7;
+              if(stepArchive)ctx.setLineDash([4,4]);
+              ctx.beginPath();ctx.moveTo(xOf(prev),yOf(prev));
+              if(stepArchive){ctx.lineTo(xOf(pt),yOf(prev));ctx.lineTo(xOf(pt),yOf(pt));}
+              else ctx.lineTo(xOf(pt),yOf(pt));
+              ctx.stroke();ctx.restore();
+            }
+          }
+          prev=pt;
         }
-        if(previous?.archive&&previous.t<end){const y=bottom-(trans(previous.v)-low)/(high-low)*(bottom-top);ctx.lineTo(right,y);}
-        ctx.stroke();for(const pt of line){const x=left+(pt.t-start)/p.windowMs*(right-left),y=bottom-(trans(pt.v)-low)/(high-low)*(bottom-top);ctx.beginPath();ctx.arc(x,y,1.8,0,Math.PI*2);ctx.fill();}
+        // Never extend change-only archives to the chart right edge just because
+        // the browser displays that time. Only the archive's recorded last capture
+        // can bound an inferred holding interval; never generate fake measurements.
+        const last=line.at(-1);
+        if(last?.archive){
+          const archiveEnd=Math.max(Number(last.endMs||0),Number(p.archiveCoverageEndMs||0));
+          const knownEnd=Math.min(end,archiveEnd);
+          if(archiveEnd>=last.t&&knownEnd>last.t){
+            ctx.save();ctx.strokeStyle=color;ctx.lineWidth=1.4;ctx.setLineDash([4,4]);
+            ctx.beginPath();ctx.moveTo(xOf(last),yOf(last));ctx.lineTo(left+(knownEnd-start)/p.windowMs*(right-left),yOf(last));ctx.stroke();ctx.restore();
+          }
+        }
+        ctx.save();ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=1.2;
+        for(const pt of line){ctx.beginPath();ctx.arc(xOf(pt),yOf(pt),2,0,Math.PI*2);if(pt.archive)ctx.stroke();else ctx.fill();}
+        ctx.restore();
       });
       canvas.setAttribute('aria-label',`${ticketLabel5216(p.ticket)} ${paneMetricLabel520(p.metric)} 上位${s.size}点の時系列グラフ`);
       if(rows.length&&!points.some(a=>a.length)){empty.hidden=false;empty.textContent='この表示期間に計算できる記録がありません。「最新へ」で戻れます。';}

@@ -10947,16 +10947,23 @@ if(horses.length === 0){
   // 全馬一律のevery()は健全な確定レースを誤除外するため、発売対象馬だけを検査する。
   function asw_finalCoverage(resultDoc, parsedHorses, oddsMap){
     const withdrawnNames = new Set();
+    const rowHead = new Map();
     if(resultDoc){
       resultDoc.querySelectorAll('tr').forEach(tr => {
         const a = tr.querySelector('a[href*="/horse/"]');
-        if(!a || !/取消|除外/.test(String(tr.textContent||''))) return;
-        withdrawnNames.add(String(a.textContent||'').replace(/\s+/g,'').trim());
+        if(!a) return;
+        const nm = String(a.textContent||'').replace(/\s+/g,'').trim();
+        // v5.23.83: DB結果表の着順欄は「取」「除」の1文字表記。行全体の「取消|除外」だけでは取消馬を見逃す。
+        const head = String((tr.children[0] && tr.children[0].textContent) || '').replace(/\s+/g,'').trim();
+        rowHead.set(nm, head);
+        if(/取消|除外/.test(String(tr.textContent||'')) || /^(取|除)$/.test(head)) withdrawnNames.add(nm);
       });
     }
     const runners = (parsedHorses||[]).filter(h => !withdrawnNames.has(String(h.name||'').replace(/\s+/g,'').trim()));
-    const covered = runners.filter(h => Number(oddsMap?.get(Number(h.num))?.odds) >= 1).length;
-    return {verified:runners.length>=2 && covered===runners.length, runners:runners.length, covered, withdrawn:(parsedHorses||[]).length-runners.length};
+    const missingH = runners.filter(h => !(Number(oddsMap?.get(Number(h.num))?.odds) >= 1));
+    const covered = runners.length - missingH.length;
+    const missing = missingH.map(h => h.num + '番(着順欄:' + (rowHead.get(String(h.name||'').replace(/\s+/g,'').trim()) || '?') + ')');
+    return {verified:runners.length>=2 && covered===runners.length, runners:runners.length, covered, withdrawn:(parsedHorses||[]).length-runners.length, missing};
   }
 
   // v5.23.64: 過去レースの確定単勝・人気は netkeiba の結果表から明示列で検証する。
@@ -10986,7 +10993,7 @@ if(horses.length === 0){
                      .map(h=>[Number(h.num),{odds:Number(h.odds),pop:Number(h.pop)}]))
           : parseFinalOddsPopularityFromResultDoc(doc,hs);
         const coverage=asw_finalCoverage(doc,hs,oddsMap);
-        diagnostics.push(source+': 出走'+coverage.runners+'頭/単勝'+coverage.covered+'頭');
+        diagnostics.push(source+': 出走'+coverage.runners+'頭/単勝'+coverage.covered+'頭'+(coverage.withdrawn?'/取消'+coverage.withdrawn+'頭':'')+(coverage.missing&&coverage.missing.length?' 欠落['+coverage.missing.join(',')+']':''));
         if(!coverage.verified)continue;
         // 結果データの着順テーブルでの検証。非レースページを「FINAL」に認定しない。
         const tbl=isDb

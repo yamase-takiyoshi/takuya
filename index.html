@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script id="thekeiba-build-version">
 // One release identity shared by all legacy and current display patches.
-window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.83 ValidationModeSyncFix',number:'5.23.83'});
+window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.84 TimingRuleUnify',number:'5.23.84'});
 window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
@@ -154,7 +154,7 @@ window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.83 ValidationModeSyncFix</title>
+<title>The競馬 EV分析 v5.23.84 TimingRuleUnify</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -544,7 +544,7 @@ body.right-analysis-active #rightAnalysisPane{
 
 <section id="keibaVersionPanel52358" class="keiba-version-panel52358" hidden aria-label="バージョン情報">
   <strong>📦 バージョン情報</strong>
-  <div>HTML本体：<span id="keibaHtmlVersion52358">v5.23.83 ValidationModeSyncFix</span></div>
+  <div>HTML本体：<span id="keibaHtmlVersion52358">v5.23.84 TimingRuleUnify</span></div>
   <div>確定単勝・人気：netkeiba結果／DB（取得・照合できたレースのみ採用）</div>
   <div>対応Worker：<span>v6.2.12 ArchiveSafe ReplayBackfill</span></div>
   <div>稼働Timeline Worker：<span id="keibaWorkerVersion52358" role="status" aria-live="polite">未照合（稼働版は未確認）</span></div>
@@ -10915,11 +10915,24 @@ if(horses.length === 0){
   function asw_host(kind){ return kind === 'NAR' ? 'https://nar.netkeiba.com' : 'https://race.netkeiba.com'; }
   function asw_chip(type){ return (typeof CHIP_CLASS !== 'undefined' && CHIP_CLASS[type]) || ''; }
 
+  // v5.23.84 TimingRuleUnify：締切3分前スナップショットの時刻規則を1か所に集約。
+  // 目標より早く取得した分(captured<target)は未来情報を含まないため広め、遅い側は狭めに許容。
+  const PRECLOSE_EARLY_TOL_MS = 120000, PRECLOSE_LATE_TOL_MS = 60000;
+  window.__precloseTimingCheck = function(o){
+    const target=Number(o?.target_ms)||0, captured=Number(o?.captured_ms)||0, close=Number(o?.close_ms)||0;
+    if(!(target>0 && captured>0))return {ok:false,deltaSeconds:NaN,reason:'取得時刻または締切3分前の目標時刻が不明'};
+    const d=captured-target, sec=Math.round(d/1000);
+    if(close>0 && captured>close)return {ok:false,deltaSeconds:sec,reason:'実取得時刻が締切後（発走前時点を証明できない）'};
+    if(d<-PRECLOSE_EARLY_TOL_MS)return {ok:false,deltaSeconds:sec,reason:'締切3分前の目標より'+Math.abs(sec)+'秒早い（許容: 早い側'+PRECLOSE_EARLY_TOL_MS/1000+'秒）'};
+    if(d>PRECLOSE_LATE_TOL_MS)return {ok:false,deltaSeconds:sec,reason:'締切3分前の目標より'+sec+'秒遅い（許容: 遅い側'+PRECLOSE_LATE_TOL_MS/1000+'秒）'};
+    return {ok:true,deltaSeconds:sec,reason:''};
+  };
+
   // v5.23.62 PRE-RACE監査：発走前という現在時刻のみでは監査合格にしない。
   // 保存済みの検証フラグとrace_id、実測時刻/目標時刻、単勝データを照合する。
   function asw_precloseEvidence(s, rid){
-    const no = reason => ({verified:false,reason,targetMs:0,capturedMs:0});
-    if(!s) return no('締切3分前スナップショット未保存');
+    const no = (reason, exists=true) => ({verified:false,reason,exists,targetMs:0,capturedMs:0});
+    if(!s) return no('締切3分前スナップショット未保存', false);
     if(String(s.race_id||'') !== String(rid)) return no('スナップショットのrace_id不一致');
     if(s.preclose3m_verified !== true) return no('preclose3m_verified が true ではない');
     const ms = v => {
@@ -10931,8 +10944,12 @@ if(horses.length === 0){
     const target=ms(s.target_at||s.target_ms)||(close?close-180000:0);
     const captured=ms(s.captured_at||s.captured_ms);
     if(!(target>0 && captured>0))return no('取得時刻または締切3分前の目標時刻が不明');
-    // 60秒の検証窓はWorkerのpreclose3m_verifiedと整合。未来の値を無条件に採用しない。
-    if(Math.abs(captured-target)>60000)return no('締切3分前の目標から実取得時刻が60秒超ずれている');
+    // v5.23.84: 右パネル(VERIFIED表示)と監査で同一の時刻規則を使う(window.__precloseTimingCheck)。
+    // 目標より早い側は最大120秒まで、遅い側は最大60秒まで。締切後(未来)の値は採用しない。
+    {
+      const tc=window.__precloseTimingCheck({target_ms:target,captured_ms:captured,close_ms:close});
+      if(!tc.ok)return no(tc.reason);
+    }
     const od=Array.isArray(s.odds)&&s.odds.length?s.odds:(s.additional_markets?.['単勝']||s.markets?.['単勝']||[]);
     const valid=new Set(od.filter(x=>{
       const number=Number(x?.horse_no??x?.num??x?.combination);
@@ -12778,9 +12795,10 @@ if(horses.length === 0){
                 return row;
               }
               if(validationMode === 'PRE_RACE_STRICT' && !row.auditEligible){
-                row.status = 'excluded'; row.failureKind = 'スナップショット未保存';
+                const hasSnap84 = loaded.precloseAudit?.exists === true;
+                row.status = 'excluded'; row.failureKind = hasSnap84 ? '時刻検証不合格' : 'スナップショット未保存';
                 row.failureStage = 'PRE-RACE監査';
-                row.auditReason = 'preclose3m_verified=true の保存済みオッズで監査不合格：' + row.auditReason;
+                row.auditReason = (hasSnap84 ? '保存済みスナップショットあり・監査不合格：' : 'スナップショット未保存：') + row.auditReason;
                 return row;
               }
               failureStage = '買い目生成・時系列準備';
@@ -13220,7 +13238,7 @@ if(horses.length === 0){
         // 「開催なし」と誤認させず実際のエラー内容を表示する。
         if(prog) prog.innerHTML = `<div class="url-status err">❌ 完了：0レース（${rsOpenVenuesFailCount}日すべてで開催場一覧の取得に失敗）。原因: ${asw_esc(rsLastOpenVenuesError || '不明')}<br><span style="font-size:11px;opacity:.85">🌉Userscriptブリッジが未接続の可能性があります。バッジに🌉マークが出ているか確認してください。</span></div>`;
       }else if(prog){
-        prog.innerHTML = `<div class="url-status ok">✅ 完了：${okCount}レースをシミュレーションしました${rsAbort ? '（中断）' : ''}${truncated ? `（⚠️期間が${RS_MAX_DAYS}日を超えたため先頭${RS_MAX_DAYS}日のみ）` : ''}。${rows.filter(x=>x.status==='excluded').length ? ` 監査対象外${rows.filter(x=>x.status==='excluded').length}件（保存済み発走前オッズなし）。` : ''}${errCnt ? ` ⚠️失敗${errCnt}件（集計の「🔁 失敗だけ再試行」で再実行できます）。` : ''}${ckNote}${rsAbort && ck && ck.enabled ? ' 💾中断しても、次回「実行」で続きから再開できます。' : ''}</div>`;
+        prog.innerHTML = `<div class="url-status ok">✅ 完了：${okCount}レースをシミュレーションしました${rsAbort ? '（中断）' : ''}${truncated ? `（⚠️期間が${RS_MAX_DAYS}日を超えたため先頭${RS_MAX_DAYS}日のみ）` : ''}。${rows.filter(x=>x.status==='excluded').length ? ` 監査対象外${rows.filter(x=>x.status==='excluded').length}件（${(()=>{const ex=rows.filter(x=>x.status==='excluded');const tv=ex.filter(x=>x.failureKind==='時刻検証不合格').length;const ns=ex.filter(x=>x.failureKind==='スナップショット未保存').length;const ot=ex.length-tv-ns;return [tv?`保存済みだが時刻検証不合格${tv}件`:'',ns?`スナップショット未保存${ns}件`:'',ot?`その他${ot}件`:''].filter(Boolean).join('／');})()}）。` : ''}${errCnt ? ` ⚠️失敗${errCnt}件（集計の「🔁 失敗だけ再試行」で再実行できます）。` : ''}${ckNote}${rsAbort && ck && ck.enabled ? ' 💾中断しても、次回「実行」で続きから再開できます。' : ''}</div>`;
       }
     }catch(e){
       console.error('[runRangeVenueSimulation]', e);
@@ -22805,9 +22823,12 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     const chosen=sel?.value||market, rows=snapRows(chosen);
     const status=$('pc3Status'), meta=$('pc3Meta'), wrap=$('pc3TableWrap');
     if(!s){ if(meta)meta.style.display='none'; if(status){status.className='pc3-status warn';status.innerHTML='⚠️ このレースの締切3分前スナップショットはまだ保存されていません。';} if(wrap)wrap.innerHTML='<div class="pc3-empty">保存済みの「締切3分前オッズ」がありません。<br>本番監視では取得時刻が検証されたスナップショットだけを3分前データとして扱います。</div>'; return; }
-    const verified=s.preclose3m_verified===true||s.timing_verified===true;
-    const delta=Number(s.capture_delta_sec);
-    if(status){status.className='pc3-status '+(verified?'ok':'warn');status.innerHTML=`${verified?'✅':'⚠️'} <b>${verified?'締切3分前・時刻検証済み':'スナップショットあり・時刻要確認'}</b>　${esc(String(s.venue_name||''))} ${esc(String(s.race_no||''))}R ${esc(String(s.race_name||''))}`;}
+    const flag84=s.preclose3m_verified===true||s.timing_verified===true;
+    const tms84=v=>{const n=Number(v);if(Number.isFinite(n)&&n>0)return n<1e11?n*1000:n;const d=Date.parse(String(v||''));return Number.isFinite(d)?d:0;};
+    const tc84=(typeof window.__precloseTimingCheck==='function')?window.__precloseTimingCheck({target_ms:tms84(s.target_ms||s.target_at),captured_ms:tms84(s.captured_ms||s.captured_at),close_ms:tms84(s.close_ms||s.cutoff_ms||s.close_at||s.cutoff_at)}):{ok:true,deltaSeconds:NaN,reason:''};
+    const verified=flag84&&tc84.ok;
+    const delta=Number.isFinite(Number(s.capture_delta_sec))?Number(s.capture_delta_sec):tc84.deltaSeconds;
+    if(status){status.className='pc3-status '+(verified?'ok':'warn');status.innerHTML=`${verified?'✅':'⚠️'} <b>${verified?'締切3分前・時刻検証済み':'スナップショットあり・時刻要確認'}</b>${(!verified&&flag84&&tc84.reason)?'（'+esc(tc84.reason)+'）':''}　${esc(String(s.venue_name||''))} ${esc(String(s.race_no||''))}R ${esc(String(s.race_name||''))}`;}
     if(meta){meta.style.display='grid';meta.innerHTML=`
       <div><b>${esc(localTime(s.target_at))}</b><span>目標時刻（締切3分前）</span></div>
       <div><b>${esc(localTime(s.captured_at))}</b><span>実取得時刻</span></div>
@@ -32621,7 +32642,7 @@ if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearI
 (function(){
   'use strict';
   const release=window.THEKEIBA_BUILD;
-  if(!release || release.number!=='5.23.83')return;
+  if(!release || release.number!=='5.23.84')return;
   const byId=id=>document.getElementById(id);
   const headerVersion=document.querySelector('.header .ver');
   const modalVersion=byId('keibaHtmlVersion52358');

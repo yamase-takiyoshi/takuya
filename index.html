@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script id="thekeiba-build-version">
 // One release identity shared by all legacy and current display patches.
-window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.68 ThinConnectedLines',number:'5.23.68'});
+window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.69 AllConnectedTransparentLines',number:'5.23.69'});
 window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
@@ -154,7 +154,7 @@ window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.68 ThinConnectedLines</title>
+<title>The競馬 EV分析 v5.23.69 AllConnectedTransparentLines</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -536,7 +536,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver" aria-label="HTML本体バージョン">v5.23.68 ☁️ 10s</span>
+    <span class="ver" aria-label="HTML本体バージョン">v5.23.69 ☁️ 10s</span>
     <button id="keibaVersionButton52358" type="button" class="btn-sm" aria-expanded="false" aria-controls="keibaVersionPanel52358" title="HTMLと稼働Workerの版を確認">📦 版確認</button>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
@@ -544,7 +544,7 @@ body.right-analysis-active #rightAnalysisPane{
 
 <section id="keibaVersionPanel52358" class="keiba-version-panel52358" hidden aria-label="バージョン情報">
   <strong>📦 バージョン情報</strong>
-  <div>HTML本体：<span id="keibaHtmlVersion52358">v5.23.68 ThinConnectedLines</span></div>
+  <div>HTML本体：<span id="keibaHtmlVersion52358">v5.23.69 AllConnectedTransparentLines</span></div>
   <div>確定単勝・人気：netkeiba結果／DB（取得・照合できたレースのみ採用）</div>
   <div>対応Worker：<span>v6.2.12 ArchiveSafe ReplayBackfill</span></div>
   <div>稼働Timeline Worker：<span id="keibaWorkerVersion52358" role="status" aria-live="polite">未照合（稼働版は未確認）</span></div>
@@ -26407,7 +26407,7 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
                 ? window.parseSavedArchive52329?.(archive)?.records
                 : (archive.captures||archive.records||archive.history||[]);
               if(!Array.isArray(raw))throw new Error('保存JSONの復元機能が未準備');
-              // v5.23.68: thin connected line emphasis for timeseries readability.
+              // v5.23.69: connect all line segments and render them slightly transparent for readability.
               // Raw GitHub exports keep their original 10-second observations and provenance.
               const compressed=!!archive.initial_snapshot&&Array.isArray(archive.deltas);
               const verifiedEndMs=compressed?Number(archive.stats?.last_capture_ms||0):0;
@@ -27161,36 +27161,25 @@ function paneModelP520(p,rec,market,key){
         const color=COLORS[(rows[i].rank-1)%COLORS.length];
         const xOf=pt=>left+(pt.t-start)/p.windowMs*(right-left);
         const yOf=pt=>bottom-(trans(pt.v)-low)/(high-low)*(bottom-top);
-        let prev=null;
-        for(const pt of line){
-          if(prev){
-            const stepArchive=prev.archive&&pt.archive;
-            const continuousRaw=!prev.archive&&!pt.archive&&pt.t-prev.t<=RANK_MAX_AGE;
-            if(stepArchive||continuousRaw){
-              ctx.save();ctx.strokeStyle=color;ctx.lineWidth=stepArchive?0.95:1.05;
-              if(stepArchive)ctx.setLineDash([3,3]);
-              ctx.beginPath();ctx.moveTo(xOf(prev),yOf(prev));
-              if(stepArchive){ctx.lineTo(xOf(pt),yOf(prev));ctx.lineTo(xOf(pt),yOf(pt));}
-              else ctx.lineTo(xOf(pt),yOf(pt));
-              ctx.stroke();ctx.restore();
-            }
-          }
-          prev=pt;
+        if(line.length>=2){
+          ctx.save();ctx.strokeStyle=color;ctx.lineWidth=1.0;ctx.globalAlpha=0.56;ctx.beginPath();
+          ctx.moveTo(xOf(line[0]),yOf(line[0]));
+          for(let j=1;j<line.length;j++)ctx.lineTo(xOf(line[j]),yOf(line[j]));
+          ctx.stroke();ctx.restore();
         }
-        // Never extend change-only archives to the chart right edge just because
-        // the browser displays that time. Only the archive's recorded last capture
-        // can bound an inferred holding interval; never generate fake measurements.
+        // When the final record is archive-derived, lightly extend it only across the
+        // archive-known coverage interval so the connected-line view remains smooth.
         const last=line.at(-1);
         if(last?.archive){
           const archiveEnd=Math.max(Number(last.endMs||0),Number(p.archiveCoverageEndMs||0));
           const knownEnd=Math.min(end,archiveEnd);
           if(archiveEnd>=last.t&&knownEnd>last.t){
-            ctx.save();ctx.strokeStyle=color;ctx.lineWidth=0.95;ctx.setLineDash([3,3]);
+            ctx.save();ctx.strokeStyle=color;ctx.lineWidth=1.0;ctx.globalAlpha=0.30;
             ctx.beginPath();ctx.moveTo(xOf(last),yOf(last));ctx.lineTo(left+(knownEnd-start)/p.windowMs*(right-left),yOf(last));ctx.stroke();ctx.restore();
           }
         }
-        ctx.save();ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=0.9;
-        for(const pt of line){const r=pt.archive?0.95:1.1;ctx.beginPath();ctx.arc(xOf(pt),yOf(pt),r,0,Math.PI*2);if(pt.archive)ctx.stroke();else ctx.fill();}
+        ctx.save();ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=0.8;ctx.globalAlpha=0.82;
+        for(const pt of line){const r=pt.archive?0.85:1.0;ctx.beginPath();ctx.arc(xOf(pt),yOf(pt),r,0,Math.PI*2);if(pt.archive)ctx.stroke();else ctx.fill();}
         ctx.restore();
       });
       canvas.setAttribute('aria-label',`${ticketLabel5216(p.ticket)} ${paneMetricLabel520(p.metric)} 上位${s.size}点の時系列グラフ`);

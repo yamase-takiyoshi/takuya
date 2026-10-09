@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script id="thekeiba-build-version">
 // One release identity shared by all legacy and current display patches.
-window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.70 VersionInfoRepair',number:'5.23.70'});
+window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.71 TimelineConnected',number:'5.23.71'});
 window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
@@ -154,7 +154,7 @@ window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.70 VersionInfoRepair</title>
+<title>The競馬 EV分析 v5.23.71 TimelineConnected</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -536,7 +536,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver" aria-label="HTML本体バージョン">v5.23.70 ☁️ 10s</span>
+    <span class="ver" aria-label="HTML本体バージョン">v5.23.71 ☁️ 10s</span>
     <button id="keibaVersionButton52358" type="button" class="btn-sm" aria-expanded="false" aria-controls="keibaVersionPanel52358" title="HTMLと稼働Workerの版を確認">📦 版確認</button>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
@@ -544,7 +544,7 @@ body.right-analysis-active #rightAnalysisPane{
 
 <section id="keibaVersionPanel52358" class="keiba-version-panel52358" hidden aria-label="バージョン情報">
   <strong>📦 バージョン情報</strong>
-  <div>HTML本体：<span id="keibaHtmlVersion52358">v5.23.70 VersionInfoRepair</span></div>
+  <div>HTML本体：<span id="keibaHtmlVersion52358">v5.23.71 TimelineConnected</span></div>
   <div>確定単勝・人気：netkeiba結果／DB（取得・照合できたレースのみ採用）</div>
   <div>対応Worker：<span>v6.2.12 ArchiveSafe ReplayBackfill</span></div>
   <div>稼働Timeline Worker：<span id="keibaWorkerVersion52358" role="status" aria-live="polite">未照合（稼働版は未確認）</span></div>
@@ -21422,22 +21422,42 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     }
     if(Number.isFinite(graph.endMs)) timeMarker(graph.endMs,'+3分','rgba(148,163,184,.66)','#94a3b8',[2,4]);
 
+    // v5.23.71: connect measured observations as fine, translucent lines.
+    // Missing samples are NEVER created or inserted into history. A pale connecting
+    // segment over a >30s gap is only a visual guide between actual observations.
     items.forEach((it,idx)=>{
-      ctx.strokeStyle=PALETTE[idx%PALETTE.length]; ctx.lineWidth=2; ctx.beginPath(); let prevMs=NaN;
+      const color=PALETTE[idx%PALETTE.length];
+      const points=[];
       graphRows.forEach(r=>{
         const v=metricValue202(r,it.market,it.key,mode);
-        if(!Number.isFinite(v)||(mode==='odds'&&v<=0)){prevMs=NaN;return;}
-        const ms=Number(r.captured_ms),x=xOf(ms),y=yOf(v);
-        // An unsampled interval is not a constant odds value.
-        if(!Number.isFinite(prevMs)||ms-prevMs>30000)ctx.moveTo(x,y);
-        else ctx.lineTo(x,y);
-        prevMs=ms;
+        const ms=Number(r.captured_ms);
+        if(!Number.isFinite(ms)||!Number.isFinite(v)||(mode==='odds'&&v<=0))return;
+        points.push({ms,x:xOf(ms),y:yOf(v)});
       });
-      ctx.stroke();
-      if(graphRows.length<=60){
-        ctx.fillStyle=PALETTE[idx%PALETTE.length];
-        graphRows.forEach(r=>{ const v=metricValue202(r,it.market,it.key,mode); if(!Number.isFinite(v)||(mode==='odds'&&v<=0))return; const x=xOf(r.captured_ms),y=yOf(v); ctx.beginPath();ctx.arc(x,y,2.2,0,Math.PI*2);ctx.fill(); });
+      if(!points.length)return;
+      ctx.save();
+      ctx.strokeStyle=color;
+      ctx.lineWidth=1.15;
+      ctx.lineJoin='round';ctx.lineCap='round';
+      for(let i=1;i<points.length;i++){
+        const a=points[i-1],b=points[i];
+        if(b.ms<=a.ms)continue;
+        const missingGap=b.ms-a.ms>30000;
+        ctx.globalAlpha=missingGap?0.42:0.73;
+        ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();
       }
+      // Small measured-value markers; keep large historical series legible.
+      ctx.globalAlpha=0.85;
+      ctx.fillStyle=color;
+      if(points.length<=90){
+        for(const p of points){
+          ctx.beginPath();ctx.arc(p.x,p.y,1.45,0,Math.PI*2);ctx.fill();
+        }
+      }else{
+        const last=points[points.length-1];
+        ctx.beginPath();ctx.arc(last.x,last.y,2.1,0,Math.PI*2);ctx.fill();
+      }
+      ctx.restore();
     });
     ctx.fillStyle=theme202.text;ctx.font='11px -apple-system,BlinkMacSystemFont,sans-serif';ctx.textAlign='left';ctx.textBaseline='top';
     const scopeLabel=choice==='__CROSS_TOP10__'?'全券種横断':market;
@@ -21473,7 +21493,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
       const cap=graph.capped?' / 🏁 発走+1分で固定済':(Number.isFinite(graph.endMs)?' / 発走+1分で自動停止':'');
       const view=Number.isFinite(graph.viewSpan)?` / ${Math.round(graph.viewSpan/60000)}分窓${graph.follow?' 追従':''}`:' / 全期間';
       const gaps=graphRows.reduce((n,r,i)=>i>0&&Number(r.captured_ms)-Number(graphRows[i-1].captured_ms)>30000?n+1:n,0);
-      meta.textContent=graphRows.length?`${graphRows.length}点 / ${new Date(first).toLocaleTimeString('ja-JP')}〜${new Date(last).toLocaleTimeString('ja-JP')} / ${scope} ${metricLabel202(mode)} / 記録間隔30秒超 ${gaps}箇所（線は切断）${view}${cap}`:'0点';
+      meta.textContent=graphRows.length?`${graphRows.length}点 / ${new Date(first).toLocaleTimeString('ja-JP')}〜${new Date(last).toLocaleTimeString('ja-JP')} / ${scope} ${metricLabel202(mode)} / 記録間隔30秒超 ${gaps}箇所（淡い線で実測点を接続・中間値は未取得）${view}${cap}`:'0点';
     }
   }
 
@@ -31599,12 +31619,12 @@ if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearI
 })();
 </script>
 
-<!-- v5.23.70: release-identity display repair; no history or chart changes. -->
-<script id="thekeiba-version-display-52370">
+<!-- v5.23.71: connected timeline rendering and release-identity display sync; historical records unchanged. -->
+<script id="thekeiba-version-display-52371">
 (function(){
   'use strict';
   const release=window.THEKEIBA_BUILD;
-  if(!release || release.number!=='5.23.70')return;
+  if(!release || release.number!=='5.23.71')return;
   const byId=id=>document.getElementById(id);
   const headerVersion=document.querySelector('.header .ver');
   const modalVersion=byId('keibaHtmlVersion52358');
@@ -31631,7 +31651,7 @@ if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearI
   // Share one stamping function with legacy callbacks; existing overlays keep
   // their event handlers and we do not start a polling loop on iPad Safari.
   window.setAppVersionLabel=stamp;
-  window.TheKeibaVersionInfo52370=Object.freeze({version:release.version,number:release.number,refresh:stamp});
+  window.TheKeibaVersionInfo52371=Object.freeze({version:release.version,number:release.number,refresh:stamp});
   const nodes=[headerVersion,modalVersion,titleNode].filter(Boolean);
   if(typeof MutationObserver==='function' && nodes.length){
     const observer=new MutationObserver(stamp);

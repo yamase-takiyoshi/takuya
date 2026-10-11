@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script id="thekeiba-build-version">
 // One release identity shared by all legacy and current display patches.
-window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.87 WorkerWarnFix',number:'5.23.87'});
+window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.88 PCSP SourceSwitch',number:'5.23.88'});
 window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
@@ -174,7 +174,7 @@ window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.87 WorkerWarnFix</title>
+<title>The競馬 EV分析 v5.23.88 PCSP SourceSwitch</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -556,7 +556,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver" aria-label="HTML本体バージョン">v5.23.87 ☁️ 10s</span>
+    <span class="ver" aria-label="HTML本体バージョン">v5.23.88 ☁️ 10s</span>
     <button id="keibaVersionButton52358" type="button" class="btn-sm" aria-expanded="false" aria-controls="keibaVersionPanel52358" title="HTMLと稼働Workerの版を確認">📦 版確認</button>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
@@ -564,7 +564,7 @@ body.right-analysis-active #rightAnalysisPane{
 
 <section id="keibaVersionPanel52358" class="keiba-version-panel52358" hidden aria-label="バージョン情報">
   <strong>📦 バージョン情報</strong>
-  <div>HTML本体：<span id="keibaHtmlVersion52358">v5.23.87 WorkerWarnFix</span></div>
+  <div>HTML本体：<span id="keibaHtmlVersion52358">v5.23.88 PCSP SourceSwitch</span></div>
   <div>確定単勝・人気：netkeiba結果／DB（取得・照合できたレースのみ採用）</div>
   <div>対応Worker：<span>v6.2.12 ArchiveSafe ReplayBackfill</span></div>
   <div>稼働Timeline Worker：<span id="keibaWorkerVersion52358" role="status" aria-live="polite">未照合（稼働版は未確認）</span></div>
@@ -629,6 +629,16 @@ body.right-analysis-active #rightAnalysisPane{
       <div class="field">
         <label>レースURL（出馬表/結果ページどちらも可）</label>
         <input type="url" id="raceUrl" placeholder="https://race.netkeiba.com/race/shutuba.html?race_id=..." />
+      </div>
+
+      <div id="keibaPcSpPanel" style="margin:9px 0 11px;padding:10px;border:1px solid #475569;border-radius:9px;background:rgba(148,163,184,.07)">
+        <label style="display:block;margin-bottom:7px;font-weight:700">🌐 netkeiba 取得先（PC版／SP版）</label>
+        <div style="display:flex;flex-wrap:wrap;gap:9px;align-items:center">
+          <label style="font-size:12px">JRA <select id="keibaPcSpJra" onchange="keibaSourceChange()" style="min-width:118px;background:var(--surface,#1e293b);color:var(--text,#fff);border:1px solid #64748b;border-radius:6px;padding:5px"><option value="auto">自動 (JRA:PC／NAR:SP優先)</option><option value="pc">PC版優先</option><option value="sp">SP版優先</option></select></label>
+          <label style="font-size:12px">NAR <select id="keibaPcSpNar" onchange="keibaSourceChange()" style="min-width:118px;background:var(--surface,#1e293b);color:var(--text,#fff);border:1px solid #64748b;border-radius:6px;padding:5px"><option value="auto">自動 (JRA:PC／NAR:SP優先)</option><option value="pc">PC版優先</option><option value="sp">SP版優先</option></select></label>
+          <label style="font-size:12px"><input type="checkbox" id="keibaPcSpFallback" checked onchange="keibaSourceChange()" /> 失敗時は別の版も試す</label>
+        </div>
+        <div id="keibaPcSpStatus" role="status" aria-live="polite" style="font-size:11px;color:#a5c7dc;margin-top:7px">設定を読み込み中…</div>
       </div>
       <div id="urlStatus"></div>
       <button class="btn btn-primary" id="fetchBtn" onclick="fetchRace()">🔄 レースデータ取得</button>
@@ -5335,7 +5345,7 @@ async function fetchHtmlViaProxy(url){
     return cached;
   }
 
-  const isNetkeiba = /\/\/(?:nar|race|db|nar\.sp)\.netkeiba\.com\//i.test(String(url));
+  const isNetkeiba = /\/\/(?:nar|race|db|nar\.sp|race\.sp)\.netkeiba\.com\//i.test(String(url));
   const isRaceData = /\/race\/(?:shutuba|result|race_result)\.html|\/odds\//i.test(String(url));
 
   // v5.18.97/102: netkeibaは Userscriptブリッジ（iPad回線IP・Akamai回避）を最優先。
@@ -5956,7 +5966,7 @@ function initCalendarPicker(){
 function buildNetkeibaOddsUrls(kind, raceId){
   if(!raceId) return [];
   if(kind === 'NAR'){
-    return [
+    return window.keibaSourceOrder(kind,[
       // v5.18.223: NARは携帯版(SP)オッズを最優先。
       // nar.sp.netkeiba.com の odds/index.html は race_id だけで単勝・複勝を含むオッズ画面を返し、
       // PC版 /odds/index.html がタイムアウトする環境でも取得できる経路として使う。
@@ -5971,9 +5981,9 @@ function buildNetkeibaOddsUrls(kind, raceId){
       `https://nar.netkeiba.com/odds/index.html?race_id=${raceId}`,
       `https://nar.sp.netkeiba.com/race/shutuba.html?race_id=${raceId}`,
       `https://nar.netkeiba.com/race/shutuba.html?race_id=${raceId}&rf=race_submenu`
-    ];
+    ]);
   }
-  return [
+  return window.keibaSourceOrder(kind,[
     // v5.18.47: 確定済みレースは result.html の「最終単勝オッズ・人気」を最優先する。
     // 未確定レースだけ odds/API → shutuba の順で補完する。
     `https://race.netkeiba.com/race/result.html?race_id=${raceId}&rf=race_submenu`,
@@ -5990,8 +6000,9 @@ function buildNetkeibaOddsUrls(kind, raceId){
     `https://race.netkeiba.com/api/api_get_odds.html?race_id=${raceId}&type=1`,
     `https://race.netkeiba.com/odds/api_get_odds.html?race_id=${raceId}&type=b1`,
     `https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}&rf=race_submenu`,
-    `https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}`
-  ];
+    `https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}`,
+    `https://race.sp.netkeiba.com/odds/index.html?race_id=${raceId}`
+  ]);
 }
 
 function parseWinOddsPopularityFromDoc(doc){
@@ -7199,13 +7210,36 @@ async function narRescueFetch217(raceId, isResult){
       return { c, horses:[], note:`${c.tag}:${(e && e.name === 'AbortError') ? '10秒超過' : 'ERR'}` };
     }finally{ clearTimeout(timer); }
   };
-  const results = await Promise.all(cands.map(one));
+  const ordered = window.keibaSourceOrder?.('NAR',cands.map(c=>c.url)) || cands.map(c=>c.url);
+  const usable = ordered.map(url=>cands.find(c=>c.url===url)).filter(Boolean);
+  const results = await Promise.all(usable.map(one));
   const log = results.map(r => r.note).join(' | ');
   const hit = results.find(r => r.horses.length >= 2);
   if(!hit) return { horses:[], log };
   try{ await putRaceHtmlCache(hit.c.url, hit.html); }catch(e){}
   window.__fetchPath = 'worker-url(' + hit.c.tag + ')';
   return { horses: hit.horses, url: hit.c.url, html: hit.html, doc: hit.doc, log };
+}
+
+
+async function keibaFetchSelectedRacePcSp(url,kind){
+  const arr = window.keibaSourceCandidates ? window.keibaSourceCandidates(url,kind) : [url];
+  const attempts=[];
+  for(const candidate of arr){
+    try{
+      const html=await fetchHtmlViaProxy(candidate);
+      const doc=new DOMParser().parseFromString(String(html||''),'text/html');
+      const horses= typeof parseHorsesFromDoc === 'function' ? parseHorsesFromDoc(doc,candidate) : [];
+      if(!Array.isArray(horses) || horses.length<2){attempts.push((new URL(candidate).hostname)+':馬名不足');continue;}
+      const expected=(String(url).match(/race_id=(\d{10,14})/)||[])[1];
+      const canonical=doc.querySelector('link[rel="canonical"]')?.getAttribute('href')||'';
+      const found=(canonical.match(/race_id=(\d{10,14})/)||[])[1];
+      if(expected && found && expected!==found){attempts.push('別race_idへ転送');continue;}
+      window.keibaSourceReport?.(candidate,window.__fetchPath||'Worker');
+      return {url:candidate,html};
+    }catch(e){attempts.push((new URL(candidate).hostname)+':'+String(e?.message||e).slice(0,100));}
+  }
+  throw new Error('PC/SP取得不可：'+attempts.join(' / ').slice(0,650));
 }
 
 async function fetchRace(){
@@ -7237,7 +7271,8 @@ async function fetchRace(){
     let activeUrl = rawUrl;
     let html;
     try {
-      html = await fetchHtmlViaProxy(rawUrl);
+      const chosen = await keibaFetchSelectedRacePcSp(rawUrl,document.getElementById('pickKind')?.value || (/nar(?:\.sp)?\.netkeiba/.test(rawUrl)?'NAR':'JRA'));
+      activeUrl=chosen.url;html=chosen.html;
     } catch(fetchErr){
       const msg = fetchErr.message || '';
       if((msg.includes('400') || msg.includes('404')) && rawUrl.includes('shutuba.html')){
@@ -25848,19 +25883,20 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   }
 
   function oddsUrls(kind, rid){
-    if(kind === 'NAR') return [
+    if(kind === 'NAR') return window.keibaSourceOrder(kind,[
       // 地方競馬公式。出馬表と同じ取得元を先に試す。
       officialNarWinOddsUrl237(rid),
       `https://nar.netkeiba.com/odds/index.html?race_id=${rid}`,
       `https://nar.netkeiba.com/odds/index.html?race_id=${rid}&type=b1`,
       `https://nar.sp.netkeiba.com/odds/index.html?race_id=${rid}`,
       `https://nar.sp.netkeiba.com/odds/?race_id=${rid}&type=b1`
-    ];
-    return [
+    ]);
+    return window.keibaSourceOrder(kind,[
       `https://race.netkeiba.com/api/api_get_jra_odds.html?race_id=${rid}&type=1&action=init`,
       `https://race.netkeiba.com/api/api_get_jra_odds.html?race_id=${rid}&type=b1`,
-      `https://race.netkeiba.com/odds/index.html?race_id=${rid}&type=b1`
-    ];
+      `https://race.netkeiba.com/odds/index.html?race_id=${rid}&type=b1`,
+      `https://race.sp.netkeiba.com/odds/index.html?race_id=${rid}`
+    ]);
   }
 
   function officialNarWinOddsUrl237(rid){
@@ -26016,7 +26052,9 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
       arr.push(`https://race.netkeiba.com/race/shutuba.html?race_id=${rid}&rf=race_submenu`);
       arr.push(`https://race.sp.netkeiba.com/race/shutuba.html?race_id=${rid}`);
     }
-    return [...new Set(arr)];
+    return window.keibaSourceCandidates
+      ? window.keibaSourceOrder(kind,[...window.keibaSourceCandidates(arr[0]||'',kind),...arr])
+      : [...new Set(arr)];
   }
 
   function parseCard(html, url){
@@ -26110,11 +26148,10 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     const failures = [];
     // v256: try JRA's query-form mobile page as a distinct route.
     // HTTP 400 alone cannot identify the cause (headers/cookies/server/Bridge).
-    const bridgeUrls = [...new Set([
-      ...(kind === 'JRA' ? [`https://race.sp.netkeiba.com/?pid=shutuba&race_id=${rid}`] : []),
-      ...urls.filter(u => /\/\/(?:race|nar)\.sp\.netkeiba\.com\//.test(u)),
-      ...urls.filter(u => !/\/\/(?:race|nar)\.sp\.netkeiba\.com\//.test(u))
-    ].map(value => {
+    const bridgeUrls = [...new Set((window.keibaSourceOrder?.(kind,[
+      ...urls,
+      ...(kind === 'JRA' ? [`https://race.sp.netkeiba.com/?pid=shutuba&race_id=${rid}`] : [])
+    ])||urls).map(value => {
       const u = new URL(value);
       ['rf','_','_ts'].forEach(k => u.searchParams.delete(k));
       u.searchParams.sort();
@@ -26129,6 +26166,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
           if(finalRid && finalRid!==rid){ errs.push('別レースへ転送'); continue; }
           const card=validCard233(r.text,r.finalUrl || url,'Bridge'+(/\.sp\.netkeiba/.test(url)?' SP':' PC'));
           if(!card){ errs.push((/\.sp\./.test(url)?'SP':'PC')+':出走馬表なし('+r.text.length+'字)'); continue; }
+          window.keibaSourceReport?.(url,card.path);
           window.__raceCards254=window.__raceCards254 || new Map();
           window.__raceCards254.set(rid,card);
           if(window.__raceCards254.size>80) window.__raceCards254.delete(window.__raceCards254.keys().next().value);
@@ -26144,8 +26182,10 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
       if(card) return card;
       throw new Error('Bridgeで出馬表を取得できませんでした。'+errs.join(' / '));
     }
-    try{ return await fetchCardJson235(kind, rid); }
-    catch(e){ failures.push('Worker出馬表JSON:' + (e.message || e)); }
+    if(!window.keibaSourceIsManual?.(kind)){
+      try{ return await fetchCardJson235(kind, rid); }
+      catch(e){ failures.push('Worker出馬表JSON:' + (e.message || e)); }
+    }
     if(window.__NAR_BRIDGE_READY__ && typeof window.bridgeText246==='function'){
       const {card, errs}=await bridgeCard255();
       if(card) return card;
@@ -26156,7 +26196,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
       try{
         const html = await getHtmlStrict(url, 16000);
         const card = validCard233(html, url, window.__fetchPath || 'worker');
-        if(card) return card;
+        if(card){ window.keibaSourceReport?.(url,card.path); return card; }
         failures.push('通常取得:出走馬表なし');
       }catch(e){ failures.push('通常取得:' + (e.message || e)); }
     }
@@ -26165,7 +26205,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
       try{
         const html = await fetchCardDirect233(url);
         const card = validCard233(html, url, 'worker-url');
-        if(card){ try{ await putRaceHtmlCache(url, html); }catch(e){} return card; }
+        if(card){ window.keibaSourceReport?.(url,card.path); try{ await putRaceHtmlCache(url, html); }catch(e){} return card; }
         failures.push('Worker直指定:出走馬表なし');
       }catch(e){ failures.push('Worker直指定:' + (e.message || e)); }
     }
@@ -32498,6 +32538,92 @@ if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearI
 })();
 </script>
 
+<script id="thekeiba-netkeiba-source-switch-pcsp">
+(function(){
+  'use strict';
+  const STORAGE = 'TheKeibaNetkeibaPcSpSourceV1';
+  let cfg = {JRA:'auto',NAR:'auto',fallback:true};
+  try{
+    const prior = JSON.parse(localStorage.getItem(STORAGE)||'{}');
+    for(const k of ['JRA','NAR']) if(['auto','pc','sp'].includes(prior[k])) cfg[k]=prior[k];
+    if(typeof prior.fallback==='boolean') cfg.fallback=prior.fallback;
+  }catch(e){}
+  function id(k){return document.getElementById(k);}
+  function read(){
+    return {JRA:id('keibaPcSpJra')?.value || cfg.JRA,NAR:id('keibaPcSpNar')?.value || cfg.NAR,
+      fallback:id('keibaPcSpFallback')?.checked ?? cfg.fallback};
+  }
+  function isSp(url){try{return /^(?:nar|race)\.sp\.netkeiba\.com$/i.test(new URL(url).hostname);}catch(e){return false;}}
+  function isPc(url){try{return /^(?:nar|race)\.netkeiba\.com$/i.test(new URL(url).hostname);}catch(e){return false;}}
+  function isRelevant(url,kind){try{return new URL(url).hostname === (kind==='NAR'?'nar.netkeiba.com':'race.netkeiba.com') ||
+    new URL(url).hostname === (kind==='NAR'?'nar.sp.netkeiba.com':'race.sp.netkeiba.com');}catch(e){return false;}}
+  function annotate(url,path){
+    try{
+      const host=new URL(url).hostname;
+      const edition=host.includes('.sp.')?'SP':host.includes('.netkeiba.com')?'PC':'外部';
+      const label='取得成功：'+edition+'版 / '+(path||'HTTP')+' / '+new Date().toLocaleTimeString('ja-JP');
+      window.__keibaPcSpLast={url,edition,path,timestamp:new Date().toISOString()};
+      if(id('keibaPcSpStatus')) id('keibaPcSpStatus').textContent=label;
+    }catch(e){}
+  }
+  function save(){
+    cfg=read();
+    try{localStorage.setItem(STORAGE,JSON.stringify(cfg));}catch(e){}
+    if(id('keibaPcSpStatus')) id('keibaPcSpStatus').textContent='保存済み：JRA '+cfg.JRA.toUpperCase()+' / NAR '+cfg.NAR.toUpperCase()+' / '+(cfg.fallback?'別版フォールバックあり':'別版フォールバックなし');
+    // In-memory rendered card cache contains no editon in its key; do not reuse it after changing preference.
+    try{window.__raceCards254?.clear?.();}catch(e){}
+    return cfg;
+  }
+  function init(){
+    if(!id('keibaPcSpJra')) return;
+    id('keibaPcSpJra').value=cfg.JRA;
+    id('keibaPcSpNar').value=cfg.NAR;
+    id('keibaPcSpFallback').checked=cfg.fallback;
+    save();
+  }
+  function sort(kind, urls){
+    const opts=read(), chosen=opts[kind] || 'auto';
+    const first=(chosen==='sp'||(chosen==='auto'&&kind==='NAR'))?'sp':'pc';
+    const arr=[...new Set((urls||[]).filter(Boolean))];
+    const rank=(url)=>{
+      if(!isRelevant(url,kind)) return 0; // official NAR and DB remain available
+      const edition=isSp(url)?'sp':'pc';
+      return edition===first?1:2;
+    };
+    return arr.map((url,i)=>({url,i,rank:rank(url)}))
+      .filter(x=>opts.fallback || x.rank!==2)
+      .sort((a,b)=>a.rank-b.rank || a.i-b.i).map(x=>x.url);
+  }
+  function candidates(rawUrl,kind){
+    const rid=(String(rawUrl).match(/race_id=(\d{10,14})/)||[])[1];
+    if(!rid) return [rawUrl];
+    const url=String(rawUrl);
+    if(!/\/race\/(?:shutuba|result|race_result)\.html|[?&]pid=shutuba/.test(url)) return [rawUrl];
+    const base=kind==='NAR'?'nar':'race';
+    const pc='https://'+base+'.netkeiba.com';
+    const sp='https://'+base+'.sp.netkeiba.com';
+    let urls=[];
+    if(/result|race_result/.test(url)){
+      urls=[`${pc}/race/result.html?race_id=${rid}&rf=race_submenu`, ...(kind==='NAR'?[`${sp}/race/race_result.html?race_id=${rid}`]:[])];
+    }else{
+      urls=[`${pc}/race/shutuba.html?race_id=${rid}&rf=race_submenu`,
+        ...(kind==='JRA'?[`${sp}/?pid=shutuba&race_id=${rid}`]:[]),
+        `${sp}/race/shutuba.html?race_id=${rid}`];
+    }
+    // Honor source user selected, then retain original URL as one of the matched variants.
+    if(!urls.includes(url)) urls.push(url);
+    return sort(kind,urls);
+  }
+  window.keibaSourceChange=save;
+  window.keibaSourceState=()=>({...read()});
+  window.keibaSourceOrder=sort;
+  window.keibaSourceCandidates=candidates;
+  window.keibaSourceReport=annotate;
+  window.keibaSourceIsManual=kind=>(read()[kind]||'auto')!=='auto';
+  window.keibaSourcePreferSp=kind=>(read()[kind]||'auto')==='sp';
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',init,{once:true}); else init();
+})();
+</script>
 </body>
 </html>
 

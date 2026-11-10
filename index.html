@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script id="thekeiba-build-version">
 // One release identity shared by all legacy and current display patches.
-window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.91 NAR VenueRecovery',number:'5.23.91'});
+window.THEKEIBA_BUILD=Object.freeze({version:'v5.23.95 Worker6223Sync',number:'5.23.95'});
 window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
@@ -174,7 +174,7 @@ window.APP_VERSION=window.THEKEIBA_BUILD.version;
 </script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>The競馬 EV分析 v5.23.91 NAR VenueRecovery</title>
+<title>The競馬 EV分析 v5.23.95 Worker6223Sync</title>
 <style>
 :root {
   --bg: #0f172a;
@@ -556,7 +556,7 @@ body.right-analysis-active #rightAnalysisPane{
   <div style="display:flex;gap:8px;align-items:center">
     <button id="rightAnalysisBtn" class="btn-sm right-analysis-toggle" type="button"
       onclick="toggleRightAnalysisPanel()" aria-pressed="false">📊 右側分析</button>
-    <span class="ver" aria-label="HTML本体バージョン">v5.23.89 ☁️ 10s</span>
+    <span class="ver" aria-label="HTML本体バージョン">v5.23.95 ☁️ 10s</span>
     <button id="keibaVersionButton52358" type="button" class="btn-sm" aria-expanded="false" aria-controls="keibaVersionPanel52358" title="HTMLと稼働Workerの版を確認">📦 版確認</button>
     <span id="narBadge" class="nar-badge" style="display:none">NAR</span>
   </div>
@@ -564,9 +564,9 @@ body.right-analysis-active #rightAnalysisPane{
 
 <section id="keibaVersionPanel52358" class="keiba-version-panel52358" hidden aria-label="バージョン情報">
   <strong>📦 バージョン情報</strong>
-  <div>HTML本体：<span id="keibaHtmlVersion52358">v5.23.89 PCSP OddsFallback</span></div>
+  <div>HTML本体：<span id="keibaHtmlVersion52358">v5.23.95 Worker6223Sync</span></div>
   <div>確定単勝・人気：netkeiba結果／DB（取得・照合できたレースのみ採用）</div>
-  <div>対応Worker：<span>v6.2.12 ArchiveSafe ReplayBackfill</span></div>
+  <div>対応Worker：<span>v6.2.23 TimestampCollisionPreserve</span></div>
   <div>稼働Timeline Worker：<span id="keibaWorkerVersion52358" role="status" aria-live="polite">未照合（稼働版は未確認）</span></div>
   <div>対応abc Cron Worker：<span>v6.1.23 cpu-budget-guard</span></div>
   <div>稼働abc Cron Worker：<span id="keibaAbcVersion52360" role="status" aria-live="polite">未照合（稼働版は未確認）</span></div>
@@ -19099,14 +19099,161 @@ try{ setTimeout(() => { if(typeof updateRaceHtmlCacheStatus === 'function') upda
     return null;
   }
 
-  window.__precloseGetSnapshot = async function(rid){
-    rid = String(rid || '').replace(/[^0-9]/g,'');
-    if(!rid) return null;
-    let s = null;
-    try{ s = await dbGetByRace(rid); }catch(e){}
-    if(s) return s;
-    return await getRemote(rid);
+  // v5.23.92 - Read the collector's actual preclose archive as well as legacy storage.
+  // A partial or unverified observation MUST retain its original audit flags.
+  // Does not write to the collector, GitHub, or the IndexedDB capture history.
+  function archiveWorkerCfg(){
+    let old={},global={};
+    try{old=JSON.parse(localStorage.getItem('thekeiba_timeline_cloud_v219')||'{}')||{};}catch(e){}
+    try{global=JSON.parse(localStorage.getItem('thekeiba_timeline_cloud_global')||'{}')||{};}catch(e){}
+    let u=String(global.workerUrl||old.workerUrl||'https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev').trim().replace(/\/+$/,'');
+    if(/^https?:\/\/abc\.nitta-katsuhiko\.workers\.dev(?:\/|$)/i.test(u))u='https://the-keiba-timeline-collector.nitta-katsuhiko.workers.dev';
+    return {url:u,token:String(global.token||old.token||'')};
+  }
+  function validArchiveSnap(s,rid){
+    return !!(s && typeof s==='object' && String(s.race_id||'')===rid &&
+      (Array.isArray(s.odds)||s.markets||s.additional_markets) &&
+      (Number(s.captured_ms)>0||!!Date.parse(String(s.captured_at||''))));
+  }
+  function withOrigin(s,origin){return {...s,_precloseDisplayOrigin:origin};}
+  async function timedJson(url,headers={},ms=7000){
+    const ctl=new AbortController(), timer=setTimeout(()=>ctl.abort(),ms);
+    try{
+      const r=await fetch(url,{headers,cache:'no-store',signal:ctl.signal});
+      // v5.23.94: 404 は「まだ保存されていない」正常応答。通信エラー扱いしない。
+      if(r.status===404)return null;
+      if(!r.ok)throw new Error('HTTP '+r.status);
+      return await r.json();
+    }catch(e){
+      if(e?.name==='AbortError')throw new Error('タイムアウト');
+      throw e;
+    }finally{clearTimeout(timer);}
+  }
+  async function getTimelinePreclose(rid){
+    const c=archiveWorkerCfg();if(!/^https:\/\//i.test(c.url))return null;
+    const h={};if(c.token)h['X-Timeline-Token']=c.token;
+    const j=await timedJson(c.url+'/timeline/preclose?race_id='+encodeURIComponent(rid),h);
+    const s=j?.snapshot||j?.precloseSnapshot||null;
+    return validArchiveSnap(s,rid)?withOrigin(s,'Timeline Worker'):null;
+  }
+  async function getGithubPreclose(rid){
+    if(!/^\d{10,14}$/.test(rid))return null;
+    const date=ghDate94(rid);if(!date)return null;
+    const kind=ghKind94(rid);
+    const path='odds-data/'+date+'/'+kind+'/'+rid+'/preclose.json';
+    // raw.githubusercontent.com は404も含め最大5分CDNキャッシュされるため、30秒単位で鍵を変えて新しいコミットを拾う。
+    const url='https://raw.githubusercontent.com/yamase-takiyoshi/takuya/main/'+path+'?t='+Math.floor(Date.now()/30000);
+    const s=await timedJson(url,{},8000);
+    return validArchiveSnap(s,rid)?withOrigin(s,'GitHub preclose.json'):null;
+  }
+  function snapshotScore(s){
+    if(!s)return -1;
+    const m=s.additional_markets||s.markets||{};
+    const count=['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単']
+      .filter(t=>Array.isArray(m[t])&&m[t].length>0).length;
+    // Prefer a certified, complete snapshot, never infer certification from count.
+    return (s.preclose3m_verified===true?1000:0)+count*10+
+      (s.cutoff_evidence_status==='OFFICIAL_SOURCE_ATTESTED'?5:0)+
+      (s._precloseDisplayOrigin==='GitHub preclose.json'?2:0);
+  }
+  // ── v5.23.94 PrecloseSmartLoad ─────────────────────────────
+  // 1) 締切3分前の記録時刻より前は、保存先3か所への問い合わせを省略（あるはずが無いため）。
+  // 2) 同じレースへの同時要求は1本にまとめ、結果を短時間キャッシュ。
+  // 3) 時刻検証済みスナップショットは端末に有れば即返し、通信しない。
+  const TYPES94=['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
+  function ghKind94(rid){return Number(String(rid).slice(4,6))>10?'NAR':'JRA';}
+  function pickedDate94(){return String(document.getElementById('pickDate')?.value||'').replace(/[^0-9]/g,'');}
+  function ghDate94(rid){
+    rid=String(rid||'');
+    // NAR race_id は YYYY 場 MMDD RR。JRA は日付を含まないので、画面の日付を使う。
+    if(ghKind94(rid)==='NAR')return rid.slice(0,4)+rid.slice(6,8)+rid.slice(8,10);
+    const d=pickedDate94();return /^\d{8}$/.test(d)?d:'';
+  }
+  const timing94=new Map();   // rid -> {close_ms,post_ms,basis,at}
+  const cache94=new Map();    // rid -> {at,value,ttl}
+  const inflight94=new Map(); // rid -> Promise
+  function domPostMs94(rid){
+    try{
+      const sel=document.getElementById('raceSelect');
+      const opt=[...(sel?.options||[])].find(o=>String(o.dataset?.raceId||o.value||'').includes(rid));
+      let t=String(window.__raceStartTimes232?.get?.(rid)||opt?.dataset?.startTime||opt?.dataset?.postTime||'');
+      if(!/\d{1,2}:\d{2}/.test(t)){const m=String(opt?.textContent||'').match(/(\d{1,2}):(\d{2})\s*発走/);if(m)t=m[1]+':'+m[2];}
+      const m=t.match(/(\d{1,2}):(\d{2})/);if(!m)return 0;
+      let d=ghKind94(rid)==='NAR'?rid.slice(0,4)+rid.slice(6,8)+rid.slice(8,10):pickedDate94();
+      if(!/^\d{8}$/.test(d))return 0;
+      const ms=Date.parse(d.slice(0,4)+'-'+d.slice(4,6)+'-'+d.slice(6,8)+'T'+m[1].padStart(2,'0')+':'+m[2]+':00+09:00');
+      return Number.isFinite(ms)?ms:0;
+    }catch(e){return 0;}
+  }
+  async function raceTiming94(rid){
+    const hit=timing94.get(rid);
+    if(hit&&((hit.basis&&hit.basis!=='目安')||Date.now()-hit.at<60000))return hit;
+    let close=0,post=0,basis='';
+    try{close=Number(window.KeibaClose629?.close?.({raceId:rid})||0);if(close)basis='締切設定';}catch(e){}
+    if(!close){
+      // 収集Workerの base.json に正確な締切時刻がある（発走約90分前から存在）。
+      try{
+        const d=ghDate94(rid);
+        if(d){
+          const j=await timedJson('https://raw.githubusercontent.com/yamase-takiyoshi/takuya/main/odds-data/'+d+'/'+ghKind94(rid)+'/'+rid+'/base.json?t='+Math.floor(Date.now()/300000),{},6000);
+          close=Number(j?.race?.close_ms||j?.base?.close_ms||0);post=Number(j?.race?.post_ms||0);
+          if(close)basis='収集Worker';
+        }
+      }catch(e){}
+    }
+    if(!close){
+      post=domPostMs94(rid);
+      // 締切は発走1〜2分前。早めに見積もり（早すぎても再確認で拾える）。
+      if(post){close=post-120000;basis='目安';}
+    }
+    const t={close_ms:close||0,post_ms:post||0,target_ms:close?close-180000:0,basis,at:Date.now()};
+    timing94.set(rid,t);
+    return t;
+  }
+  window.__precloseRaceTiming=raceTiming94;
+  function isCertified94(s){
+    return !!(s&&s.preclose3m_verified===true&&!(Array.isArray(s.missing_types)&&s.missing_types.length));
+  }
+  async function lookup94(rid){
+    let local=null;try{local=await dbGetByRace(rid);}catch(e){}
+    if(isCertified94(local)){
+      window.__precloseArchiveLookup={race_id:rid,errors:[],found:[{source:'IndexedDB',certified:true,missing:[]}],skipped:'端末に検証済みデータあり'};
+      return {value:withOrigin(local,'IndexedDB'),ttl:600000};
+    }
+    const tm=await raceTiming94(rid);
+    const now=Date.now();
+    if(!local&&tm.target_ms&&now<tm.target_ms){
+      window.__precloseArchiveLookup={race_id:rid,errors:[],found:[],pending:true,...tm};
+      // 記録時刻まで再問い合わせ不要（最大60秒で時刻を再評価）
+      return {value:null,ttl:Math.min(60000,Math.max(5000,tm.target_ms-now))};
+    }
+    // The previously installed snapshot KV endpoint is kept as a source.
+    const fetches=await Promise.allSettled([getRemote(rid),getTimelinePreclose(rid),getGithubPreclose(rid)]);
+    const candidates=[local&&withOrigin(local,'IndexedDB')];
+    fetches.forEach((r,i)=>{
+      if(r.status==='fulfilled'&&r.value&&validArchiveSnap(r.value,rid))
+        candidates.push(i===0?withOrigin(r.value,'Snapshot Worker'):r.value);
+    });
+    const errors=fetches.map((r,i)=>r.status==='rejected'?['Snapshot Worker','Timeline Worker','GitHub'][i]+': '+String(r.reason?.message||r.reason):'').filter(Boolean);
+    window.__precloseArchiveLookup={race_id:rid,errors,found:candidates.filter(Boolean).map(s=>({source:s._precloseDisplayOrigin,certified:s.preclose3m_verified===true,missing:s.missing_types||[]})),...tm,checked_at:Date.now()};
+    candidates.sort((a,b)=>snapshotScore(b)-snapshotScore(a));
+    const best=candidates.find(Boolean)||null;
+    // 検証済み=確定値なので長め、未検証/未検出は短めに再確認できるようにする。
+    return {value:best,ttl:isCertified94(best)?600000:(best?60000:20000)};
+  }
+  window.__precloseGetSnapshot = async function(rid,opts){
+    rid=String(rid||'').replace(/[^0-9]/g,'');
+    if(!/^\d{10,14}$/.test(rid))return null;
+    const force=!!(opts&&opts.force);
+    const c=cache94.get(rid);
+    if(!force&&c&&Date.now()-c.at<c.ttl)return c.value;
+    if(inflight94.has(rid))return inflight94.get(rid);
+    const pr=lookup94(rid).then(r=>{cache94.set(rid,{at:Date.now(),value:r.value,ttl:r.ttl});if(cache94.size>200)cache94.delete(cache94.keys().next().value);return r.value;})
+      .finally(()=>inflight94.delete(rid));
+    inflight94.set(rid,pr);
+    return pr;
   };
+  window.__precloseSnapshotCacheClear=rid=>{if(rid)cache94.delete(String(rid));else cache94.clear();};
 
   function docText(doc){
     try{ return String(doc && doc.body && doc.body.textContent || '').replace(/[\t\r\n]+/g,' ').replace(/[　 ]+/g,' ').trim(); }
@@ -22970,7 +23117,7 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
         <div id="pc3TableWrap" class="pc3-table-wrap"><div class="pc3-empty">締切3分前スナップショットを読み込みます。<br>保存済みデータが無い場合は「未保存」と表示します。</div></div>`;
       frame.insertAdjacentElement('afterend',p);
       $('pc3Market')?.addEventListener('change',render206);
-      $('pc3Refresh')?.addEventListener('click',()=>refresh206(true));
+      $('pc3Refresh')?.addEventListener('click',()=>{retry94={rid:currentRid(),n:0};refresh206(true);});
       $('pc3OpenTimeline')?.addEventListener('click',()=>show206('timeline'));
     }
     return true;
@@ -22979,9 +23126,14 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     const s=currentSnap; if(!s)return [];
     if(type==='単勝'){
       const base=Array.isArray(s.odds)?s.odds:[];
-      if(base.length) return base.map(x=>({combination:String(x.horse_no||''),name:String(x.horse_name||''),odds:Number(x.odds||0),pop:Number(x.popularity||0)})).filter(x=>x.odds>=1);
+      if(base.length){
+        const names=new Map((s.additional_markets?.['単勝']||s.markets?.['単勝']||[])
+          .map(x=>[String(x.combination||''),String(x.horse_name||'')]));
+        return base.map(x=>({combination:String(x.horse_no||''),name:String(x.horse_name||names.get(String(x.horse_no||''))||''),odds:Number(x.odds||0),pop:Number(x.popularity||0)})).filter(x=>x.odds>=1);
+      }
     }
-    const a=s.additional_markets && Array.isArray(s.additional_markets[type]) ? s.additional_markets[type] : [];
+    const a=Array.isArray(s.additional_markets?.[type]) ? s.additional_markets[type] :
+      (Array.isArray(s.markets?.[type]) ? s.markets[type] : []);
     return a.map(x=>({combination:String(x.combination||''),name:'',odds:Number(x.odds!=null?x.odds:x.odds_min||0),pop:0})).filter(x=>x.combination&&x.odds>=1);
   }
   function available(type){ return snapRows(type).length>0; }
@@ -22995,29 +23147,85 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
     if(sel && s){ Array.from(sel.options).forEach(o=>{o.disabled=!available(o.value);}); if(sel.selectedOptions[0]?.disabled){const ok=Array.from(sel.options).find(o=>!o.disabled);if(ok)sel.value=ok.value;} }
     const chosen=sel?.value||market, rows=snapRows(chosen);
     const status=$('pc3Status'), meta=$('pc3Meta'), wrap=$('pc3TableWrap');
-    if(!s){ if(meta)meta.style.display='none'; if(status){status.className='pc3-status warn';status.innerHTML='⚠️ このレースの締切3分前スナップショットはまだ保存されていません。';} if(wrap)wrap.innerHTML='<div class="pc3-empty">保存済みの「締切3分前オッズ」がありません。<br>本番監視では取得時刻が検証されたスナップショットだけを3分前データとして扱います。</div>'; return; }
-    const verified=s.preclose3m_verified===true||s.timing_verified===true;
+    if(!s){
+      if(meta)meta.style.display='none';
+      renderEmpty94(rid,status,wrap);
+      return;
+    }
+    const verified=s.preclose3m_verified===true &&
+      (!s.cutoff_evidence_status||s.cutoff_evidence_status==='OFFICIAL_SOURCE_ATTESTED') &&
+      !(Array.isArray(s.missing_types)&&s.missing_types.length);
     const delta=Number(s.capture_delta_sec);
-    if(status){status.className='pc3-status '+(verified?'ok':'warn');status.innerHTML=`${verified?'✅':'⚠️'} <b>${verified?'締切3分前・時刻検証済み':'スナップショットあり・時刻要確認'}</b>　${esc(String(s.venue_name||''))} ${esc(String(s.race_no||''))}R ${esc(String(s.race_name||''))}`;}
+    const present=TYPES.filter(t=>Array.isArray(s.additional_markets?.[t]||s.markets?.[t])&&(s.additional_markets?.[t]||s.markets?.[t]).length);
+    const missing=Array.isArray(s.missing_types)?s.missing_types:TYPES.filter(t=>!present.includes(t));
+    const unverifiedSource=s.cutoff_evidence_status==='SOURCE_NOT_VERIFIED'||s.cutoff_evidence_status==='NO_OFFICIAL_EVIDENCE';
+    const notes=[present.length+'/8券種',missing.length?'未取得: '+missing.join('・'):'',unverifiedSource?'公式締切の根拠未確認':''].filter(Boolean);
+    if(status){status.className='pc3-status '+(verified?'ok':'warn');status.innerHTML=`${verified?'✅':'⚠️'} <b>${verified?'締切3分前・監査検証済み':'保存記録あり・監査未完了'}</b> ｜ ${esc(String(s._precloseDisplayOrigin||s.source||'保存データ'))} ｜ ${esc(notes.join(' / '))}`;}
     if(meta){meta.style.display='grid';meta.innerHTML=`
       <div><b>${esc(localTime(s.target_at))}</b><span>目標時刻（締切3分前）</span></div>
       <div><b>${esc(localTime(s.captured_at))}</b><span>実取得時刻</span></div>
       <div><b class="${verified?'pc3-verified':'pc3-unverified'}">${Number.isFinite(delta)?(delta>=0?'+':'')+delta+'秒':'-'}</b><span>取得誤差</span></div>
-      <div><b class="${verified?'pc3-verified':'pc3-unverified'}">${verified?'VERIFIED':'CHECK'}</b><span>時刻検証</span></div>`;}
-    if(!rows.length){ if(wrap)wrap.innerHTML=`<div class="pc3-empty">${esc(chosen)} の3分前オッズはこのスナップショットにありません。<br>単勝以外は、Worker側で all-markets 保存された場合に表示されます。</div>`; return; }
+      <div><b class="${verified?'pc3-verified':'pc3-unverified'}">${verified?'VERIFIED':'NOT CERTIFIED'}</b><span>監査状態</span></div>`;}
+    if(!rows.length){ if(wrap)wrap.innerHTML=`<div class="pc3-empty">${esc(chosen)} のオッズ記録はありません。未取得・非発売などは監査診断を確認してください。</div>`; return; }
     rows.sort((a,b)=>a.odds-b.odds);
     const single=(chosen==='単勝'||chosen==='複勝');
-    if(wrap)wrap.innerHTML=`<table class="pc3-table"><thead><tr><th>${single?'馬番 / 馬名':'組合せ'}</th><th style="text-align:right">3分前オッズ</th>${chosen==='単勝'?'<th style="text-align:right">人気</th>':''}</tr></thead><tbody>${rows.map(r=>`<tr><td>${single?`<b>${esc(r.combination)}</b>${r.name?' '+esc(r.name):''}`:esc(r.combination)}</td><td class="num"><b>${r.odds.toFixed(1)}</b></td>${chosen==='単勝'?`<td class="num">${r.pop||'-'}</td>`:''}</tr>`).join('')}</tbody></table>`;
+    if(wrap)wrap.innerHTML=`<table class="pc3-table"><thead><tr><th>${single?'馬番 / 馬名':'組合せ'}</th><th style="text-align:right">${verified?'監査済み3分前':'目標時刻付近の保存オッズ（未検証）'}</th>${chosen==='単勝'?'<th style="text-align:right">人気</th>':''}</tr></thead><tbody>${rows.map(r=>`<tr><td>${single?`<b>${esc(r.combination)}</b>${r.name?' '+esc(r.name):''}`:esc(r.combination)}</td><td class="num"><b>${r.odds.toFixed(1)}</b></td>${chosen==='単勝'?`<td class="num">${r.pop||'-'}</td>`:''}</tr>`).join('')}</tbody></table>`;
+  }
+  // ── v5.23.94: 記録時刻前はカウントダウンのみ・到来後に自動読込・未反映なら自動再確認 ──
+  let tick94=0, wake94=0, retry94={rid:'',n:0}, loading94=false, fresh94=false;
+  const RETRY_MAX94=8;
+  const hhmmss94=ms=>ms?new Date(ms).toLocaleTimeString('ja-JP',{timeZone:'Asia/Tokyo',hour12:false}):'--:--:--';
+  function left94(ms){const sec=Math.max(0,Math.ceil(ms/1000));const m=Math.floor(sec/60),r=sec%60;return m>=60?Math.floor(m/60)+'時間'+(m%60)+'分':(m?m+'分':'')+String(r).padStart(m?2:1,'0')+'秒';}
+  function clearTimers94(){clearInterval(tick94);clearTimeout(wake94);tick94=0;wake94=0;}
+  function paneVisible94(){const p=$('rightPreclose3mPane');return !!p&&p.style.display!=='none'&&!document.hidden;}
+  function schedule94(ms){clearTimeout(wake94);wake94=setTimeout(()=>{if(paneVisible94())refresh206(true);},Math.max(1000,ms));}
+  function renderEmpty94(rid,status,wrap){
+    if(loading94)return; // 読込中の表示は refresh206 側が出す
+    const e=window.__precloseArchiveLookup||{};
+    const mine=e.race_id===rid;
+    const fresh=fresh94; // 取得直後の描画だけがタイマー予約・再確認回数を進める
+    const now=Date.now();
+    clearInterval(tick94);tick94=0;
+    if(mine&&e.pending&&e.target_ms>now){
+      const basis=e.basis==='目安'?'（発走時刻からの目安）':'';
+      const draw=()=>{
+        const n=Date.now(); if(currentRid()!==rid){clearInterval(tick94);return;}
+        if(status){status.className='pc3-status';status.textContent='⏳ 締切3分前の記録は '+hhmmss94(e.target_ms)+basis+'。あと '+left94(e.target_ms-n)+'。到来後に自動で読み込みます。';}
+      };
+      draw(); tick94=setInterval(draw,1000);
+      if(wrap)wrap.innerHTML='<div class="pc3-empty">まだ記録時刻前のため、保存先への問い合わせを省略しています（通信節約）。<br>'+
+        (e.post_ms?'発走 '+esc(hhmmss94(e.post_ms).slice(0,5))+' ／ ':'')+'締切 '+esc(hhmmss94(e.close_ms).slice(0,5))+'。時系列オッズは「📈 時系列へ」で確認できます。</div>';
+      if(fresh)schedule94(e.target_ms-now+20000);
+      return;
+    }
+    if(mine&&e.errors?.length){
+      if(status){status.className='pc3-status err';status.textContent='⚠️ 保存先の一部に接続できませんでした。';}
+      if(wrap)wrap.innerHTML='<div class="pc3-empty">通信診断: '+esc(e.errors.join(' / '))+'<br>「🔄 3分前を読込」で再試行できます。</div>';
+      return;
+    }
+    const recent=mine&&e.target_ms&&now-e.target_ms<15*60000;
+    if(recent&&retry94.rid===rid&&(retry94.n<RETRY_MAX94||(!fresh&&wake94))){
+      if(status){status.className='pc3-status';status.textContent='⏳ 記録時刻 '+hhmmss94(e.target_ms)+' を過ぎました。保存の反映待ち（自動再確認 '+(retry94.n+1)+'/'+RETRY_MAX94+'）…';}
+      if(wrap)wrap.innerHTML='<div class="pc3-empty">収集Workerの保存とGitHubへの反映には1〜2分かかることがあります。</div>';
+      if(fresh){retry94.n++;schedule94(30000);}
+      return;
+    }
+    if(status){status.className='pc3-status warn';status.textContent='⚠️ このレースの3分前記録は見つかりませんでした。';}
+    if(wrap)wrap.innerHTML='<div class="pc3-empty">端末・Snapshot Worker・Timeline Worker・GitHubを照合済み（通信エラーなし）。<br>'+
+      (mine&&e.target_ms?'記録時刻 '+esc(hhmmss94(e.target_ms))+' に収集Workerが動いていなかった可能性があります。':'締切時刻が不明なため、記録の有無だけを確認しました。')+'</div>';
   }
   async function refresh206(force){
-    const seq=++refreshSeq, rid=currentRid(); currentSnap=null; render206();
-    if(!rid){ const st=$('pc3Status'); if(st){st.className='pc3-status err';st.textContent='⚠️ レースを選択してください。';} return; }
+    clearTimers94();
+    const seq=++refreshSeq, rid=currentRid();
+    if(retry94.rid!==rid)retry94={rid,n:0};
+    currentSnap=null; loading94=true; render206();
+    if(!rid){ loading94=false; const st=$('pc3Status'); if(st){st.className='pc3-status err';st.textContent='⚠️ レースを選択してください。';} return; }
     const st=$('pc3Status'); if(st){st.className='pc3-status';st.textContent='🔄 保存済みの締切3分前スナップショットを確認中…';}
     try{
       let s=null;
-      if(typeof window.__precloseGetSnapshot==='function') s=await window.__precloseGetSnapshot(rid);
-      if(seq!==refreshSeq)return; currentSnap=s||null; render206();
-    }catch(e){ if(seq!==refreshSeq)return; currentSnap=null; render206(); if(st){st.className='pc3-status err';st.textContent='⚠️ 3分前スナップショット読込失敗: '+String(e?.message||e);} }
+      if(typeof window.__precloseGetSnapshot==='function') s=await window.__precloseGetSnapshot(rid,{force:force===true});
+      if(seq!==refreshSeq)return; loading94=false; currentSnap=s||null; fresh94=true; try{render206();}finally{fresh94=false;}
+    }catch(e){ if(seq!==refreshSeq)return; loading94=false; currentSnap=null; render206(); if(st){st.className='pc3-status err';st.textContent='⚠️ 3分前スナップショット読込失敗: '+String(e?.message||e);} }
   }
   function show206(mode){
     install(); openPanel();
@@ -23032,7 +23240,9 @@ async function fetchAllTickets243(kind,rid,fetchText,onProgress=()=>{},preferred
   }
   function bindRace(){
     ['raceSelect','raceUrl','pickKind','pickVenue'].forEach(id=>{const el=$(id);if(!el||el.__pc3Bound)return;el.__pc3Bound=true;el.addEventListener(id==='raceUrl'?'input':'change',()=>{clearTimeout(window.__pc3RaceTimer);window.__pc3RaceTimer=setTimeout(()=>refresh206(false),300);});});
-    window.addEventListener('thekeiba-preclose-snapshot',e=>{ const rid=currentRid(); if(String(e?.detail?.race_id||'')===rid){currentSnap=e.detail;render206();} });
+    window.addEventListener('thekeiba-preclose-snapshot',e=>{ const rid=currentRid(); if(String(e?.detail?.race_id||'')===rid){clearTimers94();try{window.__precloseSnapshotCacheClear?.(rid);}catch(_){}currentSnap=e.detail;render206();} });
+    // v5.23.94: 裏に回っている間はタイマーを止め、戻った時に必要なら1回だけ読み直す。
+    document.addEventListener('visibilitychange',()=>{ if(document.hidden){clearTimers94();return;} if(paneVisible94()&&!currentSnap)refresh206(false); });
   }
   function boot(){
     markVersion(); if(!install())return; bindRace();
@@ -27179,8 +27389,11 @@ html.bridge-only252 #oddsTsWorkerFull245 {display:none!important}
                 archive_record_kind:compressed?'compressed-delta':String(x.archive_record_kind||'raw-capture')
               },source,rid,race.date,rid)).filter(Boolean);
               if(!safe.length||safe.length!==raw.length)throw new Error('GitHub履歴を検証できません');
-              return {rows:safe,transport:'GitHub保存履歴',github:true,
-                meta:{...meta,_archiveLastCaptureMs:verifiedEndMs}};
+              // v5.23.95: Worker v6.2.23 は同一時刻の異なる記録を捨てずに残す。未解決なら明示する。
+              const collisions=Number(archive.timestamp_collision_count||0);
+              const conflicted=collisions>0||archive.replay_integrity==='CONFLICTS_PRESERVED_UNRESOLVED';
+              return {rows:safe,transport:conflicted?'GitHub保存履歴（⚠️同一時刻の記録衝突 '+collisions+'件・未解決）':'GitHub保存履歴',github:true,
+                meta:{...meta,_archiveLastCaptureMs:verifiedEndMs,_replayCollisionCount:collisions,_replayConflicted:conflicted}};
             }catch(e){
               if(e.name==='AbortError')throw e;
               errors.push(String(e.message||e));
@@ -32054,7 +32267,7 @@ if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearI
   const label=document.querySelector('.header .ver');
   const button=$('keibaVersionButton52358');
   const panel=$('keibaVersionPanel52358');
-  const expected='v6.2.12';
+  const expected='v6.2.23';
   const abcExpected='6.1.23-cpu-budget-guard';
   // /health の表記ゆれ（先頭v・空白/ハイフン・前置きの名称）を吸収して照合する。
   const normVer=s=>String(s==null?'':s).trim().toLowerCase().replace(/[\s_]+/g,'-').replace(/^v(?=\d)/,'');
@@ -32121,8 +32334,10 @@ if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearI
       const data=await res.json();
       if(data?.ok!==true || typeof data.version!=='string' || !data.version.trim())throw new Error('正しい /health レスポンスを取得できません');
       const deployed=data.version.trim();
+      if(typeof data.home_ingest_auth_ready==='boolean')window.__x96HealthAuthReady52395=data.home_ingest_auth_ready;
       const aligned=versionMatches(deployed,expected);
-      if(out)out.textContent=deployed+(aligned?' ✅ 同梱版と一致':' ⚠️ 同梱版と不一致');
+      const ingestNote=data.home_ingest===true?(data.home_ingest_auth_ready===true?' / X96取込：受付可':' / X96取込：トークン未設定'):'';
+      if(out)out.textContent=deployed+(aligned?' ✅ 同梱版と一致':' ⚠️ 同梱版と不一致')+ingestNote;
     }catch(e){if(out)out.textContent='照合失敗：'+String(e?.name==='AbortError'?'応答がタイムアウトしました':e?.message||e)+'（稼働版は未確認）';}
     finally{clearTimeout(timer);chk.disabled=false;}
   });
@@ -32685,6 +32900,21 @@ if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearI
        '直近GitHubエラー：'+String(m.last_github_error||m.archive_error||'なし'),
        '直近取得エラー：'+String(m.last_error||'なし')
      ];
+     // v5.23.95: Worker v6.2.13〜6.2.23 の X96 取込・証跡項目を表示する。
+     const ingestAge=Number(m.external_ingest_last_ms||0)>0?Date.now()-Number(m.external_ingest_last_ms):Infinity;
+     const vm=Array.isArray(d.verified_market_receipts)?d.verified_market_receipts:null;
+     const um=Array.isArray(d.unverified_market_receipts)?d.unverified_market_receipts:[];
+     lines.push(
+       '取得経路：'+(m.last_fetch_mode==='X96_HOME_INGEST'?'X96 自宅IP取込':String(m.last_fetch_mode||'不明'))
+         +(hasX96?(ingestAge<30000?'（X96優先中・Cloudflare取得は休止）':'（X96が30秒以上無受信→Cloudflare取得へ自動復帰）'):''),
+       '取込トークン（Worker側）：'+(window.__x96HealthAuthReady52395===true?'設定済み':window.__x96HealthAuthReady52395===false?'未設定（X96の書込は401で拒否されます）':'未照会（版確認の /health で判定）'),
+       '受信時刻の証跡：'+(vm?(vm.length?vm.join('・'):'なし')+(um.length?' / 未検証：'+um.join('・'):''):'診断未対応'),
+       'GitHub確定済み時刻より古い観測の拒否：'+(Number(d.last_ingest_archive_reject_ms||m.last_ingest_archive_reject_ms||0)>0?localTime(d.last_ingest_archive_reject_ms||m.last_ingest_archive_reject_ms)+'（X96の時計ずれ・送信遅延を確認）':'なし'),
+       '締切時刻の公式出典：'+(d.close_source_attested===true?'申告あり（'+String(d.cutoff_evidence_status||'')+'）':String(d.cutoff_evidence_status||m.close_evidence_status||'未確認')),
+       '再生データの時刻衝突：'+(d.replay_collision_unresolved===true?'未解決 '+Number(d.replay_collision_segments||0)+'区間（監査用には使えません）':d.replay_integrity?'なし':'診断未対応')
+     );
+     if(String(m.kind||'').toUpperCase()==='NAR')
+       lines.push('NAR 8券種の組数検証：'+(d.nar_all8_completeness_verified===true?'完了':'未完了')+(d.nar_frame_sale_last_status?' / 枠連発売：'+d.nar_frame_sale_last_status:''));
      out.textContent=lines.join('\n');
    }catch(e){out.textContent='診断できません：'+String(e?.message||e)+'\n※ Worker配備前・通信遮断・URL設定違いの可能性があります。';}
    finally{if(btn)btn.disabled=false;}
@@ -32782,7 +33012,7 @@ if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearI
 })();
 </script>
 <script id="nar-venue-recovery-v52391">
-/* TheKeiba MultiPane NAR Venue Recovery v5.23.91
+/* TheKeiba MultiPane NAR Venue Recovery v5.23.92
  * This repair only intercepts the multi-pane NAR race-list provider.
  * Never changes odds, audit flags, stored race snapshots, or Worker bindings.
  */
@@ -33202,7 +33432,7 @@ if(!install()){let n=0;const timer=setInterval(()=>{if(install()||++n>120)clearI
    target.insertAdjacentHTML('afterend',`<div style="border:1px solid var(--border);border-radius:9px;padding:10px;margin-bottom:10px;line-height:1.6"><b>🧠 時系列オッズ予測・3方式比較</b><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><label>予測方式<select id="rsTsMode"><option value="OFF">現行方式（時系列OFF）</option><option value="TREND" selected>時系列ルール＋全券種横断</option><option value="LEARN">過去日学習＋全券種横断</option><option value="STATIC">同時点・静的PL＋全券種横断</option></select></label><label>締切の基準<select id="rsTsClock"><option value="CLOSE" selected>保存締切時刻（無ければ除外）</option><option value="POST_REFERENCE">発走から仮締切を設定（参考）</option></select></label><label title="保存済み締切3分前スナップショットがあるレースはそちらを優先し、無いレースだけこの値で仮締切を置きます">仮締切(スナップショット無し時)：発走の何分前<input id="rsTsOffset" type="number" min="0" max="10" step="1" value="1" style="width:80px"></label><label>採用EV下限<input id="rsTsEv" type="number" min="0.5" max="5" step="0.01" value="1.10" style="width:80px"></label><label>記録の古さ上限（秒）<input id="rsTsAge" type="number" min="10" max="300" value="60" style="width:80px"></label><label>学習開始に必要な過去R<input id="rsTsMin" type="number" min="10" max="1000" value="30" style="width:80px"></label></div><p style="font-size:12px;color:var(--muted);margin:8px 0 0">保存履歴の締切3分前までを使い、支持率の変化・勢い・変動・複勝との一致を分析します。学習は選択期間の前日以前のレースだけで日毎に更新。初期${30}Rは学習準備です。全8券種は保存実オッズがある買い目だけ採用し、点数・1点額・予算は現在の設定を使います。10分以上の単勝履歴が必要です。締切時刻が保存されていない従来データは、仮締切の参考検証を選べます。発走時刻と実際の締切時刻は別です。馬柱補正・現行モードの係数はこの3方式には使いません。</p><button class="btn-sm" type="button" id="rsTsExport">🧠 時系列比較JSON</button></div><div id="rsTsReport" style="margin-bottom:12px"></div>`);
    $('rsTsExport').onclick=()=>{if(!session?.results?.length){alert('先に時系列モードで期間横断シミュレーションを実行してください');return;}const data={version:window.THEKEIBA_BUILD.number,config:session.cfg,featureNames,training:'選択期間内の前日以前。同日と未来を除外。JRA/NAR分離。WF校正は過去の外部予測のみ。締切3分前は任意設定。',rows:session.rows};const a=document.createElement('a'),url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));a.href=url;a.download='TheKeiba_TimeseriesComparison_'+new Date().toISOString().slice(0,10)+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
  }
- function stamp(){const text=window.THEKEIBA_BUILD.version+' ☁️ 10s';window.APP_VERSION=window.THEKEIBA_BUILD.version;document.querySelectorAll('.ver').forEach(e=>{if(e.textContent!==text)e.textContent=text;});}
+ function stamp(){const text='v'+window.THEKEIBA_BUILD.number+(window.__NAR_BRIDGE_READY__?' 🌉':'')+' ☁️ 10s';window.APP_VERSION=window.THEKEIBA_BUILD.version;document.querySelectorAll('.ver').forEach(e=>{if(e.textContent!==text)e.textContent=text;});}
  window.TheKeibaRangeTS={begin,abort,prepare,complete,render,config,core:{deadline,buildFeatures,probabilities,fit,distribution,candidates,select,trainBefore},getSession:()=>session};
  function wfUi(){const selected=$('rsGuardMode52372')?.value==='WF_EV110';
    const mode=$('rsGuardMode52372')?.value;const nar=mode==='FINAL_NAR_ADAPT';const box=mode==='FINAL_BOX4';const kelly=mode==='FINAL_KELLY';const formation=mode==='FINAL_FORMATION';const best=mode==='FINAL_BEST_EV';const finalResearch=nar||box||kelly||formation||best;
